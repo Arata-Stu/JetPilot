@@ -19,20 +19,21 @@ public:
     control_authority_ = declare_parameter<std::string>("control_authority", "hardware_mux");
     mode_ = jetpilot_msgs::msg::OperationModeState::STOP;
 
+    const auto qos_cmd = rclcpp::QoS(rclcpp::KeepLast(1)).best_effort();
     auto_sub_ = create_subscription<jetpilot_msgs::msg::ControlCommand>(
-      "/auto/control_cmd", 10,
+      "/auto/control_cmd", qos_cmd,
       [this](const jetpilot_msgs::msg::ControlCommand::SharedPtr msg) {
         latest_auto_ = *msg;
         latest_auto_stamp_ = now();
       });
     teleop_sub_ = create_subscription<jetpilot_msgs::msg::ControlCommand>(
-      "/teleop/control_cmd", 10,
+      "/teleop/control_cmd", qos_cmd,
       [this](const jetpilot_msgs::msg::ControlCommand::SharedPtr msg) {
         latest_teleop_ = *msg;
         latest_teleop_stamp_ = now();
       });
     propo_sub_ = create_subscription<jetpilot_msgs::msg::ControlCommand>(
-      "/propo/control_cmd", 10,
+      "/propo/control_cmd", qos_cmd,
       [this](const jetpilot_msgs::msg::ControlCommand::SharedPtr msg) {
         latest_propo_ = *msg;
         latest_propo_stamp_ = now();
@@ -42,7 +43,8 @@ public:
       [this](const jetpilot_msgs::msg::OperationModeState::SharedPtr msg) {
         mode_ = msg->mode;
       });
-    output_pub_ = create_publisher<jetpilot_msgs::msg::ControlCommand>("/vehicle/control_cmd", 10);
+    output_pub_ = create_publisher<jetpilot_msgs::msg::ControlCommand>(
+      "/vehicle/control_cmd", qos_cmd);
 
     const auto period = std::chrono::duration<double>(1.0 / publish_rate_hz_);
     timer_ = create_wall_timer(

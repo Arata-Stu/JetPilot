@@ -25,7 +25,8 @@ public:
 
     joy_sub_ = create_subscription<sensor_msgs::msg::Joy>(
       "/joy", 10, [this](const sensor_msgs::msg::Joy::SharedPtr msg) { handle_joy(*msg); });
-    cmd_pub_ = create_publisher<jetpilot_msgs::msg::ControlCommand>("/teleop/control_cmd", 10);
+    const auto qos_cmd = rclcpp::QoS(rclcpp::KeepLast(1)).best_effort();
+    cmd_pub_ = create_publisher<jetpilot_msgs::msg::ControlCommand>("/teleop/control_cmd", qos_cmd);
   }
 
 private:

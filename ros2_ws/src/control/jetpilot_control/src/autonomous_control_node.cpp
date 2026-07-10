@@ -16,7 +16,8 @@ public:
     throttle_ = std::clamp(declare_parameter<double>("throttle", 0.0), 0.0, 1.0);
     brake_ = std::clamp(declare_parameter<double>("brake", 1.0), 0.0, 1.0);
 
-    cmd_pub_ = create_publisher<jetpilot_msgs::msg::ControlCommand>("/auto/control_cmd", 10);
+    const auto qos_cmd = rclcpp::QoS(rclcpp::KeepLast(1)).best_effort();
+    cmd_pub_ = create_publisher<jetpilot_msgs::msg::ControlCommand>("/auto/control_cmd", qos_cmd);
     const auto period = std::chrono::duration<double>(1.0 / publish_rate_hz_);
     timer_ = create_wall_timer(
       std::chrono::duration_cast<std::chrono::nanoseconds>(period),
