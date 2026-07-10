@@ -5,8 +5,35 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-def _repo_root() -> Path:
-    return Path(__file__).resolve().parents[4]
+def _app_root() -> Path:
+    env_root = os.environ.get("JETPILOT_CONSOLE_APP_ROOT")
+    if env_root:
+        return Path(env_root).expanduser().resolve()
+
+    current = Path(__file__).resolve()
+    for parent in current.parents:
+        if parent.name in {"app", "jetpilot_console_app"} and (parent / "frontend").exists():
+            return parent
+    return current.parents[2]
+
+
+def _workspace_root(app_root: Path) -> Path:
+    env_root = os.environ.get("JETPILOT_WORKSPACE_ROOT") or os.environ.get("JETPILOT_REPO_ROOT")
+    if env_root:
+        return Path(env_root).expanduser().resolve()
+
+    if app_root.name == "jetpilot_console_app" and app_root.parent.name == "python_ws":
+        return app_root.parent.parent
+    if app_root.name == "app" and app_root.parent.name == "tools":
+        return app_root.parent.parent
+    return app_root.parent
+
+
+def _default_mount_path(workspace_root: Path, name: str, fallback: str) -> Path:
+    candidate = workspace_root / name
+    if candidate.exists():
+        return candidate
+    return Path(fallback)
 
 
 @dataclass(frozen=True)
@@ -29,14 +56,22 @@ class ConsoleConfig:
 
     @classmethod
     def from_env(cls) -> "ConsoleConfig":
-        repo_root = _repo_root()
-        app_root = repo_root / "tools" / "app"
+        app_root = _app_root()
+        repo_root = _workspace_root(app_root)
         state_dir = Path(
             os.environ.get("JETPILOT_CONSOLE_STATE_DIR", str(app_root / ".state"))
         ).expanduser()
-        ros2_ws = Path(os.environ.get("ROS2_WS", "/workspaces/ros2_ws")).expanduser()
+        ros2_ws = Path(
+            os.environ.get(
+                "ROS2_WS",
+                str(_default_mount_path(repo_root, "ros2_ws", "/workspaces/ros2_ws")),
+            )
+        ).expanduser()
         python_ws = Path(
-            os.environ.get("PYTHON_WS", str(ros2_ws.parent / "python_ws"))
+            os.environ.get(
+                "PYTHON_WS",
+                str(_default_mount_path(repo_root, "python_ws", str(ros2_ws.parent / "python_ws"))),
+            )
         ).expanduser()
         jetson_ips = os.environ.get(
             "JETSON_REMOTE_IPS", "10.42.0.1 192.168.55.1 192.168.11.190"
@@ -48,8 +83,18 @@ class ConsoleConfig:
             frontend_root=app_root / "frontend",
             state_dir=state_dir,
             task_dir=state_dir / "tasks",
-            record_root=Path(os.environ.get("RECORD_ROOT", "/workspaces/record")).expanduser(),
-            map_root=Path(os.environ.get("MAP_ROOT", "/workspaces/map")).expanduser(),
+            record_root=Path(
+                os.environ.get(
+                    "RECORD_ROOT",
+                    str(_default_mount_path(repo_root, "record", "/workspaces/record")),
+                )
+            ).expanduser(),
+            map_root=Path(
+                os.environ.get(
+                    "MAP_ROOT",
+                    str(_default_mount_path(repo_root, "map", "/workspaces/map")),
+                )
+            ).expanduser(),
             ros2_ws=ros2_ws,
             python_ws=python_ws,
             python_bin=os.environ.get("PYTHON_BIN", "/opt/env/bin/python"),
@@ -80,4 +125,3 @@ class ConsoleConfig:
             "jetson_map_root": self.jetson_map_root,
             "jetson_record_root": self.jetson_record_root,
         }
-

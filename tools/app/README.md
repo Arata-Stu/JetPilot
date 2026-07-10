@@ -20,6 +20,15 @@ Start it from the repository root:
 tools/app/scripts/start.sh --host 127.0.0.1 --port 8765
 ```
 
+When running inside the JetPilot Docker environment, use the `tools` mount:
+
+```bash
+/workspaces/tools/app/scripts/start.sh --host 0.0.0.0 --port 8765
+```
+
+The Docker launcher mounts the top-level `tools` directory to
+`/workspaces/tools` alongside `ros2_ws`, `python_ws`, `record`, and `map`.
+
 Then open:
 
 ```text
