@@ -30,6 +30,9 @@ Implemented in this MVP:
 
 - Local rosbag scan from `RECORD_ROOT`.
 - Local map scan from `MAP_ROOT`.
+- Dashboard focused on status, recent assets, and running tasks.
+- Dedicated Map Builder tab for VGL/VSLAM build entry.
+- Clear Jetson tab split into connection, remote state, and transfers.
 - Task runner with PID/process-group tracking.
 - Task stop button using process-group termination.
 - Per-task log files under `tools/app/.state/tasks/`.
@@ -42,6 +45,9 @@ Implemented in this MVP:
   - HD raster preparation
   - raceline generation
   - preview generation
+- The Map Builder UI is tuned for the current VSLAM/VGL workflow. Occupancy-map
+  specific controls such as FoundationStereo model resolution are intentionally
+  hidden from the main form.
 
 ## Goals
 
@@ -106,7 +112,7 @@ editor.
 
 ### Dashboard
 
-- Jetson connection cards: host, SSH status, disk usage, map root, latest map.
+- High-level counts for running tasks, rosbags, and runtime-ready maps.
 - Running task list with status, elapsed time, command, stop button, and log
   button.
 - Recent rosbags and recent maps.
@@ -167,6 +173,13 @@ editor.
   - `<map_name>_line_preview.png`
 - Transfer action: notebook to Jetson.
 - Jetson map root browser with size, modified time, and `latest` symlink.
+
+### Jetson
+
+- Connection target: host, user, remote map root, remote rosbag root.
+- Remote state: SSH result, latest map, map count, rosbag count, disk output.
+- Pull rosbags: Jetson to notebook transfer.
+- Push map bundle: notebook to Jetson transfer.
 
 ### Terminal Panel
 

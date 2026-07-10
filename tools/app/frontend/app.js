@@ -8,11 +8,13 @@ const state = {
   terminalCollapsed: false,
   logText: "",
   stream: null,
+  jetsonInspect: null,
 };
 
 const tabs = [
   ["dashboard", "Dashboard"],
   ["rosbags", "Rosbags"],
+  ["map-builder", "Map Builder"],
   ["maps", "Maps"],
   ["jetson", "Jetson"],
   ["terminal", "Terminal"],
@@ -66,6 +68,10 @@ function fmtTime(seconds) {
 
 function commandText(task) {
   return (task?.command || []).map((part) => JSON.stringify(part)).join(" ");
+}
+
+function trimTrailingSlash(value) {
+  return String(value || "").replace(/\/+$/, "");
 }
 
 async function refreshAll() {
@@ -128,6 +134,7 @@ function updateLogOnly() {
 
 function renderPage() {
   if (state.tab === "rosbags") return renderRosbags();
+  if (state.tab === "map-builder") return renderMapBuilder();
   if (state.tab === "maps") return renderMaps();
   if (state.tab === "jetson") return renderJetson();
   if (state.tab === "terminal") return renderTerminalPage();
@@ -137,6 +144,8 @@ function renderPage() {
 function renderDashboard() {
   const running = state.tasks.filter((task) => ["queued", "running", "stopping"].includes(task.status));
   const completeMaps = state.maps.filter((item) => item.complete_runtime_bundle);
+  const recentMaps = state.maps.slice(0, 3);
+  const recentBags = state.rosbags.slice(0, 3);
   return `
     <div class="page">
       <div class="grid-3">
@@ -144,25 +153,26 @@ function renderDashboard() {
         ${metric("Rosbags", state.rosbags.length, state.config ? state.config.record_root : "")}
         ${metric("Runtime maps", completeMaps.length, `${state.maps.length} map folders scanned`)}
       </div>
+      <section class="panel">
+        <div class="panel-header">
+          <h2>Running Tasks</h2>
+          <span class="spacer"></span>
+          <button onclick="setTab('jetson')">Jetson</button>
+          <button onclick="setTab('map-builder')">Map Builder</button>
+          <button onclick="refreshAll()">Refresh</button>
+        </div>
+        <div class="panel-body">${renderTaskTable(running.length ? running : state.tasks.slice(0, 4))}</div>
+      </section>
       <div class="grid-2">
         <section class="panel">
-          <div class="panel-header"><h2>Map Builder</h2><span class="spacer"></span><button onclick="fillMapDir()">Suggest Name</button></div>
-          <div class="panel-body">${renderMapBuildForm()}</div>
+          <div class="panel-header"><h2>Recent Rosbags</h2><span class="spacer"></span><button onclick="setTab('rosbags')">Open</button></div>
+          <div class="panel-body">${renderCompactList(recentBags, "rosbag")}</div>
         </section>
         <section class="panel">
-          <div class="panel-header"><h2>Running Tasks</h2><span class="spacer"></span><button onclick="refreshAll()">Refresh</button></div>
-          <div class="panel-body">${renderTaskTable(running.length ? running : state.tasks.slice(0, 6))}</div>
+          <div class="panel-header"><h2>Recent Maps</h2><span class="spacer"></span><button onclick="setTab('maps')">Open</button></div>
+          <div class="panel-body">${renderCompactList(recentMaps, "map")}</div>
         </section>
       </div>
-      <section class="panel">
-        <div class="panel-header"><h2>Workflow Notes</h2></div>
-        <div class="panel-body">
-          <div class="notice">
-            MVP focus: staged utility workflows, task logs, process-group stop, file scans, transfer commands, and copy buttons.
-            Live Jetson tmux runtime orchestration stays out of the first phase.
-          </div>
-        </div>
-      </section>
     </div>
   `;
 }
@@ -174,6 +184,64 @@ function metric(label, value, sub) {
         <div class="metric-label">${esc(label)}</div>
         <div class="metric-value">${esc(value)}</div>
         <div class="metric-sub">${esc(sub)}</div>
+      </div>
+    </section>
+  `;
+}
+
+function renderCompactList(items, kind) {
+  if (!items.length) return `<div class="empty">No ${kind === "map" ? "maps" : "rosbags"} found.</div>`;
+  return `
+    <div class="mini-list">
+      ${items
+        .map((item) => {
+          const ready = kind === "map" ? item.complete_runtime_bundle : true;
+          return `
+            <div class="mini-row">
+              <div>
+                <strong>${esc(item.name)}</strong>
+                <div class="path" title="${esc(item.path)}">${esc(item.path)}</div>
+              </div>
+              <div class="actions">
+                ${kind === "map" ? `<span class="status ${ready ? "success" : "failed"}">${ready ? "ready" : "incomplete"}</span>` : ""}
+                <button onclick="copyText(${js(item.path)})">Copy</button>
+                ${kind === "rosbag" ? `<button onclick="useRosbag(${js(item.path)})">Build</button>` : `<button onclick="fillTransferLocal(${js(item.path)})">Transfer</button>`}
+              </div>
+            </div>`;
+        })
+        .join("")}
+    </div>
+  `;
+}
+
+function renderMapBuilder() {
+  return `
+    <div class="page">
+      <section class="panel">
+        <div class="panel-header">
+          <h2>VGL / VSLAM Build</h2>
+          <span class="spacer"></span>
+          <button onclick="fillMapDir()">Suggest Name</button>
+        </div>
+        <div class="panel-body">${renderMapBuildForm()}</div>
+      </section>
+      <div class="grid-3">
+        ${stageCard("1", "Build", "cuVGL, cuVSLAM, snapshot", "Start VGL/VSLAM Build")}
+        ${stageCard("2", "Edit", "HD map raster and browser editor", "Prepare Raster")}
+        ${stageCard("3", "Review", "raceline and preview image", "Generate Preview")}
+      </div>
+    </div>
+  `;
+}
+
+function stageCard(step, title, detail, action) {
+  return `
+    <section class="panel stage-card">
+      <div class="panel-body">
+        <div class="stage-step">${esc(step)}</div>
+        <h3>${esc(title)}</h3>
+        <p>${esc(detail)}</p>
+        <span class="chip">${esc(action)}</span>
       </div>
     </section>
   `;
@@ -196,10 +264,6 @@ function renderMapBuildForm() {
       <div class="field">
         <label>Mapping steps</label>
         <input id="build-steps" value="edex compute_poses cuvgl" />
-      </div>
-      <div class="field">
-        <label>FoundationStereo model res</label>
-        <select id="build-fs-res"><option>low_res</option><option>high_res</option></select>
       </div>
       <div class="field full">
         <label>Camera topic config</label>
@@ -292,39 +356,117 @@ function mapTable() {
 }
 
 function renderJetson() {
-  const config = state.config || {};
   return `
     <div class="page">
       <div class="grid-2">
         <section class="panel">
-          <div class="panel-header"><h2>Jetson Inspect</h2></div>
-          <div class="panel-body">
-            <div class="form-grid">
-              <div class="field"><label>Host</label><input id="jetson-host" value="${esc((config.jetson_ips || [])[0] || "")}" /></div>
-              <div class="field"><label>User</label><input id="jetson-user" value="${esc(config.jetson_user || "tamiya")}" /></div>
-              <div class="field full"><label>Map root</label><input id="jetson-map-root" value="${esc(config.jetson_map_root || "")}" /></div>
-              <div class="field full"><label>Record root</label><input id="jetson-record-root" value="${esc(config.jetson_record_root || "")}" /></div>
-              <div class="actions full"><button class="primary" onclick="inspectJetson()">Inspect</button><button onclick="copyJetsonInspect()">Copy SSH Command</button></div>
-            </div>
-            <pre id="jetson-output" class="log"></pre>
-          </div>
+          <div class="panel-header"><h2>Connection</h2></div>
+          <div class="panel-body">${renderJetsonTarget()}</div>
         </section>
         <section class="panel">
-          <div class="panel-header"><h2>Transfers</h2></div>
-          <div class="panel-body">
-            <div class="form-grid">
-              <div class="field"><label>Host</label><input id="transfer-host" value="${esc((config.jetson_ips || [])[0] || "")}" /></div>
-              <div class="field"><label>User</label><input id="transfer-user" value="${esc(config.jetson_user || "tamiya")}" /></div>
-              <div class="field full"><label>Remote path</label><input id="transfer-remote" placeholder="${esc(config.jetson_map_root || "")}" /></div>
-              <div class="field full"><label>Local path</label><input id="transfer-local" placeholder="${esc(config.map_root || "")}" /></div>
-              <div class="actions full">
-                <button onclick="startTransfer('jetson-to-local')">Jetson to Notebook</button>
-                <button onclick="startTransfer('local-to-jetson')">Notebook to Jetson</button>
-              </div>
-            </div>
-          </div>
+          <div class="panel-header"><h2>Remote State</h2><span class="spacer"></span><button onclick="copyJetsonInspect()">Copy SSH</button></div>
+          <div class="panel-body">${renderJetsonSummary()}</div>
         </section>
       </div>
+      <section class="panel">
+        <div class="panel-header"><h2>Transfers</h2></div>
+        <div class="panel-body">${renderJetsonTransfers()}</div>
+      </section>
+    </div>
+  `;
+}
+
+function renderJetsonTarget() {
+  const config = state.config || {};
+  const host = state.jetsonInspect?.host || (config.jetson_ips || [])[0] || "";
+  const user = state.jetsonInspect?.user || config.jetson_user || "tamiya";
+  return `
+    <div class="form-grid jetson-target">
+      <div class="field">
+        <label>Jetson host</label>
+        <input id="jetson-host" value="${esc(host)}" />
+      </div>
+      <div class="field">
+        <label>SSH user</label>
+        <input id="jetson-user" value="${esc(user)}" />
+      </div>
+      <div class="field full">
+        <label>Remote map root</label>
+        <input id="jetson-map-root" value="${esc(config.jetson_map_root || "")}" />
+      </div>
+      <div class="field full">
+        <label>Remote rosbag root</label>
+        <input id="jetson-record-root" value="${esc(config.jetson_record_root || "")}" />
+      </div>
+      <div class="actions full">
+        <button class="primary" onclick="inspectJetson()">Inspect Jetson</button>
+        <button onclick="copyJetsonInspect()">Copy SSH</button>
+      </div>
+      <div class="quick-hosts full">
+        ${(config.jetson_ips || [])
+          .map((ip) => `<button class="ghost" onclick="setJetsonHost(${js(ip)})">${esc(ip)}</button>`)
+          .join("")}
+      </div>
+    </div>
+  `;
+}
+
+function renderJetsonSummary() {
+  const result = state.jetsonInspect;
+  if (!result) {
+    return `
+      <div class="remote-state">
+        <div class="state-tile"><span>SSH</span><strong>not checked</strong></div>
+        <div class="state-tile"><span>latest</span><strong>-</strong></div>
+        <div class="state-tile"><span>maps</span><strong>-</strong></div>
+        <div class="state-tile"><span>rosbags</span><strong>-</strong></div>
+      </div>
+    `;
+  }
+  const sections = parseJetsonOutput(result.output || "");
+  const latest = firstContentLine(sections.latest) || "-";
+  const maps = contentLines(sections.maps).length;
+  const rosbags = contentLines(sections.rosbags).length;
+  return `
+    <div class="remote-state">
+      <div class="state-tile ${result.ok ? "ok" : "bad"}"><span>SSH</span><strong>${result.ok ? "online" : "failed"}</strong></div>
+      <div class="state-tile"><span>latest</span><strong title="${esc(latest)}">${esc(shortName(latest))}</strong></div>
+      <div class="state-tile"><span>maps</span><strong>${esc(maps)}</strong></div>
+      <div class="state-tile"><span>rosbags</span><strong>${esc(rosbags)}</strong></div>
+    </div>
+    ${sectionOutput("Disk", sections.disk)}
+    ${sectionOutput("Maps", sections.maps)}
+    ${sectionOutput("Rosbags", sections.rosbags)}
+    ${result.error ? `<div class="notice">${esc(result.error)}</div>` : ""}
+  `;
+}
+
+function renderJetsonTransfers() {
+  const config = state.config || {};
+  return `
+    <div class="transfer-grid">
+      <section class="transfer-card">
+        <h3>Pull rosbags</h3>
+        <div class="form-grid">
+          <div class="field full"><label>From Jetson</label><input id="pull-remote" value="${esc(config.jetson_record_root || "")}" /></div>
+          <div class="field full"><label>To notebook</label><input id="pull-local" value="${esc(config.record_root || "")}" /></div>
+          <div class="actions full">
+            <button class="primary" onclick="startJetsonPull()">Start Pull</button>
+            <button onclick="copyPullCommand()">Copy Command</button>
+          </div>
+        </div>
+      </section>
+      <section class="transfer-card">
+        <h3>Push map bundle</h3>
+        <div class="form-grid">
+          <div class="field full"><label>From notebook</label><input id="push-local" value="" placeholder="${esc(config.map_root || "")}/course_a" /></div>
+          <div class="field full"><label>To Jetson</label><input id="push-remote" value="${esc(config.jetson_map_root || "")}" /></div>
+          <div class="actions full">
+            <button class="primary" onclick="startJetsonPush()">Start Push</button>
+            <button onclick="copyPushCommand()">Copy Command</button>
+          </div>
+        </div>
+      </section>
     </div>
   `;
 }
@@ -474,7 +616,7 @@ function fillMapDir() {
 }
 
 function useRosbag(path) {
-  state.tab = "dashboard";
+  state.tab = "map-builder";
   render();
   $("build-rosbag").value = path;
   fillMapDir();
@@ -486,7 +628,6 @@ async function startMapBuild() {
     map_dir: $("build-map-dir").value,
     topic_config: $("build-topic-config").value,
     steps: $("build-steps").value,
-    fs_model_res: $("build-fs-res").value,
     enable_rviz: false,
   };
   const result = await api("/api/maps/build-vgl-vslam", { method: "POST", body: JSON.stringify(payload) });
@@ -510,8 +651,8 @@ async function runMapStage(stage, mapDir) {
 function fillTransferLocal(path) {
   state.tab = "jetson";
   render();
-  $("transfer-local").value = path;
-  $("transfer-remote").value = state.config?.jetson_map_root || "";
+  $("push-local").value = path;
+  $("push-remote").value = state.config?.jetson_map_root || "";
 }
 
 async function inspectJetson() {
@@ -522,24 +663,102 @@ async function inspectJetson() {
     record_root: $("jetson-record-root").value,
   });
   const result = await api(`/api/jetson/inspect?${params.toString()}`);
-  $("jetson-output").textContent = result.output || result.error || "";
+  state.jetsonInspect = result;
+  render();
 }
 
 function copyJetsonInspect() {
   copyText(`ssh ${$("jetson-user").value}@${$("jetson-host").value}`);
 }
 
-async function startTransfer(direction) {
+function setJetsonHost(host) {
+  const input = $("jetson-host");
+  if (input) input.value = host;
+}
+
+function jetsonTarget() {
+  return {
+    host: $("jetson-host")?.value || state.jetsonInspect?.host || state.config?.jetson_ips?.[0] || "",
+    user: $("jetson-user")?.value || state.jetsonInspect?.user || state.config?.jetson_user || "tamiya",
+  };
+}
+
+async function startTransfer(direction, paths = null) {
+  const target = jetsonTarget();
   const payload = {
-    host: $("transfer-host").value,
-    user: $("transfer-user").value,
-    remote_path: $("transfer-remote").value,
-    local_path: $("transfer-local").value,
+    host: target.host,
+    user: target.user,
+    remote_path: paths?.remote || "",
+    local_path: paths?.local || "",
   };
   const endpoint = direction === "jetson-to-local" ? "/api/transfers/jetson-to-local" : "/api/transfers/local-to-jetson";
   const result = await api(endpoint, { method: "POST", body: JSON.stringify(payload) });
   await refreshAll();
   selectTask(result.task.task_id);
+}
+
+function startJetsonPull() {
+  return startTransfer("jetson-to-local", {
+    remote: $("pull-remote").value,
+    local: $("pull-local").value,
+  });
+}
+
+function startJetsonPush() {
+  return startTransfer("local-to-jetson", {
+    remote: $("push-remote").value,
+    local: $("push-local").value,
+  });
+}
+
+function copyPullCommand() {
+  const target = jetsonTarget();
+  copyText(`rsync -avhP --info=progress2 ${target.user}@${target.host}:${$("pull-remote").value} ${trimTrailingSlash($("pull-local").value)}/`);
+}
+
+function copyPushCommand() {
+  const target = jetsonTarget();
+  copyText(`rsync -avhP --info=progress2 ${trimTrailingSlash($("push-local").value)}/ ${target.user}@${target.host}:${trimTrailingSlash($("push-remote").value)}/`);
+}
+
+function parseJetsonOutput(output) {
+  const sections = {};
+  let current = "output";
+  for (const line of String(output || "").split("\n")) {
+    const match = line.match(/^\[([^\]]+)\]$/);
+    if (match) {
+      current = match[1];
+      sections[current] = [];
+    } else {
+      if (!sections[current]) sections[current] = [];
+      sections[current].push(line);
+    }
+  }
+  return sections;
+}
+
+function contentLines(lines = []) {
+  return lines.map((line) => line.trim()).filter(Boolean);
+}
+
+function firstContentLine(lines = []) {
+  return contentLines(lines)[0] || "";
+}
+
+function shortName(path) {
+  if (!path || path === "-") return "-";
+  return path.split("/").filter(Boolean).pop() || path;
+}
+
+function sectionOutput(title, lines = []) {
+  const text = contentLines(lines).join("\n");
+  if (!text) return "";
+  return `
+    <div class="section-output">
+      <div class="section-output-title">${esc(title)}</div>
+      <pre class="log">${esc(text)}</pre>
+    </div>
+  `;
 }
 
 window.setTab = setTab;
@@ -557,7 +776,12 @@ window.runMapStage = runMapStage;
 window.fillTransferLocal = fillTransferLocal;
 window.inspectJetson = inspectJetson;
 window.copyJetsonInspect = copyJetsonInspect;
+window.setJetsonHost = setJetsonHost;
 window.startTransfer = startTransfer;
+window.startJetsonPull = startJetsonPull;
+window.startJetsonPush = startJetsonPush;
+window.copyPullCommand = copyPullCommand;
+window.copyPushCommand = copyPushCommand;
 
 refreshAll().catch((error) => {
   $("app").innerHTML = `<div class="content"><div class="notice">Failed to load JetPilot Console: ${esc(error.message)}</div></div>`;

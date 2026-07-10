@@ -245,6 +245,129 @@ textarea {
   gap: 8px;
 }
 
+.mini-list {
+  display: grid;
+  gap: 8px;
+}
+
+.mini-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #14171b;
+  padding: 10px;
+}
+
+.stage-card h3,
+.transfer-card h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.stage-card p {
+  margin: 8px 0 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.stage-step {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin-bottom: 12px;
+  border: 1px solid #315b79;
+  border-radius: 999px;
+  color: #8ec8ff;
+  font-weight: 700;
+}
+
+.quick-hosts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.remote-state {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.state-tile {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #14171b;
+  padding: 10px;
+}
+
+.state-tile span {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.state-tile strong {
+  display: block;
+  overflow: hidden;
+  margin-top: 4px;
+  font-size: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.state-tile.ok {
+  border-color: #2a6d48;
+}
+
+.state-tile.bad {
+  border-color: #873b3b;
+}
+
+.section-output {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.section-output-title {
+  color: var(--soft);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.section-output .log {
+  max-height: 140px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #0d0f12;
+  padding: 10px;
+}
+
+.transfer-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.transfer-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #14171b;
+  padding: 14px;
+}
+
+.transfer-card h3 {
+  margin-bottom: 12px;
+}
+
 .table-wrap {
   overflow: auto;
 }
@@ -439,4 +562,3 @@ tr:last-child td {
 .mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
-
