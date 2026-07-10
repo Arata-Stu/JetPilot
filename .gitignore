@@ -149,8 +149,9 @@ dmypy.json
 
 # VCS managed repositories
 python_ws/global_racetrajectory_optimization/
-ros2_ws/src/isaac_ros/isaac-ros-cli/
-ros2_ws/src/vehicle/vesc/
+tools/isaac-ros-cli
+ros2_ws/src/tool/custom_joy_node
+ros2_ws/src/vehicle/pca9685_rc_interface
 
 # ROS 2 Workspace Directories
 ros2_ws/build/
