@@ -168,3 +168,5 @@ ros2_ws/src/launch/localization_launch/path
 
 # exceptions
 !scripts/lib/
+
+/tools/isaac-ros-cli/
