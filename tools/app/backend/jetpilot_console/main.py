@@ -19,6 +19,7 @@ from .map_pipeline import (
     generate_preview_script,
     generate_raceline_script,
     prepare_hd_raster_script,
+    scan_camera_topic_configs,
 )
 from .tasks import TaskManager
 
@@ -76,6 +77,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/maps/local":
             self._json({"maps": scan_maps(self.server.state.config.map_root)})
+            return
+        if path == "/api/map-builder/camera-topic-configs":
+            self._json({"configs": scan_camera_topic_configs(self.server.state.config)})
             return
         if path == "/api/jetson/inspect":
             self._json(self._inspect_jetson(query))

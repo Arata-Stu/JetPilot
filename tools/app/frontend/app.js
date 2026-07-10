@@ -4,6 +4,7 @@ const state = {
   tasks: [],
   rosbags: [],
   maps: [],
+  cameraTopicConfigs: [],
   selectedTaskId: null,
   terminalCollapsed: false,
   logText: "",
@@ -74,17 +75,26 @@ function trimTrailingSlash(value) {
   return String(value || "").replace(/\/+$/, "");
 }
 
+function sh(value) {
+  const text = String(value ?? "");
+  if (!text) return "''";
+  if (/^[A-Za-z0-9_/:=.,@%+-]+$/.test(text)) return text;
+  return `'${text.replaceAll("'", "'\\''")}'`;
+}
+
 async function refreshAll() {
-  const [config, tasks, rosbags, maps] = await Promise.all([
+  const [config, tasks, rosbags, maps, cameraTopicConfigs] = await Promise.all([
     api("/api/config"),
     api("/api/tasks"),
     api("/api/rosbags/local"),
     api("/api/maps/local"),
+    api("/api/map-builder/camera-topic-configs"),
   ]);
   state.config = config;
   state.tasks = tasks.tasks || [];
   state.rosbags = rosbags.rosbags || [];
   state.maps = maps.maps || [];
+  state.cameraTopicConfigs = cameraTopicConfigs.configs || [];
   if (!state.selectedTaskId && state.tasks[0]) state.selectedTaskId = state.tasks[0].task_id;
   render();
 }
@@ -248,6 +258,18 @@ function stageCard(step, title, detail, action) {
 }
 
 function renderMapBuildForm() {
+  const topicConfigs = state.cameraTopicConfigs || [];
+  const recommended = topicConfigs.find((config) => config.recommended) || topicConfigs[0];
+  const recommendedPath = recommended?.path || "";
+  const topicOptions = topicConfigs
+    .map((config) => {
+      const confidence = config.recommended ? "recommended" : `score ${config.score}`;
+      return `
+        <option value="${esc(config.path)}" ${config.path === recommendedPath ? "selected" : ""}>
+          ${esc(config.name)} - ${esc(confidence)}
+        </option>`;
+    })
+    .join("");
   return `
     <div class="form-grid">
       <div class="field full">
@@ -265,9 +287,20 @@ function renderMapBuildForm() {
         <label>Mapping steps</label>
         <input id="build-steps" value="edex compute_poses cuvgl" />
       </div>
-      <div class="field full">
-        <label>Camera topic config</label>
-        <input id="build-topic-config" placeholder="Default JetPilot vgl_camera_topics.yaml" />
+      <div class="field">
+        <label>Predicted camera topic config</label>
+        <select id="build-topic-config-select">
+          <option value="">Use backend default</option>
+          ${topicOptions || `<option value="" disabled>No localization YAML found</option>`}
+        </select>
+      </div>
+      <div class="field">
+        <label>Manual camera topic config</label>
+        <input id="build-topic-config" placeholder="${esc(recommendedPath || "Default JetPilot vgl_camera_topics.yaml")}" />
+      </div>
+      <div class="actions full">
+        <button onclick="applyCameraTopicConfig()" ${recommendedPath ? "" : "disabled"}>Use Predicted Path</button>
+        <button onclick="copySelectedCameraTopicConfig()">Copy Topic Config</button>
       </div>
       <div class="actions full">
         <button class="primary" onclick="startMapBuild()">Start VGL/VSLAM Build</button>
@@ -622,11 +655,26 @@ function useRosbag(path) {
   fillMapDir();
 }
 
+function selectedCameraTopicConfig() {
+  const manual = $("build-topic-config")?.value.trim();
+  if (manual) return manual;
+  return $("build-topic-config-select")?.value || "";
+}
+
+function applyCameraTopicConfig() {
+  const selected = $("build-topic-config-select")?.value || "";
+  if ($("build-topic-config")) $("build-topic-config").value = selected;
+}
+
+function copySelectedCameraTopicConfig() {
+  copyText(selectedCameraTopicConfig());
+}
+
 async function startMapBuild() {
   const payload = {
     rosbag: $("build-rosbag").value,
     map_dir: $("build-map-dir").value,
-    topic_config: $("build-topic-config").value,
+    topic_config: selectedCameraTopicConfig(),
     steps: $("build-steps").value,
     enable_rviz: false,
   };
@@ -638,7 +686,10 @@ async function startMapBuild() {
 function copyMapBuildCommand() {
   const rosbag = $("build-rosbag")?.value || "<rosbag>";
   const mapDir = $("build-map-dir")?.value || "<map_dir>";
-  copyText(`jetpilot_map build-vgl-vslam --rosbag ${rosbag} --map-dir ${mapDir}`);
+  const topicConfig = selectedCameraTopicConfig();
+  const steps = $("build-steps")?.value || "edex compute_poses cuvgl";
+  const topicArg = topicConfig ? ` --topic-config ${sh(topicConfig)}` : "";
+  copyText(`jetpilot_map build-vgl-vslam --rosbag ${sh(rosbag)} --map-dir ${sh(mapDir)} --steps ${sh(steps)}${topicArg}`);
 }
 
 async function runMapStage(stage, mapDir) {
@@ -770,6 +821,9 @@ window.stopTask = stopTask;
 window.runCustomCommand = runCustomCommand;
 window.fillMapDir = fillMapDir;
 window.useRosbag = useRosbag;
+window.selectedCameraTopicConfig = selectedCameraTopicConfig;
+window.applyCameraTopicConfig = applyCameraTopicConfig;
+window.copySelectedCameraTopicConfig = copySelectedCameraTopicConfig;
 window.startMapBuild = startMapBuild;
 window.copyMapBuildCommand = copyMapBuildCommand;
 window.runMapStage = runMapStage;

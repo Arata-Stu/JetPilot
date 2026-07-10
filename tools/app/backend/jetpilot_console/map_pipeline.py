@@ -16,15 +16,70 @@ def _source_ros_setup(config: ConsoleConfig) -> str:
 
 
 def default_topic_config(config: ConsoleConfig) -> Path:
+    return localization_config_dir(config) / "vgl_camera_topics.yaml"
+
+
+def localization_config_dir(config: ConsoleConfig) -> Path:
     return (
-        config.repo_root
-        / "ros2_ws"
+        config.ros2_ws
         / "src"
         / "launch"
         / "jetpilot_system_launch"
         / "config"
         / "localization"
-        / "vgl_camera_topics.yaml"
+    )
+
+
+def _path_relative_to(path: Path, base: Path) -> str:
+    try:
+        return str(path.relative_to(base))
+    except ValueError:
+        return str(path)
+
+
+def _camera_topic_config_score(path: Path) -> int:
+    name = path.name.lower()
+    if name == "vgl_camera_topics.yaml":
+        return 100
+    score = 0
+    if "camera" in name:
+        score += 40
+    if "topic" in name or "topics" in name:
+        score += 40
+    if "vgl" in name:
+        score += 10
+    return score
+
+
+def scan_camera_topic_configs(config: ConsoleConfig) -> list[dict[str, object]]:
+    config_dir = localization_config_dir(config)
+    if not config_dir.exists():
+        return []
+
+    discovered = []
+    for path in sorted([*config_dir.glob("*.yaml"), *config_dir.glob("*.yml")]):
+        if not path.is_file():
+            continue
+        score = _camera_topic_config_score(path)
+        discovered.append(
+            {
+                "name": path.name,
+                "path": str(path),
+                "relative_path": _path_relative_to(path, config.ros2_ws),
+                "score": score,
+                "recommended": path == default_topic_config(config) or score >= 80,
+            }
+        )
+
+    confident = [item for item in discovered if int(item["score"]) >= 40]
+    candidates = confident or discovered
+    return sorted(
+        candidates,
+        key=lambda item: (
+            not bool(item["recommended"]),
+            -int(item["score"]),
+            str(item["name"]),
+        ),
     )
 
 
@@ -120,4 +175,3 @@ def generate_preview_script(config: ConsoleConfig, map_dir: str) -> str:
   --raceline {_q(map_path / f"{name}_raceline.csv")} \\
   --output {_q(map_path / f"{name}_line_preview.png")}
 """
-

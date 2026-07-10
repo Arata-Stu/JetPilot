@@ -137,6 +137,8 @@ editor.
 ### Map Builder
 
 - Select a rosbag and output name.
+- Predict the camera topic config from `ros2_ws/src/launch/jetpilot_system_launch/config/localization/`
+  while still allowing a manual override.
 - Run VGL/VSLAM map build as a task.
 - Show generated artifacts:
   - `cuvgl_map/`
@@ -261,6 +263,7 @@ POST /api/transfers/jetson-to-local
 
 GET  /api/maps/local
 GET  /api/maps/jetson
+GET  /api/map-builder/camera-topic-configs
 POST /api/maps/build-vgl-vslam
 POST /api/maps/{map_id}/prepare-hd-raster
 POST /api/maps/{map_id}/generate-raceline
