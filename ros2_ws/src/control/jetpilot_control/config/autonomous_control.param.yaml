@@ -1,0 +1,6 @@
+autonomous_control_node:
+  ros__parameters:
+    publish_rate_hz: 20.0
+    steering: 0.0
+    throttle: 0.0
+    brake: 1.0

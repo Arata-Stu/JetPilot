@@ -1,0 +1,29 @@
+repositories:
+
+  # ISAAC ROS
+  ## isaac-ros-cli
+  tools/isaac-ros-cli:
+    type: git
+    url: https://github.com/carbuncle01/isaac-ros-cli.git
+    version: jetpilot-v1.0.0
+
+  
+  # Race Line
+  ## global_racetrajectory_optimization
+  python_ws/global_racetrajectory_optimization:
+    type: git
+    url: https://github.com/carbuncle01/global_racetrajectory_optimization.git
+    version: jetpilot-v1.0.0
+
+  # Tools
+  ros2_ws/src/tool/custom_joy_node:
+    type: git
+    url: https://github.com/carbuncle01/custom_joy_node.git
+    version: jetpilot-v1.0.0
+
+  # Vehicle
+  ## pca9685 Tamiya TT-02
+  ros2_ws/src/vehicle/pca9685_rc_interface:
+    type: git
+    url: https://github.com/carbuncle01/pca9685_rc_interface.git
+    version: jetpilot-v1.0.0

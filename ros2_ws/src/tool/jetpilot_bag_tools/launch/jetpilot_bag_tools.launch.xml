@@ -1,0 +1,9 @@
+<launch>
+  <arg name="config_file" default="$(find-pkg-share jetpilot_bag_tools)/config/bag_manager.param.yaml"/>
+  <arg name="use_sim_time" default="false"/>
+
+  <node pkg="jetpilot_bag_tools" exec="bag_manager_node" name="bag_manager_node" output="screen">
+    <param from="$(var config_file)"/>
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+  </node>
+</launch>

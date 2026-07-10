@@ -1,0 +1,9 @@
+custom_joy_node:
+  ros__parameters:
+    device_path: ""
+    publish_rate_hz: 50.0
+    scan_period_ms: 1000
+    default_axes_count: 8
+    default_buttons_count: 16
+    deadzone: 0.05
+    prefer_evdev: true

@@ -1,0 +1,22 @@
+<launch>
+  
+  <arg name="bag_manager_param"  default="$(find-pkg-share bag_manager_py)/config/bag_manager.param.yaml"/>
+  <arg name="trigger_topic" default="/rosbag2_recorder/trigger"/>
+  <arg name="memo_topic" default="/rosbag2_recorder/memo"/>
+  <arg name="use_sim_time" default="false"/>
+
+
+  <!-- bag_manager node -->
+  <node pkg="bag_manager_py" 
+        exec="bag_manager_node.py"
+        name="bag_manager_node"
+        output="screen">
+
+    <param from="$(var bag_manager_param)"/>
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+    <remap from="/rosbag2_recorder/trigger" to="$(var trigger_topic)"/>
+    <remap from="/rosbag2_recorder/memo" to="$(var memo_topic)"/> 
+  </node>
+
+
+</launch>

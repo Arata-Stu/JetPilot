@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>jetpilot_system_launch</name>
+  <version>0.0.1</version>
+  <description>JetPilot system launch</description>
+
+  <maintainer email="you@example.com">Your Name</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake_auto</buildtool_depend>
+
+  <exec_depend>custom_joy_node</exec_depend>
+  <exec_depend>jetpilot_bag_tools</exec_depend>
+  <exec_depend>jetpilot_control</exec_depend>
+  <exec_depend>jetpilot_operation</exec_depend>
+  <exec_depend>jetpilot_teleop_tools</exec_depend>
+  <exec_depend>pca9685_rc_driver</exec_depend>
+  <exec_depend>rc_serial_reader</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>rviz2</exec_depend>
+  <exec_depend>vslam_map_tools</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

@@ -1,0 +1,49 @@
+bag_manager_node:
+  ros__parameters:
+    output_dir: "/workspaces/record"
+    ## JetPilot default: record only explicitly listed topics.
+    record_all: false
+    topics:
+      - /joy
+      - /rc/channels
+      - /teleop/control_cmd
+      - /propo/control_cmd
+      - /auto/control_cmd
+      - /operation_mode/request
+      - /operation_mode/state
+      - /vehicle/control_cmd
+      - /bag/request
+      - /bag/status
+    exclude_topics: []
+
+    ## Storage backend. Use "mcap" for modern rosbag2 recording, or "sqlite3" if needed.
+    storage_id: "mcap"
+    serialization_format: ""
+
+    ## Splitting. Values of 0 disable each split condition.
+    ## max_bag_size is bytes. max_bag_duration is seconds.
+    max_bag_size: 0
+    max_bag_duration: 0
+
+    ## Recorder cache in bytes. 0 keeps rosbag2 default.
+    max_cache_size: 0
+
+    ## Compression. Common values:
+    ## compression_mode: "" | "file" | "message"
+    ## compression_format: "" | "zstd"
+    compression_mode: ""
+    compression_format: ""
+    compression_queue_size: 0
+    compression_threads: 0
+
+    ## Optional YAML path for per-topic QoS overrides.
+    qos_profile_overrides_path: ""
+
+    include_hidden_topics: false
+    no_discovery: false
+    snapshot_mode: false
+    start_paused: false
+
+    ## Escape hatch for ros2 bag record flags not modeled above.
+    extra_args: []
+    status_period_s: 1.0

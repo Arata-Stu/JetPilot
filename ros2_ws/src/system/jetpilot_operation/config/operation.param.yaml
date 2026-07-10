@@ -1,0 +1,9 @@
+operation_mode_manager_node:
+  ros__parameters:
+    initial_mode: "STOP"
+
+command_mux_node:
+  ros__parameters:
+    publish_rate_hz: 100.0
+    command_timeout_s: 0.3
+    control_authority: "hardware_mux"

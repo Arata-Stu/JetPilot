@@ -1,0 +1,15 @@
+<launch>
+  <arg name="teleop_cmd_config" default="$(find-pkg-share jetpilot_teleop_tools)/config/teleop_cmd.param.yaml"/>
+  <arg name="button_mapping_config" default="$(find-pkg-share jetpilot_teleop_tools)/config/joy_button_mapping.param.yaml"/>
+  <arg name="use_sim_time" default="false"/>
+
+  <node pkg="jetpilot_teleop_tools" exec="teleop_button_manager_node" name="teleop_button_manager_node" output="screen">
+    <param from="$(var button_mapping_config)"/>
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+  </node>
+
+  <node pkg="jetpilot_teleop_tools" exec="teleop_cmd_node" name="teleop_cmd_node" output="screen">
+    <param from="$(var teleop_cmd_config)"/>
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+  </node>
+</launch>

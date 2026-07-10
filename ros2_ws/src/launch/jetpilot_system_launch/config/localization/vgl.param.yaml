@@ -1,0 +1,58 @@
+/**:
+  visual_global_localization_node:
+    ros__parameters:
+      # ==========================================
+      # 座標系（フレーム）設定
+      # ==========================================
+      map_frame: 'map'
+      odom_frame: 'odom'
+      base_frame: 'base_link'
+
+      # ==========================================
+      # TF（トランスフォーム）とパブリッシュ設定
+      # ==========================================
+      publish_map_to_base_tf: false
+      publish_map_to_odom_tf: false
+      publish_rectified_images: false
+
+      # ==========================================
+      # 画像・同期処理設定
+      # ==========================================
+      enable_rectify_images: true
+      image_sync_match_threshold_ms: 3.0
+
+      # ==========================================
+      # VGL (Visual Global Localization) 動作設定
+      # ==========================================
+      use_initial_guess: false
+      enable_continuous_localization: false
+      localization_precision_level: 2
+      vgl_frequency: 1.0
+
+      # ==========================================
+      # デバッグ・ログ設定
+      # ==========================================
+      verbose_logging: false
+      init_glog: false
+      glog_v: 0
+      vgl_enable_debug: false
+
+      # ==========================================
+      # ディレクトリ設定
+      # ※以下はLaunchファイルで動的に解決されるため、
+      # YAML側では空文字、あるいは環境依存の絶対パスを記述します。
+      # ==========================================
+      map_dir: ''
+      config_dir: ''
+      model_dir: ''
+      debug_dir: ''
+      debug_map_raw_dir: ''
+
+      # ==========================================
+      # 動的パラメータ（参考）
+      # ※Launchスクリプト内で計算されるため、通常YAMLには書きませんが
+      # 完全上書き用に定義しておくことも可能です。
+      # ==========================================
+      # num_cameras: 2
+      # stereo_localizer_cam_ids: '0'
+      # camera_optical_frames: ['camera_left_optical_frame', 'camera_right_optical_frame']

@@ -1,0 +1,16 @@
+<launch>
+  <arg name="config_file" default="$(find-pkg-share jetpilot_operation)/config/operation.param.yaml"/>
+  <arg name="control_authority" default="hardware_mux"/>
+  <arg name="use_sim_time" default="false"/>
+
+  <node pkg="jetpilot_operation" exec="operation_mode_manager_node" name="operation_mode_manager_node" output="screen">
+    <param from="$(var config_file)"/>
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+  </node>
+
+  <node pkg="jetpilot_operation" exec="command_mux_node" name="command_mux_node" output="screen">
+    <param from="$(var config_file)"/>
+    <param name="control_authority" value="$(var control_authority)"/>
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+  </node>
+</launch>
