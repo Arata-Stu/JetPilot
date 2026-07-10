@@ -238,6 +238,16 @@ textarea {
   font-size: 12px;
 }
 
+.field-hint {
+  overflow: hidden;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .actions {
   display: flex;
   flex-wrap: wrap;
@@ -406,6 +416,14 @@ tr:last-child td {
   white-space: nowrap;
 }
 
+.path-preview {
+  max-width: none;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #0d0f12;
+  padding: 9px 10px;
+}
+
 .status {
   display: inline-flex;
   align-items: center;
@@ -543,10 +561,83 @@ tr:last-child td {
 .log {
   margin: 0;
   min-height: 100%;
-  color: #d9e3ec;
+  color: #c7d4dd;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+}
+
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  background: rgba(3, 6, 9, 0.78);
+  backdrop-filter: blur(6px);
+}
+
+.console-dialog {
+  display: grid;
+  grid-template-rows: 84px minmax(0, 1fr);
+  width: min(1080px, calc(100vw - 72px));
+  height: min(720px, calc(100vh - 92px));
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #0c1117;
+  box-shadow: 0 30px 120px rgba(0, 0, 0, 0.72);
+}
+
+.dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  border-bottom: 1px solid var(--line);
+  padding: 0 20px;
+}
+
+.dialog-header h2 {
+  margin: 4px 0;
+  font-size: 18px;
+}
+
+.dialog-header span {
+  color: var(--muted);
   font-size: 12px;
-  line-height: 1.45;
+}
+
+.eyebrow {
+  margin: 0;
+  color: var(--cyan);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.dialog-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.icon-button {
+  width: 34px;
+  min-width: 34px;
+  padding: 0;
+  font-size: 16px;
+}
+
+.dialog-log {
+  min-height: 0;
+  margin: 0;
+  overflow: auto;
+  padding: 22px;
+  color: #c7d4dd;
+  background: #080b0f;
+  font: 11px/1.7 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   white-space: pre-wrap;
 }
 
@@ -561,4 +652,32 @@ tr:last-child td {
 
 .mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.toast-region {
+  position: fixed;
+  z-index: 70;
+  top: 72px;
+  right: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.toast {
+  min-width: 220px;
+  max-width: 420px;
+  border: 1px solid #315d50;
+  border-radius: 8px;
+  background: rgba(18, 55, 46, 0.96);
+  color: #dff8ef;
+  box-shadow: var(--shadow);
+  padding: 11px 13px;
+  font-size: 12px;
+}
+
+.toast.error {
+  border-color: #703d43;
+  background: rgba(69, 28, 34, 0.97);
+  color: #ffdfe1;
 }

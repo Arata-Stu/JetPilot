@@ -46,6 +46,7 @@ Implemented in this MVP:
 - Task stop button using process-group termination.
 - Per-task log files under `tools/app/.state/tasks/`.
 - Live log terminal using server-sent events.
+- Large console dialog for reading and copying task logs.
 - Copy buttons for commands, logs, and paths.
 - Jetson SSH inspection endpoint.
 - `rsync` transfer tasks for Jetson to notebook and notebook to Jetson.
@@ -136,7 +137,8 @@ editor.
 
 ### Map Builder
 
-- Select a rosbag and output name.
+- Select a rosbag, output base directory, and map name. The base directory is
+  prefilled from `MAP_ROOT`.
 - Predict the camera topic config from `ros2_ws/src/launch/jetpilot_system_launch/config/localization/`
   while still allowing a manual override.
 - Run VGL/VSLAM map build as a task.

@@ -7,6 +7,7 @@ const state = {
   cameraTopicConfigs: [],
   selectedTaskId: null,
   terminalCollapsed: false,
+  logDialogOpen: false,
   logText: "",
   stream: null,
   jetsonInspect: null,
@@ -46,8 +47,37 @@ async function api(path, options = {}) {
   return payload;
 }
 
-function copyText(text) {
-  navigator.clipboard.writeText(String(text ?? ""));
+function toast(message, type = "success") {
+  const region = $("toast-region");
+  if (!region) return;
+  const item = document.createElement("div");
+  item.className = `toast ${type === "error" ? "error" : ""}`;
+  item.textContent = message;
+  region.append(item);
+  setTimeout(() => item.remove(), 3200);
+}
+
+async function copyText(text, message = "Copied") {
+  try {
+    const value = String(text ?? "");
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value);
+    } else {
+      const textarea = document.createElement("textarea");
+      textarea.value = value;
+      textarea.setAttribute("readonly", "");
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.append(textarea);
+      textarea.select();
+      const copied = document.execCommand("copy");
+      textarea.remove();
+      if (!copied) throw new Error("Clipboard is not available");
+    }
+    toast(message);
+  } catch (error) {
+    toast(`Copy failed: ${error.message}`, "error");
+  }
 }
 
 function fmtBytes(bytes) {
@@ -125,6 +155,8 @@ function render() {
       </header>
       <main class="content">${renderPage()}</main>
       ${renderTerminal()}
+      ${renderLogDialog()}
+      <div class="toast-region" id="toast-region" aria-live="polite"></div>
     </div>
   `;
   scrollLogToEnd();
@@ -139,6 +171,11 @@ function updateLogOnly() {
   if (log) {
     log.textContent = state.logText || "Select a task to view logs.";
     scrollLogToEnd();
+  }
+  const dialogLog = $("console-output");
+  if (dialogLog) {
+    dialogLog.textContent = state.logText || "Select a task to view logs.";
+    scrollDialogLogToEnd();
   }
 }
 
@@ -231,7 +268,7 @@ function renderMapBuilder() {
         <div class="panel-header">
           <h2>VGL / VSLAM Build</h2>
           <span class="spacer"></span>
-          <button onclick="fillMapDir()">Suggest Name</button>
+          <button onclick="fillMapDir()">Suggest Map Name</button>
         </div>
         <div class="panel-body">${renderMapBuildForm()}</div>
       </section>
@@ -261,6 +298,7 @@ function renderMapBuildForm() {
   const topicConfigs = state.cameraTopicConfigs || [];
   const recommended = topicConfigs.find((config) => config.recommended) || topicConfigs[0];
   const recommendedPath = recommended?.path || "";
+  const defaultMapBase = state.config?.map_root || "/workspaces/map";
   const topicOptions = topicConfigs
     .map((config) => {
       const confidence = config.recommended ? "recommended" : `score ${config.score}`;
@@ -279,9 +317,17 @@ function renderMapBuildForm() {
           ${state.rosbags.map((bag) => `<option value="${esc(bag.path)}">${esc(bag.name)} - ${esc(bag.path)}</option>`).join("")}
         </select>
       </div>
+      <div class="field">
+        <label>Output base directory</label>
+        <input id="build-map-base" value="${esc(defaultMapBase)}" oninput="updateMapDirPreview()" />
+      </div>
+      <div class="field">
+        <label>Map name</label>
+        <input id="build-map-name" placeholder="course_a" oninput="updateMapDirPreview()" />
+      </div>
       <div class="field full">
-        <label>Output map directory</label>
-        <input id="build-map-dir" placeholder="${esc((state.config?.map_root || "/workspaces/map") + "/course_a")}" />
+        <label>Output map directory preview</label>
+        <div id="build-map-dir-preview" class="path path-preview">${esc(defaultMapBase)}/&lt;map_name&gt;</div>
       </div>
       <div class="field">
         <label>Mapping steps</label>
@@ -289,14 +335,15 @@ function renderMapBuildForm() {
       </div>
       <div class="field">
         <label>Predicted camera topic config</label>
-        <select id="build-topic-config-select">
+        <select id="build-topic-config-select" onchange="applyCameraTopicConfig()">
           <option value="">Use backend default</option>
           ${topicOptions || `<option value="" disabled>No localization YAML found</option>`}
         </select>
+        <div id="build-topic-config-preview" class="field-hint">${esc(recommendedPath || "No predicted config found")}</div>
       </div>
       <div class="field">
         <label>Manual camera topic config</label>
-        <input id="build-topic-config" placeholder="${esc(recommendedPath || "Default JetPilot vgl_camera_topics.yaml")}" />
+        <input id="build-topic-config" placeholder="${esc(recommendedPath || "Default JetPilot vgl_camera_topics.yaml")}" oninput="updateCameraTopicPreview()" />
       </div>
       <div class="actions full">
         <button onclick="applyCameraTopicConfig()" ${recommendedPath ? "" : "disabled"}>Use Predicted Path</button>
@@ -541,7 +588,7 @@ function renderTaskTable(tasks) {
                 <td class="mono">${esc(task.pid || "-")} / ${esc(task.pgid || "-")}</td>
                 <td>${esc(task.started_at || "-")}</td>
                 <td class="actions">
-                  <button onclick="selectTask(${js(task.task_id)})">Log</button>
+                  <button onclick="openTaskLog(${js(task.task_id)})">Log</button>
                   <button onclick="copyText(${js(commandText(task))})">Copy</button>
                   <button class="danger" onclick="stopTask(${js(task.task_id)})" ${["running", "queued", "stopping"].includes(task.status) ? "" : "disabled"}>Stop</button>
                 </td>
@@ -562,8 +609,9 @@ function renderTerminal() {
         <div class="terminal-title">${esc(task?.title || "No task selected")}</div>
         <div class="terminal-meta">${task ? `pid ${task.pid || "-"} / pgid ${task.pgid || "-"} / ${task.status}` : ""}</div>
         <span class="spacer"></span>
+        <button onclick="openLogDialog()" ${task ? "" : "disabled"}>Open Console</button>
         <button onclick="copyText(${js(commandText(task || {}))})" ${task ? "" : "disabled"}>Copy Command</button>
-        <button onclick="copyText(state.logText)" ${task ? "" : "disabled"}>Copy Log</button>
+        <button onclick="copyText(state.logText, 'Log copied')" ${task ? "" : "disabled"}>Copy Log</button>
         <button class="danger" onclick="stopTask(${js(task?.task_id || "")})" ${task && ["running", "queued", "stopping"].includes(task.status) ? "" : "disabled"}>Stop</button>
       </div>
       <div class="terminal-body">
@@ -585,6 +633,31 @@ function renderTerminal() {
   `;
 }
 
+function renderLogDialog() {
+  const task = state.tasks.find((item) => item.task_id === state.selectedTaskId);
+  if (!state.logDialogOpen) return "";
+  return `
+    <div class="dialog-backdrop" onclick="closeLogDialog()">
+      <section class="console-dialog" role="dialog" aria-modal="true" aria-labelledby="console-title" onclick="event.stopPropagation()">
+        <div class="dialog-header">
+          <div>
+            <p class="eyebrow">Task console</p>
+            <h2 id="console-title">${esc(task?.title || "Console")}</h2>
+            <span>${task ? `pid ${esc(task.pid || "-")} / pgid ${esc(task.pgid || "-")} / ${esc(task.status)}` : "No task selected"}</span>
+          </div>
+          <div class="dialog-actions">
+            <button onclick="copyText(${js(commandText(task || {}))})" ${task ? "" : "disabled"}>Copy Command</button>
+            <button onclick="copyText(state.logText, 'Log copied')" ${task ? "" : "disabled"}>Copy Log</button>
+            <button class="danger" onclick="stopTask(${js(task?.task_id || "")})" ${task && ["running", "queued", "stopping"].includes(task.status) ? "" : "disabled"}>Stop</button>
+            <button class="icon-button" onclick="closeLogDialog()" aria-label="Close console">x</button>
+          </div>
+        </div>
+        <pre id="console-output" class="dialog-log">${esc(state.logText || "Select a task to view logs.")}</pre>
+      </section>
+    </div>
+  `;
+}
+
 function toggleTerminal() {
   state.terminalCollapsed = !state.terminalCollapsed;
   render();
@@ -593,9 +666,29 @@ function toggleTerminal() {
 function scrollLogToEnd() {
   const pane = document.querySelector(".log-pane");
   if (pane) pane.scrollTop = pane.scrollHeight;
+  scrollDialogLogToEnd();
 }
 
-async function selectTask(taskId) {
+function scrollDialogLogToEnd() {
+  const dialogLog = $("console-output");
+  if (dialogLog) dialogLog.scrollTop = dialogLog.scrollHeight;
+}
+
+function openLogDialog() {
+  state.logDialogOpen = true;
+  render();
+}
+
+function closeLogDialog() {
+  state.logDialogOpen = false;
+  render();
+}
+
+function openTaskLog(taskId) {
+  selectTask(taskId, { openDialog: true });
+}
+
+async function selectTask(taskId, options = {}) {
   state.selectedTaskId = taskId;
   state.logText = "";
   if (state.stream) state.stream.close();
@@ -605,6 +698,7 @@ async function selectTask(taskId) {
     return;
   }
   state.terminalCollapsed = false;
+  if (options.openDialog) state.logDialogOpen = true;
   state.stream = new EventSource(`/api/tasks/${encodeURIComponent(taskId)}/stream`);
   state.stream.onmessage = (event) => {
     const payload = JSON.parse(event.data);
@@ -645,7 +739,11 @@ function fillMapDir() {
   const bagPath = select?.value || state.rosbags[0]?.path || "";
   const bagName = bagPath.split("/").filter(Boolean).pop() || "map";
   const stamp = new Date().toISOString().replace(/[-:]/g, "").slice(0, 15);
-  $("build-map-dir").value = `${state.config?.map_root || "/workspaces/map"}/${bagName}_map_${stamp}`;
+  if ($("build-map-base") && !$("build-map-base").value.trim()) {
+    $("build-map-base").value = state.config?.map_root || "/workspaces/map";
+  }
+  if ($("build-map-name")) $("build-map-name").value = `${bagName}_map_${stamp}`;
+  updateMapDirPreview();
 }
 
 function useRosbag(path) {
@@ -664,16 +762,47 @@ function selectedCameraTopicConfig() {
 function applyCameraTopicConfig() {
   const selected = $("build-topic-config-select")?.value || "";
   if ($("build-topic-config")) $("build-topic-config").value = selected;
+  updateCameraTopicPreview();
 }
 
 function copySelectedCameraTopicConfig() {
   copyText(selectedCameraTopicConfig());
 }
 
+function updateCameraTopicPreview() {
+  const preview = $("build-topic-config-preview");
+  if (preview) preview.textContent = selectedCameraTopicConfig() || "Backend default will be used.";
+}
+
+function outputMapBase() {
+  return trimTrailingSlash($("build-map-base")?.value || state.config?.map_root || "/workspaces/map");
+}
+
+function outputMapName() {
+  return String($("build-map-name")?.value || "").replace(/^\/+|\/+$/g, "");
+}
+
+function outputMapDir(options = {}) {
+  const base = outputMapBase();
+  const name = outputMapName();
+  if (name) return `${base}/${name}`;
+  return options.placeholder ? `${base}/<map_name>` : "";
+}
+
+function updateMapDirPreview() {
+  const preview = $("build-map-dir-preview");
+  if (preview) preview.textContent = outputMapDir({ placeholder: true });
+}
+
 async function startMapBuild() {
+  const mapDir = outputMapDir();
+  if (!mapDir) {
+    window.alert("Map name is required.");
+    return;
+  }
   const payload = {
     rosbag: $("build-rosbag").value,
-    map_dir: $("build-map-dir").value,
+    map_dir: mapDir,
     topic_config: selectedCameraTopicConfig(),
     steps: $("build-steps").value,
     enable_rviz: false,
@@ -685,7 +814,7 @@ async function startMapBuild() {
 
 function copyMapBuildCommand() {
   const rosbag = $("build-rosbag")?.value || "<rosbag>";
-  const mapDir = $("build-map-dir")?.value || "<map_dir>";
+  const mapDir = outputMapDir({ placeholder: true });
   const topicConfig = selectedCameraTopicConfig();
   const steps = $("build-steps")?.value || "edex compute_poses cuvgl";
   const topicArg = topicConfig ? ` --topic-config ${sh(topicConfig)}` : "";
@@ -817,6 +946,9 @@ window.refreshAll = refreshAll;
 window.toggleTerminal = toggleTerminal;
 window.copyText = copyText;
 window.selectTask = selectTask;
+window.openTaskLog = openTaskLog;
+window.openLogDialog = openLogDialog;
+window.closeLogDialog = closeLogDialog;
 window.stopTask = stopTask;
 window.runCustomCommand = runCustomCommand;
 window.fillMapDir = fillMapDir;
@@ -824,6 +956,8 @@ window.useRosbag = useRosbag;
 window.selectedCameraTopicConfig = selectedCameraTopicConfig;
 window.applyCameraTopicConfig = applyCameraTopicConfig;
 window.copySelectedCameraTopicConfig = copySelectedCameraTopicConfig;
+window.updateCameraTopicPreview = updateCameraTopicPreview;
+window.updateMapDirPreview = updateMapDirPreview;
 window.startMapBuild = startMapBuild;
 window.copyMapBuildCommand = copyMapBuildCommand;
 window.runMapStage = runMapStage;
