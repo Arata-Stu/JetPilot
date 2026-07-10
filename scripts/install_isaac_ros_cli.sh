@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-cd "${ISAAC_ROS_WS}/../src/isaac_ros/isaac-ros-cli"
+cd "${ISAAC_ROS_WS}/../tools/isaac-ros-cli"
 
 git pull
 
