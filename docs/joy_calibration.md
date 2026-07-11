@@ -98,6 +98,11 @@ Axis values are captured from the browser Gamepad API and converted to the same
 while not touching the stick to record the center values and estimate a
 deadzone from the observed idle noise.
 
+Use `Button Functions` to choose which physical button should perform each
+runtime action, such as auto/manual/stop mode changes or bag start/stop. The
+`joy_button_mapping.generated.yaml` output resolves those choices to numeric
+button indices for `teleop_button_manager_node`.
+
 For L2/R2, use `Released Cap` while the trigger is not pressed and `Pressed Cap`
 while it is fully pressed. Browsers often expose L2/R2 as analog buttons rather
 than axes, so the editor prefers the trigger `button` value for these captures

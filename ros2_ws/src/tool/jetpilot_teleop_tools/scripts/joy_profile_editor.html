@@ -258,6 +258,16 @@
       </div>
 
       <div class="panel">
+        <h2>Button Functions / ボタン機能</h2>
+        <div class="muted">物理ボタン名を見ながら、各機能に使うボタンを選びます。 / Choose which physical button drives each function.</div>
+        <table class="mapping-table">
+          <thead><tr><th>Function</th><th>Physical button</th><th>Index</th></tr></thead>
+          <tbody id="buttonFunctionRows"></tbody>
+        </table>
+        <div class="field"><label>hold_time_s</label><input type="number" step="0.1" data-path="button_mapping.hold_time_s"></div>
+      </div>
+
+      <div class="panel">
         <h2>Triggers / トリガー</h2>
         <div id="triggerFields"></div>
       </div>
@@ -320,6 +330,14 @@
 <script id="embeddedProfile" type="application/json">__EMBEDDED_PROFILE_JSON__</script>
 <script>
 const buttonNames = ["cross", "circle", "triangle", "square", "l1", "r1", "share", "options", "ps", "l3", "r3"];
+const buttonActions = [
+  ["auto_button", "Auto mode"],
+  ["manual_button", "Manual mode"],
+  ["stop_button", "Stop mode"],
+  ["back_button", "Back / modifier"],
+  ["bag_start_button", "Bag start"],
+  ["bag_stop_button", "Bag stop"],
+];
 const state = {
   profile: emptyProfile(),
   outputKind: "profile",
@@ -342,6 +360,15 @@ function emptyProfile() {
       right: {x_axis: 3, y_axis: 4, invert_x: false, invert_y: true, center_x: 0, center_y: 0, deadzone: 2500}
     },
     dpad: {type: "button", up: 12, right: 15, down: 13, left: 14},
+    button_mapping: {
+      auto_button: "triangle",
+      manual_button: "cross",
+      stop_button: "circle",
+      back_button: "share",
+      bag_start_button: "r1",
+      bag_stop_button: "l1",
+      hold_time_s: 1.0
+    },
     idle_axes: {}
   };
 }
@@ -473,6 +500,7 @@ function mergeProfile(input) {
       right: {...base.sticks.right, ...(input.sticks?.right || {})}
     },
     dpad: {...base.dpad, ...(input.dpad || {})},
+    button_mapping: {...base.button_mapping, ...(input.button_mapping || {})},
     idle_axes: input.idle_axes || base.idle_axes
   };
 }
@@ -505,16 +533,21 @@ function teleopCmdYaml(profile) {
 }
 
 function buttonMappingYaml(profile) {
+  const mapping = profile.button_mapping || {};
+  const buttonIndex = (action, fallbackName) => {
+    const selectedName = mapping[action] || fallbackName;
+    return Number(profile.buttons[selectedName] ?? -1);
+  };
   return {
     teleop_button_manager_node: {
       ros__parameters: {
-        auto_button: profile.buttons.triangle ?? -1,
-        manual_button: profile.buttons.cross ?? -1,
-        stop_button: profile.buttons.circle ?? -1,
-        back_button: profile.buttons.share ?? -1,
-        bag_start_button: profile.buttons.r1 ?? -1,
-        bag_stop_button: profile.buttons.l1 ?? -1,
-        hold_time_s: 1.0
+        auto_button: buttonIndex("auto_button", "triangle"),
+        manual_button: buttonIndex("manual_button", "cross"),
+        stop_button: buttonIndex("stop_button", "circle"),
+        back_button: buttonIndex("back_button", "share"),
+        bag_start_button: buttonIndex("bag_start_button", "r1"),
+        bag_stop_button: buttonIndex("bag_stop_button", "l1"),
+        hold_time_s: Number(mapping.hold_time_s ?? 1.0)
       }
     }
   };
@@ -533,11 +566,28 @@ function renderEditor() {
       <td><button class="capture" data-capture-kind="profileButton" data-capture-target="${name}">Capture</button></td>
     </tr>
   `).join("");
+  document.getElementById("buttonFunctionRows").innerHTML = buttonActions.map(([action, label]) => {
+    const selected = state.profile.button_mapping?.[action] || "";
+    const index = selected ? state.profile.buttons[selected] : -1;
+    return `
+      <tr>
+        <td>${label}<br><span class="muted">${action}</span></td>
+        <td>${buttonSelect(action, selected)}</td>
+        <td>${index ?? -1}</td>
+      </tr>
+    `;
+  }).join("");
   document.getElementById("triggerFields").innerHTML = ["l2", "r2"].map(name => triggerBlock(name)).join("");
   document.getElementById("stickFields").innerHTML = ["left", "right"].map(name => stickBlock(name)).join("");
   document.getElementById("deviceSummary").textContent = `${state.profile.device.name || "Controller"} ${state.profile.device.path || ""}`;
   updateCaptureClasses();
   syncOutputs();
+}
+
+function buttonSelect(action, selected) {
+  const options = ['<option value="">none</option>']
+    .concat(buttonNames.map(name => `<option value="${name}" ${name === selected ? "selected" : ""}>${name}</option>`));
+  return `<select data-button-action="${action}">${options.join("")}</select>`;
 }
 
 function triggerBlock(name) {
@@ -582,6 +632,7 @@ function check(path, label, value) {
 }
 
 function readForm() {
+  if (!state.profile.button_mapping) state.profile.button_mapping = {};
   document.querySelectorAll("[data-path]").forEach(input => {
     const oldValue = getPath(state.profile, input.dataset.path);
     const value = input.type === "checkbox" ? input.checked : coerce(input.value, oldValue);
@@ -589,6 +640,9 @@ function readForm() {
   });
   document.querySelectorAll("[data-button]").forEach(input => {
     state.profile.buttons[input.dataset.button] = Number(input.value);
+  });
+  document.querySelectorAll("[data-button-action]").forEach(select => {
+    state.profile.button_mapping[select.dataset.buttonAction] = select.value;
   });
 }
 
@@ -867,11 +921,11 @@ document.querySelectorAll(".tabs button").forEach(button => {
 });
 
 document.addEventListener("input", event => {
-  if (event.target.matches("[data-path], [data-button]")) syncOutputs();
+  if (event.target.matches("[data-path], [data-button], [data-button-action]")) syncOutputs();
 });
 
 document.addEventListener("change", event => {
-  if (event.target.matches("[data-path], [data-button]")) syncOutputs();
+  if (event.target.matches("[data-path], [data-button], [data-button-action]")) syncOutputs();
 });
 
 document.addEventListener("click", event => {
@@ -915,7 +969,7 @@ document.querySelectorAll("[data-output]").forEach(button => {
 });
 
 document.getElementById("downloadOutput").addEventListener("click", () => {
-  const names = {profile: "joy_profile.yaml", teleop: "teleop_cmd.generated.yaml", buttons: "joy_button_mapping.generated.yaml"};
+  const names = {profile: "joy_profile.yaml", teleop: "teleop_cmd.param.yaml", buttons: "joy_button_mapping.param.yaml"};
   download(names[state.outputKind], document.getElementById("yamlOutput").value);
 });
 
