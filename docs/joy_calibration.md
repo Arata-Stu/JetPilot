@@ -97,6 +97,10 @@ Axis values are captured from the browser Gamepad API and converted to the same
 while not touching the stick to record the center values and estimate a
 deadzone from the observed idle noise.
 
+For L2/R2, use `Released Cap` while the trigger is not pressed and `Pressed Cap`
+while it is fully pressed. The editor updates `released`, `pressed`, `min`,
+`max`, and `inverted` from those two values.
+
 To generate the editor again from an existing profile:
 
 ```bash

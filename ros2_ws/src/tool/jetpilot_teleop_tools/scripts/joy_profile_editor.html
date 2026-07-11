@@ -523,13 +523,16 @@ function renderEditor() {
 
 function triggerBlock(name) {
   const t = state.profile.triggers[name] || {};
-  return `<h3>${name.toUpperCase()}</h3><div class="form-grid">
+  return `<h3>${name.toUpperCase()}</h3><div class="muted">Released Cap: 離した状態で押す / click while released. Pressed Cap: 最後まで押し込んだ状態で押す / click while fully pressed.</div><div class="toolbar">
+    <button class="capture" data-capture-kind="triggerReleased" data-capture-target="${name}">Released Cap</button>
+    <button class="capture" data-capture-kind="triggerPressed" data-capture-target="${name}">Pressed Cap</button>
+  </div><div class="form-grid">
     ${field(`triggers.${name}.axis`, "axis", t.axis, "number", capture("axis", `triggers.${name}.axis`))}
     ${field(`triggers.${name}.button`, "button", t.button, "number", capture("buttonPath", `triggers.${name}.button`))}
     ${field(`triggers.${name}.min`, "min", t.min, "number", capture("axisValue", `triggers.${name}.min`, `triggers.${name}.axis`))}
     ${field(`triggers.${name}.max`, "max", t.max, "number", capture("axisValue", `triggers.${name}.max`, `triggers.${name}.axis`))}
-    ${field(`triggers.${name}.released`, "released", t.released, "number", capture("axisValue", `triggers.${name}.released`, `triggers.${name}.axis`))}
-    ${field(`triggers.${name}.pressed`, "pressed", t.pressed, "number", capture("axisValue", `triggers.${name}.pressed`, `triggers.${name}.axis`))}
+    ${field(`triggers.${name}.released`, "released", t.released, "number", capture("triggerReleased", name))}
+    ${field(`triggers.${name}.pressed`, "pressed", t.pressed, "number", capture("triggerPressed", name))}
     ${field(`triggers.${name}.deadzone`, "deadzone", t.deadzone, "number")}
     ${check(`triggers.${name}.inverted`, "inverted", t.inverted)}
   </div>`;
@@ -624,6 +627,15 @@ function estimateStickIdle(stick, samples) {
   const noiseY = Math.max(...yValues.map(value => Math.abs(Math.round(value * 32767) - centerY)), 0);
   const deadzone = Math.max(1200, Math.min(8000, Math.ceil(Math.max(noiseX, noiseY) * 3 + 500)));
   return {centerX, centerY, deadzone};
+}
+
+function updateTriggerRange(trigger) {
+  const released = Number(trigger.released);
+  const pressed = Number(trigger.pressed);
+  if (!Number.isFinite(released) || !Number.isFinite(pressed)) return;
+  trigger.min = Math.min(released, pressed);
+  trigger.max = Math.max(released, pressed);
+  trigger.inverted = pressed < released;
 }
 
 function buttonPressed(gamepad, index) {
@@ -722,6 +734,25 @@ function handleCapture(pad) {
         finishCapture();
         return;
       }
+    }
+    return;
+  }
+  if (capture.kind === "triggerReleased" || capture.kind === "triggerPressed") {
+    const trigger = state.profile.triggers[capture.target];
+    if (!trigger) {
+      finishCapture();
+      return;
+    }
+    const axis = Number(trigger.axis);
+    if (Number.isInteger(axis) && axis >= 0 && axis < pad.axes.length) {
+      const value = axisRawValue(pad, axis);
+      if (capture.kind === "triggerReleased") trigger.released = value;
+      else trigger.pressed = value;
+      updateTriggerRange(trigger);
+      setStatus(
+        `${capture.target.toUpperCase()} ${capture.kind === "triggerReleased" ? "released" : "pressed"} を記録しました / Captured ${capture.target.toUpperCase()} ${capture.kind === "triggerReleased" ? "released" : "pressed"}: ${value}`
+      );
+      finishCapture();
     }
     return;
   }
