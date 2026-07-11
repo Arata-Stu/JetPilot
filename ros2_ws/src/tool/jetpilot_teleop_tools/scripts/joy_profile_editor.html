@@ -239,6 +239,7 @@
           <button id="loadText">Load Text</button>
           <button id="sampleProfile">Sample</button>
           <button class="primary" id="syncOutputs">Generate YAML</button>
+          <button id="saveDocker">Save to Docker</button>
         </div>
         <div class="status-log" id="statusLog" aria-live="polite"></div>
         <div class="form-grid">
@@ -664,6 +665,29 @@ function syncOutputs(showStatus = false) {
   }
 }
 
+function generatedFiles() {
+  readForm();
+  const profileOutput = cleanProfileForOutput(state.profile);
+  return {
+    "joy_profile.yaml": toYaml(profileOutput) + "\n",
+    "teleop_cmd.generated.yaml": toYaml(teleopCmdYaml(state.profile)) + "\n",
+    "joy_button_mapping.generated.yaml": toYaml(buttonMappingYaml(state.profile)) + "\n",
+  };
+}
+
+async function saveToDocker() {
+  const response = await fetch("/api/joy-profile/save", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({files: generatedFiles()}),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.error || `save failed: ${response.status}`);
+  }
+  setStatus(`Docker内に保存しました / Saved in Docker: ${(payload.saved || []).join(", ")}`);
+}
+
 function captureSelector(capture) {
   if (!capture) return "";
   return `.capture[data-capture-kind="${capture.kind}"][data-capture-target="${capture.target}"]`;
@@ -959,6 +983,13 @@ document.getElementById("loadText").addEventListener("click", () => {
 
 document.getElementById("sampleProfile").addEventListener("click", () => setProfile(emptyProfile()));
 document.getElementById("syncOutputs").addEventListener("click", () => syncOutputs(true));
+document.getElementById("saveDocker").addEventListener("click", async () => {
+  try {
+    await saveToDocker();
+  } catch (error) {
+    setStatus(`保存に失敗しました / Save failed: ${error.message}`);
+  }
+});
 
 document.querySelectorAll("[data-output]").forEach(button => {
   button.addEventListener("click", () => {

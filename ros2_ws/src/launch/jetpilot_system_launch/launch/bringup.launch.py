@@ -1,8 +1,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import isaac_ros_launch_utils as lu
 import isaac_ros_launch_utils.all_types as lut
 from launch.conditions import IfCondition
+
+
+def joy_profile_path(filename: str, fallback_package_path: str) -> str:
+    ros2_ws = os.environ.get('ROS2_WS', '/workspaces/ros2_ws')
+    generated_path = os.path.join(ros2_ws, 'joy_profiles', filename)
+    if os.path.exists(generated_path):
+        return generated_path
+    return lu.get_path('jetpilot_teleop_tools', fallback_package_path)
 
 
 def generate_launch_description() -> lut.LaunchDescription:
@@ -24,8 +34,14 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('enable_rc_serial', False, cli=True)
     args.add_arg('control_authority', 'hardware_mux', cli=True)
     args.add_arg('bag_manager_param', lu.get_path('jetpilot_bag_tools', 'config/bag_manager.param.yaml'), cli=True)
-    args.add_arg('teleop_cmd_param', lu.get_path('jetpilot_teleop_tools', 'config/teleop_cmd.param.yaml'), cli=True)
-    args.add_arg('teleop_button_mapping_param', lu.get_path('jetpilot_teleop_tools', 'config/joy_button_mapping.param.yaml'), cli=True)
+    args.add_arg(
+        'teleop_cmd_param',
+        joy_profile_path('teleop_cmd.generated.yaml', 'config/teleop_cmd.param.yaml'),
+        cli=True)
+    args.add_arg(
+        'teleop_button_mapping_param',
+        joy_profile_path('joy_button_mapping.generated.yaml', 'config/joy_button_mapping.param.yaml'),
+        cli=True)
     args.add_arg('serial_reader_param', lu.get_path('rc_serial_reader', 'config/serial_reader_node.param.yaml'), cli=True)
     args.add_arg('rc_channels_topic', '/rc/channels', cli=True)
     args.add_arg('propo_control_topic', '/propo/control_cmd', cli=True)

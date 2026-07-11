@@ -61,6 +61,18 @@ def editor_path() -> Path | None:
     return None
 
 
+def default_output_dir() -> Path:
+    ros2_ws = Path(os.environ.get("ROS2_WS", "/workspaces/ros2_ws")).expanduser()
+    return ros2_ws / "joy_profiles"
+
+
+def resolve_output_path(path_text: str) -> Path:
+    path = Path(path_text).expanduser()
+    if not path.is_absolute():
+        path = default_output_dir() / path
+    return path
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args: object) -> None:
         print(f"[{self.log_date_time_string()}] {fmt % args}")
@@ -74,6 +86,40 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"ok": True})
             return
         self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
+
+    def do_POST(self) -> None:
+        path = unquote(urlparse(self.path).path)
+        body = self._read_json()
+        if path == "/api/joy-profile/save":
+            self._save_files(body)
+            return
+        self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
+
+    def _read_json(self) -> dict[str, object]:
+        length = int(self.headers.get("Content-Length", "0") or 0)
+        if length <= 0:
+            return {}
+        try:
+            value = json.loads(self.rfile.read(length).decode("utf-8"))
+        except json.JSONDecodeError:
+            return {}
+        return value if isinstance(value, dict) else {}
+
+    def _save_files(self, body: dict[str, object]) -> None:
+        files = body.get("files")
+        if not isinstance(files, dict):
+            self._json({"error": "files must be an object"}, HTTPStatus.BAD_REQUEST)
+            return
+        saved = []
+        for name, content in files.items():
+            if not isinstance(name, str) or not isinstance(content, str):
+                self._json({"error": "file names and contents must be strings"}, HTTPStatus.BAD_REQUEST)
+                return
+            path = resolve_output_path(name)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
+            saved.append(str(path))
+        self._json({"ok": True, "saved": saved})
 
     def _editor(self) -> None:
         path = editor_path()

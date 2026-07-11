@@ -129,22 +129,35 @@ ros2 run jetpilot_teleop_tools joy_calibrator.py ui
 
 ## Use Generated Parameters
 
-Launch teleop with the generated parameter files:
+After using `Save to Docker`, launch teleop normally:
 
 ```bash
 ros2 launch jetpilot_system_launch bringup.launch.py \
   enable_joy:=true \
-  enable_teleop:=true \
-  teleop_cmd_param:=$(pwd)/teleop_cmd.generated.yaml \
-  teleop_button_mapping_param:=$(pwd)/joy_button_mapping.generated.yaml
+  enable_teleop:=true
 ```
 
 The full `joy_profile.yaml` is intended for calibration and tester tools. The
 `teleop_cmd.generated.yaml` and `joy_button_mapping.generated.yaml` files are
-the runtime inputs for the current ROS nodes.
+the runtime inputs for the current ROS nodes. `bringup.launch.py` and
+`tool.launch.py` use the generated files from `ROS2_WS/joy_profiles` by default
+when they exist, and fall back to the package defaults before calibration.
 
-When running inside Docker, prefer explicit paths such as `$(pwd)/...` or paths
-under the mounted workspace. Host paths and container paths are not the same.
-The browser UI can download YAML files, but those downloads go to the browser
-environment. For files that ROS launch should read inside Docker, prefer the
-CLI-generated YAML paths shown above.
+When running inside Docker, host paths and container paths are not the same.
+The browser UI can download YAML files to the host, but `Save to Docker` writes
+all three YAML files directly under `ROS2_WS/joy_profiles` inside the container.
+If `ROS2_WS` is not set, the default is `/workspaces/ros2_ws`:
+
+```text
+/workspaces/ros2_ws/joy_profiles/joy_profile.yaml
+/workspaces/ros2_ws/joy_profiles/teleop_cmd.generated.yaml
+/workspaces/ros2_ws/joy_profiles/joy_button_mapping.generated.yaml
+```
+
+You can still override the runtime files explicitly when needed:
+
+```bash
+ros2 launch jetpilot_system_launch bringup.launch.py \
+  teleop_cmd_param:=/workspaces/ros2_ws/joy_profiles/teleop_cmd.generated.yaml \
+  teleop_button_mapping_param:=/workspaces/ros2_ws/joy_profiles/joy_button_mapping.generated.yaml
+```

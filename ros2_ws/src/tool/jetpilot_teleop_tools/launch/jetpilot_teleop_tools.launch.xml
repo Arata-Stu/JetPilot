@@ -1,6 +1,6 @@
 <launch>
-  <arg name="teleop_cmd_config" default="$(find-pkg-share jetpilot_teleop_tools)/config/teleop_cmd.param.yaml"/>
-  <arg name="button_mapping_config" default="$(find-pkg-share jetpilot_teleop_tools)/config/joy_button_mapping.param.yaml"/>
+  <arg name="teleop_cmd_config" default="/workspaces/ros2_ws/joy_profiles/teleop_cmd.generated.yaml"/>
+  <arg name="button_mapping_config" default="/workspaces/ros2_ws/joy_profiles/joy_button_mapping.generated.yaml"/>
   <arg name="use_sim_time" default="false"/>
 
   <node pkg="jetpilot_teleop_tools" exec="teleop_button_manager_node" name="teleop_button_manager_node" output="screen">

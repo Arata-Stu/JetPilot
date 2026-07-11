@@ -120,6 +120,10 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"ok": ok}, HTTPStatus.OK if ok else HTTPStatus.NOT_FOUND)
             return
 
+        if path == "/api/joy-profile/save":
+            self._save_joy_profile_files(body)
+            return
+
         if path == "/api/transfers/jetson-to-local":
             self._start_transfer(body, direction="jetson-to-local")
             return
@@ -190,6 +194,25 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
         self.wfile.write(payload)
+
+    def _save_joy_profile_files(self, body: dict[str, Any]) -> None:
+        files = body.get("files")
+        if not isinstance(files, dict):
+            self._json({"error": "files must be an object"}, HTTPStatus.BAD_REQUEST)
+            return
+        output_root = self.server.state.config.ros2_ws / "joy_profiles"
+        saved = []
+        for name, content in files.items():
+            if not isinstance(name, str) or not isinstance(content, str):
+                self._json({"error": "file names and contents must be strings"}, HTTPStatus.BAD_REQUEST)
+                return
+            path = Path(name).expanduser()
+            if not path.is_absolute():
+                path = output_root / path
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
+            saved.append(str(path))
+        self._json({"ok": True, "saved": saved})
 
     def _joy_profile_editor(self) -> None:
         config = self.server.state.config
