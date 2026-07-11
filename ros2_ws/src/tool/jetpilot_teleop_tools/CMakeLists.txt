@@ -18,4 +18,9 @@ install(DIRECTORY config launch
   DESTINATION share/${PROJECT_NAME}
 )
 
+install(PROGRAMS
+  scripts/joy_calibrator.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
 ament_auto_package()

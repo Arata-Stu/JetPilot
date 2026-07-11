@@ -24,6 +24,12 @@ public:
     deadzone_ = std::clamp(declare_parameter<double>("deadzone", 0.05), 0.0, 1.0);
     trigger_min_ = declare_parameter<double>("trigger_min", -1.0);
     trigger_max_ = declare_parameter<double>("trigger_max", 1.0);
+    throttle_trigger_min_ = declare_parameter<double>("throttle_trigger_min", trigger_min_);
+    throttle_trigger_max_ = declare_parameter<double>("throttle_trigger_max", trigger_max_);
+    throttle_trigger_inverted_ = declare_parameter<bool>("throttle_trigger_inverted", true);
+    reverse_trigger_min_ = declare_parameter<double>("reverse_trigger_min", trigger_min_);
+    reverse_trigger_max_ = declare_parameter<double>("reverse_trigger_max", trigger_max_);
+    reverse_trigger_inverted_ = declare_parameter<bool>("reverse_trigger_inverted", true);
 
     joy_sub_ = create_subscription<sensor_msgs::msg::Joy>(
       "/joy", 10, [this](const sensor_msgs::msg::Joy::SharedPtr msg) { handle_joy(*msg); });
@@ -47,13 +53,17 @@ private:
     return std::abs(value) < deadzone_ ? 0.0 : value;
   }
 
-  double normalized_trigger(const sensor_msgs::msg::Joy & joy, const int axis, const double scale) const
+  double normalized_trigger(
+    const sensor_msgs::msg::Joy & joy, const int axis, const double scale,
+    const double trigger_min, const double trigger_max, const bool inverted) const
   {
-    if (!has_axis(joy, axis) || trigger_max_ == trigger_min_) {
+    if (!has_axis(joy, axis) || trigger_max == trigger_min) {
       return 0.0;
     }
-    const double raw = std::clamp(static_cast<double>(joy.axes[axis]), trigger_min_, trigger_max_);
-    const double normalized = (trigger_max_ - raw) / (trigger_max_ - trigger_min_);
+    const double raw = std::clamp(static_cast<double>(joy.axes[axis]), trigger_min, trigger_max);
+    const double normalized = inverted ?
+      (trigger_max - raw) / (trigger_max - trigger_min) :
+      (raw - trigger_min) / (trigger_max - trigger_min);
     return std::clamp(normalized * scale, 0.0, 1.0);
   }
 
@@ -69,8 +79,14 @@ private:
       const double steering =
         has_axis(joy, steering_axis_) ? apply_deadzone(joy.axes[steering_axis_]) * steering_scale_ : 0.0;
       cmd.steering = static_cast<float>(std::clamp(steering, -1.0, 1.0));
-      cmd.throttle = static_cast<float>(normalized_trigger(joy, throttle_axis_, throttle_scale_));
-      cmd.reverse = static_cast<float>(normalized_trigger(joy, reverse_axis_, reverse_scale_));
+      cmd.throttle = static_cast<float>(
+        normalized_trigger(
+          joy, throttle_axis_, throttle_scale_, throttle_trigger_min_, throttle_trigger_max_,
+          throttle_trigger_inverted_));
+      cmd.reverse = static_cast<float>(
+        normalized_trigger(
+          joy, reverse_axis_, reverse_scale_, reverse_trigger_min_, reverse_trigger_max_,
+          reverse_trigger_inverted_));
       cmd.brake = has_button(joy, brake_button_) && joy.buttons[brake_button_] != 0 ?
         static_cast<float>(brake_value_) : 0.0F;
     } else {
@@ -95,6 +111,12 @@ private:
   double deadzone_;
   double trigger_min_;
   double trigger_max_;
+  double throttle_trigger_min_;
+  double throttle_trigger_max_;
+  bool throttle_trigger_inverted_;
+  double reverse_trigger_min_;
+  double reverse_trigger_max_;
+  bool reverse_trigger_inverted_;
   rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr joy_sub_;
   rclcpp::Publisher<jetpilot_msgs::msg::ControlCommand>::SharedPtr cmd_pub_;
 };
