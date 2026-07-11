@@ -191,7 +191,9 @@ editor.
 
 - Connection target: host, user, remote map root, remote rosbag root.
 - Remote state: SSH result, latest map, map count, rosbag count, disk output.
-- Pull rosbags: Jetson to notebook transfer.
+- Pull one rosbag sequence from Jetson to notebook. The sequence picker is built
+  from remote `metadata.yaml` discovery so the entire record root does not need
+  to be transferred.
 - Push map bundle: notebook to Jetson transfer.
 
 ### Terminal Panel
@@ -202,6 +204,8 @@ opening a task log in a modal/drawer from any `View Log` button.
 Required terminal features:
 
 - Live log streaming.
+- Auto-scroll only while the log view is already at the bottom, so older logs can
+  be inspected without being pulled back to the newest line.
 - Per-task tabs.
 - Copy command button.
 - Copy visible log button.

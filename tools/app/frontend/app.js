@@ -8,6 +8,7 @@ const state = {
   selectedTaskId: null,
   terminalCollapsed: false,
   logDialogOpen: false,
+  logStickToEnd: true,
   logText: "",
   stream: null,
   jetsonInspect: null,
@@ -45,6 +46,13 @@ async function api(path, options = {}) {
     throw new Error(message);
   }
   return payload;
+}
+
+async function apiText(path) {
+  const response = await fetch(path);
+  const text = await response.text();
+  if (!response.ok) throw new Error(text || `${response.status} ${response.statusText}`);
+  return text;
 }
 
 function toast(message, type = "success") {
@@ -166,17 +174,11 @@ function isEditingField() {
   return ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName || "");
 }
 
-function updateLogOnly() {
-  const log = $("task-log");
-  if (log) {
-    log.textContent = state.logText || "Select a task to view logs.";
-    scrollLogToEnd();
-  }
-  const dialogLog = $("console-output");
-  if (dialogLog) {
-    dialogLog.textContent = state.logText || "Select a task to view logs.";
-    scrollDialogLogToEnd();
-  }
+function updateLogOnly(chunk = "", append = false) {
+  updateLogElement($("task-log"), chunk, append);
+  updateLogElement($("console-output"), chunk, append);
+  updateTaskChrome();
+  scrollLogToEnd();
 }
 
 function renderPage() {
@@ -523,17 +525,49 @@ function renderJetsonSummary() {
 
 function renderJetsonTransfers() {
   const config = state.config || {};
+  const sequences = jetsonRosbagSequences();
+  const sequenceOptions = sequences
+    .map((sequence) => `<option value="${esc(sequence.path)}">${esc(sequence.name)} - ${esc(sequence.modified || sequence.path)}</option>`)
+    .join("");
+  const sequenceList = sequences
+    .slice(0, 12)
+    .map(
+      (sequence) => `
+        <div class="mini-row">
+          <div>
+            <strong>${esc(sequence.name)}</strong>
+            <div class="path" title="${esc(sequence.path)}">${esc(sequence.path)}</div>
+          </div>
+          <div class="actions">
+            <button onclick="useJetsonRosbag(${js(sequence.path)})">Use</button>
+            <button class="primary" onclick="pullJetsonRosbag(${js(sequence.path)})">Pull</button>
+          </div>
+        </div>`,
+    )
+    .join("");
   return `
     <div class="transfer-grid">
       <section class="transfer-card">
-        <h3>Pull rosbags</h3>
+        <h3>Pull one rosbag sequence</h3>
         <div class="form-grid">
-          <div class="field full"><label>From Jetson</label><input id="pull-remote" value="${esc(config.jetson_record_root || "")}" /></div>
+          <div class="field full">
+            <label>Discovered by metadata.yaml</label>
+            <select id="pull-remote-select" onchange="useJetsonRosbag(this.value)">
+              <option value="">Select inspected sequence</option>
+              ${sequenceOptions}
+            </select>
+          </div>
+          <div class="field full"><label>From Jetson</label><input id="pull-remote" value="" placeholder="${esc(config.jetson_record_root || "")}/<sequence>" /></div>
           <div class="field full"><label>To notebook</label><input id="pull-local" value="${esc(config.record_root || "")}" /></div>
           <div class="actions full">
-            <button class="primary" onclick="startJetsonPull()">Start Pull</button>
-            <button onclick="copyPullCommand()">Copy Command</button>
+            <button class="primary" onclick="startJetsonPull()">Pull Selected Sequence</button>
+            <button onclick="copyPullCommand()">Copy rsync Command</button>
           </div>
+          ${
+            sequences.length
+              ? `<div class="mini-list full">${sequenceList}</div>`
+              : `<div class="notice full">Inspect Jetson first. Rosbag sequences are discovered by searching for metadata.yaml under the remote rosbag root.</div>`
+          }
         </div>
       </section>
       <section class="transfer-card">
@@ -606,12 +640,12 @@ function renderTerminal() {
     <section class="terminal ${state.terminalCollapsed ? "collapsed" : ""}">
       <div class="terminal-bar">
         <button class="ghost" onclick="toggleTerminal()">${state.terminalCollapsed ? "Open" : "Close"}</button>
-        <div class="terminal-title">${esc(task?.title || "No task selected")}</div>
-        <div class="terminal-meta">${task ? `pid ${task.pid || "-"} / pgid ${task.pgid || "-"} / ${task.status}` : ""}</div>
+        <div id="terminal-title" class="terminal-title">${esc(task?.title || "No task selected")}</div>
+        <div id="terminal-meta" class="terminal-meta">${task ? `pid ${task.pid || "-"} / pgid ${task.pgid || "-"} / ${task.status}` : ""}</div>
         <span class="spacer"></span>
         <button onclick="openLogDialog()" ${task ? "" : "disabled"}>Open Console</button>
-        <button onclick="copyText(${js(commandText(task || {}))})" ${task ? "" : "disabled"}>Copy Command</button>
-        <button onclick="copyText(state.logText, 'Log copied')" ${task ? "" : "disabled"}>Copy Log</button>
+        <button onclick="copySelectedTaskCommand()" ${task ? "" : "disabled"}>Copy Command</button>
+        <button onclick="copySelectedTaskLog()" ${task ? "" : "disabled"}>Copy Log</button>
         <button class="danger" onclick="stopTask(${js(task?.task_id || "")})" ${task && ["running", "queued", "stopping"].includes(task.status) ? "" : "disabled"}>Stop</button>
       </div>
       <div class="terminal-body">
@@ -627,7 +661,7 @@ function renderTerminal() {
             )
             .join("")}
         </div>
-        <div class="log-pane"><pre id="task-log" class="log">${esc(state.logText || "Select a task to view logs.")}</pre></div>
+        <div class="log-pane" onscroll="handleLogScroll(event)"><pre id="task-log" class="log">${esc(state.logText || "Select a task to view logs.")}</pre></div>
       </div>
     </section>
   `;
@@ -643,16 +677,16 @@ function renderLogDialog() {
           <div>
             <p class="eyebrow">Task console</p>
             <h2 id="console-title">${esc(task?.title || "Console")}</h2>
-            <span>${task ? `pid ${esc(task.pid || "-")} / pgid ${esc(task.pgid || "-")} / ${esc(task.status)}` : "No task selected"}</span>
+            <span id="console-meta">${task ? `pid ${esc(task.pid || "-")} / pgid ${esc(task.pgid || "-")} / ${esc(task.status)}` : "No task selected"}</span>
           </div>
           <div class="dialog-actions">
-            <button onclick="copyText(${js(commandText(task || {}))})" ${task ? "" : "disabled"}>Copy Command</button>
-            <button onclick="copyText(state.logText, 'Log copied')" ${task ? "" : "disabled"}>Copy Log</button>
+            <button onclick="copySelectedTaskCommand()" ${task ? "" : "disabled"}>Copy Command</button>
+            <button onclick="copySelectedTaskLog()" ${task ? "" : "disabled"}>Copy Log</button>
             <button class="danger" onclick="stopTask(${js(task?.task_id || "")})" ${task && ["running", "queued", "stopping"].includes(task.status) ? "" : "disabled"}>Stop</button>
             <button class="icon-button" onclick="closeLogDialog()" aria-label="Close console">x</button>
           </div>
         </div>
-        <pre id="console-output" class="dialog-log">${esc(state.logText || "Select a task to view logs.")}</pre>
+        <pre id="console-output" class="dialog-log" onscroll="handleLogScroll(event)">${esc(state.logText || "Select a task to view logs.")}</pre>
       </section>
     </div>
   `;
@@ -663,13 +697,45 @@ function toggleTerminal() {
   render();
 }
 
-function scrollLogToEnd() {
-  const pane = document.querySelector(".log-pane");
-  if (pane) pane.scrollTop = pane.scrollHeight;
-  scrollDialogLogToEnd();
+function selectedTask() {
+  return state.tasks.find((item) => item.task_id === state.selectedTaskId);
 }
 
-function scrollDialogLogToEnd() {
+function updateLogElement(element, chunk = "", append = false) {
+  if (!element) return;
+  if (chunk && append) {
+    element.textContent += chunk;
+    return;
+  }
+  element.textContent = state.logText || "Select a task to view logs.";
+}
+
+function updateTaskChrome() {
+  const task = selectedTask();
+  if ($("terminal-title")) $("terminal-title").textContent = task?.title || "No task selected";
+  if ($("terminal-meta")) $("terminal-meta").textContent = task ? `pid ${task.pid || "-"} / pgid ${task.pgid || "-"} / ${task.status}` : "";
+  if ($("console-title")) $("console-title").textContent = task?.title || "Console";
+  if ($("console-meta")) $("console-meta").textContent = task ? `pid ${task.pid || "-"} / pgid ${task.pgid || "-"} / ${task.status}` : "No task selected";
+}
+
+function isNearBottom(element) {
+  if (!element) return true;
+  return element.scrollHeight - element.scrollTop - element.clientHeight < 28;
+}
+
+function handleLogScroll(event) {
+  state.logStickToEnd = isNearBottom(event.currentTarget);
+}
+
+function scrollLogToEnd(force = false) {
+  if (!force && !state.logStickToEnd) return;
+  const pane = document.querySelector(".log-pane");
+  if (pane) pane.scrollTop = pane.scrollHeight;
+  scrollDialogLogToEnd(force);
+}
+
+function scrollDialogLogToEnd(force = false) {
+  if (!force && !state.logStickToEnd) return;
   const dialogLog = $("console-output");
   if (dialogLog) dialogLog.scrollTop = dialogLog.scrollHeight;
 }
@@ -691,6 +757,7 @@ function openTaskLog(taskId) {
 async function selectTask(taskId, options = {}) {
   state.selectedTaskId = taskId;
   state.logText = "";
+  state.logStickToEnd = true;
   if (state.stream) state.stream.close();
   const task = state.tasks.find((item) => item.task_id === taskId);
   if (!task) {
@@ -702,18 +769,39 @@ async function selectTask(taskId, options = {}) {
   state.stream = new EventSource(`/api/tasks/${encodeURIComponent(taskId)}/stream`);
   state.stream.onmessage = (event) => {
     const payload = JSON.parse(event.data);
-    if (payload.chunk) state.logText += payload.chunk;
+    const chunk = payload.chunk || "";
+    const append = Boolean(state.logText && chunk);
+    if (chunk) state.logText += chunk;
     if (payload.task) {
       const index = state.tasks.findIndex((item) => item.task_id === payload.task.task_id);
       if (index >= 0) state.tasks[index] = payload.task;
     }
-    if (isEditingField()) updateLogOnly();
-    else render();
+    updateLogOnly(chunk, append);
   };
   state.stream.onerror = () => {
     if (state.stream) state.stream.close();
   };
   render();
+}
+
+function logHistoryIsBeingRead() {
+  return Boolean(state.selectedTaskId && !state.logStickToEnd && (!state.terminalCollapsed || state.logDialogOpen));
+}
+
+function copySelectedTaskCommand() {
+  copyText(commandText(selectedTask() || {}), "Command copied");
+}
+
+async function copySelectedTaskLog() {
+  try {
+    let text = state.logText;
+    if (!text && state.selectedTaskId) {
+      text = await apiText(`/api/tasks/${encodeURIComponent(state.selectedTaskId)}/log`);
+    }
+    await copyText(text, "Log copied");
+  } catch (error) {
+    toast(`Copy failed: ${error.message}`, "error");
+  }
 }
 
 async function stopTask(taskId) {
@@ -863,6 +951,24 @@ function jetsonTarget() {
   };
 }
 
+function pullRemotePath() {
+  return $("pull-remote")?.value.trim() || $("pull-remote-select")?.value || "";
+}
+
+function pullLocalPath() {
+  return $("pull-local")?.value.trim() || state.config?.record_root || "";
+}
+
+function useJetsonRosbag(path) {
+  if ($("pull-remote")) $("pull-remote").value = path || "";
+  if ($("pull-remote-select") && path) $("pull-remote-select").value = path;
+}
+
+function pullJetsonRosbag(path) {
+  useJetsonRosbag(path);
+  return startJetsonPull();
+}
+
 async function startTransfer(direction, paths = null) {
   const target = jetsonTarget();
   const payload = {
@@ -878,9 +984,13 @@ async function startTransfer(direction, paths = null) {
 }
 
 function startJetsonPull() {
+  if (!pullRemotePath()) {
+    window.alert("Select or enter one Jetson rosbag sequence first.");
+    return null;
+  }
   return startTransfer("jetson-to-local", {
-    remote: $("pull-remote").value,
-    local: $("pull-local").value,
+    remote: pullRemotePath(),
+    local: pullLocalPath(),
   });
 }
 
@@ -892,13 +1002,17 @@ function startJetsonPush() {
 }
 
 function copyPullCommand() {
+  if (!pullRemotePath()) {
+    window.alert("Select or enter one Jetson rosbag sequence first.");
+    return;
+  }
   const target = jetsonTarget();
-  copyText(`rsync -avhP --info=progress2 ${target.user}@${target.host}:${$("pull-remote").value} ${trimTrailingSlash($("pull-local").value)}/`);
+  copyText(`rsync -avhP --info=progress2 ${sh(`${target.user}@${target.host}:${pullRemotePath()}`)} ${sh(trimTrailingSlash(pullLocalPath()) + "/")}`);
 }
 
 function copyPushCommand() {
   const target = jetsonTarget();
-  copyText(`rsync -avhP --info=progress2 ${trimTrailingSlash($("push-local").value)}/ ${target.user}@${target.host}:${trimTrailingSlash($("push-remote").value)}/`);
+  copyText(`rsync -avhP --info=progress2 ${sh(trimTrailingSlash($("push-local").value) + "/")} ${sh(`${target.user}@${target.host}:${trimTrailingSlash($("push-remote").value)}/`)}`);
 }
 
 function parseJetsonOutput(output) {
@@ -915,6 +1029,28 @@ function parseJetsonOutput(output) {
     }
   }
   return sections;
+}
+
+function jetsonRosbagSequences() {
+  const sections = parseJetsonOutput(state.jetsonInspect?.output || "");
+  const seen = new Set();
+  return contentLines(sections.rosbags)
+    .map((line) => {
+      const match = line.match(/^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})\s+(.+)$/);
+      const modified = match ? match[1] : "";
+      const path = match ? match[2] : line;
+      return {
+        modified,
+        path,
+        name: shortName(path),
+      };
+    })
+    .filter((sequence) => {
+      if (!sequence.path || seen.has(sequence.path)) return false;
+      seen.add(sequence.path);
+      return true;
+    })
+    .reverse();
 }
 
 function contentLines(lines = []) {
@@ -949,6 +1085,9 @@ window.selectTask = selectTask;
 window.openTaskLog = openTaskLog;
 window.openLogDialog = openLogDialog;
 window.closeLogDialog = closeLogDialog;
+window.handleLogScroll = handleLogScroll;
+window.copySelectedTaskCommand = copySelectedTaskCommand;
+window.copySelectedTaskLog = copySelectedTaskLog;
 window.stopTask = stopTask;
 window.runCustomCommand = runCustomCommand;
 window.fillMapDir = fillMapDir;
@@ -966,6 +1105,8 @@ window.inspectJetson = inspectJetson;
 window.copyJetsonInspect = copyJetsonInspect;
 window.setJetsonHost = setJetsonHost;
 window.startTransfer = startTransfer;
+window.useJetsonRosbag = useJetsonRosbag;
+window.pullJetsonRosbag = pullJetsonRosbag;
 window.startJetsonPull = startJetsonPull;
 window.startJetsonPush = startJetsonPush;
 window.copyPullCommand = copyPullCommand;
@@ -979,7 +1120,8 @@ setInterval(() => {
   api("/api/tasks")
     .then((data) => {
       state.tasks = data.tasks || [];
-      if (!isEditingField()) render();
+      if (!isEditingField() && !logHistoryIsBeingRead()) render();
+      else updateTaskChrome();
     })
     .catch(() => {});
 }, 5000);
