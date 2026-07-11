@@ -70,7 +70,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._text(text)
                 return
             if len(parts) == 4 and parts[3] == "stream":
-                self._stream_task(parts[2])
+                tail = int(query.get("tail", ["0"])[0] or 0)
+                self._stream_task(parts[2], tail if tail > 0 else None)
                 return
         if path == "/api/rosbags/local":
             self._json({"rosbags": scan_rosbags(self.server.state.config.record_root)})
@@ -187,7 +188,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
 
-    def _stream_task(self, task_id: str) -> None:
+    def _stream_task(self, task_id: str, initial_tail: int | None = None) -> None:
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
@@ -196,6 +197,7 @@ class Handler(BaseHTTPRequestHandler):
 
         offset = 0
         idle_after_finish = 0
+        sent_initial_tail = initial_tail is None
         while True:
             task = self.server.state.tasks.get_task(task_id)
             if task is None:
@@ -204,11 +206,16 @@ class Handler(BaseHTTPRequestHandler):
             path = Path(task.log_path)
             chunk = ""
             if path.exists():
-                with path.open("rb") as handle:
-                    handle.seek(offset)
-                    data = handle.read()
-                    offset = handle.tell()
-                chunk = data.decode("utf-8", errors="replace")
+                if not sent_initial_tail:
+                    chunk = self.server.state.tasks.read_log(task_id, initial_tail)
+                    offset = path.stat().st_size
+                    sent_initial_tail = True
+                else:
+                    with path.open("rb") as handle:
+                        handle.seek(offset)
+                        data = handle.read()
+                        offset = handle.tell()
+                    chunk = data.decode("utf-8", errors="replace")
             self._sse({"task": task.to_json(), "chunk": chunk})
             if task.status in {"success", "failed", "stopped", "lost"}:
                 idle_after_finish += 1

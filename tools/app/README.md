@@ -208,6 +208,7 @@ Required terminal features:
   be inspected without being pulled back to the newest line.
 - Per-task tabs.
 - Copy command button.
+- Copy task log button.
 - Copy visible log button.
 - Copy full log button.
 - Download log button.

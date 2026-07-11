@@ -15,6 +15,7 @@ public:
     steering_ = std::clamp(declare_parameter<double>("steering", 0.0), -1.0, 1.0);
     throttle_ = std::clamp(declare_parameter<double>("throttle", 0.0), 0.0, 1.0);
     brake_ = std::clamp(declare_parameter<double>("brake", 1.0), 0.0, 1.0);
+    reverse_ = std::clamp(declare_parameter<double>("reverse", 0.0), 0.0, 1.0);
 
     const auto qos_cmd = rclcpp::QoS(rclcpp::KeepLast(1)).best_effort();
     cmd_pub_ = create_publisher<jetpilot_msgs::msg::ControlCommand>("/auto/control_cmd", qos_cmd);
@@ -33,6 +34,7 @@ private:
     cmd.steering = static_cast<float>(steering_);
     cmd.throttle = static_cast<float>(throttle_);
     cmd.brake = static_cast<float>(brake_);
+    cmd.reverse = static_cast<float>(reverse_);
     cmd_pub_->publish(cmd);
   }
 
@@ -40,6 +42,7 @@ private:
   double steering_;
   double throttle_;
   double brake_;
+  double reverse_;
   rclcpp::Publisher<jetpilot_msgs::msg::ControlCommand>::SharedPtr cmd_pub_;
   rclcpp::TimerBase::SharedPtr timer_;
 };

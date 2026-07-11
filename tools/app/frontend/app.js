@@ -622,8 +622,9 @@ function renderTaskTable(tasks) {
                 <td class="mono">${esc(task.pid || "-")} / ${esc(task.pgid || "-")}</td>
                 <td>${esc(task.started_at || "-")}</td>
                 <td class="actions">
-                  <button onclick="openTaskLog(${js(task.task_id)})">Log</button>
-                  <button onclick="copyText(${js(commandText(task))})">Copy</button>
+                  <button onclick="openTaskLog(${js(task.task_id)})">Open Log</button>
+                  <button onclick="copyTaskCommand(${js(task.task_id)})">Copy Command</button>
+                  <button onclick="copyTaskLog(${js(task.task_id)})">Copy Log</button>
                   <button class="danger" onclick="stopTask(${js(task.task_id)})" ${["running", "queued", "stopping"].includes(task.status) ? "" : "disabled"}>Stop</button>
                 </td>
               </tr>`,
@@ -750,8 +751,8 @@ function closeLogDialog() {
   render();
 }
 
-function openTaskLog(taskId) {
-  selectTask(taskId, { openDialog: true });
+async function openTaskLog(taskId) {
+  await selectTask(taskId, { openDialog: true });
 }
 
 async function selectTask(taskId, options = {}) {
@@ -766,7 +767,7 @@ async function selectTask(taskId, options = {}) {
   }
   state.terminalCollapsed = false;
   if (options.openDialog) state.logDialogOpen = true;
-  state.stream = new EventSource(`/api/tasks/${encodeURIComponent(taskId)}/stream`);
+  state.stream = new EventSource(`/api/tasks/${encodeURIComponent(taskId)}/stream?tail=1000`);
   state.stream.onmessage = (event) => {
     const payload = JSON.parse(event.data);
     const chunk = payload.chunk || "";
@@ -788,20 +789,33 @@ function logHistoryIsBeingRead() {
   return Boolean(state.selectedTaskId && !state.logStickToEnd && (!state.terminalCollapsed || state.logDialogOpen));
 }
 
-function copySelectedTaskCommand() {
-  copyText(commandText(selectedTask() || {}), "Command copied");
+function taskById(taskId) {
+  return state.tasks.find((item) => item.task_id === taskId);
 }
 
-async function copySelectedTaskLog() {
+function copyTaskCommand(taskId) {
+  copyText(commandText(taskById(taskId) || {}), "Command copied");
+}
+
+async function copyTaskLog(taskId) {
   try {
-    let text = state.logText;
-    if (!text && state.selectedTaskId) {
-      text = await apiText(`/api/tasks/${encodeURIComponent(state.selectedTaskId)}/log`);
-    }
+    const text = taskId === state.selectedTaskId && state.logText
+      ? state.logText
+      : await apiText(`/api/tasks/${encodeURIComponent(taskId)}/log`);
     await copyText(text, "Log copied");
   } catch (error) {
     toast(`Copy failed: ${error.message}`, "error");
   }
+}
+
+function copySelectedTaskCommand() {
+  if (!state.selectedTaskId) return;
+  copyTaskCommand(state.selectedTaskId);
+}
+
+function copySelectedTaskLog() {
+  if (!state.selectedTaskId) return;
+  return copyTaskLog(state.selectedTaskId);
 }
 
 async function stopTask(taskId) {
@@ -1086,6 +1100,8 @@ window.openTaskLog = openTaskLog;
 window.openLogDialog = openLogDialog;
 window.closeLogDialog = closeLogDialog;
 window.handleLogScroll = handleLogScroll;
+window.copyTaskCommand = copyTaskCommand;
+window.copyTaskLog = copyTaskLog;
 window.copySelectedTaskCommand = copySelectedTaskCommand;
 window.copySelectedTaskLog = copySelectedTaskLog;
 window.stopTask = stopTask;

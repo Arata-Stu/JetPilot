@@ -14,11 +14,13 @@ public:
   {
     steering_axis_ = declare_parameter<int>("steering_axis", 0);
     throttle_axis_ = declare_parameter<int>("throttle_axis", 5);
-    brake_axis_ = declare_parameter<int>("brake_axis", 2);
+    reverse_axis_ = declare_parameter<int>("reverse_axis", 2);
+    brake_button_ = declare_parameter<int>("brake_button", -1);
     deadman_button_ = declare_parameter<int>("deadman_button", 4);
     steering_scale_ = declare_parameter<double>("steering_scale", 1.0);
     throttle_scale_ = declare_parameter<double>("throttle_scale", 1.0);
-    brake_scale_ = declare_parameter<double>("brake_scale", 1.0);
+    reverse_scale_ = declare_parameter<double>("reverse_scale", 1.0);
+    brake_value_ = std::clamp(declare_parameter<double>("brake_value", 1.0), 0.0, 1.0);
     deadzone_ = std::clamp(declare_parameter<double>("deadzone", 0.05), 0.0, 1.0);
     trigger_min_ = declare_parameter<double>("trigger_min", -1.0);
     trigger_max_ = declare_parameter<double>("trigger_max", 1.0);
@@ -68,11 +70,14 @@ private:
         has_axis(joy, steering_axis_) ? apply_deadzone(joy.axes[steering_axis_]) * steering_scale_ : 0.0;
       cmd.steering = static_cast<float>(std::clamp(steering, -1.0, 1.0));
       cmd.throttle = static_cast<float>(normalized_trigger(joy, throttle_axis_, throttle_scale_));
-      cmd.brake = static_cast<float>(normalized_trigger(joy, brake_axis_, brake_scale_));
+      cmd.reverse = static_cast<float>(normalized_trigger(joy, reverse_axis_, reverse_scale_));
+      cmd.brake = has_button(joy, brake_button_) && joy.buttons[brake_button_] != 0 ?
+        static_cast<float>(brake_value_) : 0.0F;
     } else {
       cmd.steering = 0.0F;
       cmd.throttle = 0.0F;
       cmd.brake = 1.0F;
+      cmd.reverse = 0.0F;
     }
 
     cmd_pub_->publish(cmd);
@@ -80,11 +85,13 @@ private:
 
   int steering_axis_;
   int throttle_axis_;
-  int brake_axis_;
+  int reverse_axis_;
+  int brake_button_;
   int deadman_button_;
   double steering_scale_;
   double throttle_scale_;
-  double brake_scale_;
+  double reverse_scale_;
+  double brake_value_;
   double deadzone_;
   double trigger_min_;
   double trigger_max_;

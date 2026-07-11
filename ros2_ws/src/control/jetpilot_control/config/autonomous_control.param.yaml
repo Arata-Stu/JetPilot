@@ -4,3 +4,4 @@ autonomous_control_node:
     steering: 0.0
     throttle: 0.0
     brake: 1.0
+    reverse: 0.0
