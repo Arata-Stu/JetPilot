@@ -265,13 +265,7 @@
       <div class="panel">
         <h2>D-pad / 十字キー</h2>
         <div class="form-grid">
-          <div class="field"><label>type</label><select data-path="dpad.type"><option>axis</option><option>button</option><option>mixed</option></select></div>
-          <div class="field"><label>x_axis</label><div class="capture-field"><input type="number" data-path="dpad.x_axis"><button class="capture" data-capture-kind="axis" data-capture-target="dpad.x_axis">Cap</button></div></div>
-          <div class="field"><label>y_axis</label><div class="capture-field"><input type="number" data-path="dpad.y_axis"><button class="capture" data-capture-kind="axis" data-capture-target="dpad.y_axis">Cap</button></div></div>
-          <div class="field"><label>up_value</label><div class="capture-field"><input type="number" data-path="dpad.up_value"><button class="capture" data-capture-kind="axisValue" data-capture-target="dpad.up_value" data-capture-axis="dpad.y_axis">Cap</button></div></div>
-          <div class="field"><label>down_value</label><div class="capture-field"><input type="number" data-path="dpad.down_value"><button class="capture" data-capture-kind="axisValue" data-capture-target="dpad.down_value" data-capture-axis="dpad.y_axis">Cap</button></div></div>
-          <div class="field"><label>left_value</label><div class="capture-field"><input type="number" data-path="dpad.left_value"><button class="capture" data-capture-kind="axisValue" data-capture-target="dpad.left_value" data-capture-axis="dpad.x_axis">Cap</button></div></div>
-          <div class="field"><label>right_value</label><div class="capture-field"><input type="number" data-path="dpad.right_value"><button class="capture" data-capture-kind="axisValue" data-capture-target="dpad.right_value" data-capture-axis="dpad.x_axis">Cap</button></div></div>
+          <div class="field"><label>type</label><select data-path="dpad.type"><option>button</option></select></div>
           <div class="field"><label>up button</label><div class="capture-field"><input type="number" data-path="dpad.up"><button class="capture" data-capture-kind="buttonPath" data-capture-target="dpad.up">Cap</button></div></div>
           <div class="field"><label>right button</label><div class="capture-field"><input type="number" data-path="dpad.right"><button class="capture" data-capture-kind="buttonPath" data-capture-target="dpad.right">Cap</button></div></div>
           <div class="field"><label>down button</label><div class="capture-field"><input type="number" data-path="dpad.down"><button class="capture" data-capture-kind="buttonPath" data-capture-target="dpad.down">Cap</button></div></div>
@@ -334,14 +328,14 @@ function emptyProfile() {
     device: {name: "DualShock4", path: "/dev/input/js0", vendor_id: "054c", product_id: "09cc"},
     buttons: Object.fromEntries(buttonNames.map((name, index) => [name, index])),
     triggers: {
-      l2: {axis: 2, button: 6, min: -32767, max: 32767, released: -32767, pressed: 32767, deadzone: 500, inverted: false},
-      r2: {axis: 5, button: 7, min: -32767, max: 32767, released: -32767, pressed: 32767, deadzone: 500, inverted: false}
+      l2: {axis: 2, button: 6, released: -32767, pressed: 32767, deadzone: 500, inverted: false},
+      r2: {axis: 5, button: 7, released: -32767, pressed: 32767, deadzone: 500, inverted: false}
     },
     sticks: {
       left: {x_axis: 0, y_axis: 1, invert_x: false, invert_y: true, center_x: 0, center_y: 0, deadzone: 2500},
       right: {x_axis: 3, y_axis: 4, invert_x: false, invert_y: true, center_x: 0, center_y: 0, deadzone: 2500}
     },
-    dpad: {type: "button", up: 12, right: 15, down: 13, left: 14, x_axis: 6, y_axis: 7, left_value: -32767, right_value: 32767, up_value: -32767, down_value: 32767},
+    dpad: {type: "button", up: 12, right: 15, down: 13, left: 14},
     idle_axes: {}
   };
 }
@@ -439,6 +433,24 @@ function toYaml(value, indent = 0) {
   return `${pad}${yamlScalar(value)}`;
 }
 
+function cleanProfileForOutput(profile) {
+  const output = JSON.parse(JSON.stringify(profile));
+  for (const trigger of Object.values(output.triggers || {})) {
+    delete trigger.min;
+    delete trigger.max;
+  }
+  if (output.dpad) {
+    output.dpad = {
+      type: "button",
+      up: Number(output.dpad.up ?? -1),
+      right: Number(output.dpad.right ?? -1),
+      down: Number(output.dpad.down ?? -1),
+      left: Number(output.dpad.left ?? -1),
+    };
+  }
+  return output;
+}
+
 function mergeProfile(input) {
   const base = emptyProfile();
   return {
@@ -529,8 +541,6 @@ function triggerBlock(name) {
   </div><div class="form-grid">
     ${field(`triggers.${name}.axis`, "axis", t.axis, "number", capture("axis", `triggers.${name}.axis`))}
     ${field(`triggers.${name}.button`, "button", t.button, "number", capture("buttonPath", `triggers.${name}.button`))}
-    ${field(`triggers.${name}.min`, "min", t.min, "number", capture("axisValue", `triggers.${name}.min`, `triggers.${name}.axis`))}
-    ${field(`triggers.${name}.max`, "max", t.max, "number", capture("axisValue", `triggers.${name}.max`, `triggers.${name}.axis`))}
     ${field(`triggers.${name}.released`, "released", t.released, "number", capture("triggerReleased", name))}
     ${field(`triggers.${name}.pressed`, "pressed", t.pressed, "number", capture("triggerPressed", name))}
     ${field(`triggers.${name}.deadzone`, "deadzone", t.deadzone, "number")}
@@ -581,8 +591,9 @@ function setStatus(message) {
 
 function syncOutputs(showStatus = false) {
   readForm();
-  document.getElementById("yamlInput").value = toYaml(state.profile);
-  let output = state.profile;
+  const profileOutput = cleanProfileForOutput(state.profile);
+  document.getElementById("yamlInput").value = toYaml(profileOutput);
+  let output = profileOutput;
   if (state.outputKind === "teleop") output = teleopCmdYaml(state.profile);
   if (state.outputKind === "buttons") output = buttonMappingYaml(state.profile);
   document.getElementById("yamlOutput").value = toYaml(output) + "\n";
@@ -615,6 +626,15 @@ function axisRawValue(gamepad, index) {
   return Math.round(axisValue(gamepad, index) * 32767);
 }
 
+function buttonAnalogValue(gamepad, index) {
+  if (index === undefined || index < 0 || index >= gamepad.buttons.length) return null;
+  return gamepad.buttons[index].value;
+}
+
+function analogToRaw(value) {
+  return Math.round(Math.max(0, Math.min(1, value)) * 65534 - 32767);
+}
+
 function estimateStickIdle(stick, samples) {
   const xAxis = Number(stick.x_axis);
   const yAxis = Number(stick.y_axis);
@@ -633,8 +653,6 @@ function updateTriggerRange(trigger) {
   const released = Number(trigger.released);
   const pressed = Number(trigger.pressed);
   if (!Number.isFinite(released) || !Number.isFinite(pressed)) return;
-  trigger.min = Math.min(released, pressed);
-  trigger.max = Math.max(released, pressed);
   trigger.inverted = pressed < released;
 }
 
@@ -644,9 +662,13 @@ function buttonPressed(gamepad, index) {
 }
 
 function triggerValue(gamepad, trigger) {
+  const buttonValue = buttonAnalogValue(gamepad, trigger.button);
+  if (buttonValue !== null) {
+    return trigger.inverted ? 1 - buttonValue : buttonValue;
+  }
   const axis = axisValue(gamepad, trigger.axis);
-  const raw = trigger.inverted ? 1 - (axis + 1) : axis;
-  return Math.max(0, Math.min(1, (raw + 1) / 2));
+  const value = (axis + 1) / 2;
+  return Math.max(0, Math.min(1, trigger.inverted ? 1 - value : value));
 }
 
 function meter(label, value, min = -1, max = 1) {
@@ -716,6 +738,19 @@ function handleCapture(pad) {
         return;
       }
     }
+    const triggerAxisMatch = capture.target.match(/^triggers\.(l2|r2)\.axis$/);
+    if (triggerAxisMatch) {
+      for (let index = 0; index < pad.buttons.length; index += 1) {
+        if (pad.buttons[index].pressed && !state.lastButtons[index]) {
+          state.profile.triggers[triggerAxisMatch[1]].button = index;
+          setStatus(
+            `${triggerAxisMatch[1].toUpperCase()} はブラウザでは button ${index} として検出されました。axis は手入力してください。 / Browser exposed ${triggerAxisMatch[1].toUpperCase()} as button ${index}; enter the ROS axis manually.`
+          );
+          finishCapture();
+          return;
+        }
+      }
+    }
     return;
   }
   if (capture.kind === "axisValue") {
@@ -743,14 +778,23 @@ function handleCapture(pad) {
       finishCapture();
       return;
     }
+    const buttonValue = buttonAnalogValue(pad, trigger.button);
     const axis = Number(trigger.axis);
-    if (Number.isInteger(axis) && axis >= 0 && axis < pad.axes.length) {
-      const value = axisRawValue(pad, axis);
+    let value = null;
+    let source = "";
+    if (buttonValue !== null) {
+      value = analogToRaw(buttonValue);
+      source = `button ${trigger.button}`;
+    } else if (Number.isInteger(axis) && axis >= 0 && axis < pad.axes.length) {
+      value = axisRawValue(pad, axis);
+      source = `axis ${axis}`;
+    }
+    if (value !== null) {
       if (capture.kind === "triggerReleased") trigger.released = value;
       else trigger.pressed = value;
       updateTriggerRange(trigger);
       setStatus(
-        `${capture.target.toUpperCase()} ${capture.kind === "triggerReleased" ? "released" : "pressed"} を記録しました / Captured ${capture.target.toUpperCase()} ${capture.kind === "triggerReleased" ? "released" : "pressed"}: ${value}`
+        `${capture.target.toUpperCase()} ${capture.kind === "triggerReleased" ? "released" : "pressed"} を記録しました / Captured ${capture.target.toUpperCase()} ${capture.kind === "triggerReleased" ? "released" : "pressed"} from ${source}: ${value}`
       );
       finishCapture();
     }
@@ -785,6 +829,10 @@ document.querySelectorAll(".tabs button").forEach(button => {
 });
 
 document.addEventListener("input", event => {
+  if (event.target.matches("[data-path], [data-button]")) syncOutputs();
+});
+
+document.addEventListener("change", event => {
   if (event.target.matches("[data-path], [data-button]")) syncOutputs();
 });
 

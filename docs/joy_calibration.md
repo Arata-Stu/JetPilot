@@ -91,15 +91,23 @@ full profile YAML, export `teleop_cmd_node` parameters, export
 using the Gamepad API when the browser can see the controller.
 
 Capture buttons are available for button mappings, trigger axis/button fields,
-stick axes, stick center values, d-pad axes/values, and d-pad direction buttons.
+trigger released/pressed values, stick axes, stick center values, and d-pad
+direction buttons.
 Axis values are captured from the browser Gamepad API and converted to the same
 `-32767..32767` style range used in the profile YAML. For sticks, use `Idle Cap`
 while not touching the stick to record the center values and estimate a
 deadzone from the observed idle noise.
 
 For L2/R2, use `Released Cap` while the trigger is not pressed and `Pressed Cap`
-while it is fully pressed. The editor updates `released`, `pressed`, `min`,
-`max`, and `inverted` from those two values.
+while it is fully pressed. Browsers often expose L2/R2 as analog buttons rather
+than axes, so the editor prefers the trigger `button` value for these captures
+and falls back to the configured axis only when no trigger button is available.
+The editor keeps `released`, `pressed`, and `inverted`; `min/max` are not needed
+in the edited profile.
+If the browser never exposes L2/R2 as axes, the trigger `axis` field cannot be
+captured from the browser UI. In that case, enter the ROS `/joy` axis manually
+or use the terminal calibrator, while still using the browser UI to capture the
+released/pressed analog values from the trigger button.
 
 To generate the editor again from an existing profile:
 
