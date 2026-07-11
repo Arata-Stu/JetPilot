@@ -32,6 +32,21 @@ The terminal prompts are shown in Japanese and English so the same tool can be
 used by mixed-language teams. Calibration also writes a standalone HTML editor
 next to the profile by default, for example `joy_profile.html`.
 
+The blank editor defaults to DualShock4 values:
+
+```yaml
+device:
+  name: DualShock4
+  path: /dev/input/js0
+  vendor_id: "054c"
+  product_id: "09cc"
+```
+
+`054c` is Sony's vendor ID. `09cc` is common for the newer DualShock 4
+CUH-ZCT2 controller. Older DualShock 4 controllers may report product ID
+`05c4`. Running the calibrator against the real `/dev/input/js*` device
+overwrites these defaults with the detected values when Linux exposes them.
+
 ## Check the Result
 
 ```bash

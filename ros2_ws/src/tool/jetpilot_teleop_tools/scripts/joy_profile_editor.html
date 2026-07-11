@@ -144,6 +144,11 @@
       align-items: center;
       margin-bottom: 12px;
     }
+    .status-log {
+      min-height: 24px;
+      color: var(--accent);
+      font-size: 13px;
+    }
     .tester {
       display: grid;
       gap: 12px;
@@ -230,6 +235,7 @@
           <button id="sampleProfile">Sample</button>
           <button class="primary" id="syncOutputs">Generate YAML</button>
         </div>
+        <div class="status-log" id="statusLog" aria-live="polite"></div>
         <div class="form-grid">
           <div class="field"><label>device.name</label><input data-path="device.name"></div>
           <div class="field"><label>device.path</label><input data-path="device.path"></div>
@@ -321,7 +327,7 @@ const state = {
 
 function emptyProfile() {
   return {
-    device: {name: "", path: "", vendor_id: "", product_id: ""},
+    device: {name: "DualShock4", path: "/dev/input/js0", vendor_id: "054c", product_id: "09cc"},
     buttons: Object.fromEntries(buttonNames.map((name, index) => [name, index])),
     triggers: {
       l2: {axis: 2, button: 6, min: -32767, max: 32767, released: -32767, pressed: 32767, deadzone: 500, inverted: false},
@@ -562,13 +568,21 @@ function readForm() {
   });
 }
 
-function syncOutputs() {
+function setStatus(message) {
+  document.getElementById("statusLog").textContent = message;
+}
+
+function syncOutputs(showStatus = false) {
   readForm();
   document.getElementById("yamlInput").value = toYaml(state.profile);
   let output = state.profile;
   if (state.outputKind === "teleop") output = teleopCmdYaml(state.profile);
   if (state.outputKind === "buttons") output = buttonMappingYaml(state.profile);
   document.getElementById("yamlOutput").value = toYaml(output) + "\n";
+  if (showStatus) {
+    const labels = {profile: "Profile YAML", teleop: "teleop_cmd YAML", buttons: "button_mapping YAML"};
+    setStatus(`${labels[state.outputKind]} を生成しました / Generated ${labels[state.outputKind]} at ${new Date().toLocaleTimeString()}`);
+  }
 }
 
 function setProfile(profile) {
@@ -733,7 +747,7 @@ document.getElementById("loadText").addEventListener("click", () => {
 });
 
 document.getElementById("sampleProfile").addEventListener("click", () => setProfile(emptyProfile()));
-document.getElementById("syncOutputs").addEventListener("click", syncOutputs);
+document.getElementById("syncOutputs").addEventListener("click", () => syncOutputs(true));
 
 document.querySelectorAll("[data-output]").forEach(button => {
   button.addEventListener("click", () => {

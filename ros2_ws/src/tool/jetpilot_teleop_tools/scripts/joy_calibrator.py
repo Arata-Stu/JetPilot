@@ -969,7 +969,12 @@ def ui(args: argparse.Namespace) -> None:
         profile = load_simple_yaml(args.profile)
     else:
         profile = {
-            "device": {"name": "", "path": "", "vendor_id": "", "product_id": ""},
+            "device": {
+                "name": "DualShock4",
+                "path": "/dev/input/js0",
+                "vendor_id": "054c",
+                "product_id": "09cc",
+            },
             "buttons": {},
             "triggers": {},
             "sticks": {},
