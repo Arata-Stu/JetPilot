@@ -81,8 +81,6 @@ Visualization Manager:
               Value: true
             camera_infra2_optical_frame:
               Value: true
-            laser:
-              Value: true
             map:
               Value: true
             odom:
@@ -117,8 +115,6 @@ Visualization Manager:
                       camera_infra2_frame:
                         camera_infra2_optical_frame:
                           {}
-                  laser:
-                    {}
               omap:
                 {}
           Update Interval: 0

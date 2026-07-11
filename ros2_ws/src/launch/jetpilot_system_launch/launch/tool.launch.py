@@ -106,11 +106,11 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('bag_manager_param', lu.get_path('jetpilot_bag_tools', 'config/bag_manager.param.yaml'), cli=True)
     args.add_arg(
         'teleop_cmd_param',
-        joy_profile_path('teleop_cmd.generated.yaml', 'config/teleop_cmd.param.yaml'),
+        joy_profile_path('teleop_cmd.param.yaml', 'config/teleop_cmd.param.yaml'),
         cli=True)
     args.add_arg(
         'teleop_button_mapping_param',
-        joy_profile_path('joy_button_mapping.generated.yaml', 'config/joy_button_mapping.param.yaml'),
+        joy_profile_path('joy_button_mapping.param.yaml', 'config/joy_button_mapping.param.yaml'),
         cli=True)
     args.add_arg('serial_reader_param', lu.get_path('rc_serial_reader', 'config/serial_reader_node.param.yaml'), cli=True)
     args.add_arg('enable_bag_manager', False, cli=True)

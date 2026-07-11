@@ -63,22 +63,6 @@ def generate_remap_from_config_file(topic_config_file: str,
     return remapping
 
 
-def create_point_cloud_filter(map_frame: str) -> lut.ComposableNode:
-    point_cloud_filter_node = lut.ComposableNode(
-        name='point_cloud_filter_node',
-        package='isaac_ros_visual_global_localization',
-        plugin='nvidia::isaac_ros::visual_global_localization::PointCloudFilterNode',
-        parameters=[{
-            'target_frame': map_frame
-        }],
-        remappings=[
-            ('point_cloud', '/front_3d_lidar/lidar_points'),
-            ('filtered_point_cloud', '/front_3d_lidar/lidar_points_filtered'),
-            ('pose', '/visual_localization/pose'),
-        ])
-    return point_cloud_filter_node
-
-
 def add_visual_global_localization(args: lu.ArgumentContainer) -> list[lut.Action]:
     node_name = 'visual_localization'
 
@@ -139,12 +123,6 @@ def add_visual_global_localization(args: lu.ArgumentContainer) -> list[lut.Actio
     actions.append(lu.log_info(['Enabling visual localization']))
     actions.append(lu.load_composable_nodes(args.container_name, [visual_localization_node]))
 
-    if args.vgl_enable_point_cloud_filter:
-        actions.append(lu.log_info(['Enabling point cloud filter']))
-        actions.append(
-            lu.load_composable_nodes(args.container_name,
-                                     [create_point_cloud_filter(args.vgl_map_frame)]))
-
     return actions
 
 
@@ -165,7 +143,6 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('vgl_odom_frame', 'odom')
     args.add_arg('vgl_use_initial_guess', False)
     args.add_arg('vgl_enable_continuous_localization', False)
-    args.add_arg('vgl_enable_point_cloud_filter', False)
     args.add_arg('vgl_image_sync_match_threshold_ms', 3.0)
     args.add_arg('vgl_verbose_logging', False)
     args.add_arg('vgl_init_glog', False)

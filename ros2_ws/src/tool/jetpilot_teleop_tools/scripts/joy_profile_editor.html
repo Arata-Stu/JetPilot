@@ -670,8 +670,8 @@ function generatedFiles() {
   const profileOutput = cleanProfileForOutput(state.profile);
   return {
     "joy_profile.yaml": toYaml(profileOutput) + "\n",
-    "teleop_cmd.generated.yaml": toYaml(teleopCmdYaml(state.profile)) + "\n",
-    "joy_button_mapping.generated.yaml": toYaml(buttonMappingYaml(state.profile)) + "\n",
+    "teleop_cmd.param.yaml": toYaml(teleopCmdYaml(state.profile)) + "\n",
+    "joy_button_mapping.param.yaml": toYaml(buttonMappingYaml(state.profile)) + "\n",
   };
 }
 

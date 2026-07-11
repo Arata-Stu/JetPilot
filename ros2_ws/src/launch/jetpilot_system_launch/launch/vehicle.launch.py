@@ -13,6 +13,14 @@ def add_vehicle(args: lu.ArgumentContainer):
                 'vehicle_control_topic': args.vehicle_control_topic,
                 'driver_param': args.vehicle_driver_param,
                 'publish_description': args.publish_vehicle_description,
+                'description_base_frame': args.vehicle_description_base_frame,
+                'description_camera_frame': args.vehicle_description_camera_frame,
+                'description_camera_x': args.vehicle_description_camera_x,
+                'description_camera_y': args.vehicle_description_camera_y,
+                'description_camera_z': args.vehicle_description_camera_z,
+                'description_camera_roll': args.vehicle_description_camera_roll,
+                'description_camera_pitch': args.vehicle_description_camera_pitch,
+                'description_camera_yaw': args.vehicle_description_camera_yaw,
                 'use_sim_time': args.use_sim_time,
             },
         ),
@@ -37,7 +45,15 @@ def generate_launch_description() -> lut.LaunchDescription:
         'vehicle_driver_param',
         lu.get_path('pca9685_rc_driver', 'config/pca9685_rc_driver_node.param.yaml'),
         cli=True)
-    args.add_arg('publish_vehicle_description', False, cli=True)
+    args.add_arg('publish_vehicle_description', True, cli=True)
+    args.add_arg('vehicle_description_base_frame', 'base_link', cli=True)
+    args.add_arg('vehicle_description_camera_frame', 'camera_link', cli=True)
+    args.add_arg('vehicle_description_camera_x', '0.2075', cli=True)
+    args.add_arg('vehicle_description_camera_y', '0.019', cli=True)
+    args.add_arg('vehicle_description_camera_z', '0.065', cli=True)
+    args.add_arg('vehicle_description_camera_roll', '0.0', cli=True)
+    args.add_arg('vehicle_description_camera_pitch', '0.0', cli=True)
+    args.add_arg('vehicle_description_camera_yaw', '0.0', cli=True)
     args.add_arg('use_sim_time', False, cli=True)
 
     args.add_opaque_function(add_vehicle)

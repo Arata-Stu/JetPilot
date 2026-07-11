@@ -939,12 +939,12 @@ def calibrate(args: argparse.Namespace) -> None:
         save_yaml(args.profile, profile)
         print(f"\nプロファイルを保存しました / Saved profile: {args.profile}")
         if not args.no_teleop_cmd:
-            teleop_cmd_path = args.teleop_cmd or default_sibling_path(args.profile, "teleop_cmd.generated.yaml")
+            teleop_cmd_path = args.teleop_cmd or default_sibling_path(args.profile, "teleop_cmd.param.yaml")
             save_yaml(teleop_cmd_path, teleop_cmd_yaml(profile))
             print(f"teleop cmd設定を保存しました / Saved teleop cmd parameters: {teleop_cmd_path}")
         if not args.no_button_mapping:
             button_mapping_path = args.button_mapping or default_sibling_path(
-                args.profile, "joy_button_mapping.generated.yaml"
+                args.profile, "joy_button_mapping.param.yaml"
             )
             save_yaml(button_mapping_path, button_mapping_yaml(profile))
             print(f"ボタン設定を保存しました / Saved button mapping parameters: {button_mapping_path}")
@@ -999,11 +999,11 @@ def main() -> int:
     )
     calibrate_parser.add_argument(
         "--teleop-cmd",
-        help="teleop_cmd_node parameter YAML output. Defaults to teleop_cmd.generated.yaml next to --profile",
+        help="teleop_cmd_node parameter YAML output. Defaults to teleop_cmd.param.yaml next to --profile",
     )
     calibrate_parser.add_argument(
         "--button-mapping",
-        help="teleop_button_manager_node parameter YAML output. Defaults to joy_button_mapping.generated.yaml next to --profile",
+        help="teleop_button_manager_node parameter YAML output. Defaults to joy_button_mapping.param.yaml next to --profile",
     )
     calibrate_parser.add_argument("--no-teleop-cmd", action="store_true", help="do not generate teleop_cmd YAML")
     calibrate_parser.add_argument(

@@ -19,8 +19,8 @@ By default this writes all generated files next to `--profile`:
 ```text
 joy_profile.yaml
 joy_profile.html
-teleop_cmd.generated.yaml
-joy_button_mapping.generated.yaml
+teleop_cmd.param.yaml
+joy_button_mapping.param.yaml
 ```
 
 The wizard first asks which `/dev/input/js*` device to use, observes the idle
@@ -100,7 +100,7 @@ deadzone from the observed idle noise.
 
 Use `Button Functions` to choose which physical button should perform each
 runtime action, such as auto/manual/stop mode changes or bag start/stop. The
-`joy_button_mapping.generated.yaml` output resolves those choices to numeric
+`joy_button_mapping.param.yaml` output resolves those choices to numeric
 button indices for `teleop_button_manager_node`.
 
 For L2/R2, use `Released Cap` while the trigger is not pressed and `Pressed Cap`
@@ -138,7 +138,7 @@ ros2 launch jetpilot_system_launch bringup.launch.py \
 ```
 
 The full `joy_profile.yaml` is intended for calibration and tester tools. The
-`teleop_cmd.generated.yaml` and `joy_button_mapping.generated.yaml` files are
+`teleop_cmd.param.yaml` and `joy_button_mapping.param.yaml` files are
 the runtime inputs for the current ROS nodes. `bringup.launch.py` and
 `tool.launch.py` use the generated files from `ROS2_WS/joy_profiles` by default
 when they exist, and fall back to the package defaults before calibration.
@@ -150,14 +150,14 @@ If `ROS2_WS` is not set, the default is `/workspaces/ros2_ws`:
 
 ```text
 /workspaces/ros2_ws/joy_profiles/joy_profile.yaml
-/workspaces/ros2_ws/joy_profiles/teleop_cmd.generated.yaml
-/workspaces/ros2_ws/joy_profiles/joy_button_mapping.generated.yaml
+/workspaces/ros2_ws/joy_profiles/teleop_cmd.param.yaml
+/workspaces/ros2_ws/joy_profiles/joy_button_mapping.param.yaml
 ```
 
 You can still override the runtime files explicitly when needed:
 
 ```bash
 ros2 launch jetpilot_system_launch bringup.launch.py \
-  teleop_cmd_param:=/workspaces/ros2_ws/joy_profiles/teleop_cmd.generated.yaml \
-  teleop_button_mapping_param:=/workspaces/ros2_ws/joy_profiles/joy_button_mapping.generated.yaml
+  teleop_cmd_param:=/workspaces/ros2_ws/joy_profiles/teleop_cmd.param.yaml \
+  teleop_button_mapping_param:=/workspaces/ros2_ws/joy_profiles/joy_button_mapping.param.yaml
 ```

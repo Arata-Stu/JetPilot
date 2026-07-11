@@ -1,0 +1,20 @@
+/**:
+  ros__parameters:
+    # RealSense ROS wrapper publishes camera sensor static TFs by default.
+    # Keep this explicit so VSLAM/VGL can rely on camera_infra*_optical_frame.
+    publish_tf: true
+    tf_publish_rate: 0.0
+
+    enable_infra1: true
+    enable_infra2: true
+    enable_depth: true
+    enable_color: false
+
+    depth_module.depth_profile: "640x480x30"
+    depth_module.infra_profile: "640x480x30"
+    depth_qos: "SENSOR_DATA"
+    depth_info_qos: "SENSOR_DATA"
+    infra1_qos: "SENSOR_DATA"
+    infra2_qos: "SENSOR_DATA"
+    infra1_info_qos: "SENSOR_DATA"
+    infra2_info_qos: "SENSOR_DATA"
