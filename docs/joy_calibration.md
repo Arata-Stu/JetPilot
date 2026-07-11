@@ -41,16 +41,37 @@ ros2 run jetpilot_teleop_tools joy_calibrator.py test \
 
 Add `--raw` to show raw axis values next to the normalized tester output.
 
-## Open the HTML Editor
+## Open the Browser Editor
 
-Open the generated HTML file in a browser:
+Inside Docker, do not run `open` or `xdg-open`. To start only the Joy Profile
+Editor, run:
 
 ```bash
-open joy_profile.html
+/workspaces/tools/app/scripts/start_joy_profile_editor.sh --host 0.0.0.0 --port 8766
 ```
 
-The editor can load a profile YAML file, edit button/axis assignments, export
-the full profile YAML, export `teleop_cmd_node` parameters, export
+Then open this URL on the host:
+
+```text
+http://127.0.0.1:8766/joy-profile-editor
+```
+
+If you want the full JetPilot Console as well, start the existing Console
+server instead:
+
+```bash
+/workspaces/tools/app/scripts/start.sh --host 0.0.0.0 --port 8765
+```
+
+Then open this URL on the host:
+
+```text
+http://127.0.0.1:8765/joy-profile-editor
+```
+
+In the full Console, the same editor is also available from the `Joy Profile`
+tab. It can load a profile YAML file, edit button/axis assignments, export the
+full profile YAML, export `teleop_cmd_node` parameters, export
 `teleop_button_manager_node` parameters, and run a browser-based Joy Tester
 using the Gamepad API when the browser can see the controller.
 
@@ -65,7 +86,6 @@ To generate a blank editor first and load YAML from the browser UI:
 
 ```bash
 ros2 run jetpilot_teleop_tools joy_calibrator.py ui
-open joy_profile_editor.html
 ```
 
 ## Use Generated Parameters

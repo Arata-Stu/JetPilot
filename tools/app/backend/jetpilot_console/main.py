@@ -55,6 +55,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/config":
             self._json(self.server.state.config.as_json())
             return
+        if path in {"/joy-profile-editor", "/joy-profile-editor.html"}:
+            self._joy_profile_editor()
+            return
         if path == "/api/tasks":
             self._json({"tasks": self.server.state.tasks.list_tasks()})
             return
@@ -187,6 +190,30 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
         self.wfile.write(payload)
+
+    def _joy_profile_editor(self) -> None:
+        config = self.server.state.config
+        candidates = [
+            config.ros2_ws / "src/tool/jetpilot_teleop_tools/scripts/joy_profile_editor.html",
+            config.repo_root / "ros2_ws/src/tool/jetpilot_teleop_tools/scripts/joy_profile_editor.html",
+            config.app_root / "frontend/joy_profile_editor.html",
+        ]
+        for file_path in candidates:
+            if file_path.exists() and file_path.is_file():
+                payload = file_path.read_bytes()
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+                return
+        self._json(
+            {
+                "error": "joy_profile_editor.html not found",
+                "searched": [str(path) for path in candidates],
+            },
+            HTTPStatus.NOT_FOUND,
+        )
 
     def _stream_task(self, task_id: str, initial_tail: int | None = None) -> None:
         self.send_response(HTTPStatus.OK)

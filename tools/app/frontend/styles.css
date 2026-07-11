@@ -154,6 +154,56 @@ textarea {
   gap: 16px;
 }
 
+.joy-profile-page {
+  gap: 10px;
+}
+
+.joy-profile-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 48px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 0 14px;
+}
+
+.joy-profile-toolbar div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: baseline;
+}
+
+.joy-profile-toolbar span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.button-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel-2);
+  color: var(--text);
+  padding: 0 10px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.joy-profile-frame {
+  width: 100%;
+  min-height: calc(100vh - 166px);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
 .grid-2 {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(380px, 0.72fr);

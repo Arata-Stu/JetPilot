@@ -18,6 +18,7 @@ const tabs = [
   ["dashboard", "Dashboard"],
   ["rosbags", "Rosbags"],
   ["map-builder", "Map Builder"],
+  ["joy-profile", "Joy Profile"],
   ["maps", "Maps"],
   ["jetson", "Jetson"],
   ["terminal", "Terminal"],
@@ -184,10 +185,26 @@ function updateLogOnly(chunk = "", append = false) {
 function renderPage() {
   if (state.tab === "rosbags") return renderRosbags();
   if (state.tab === "map-builder") return renderMapBuilder();
+  if (state.tab === "joy-profile") return renderJoyProfile();
   if (state.tab === "maps") return renderMaps();
   if (state.tab === "jetson") return renderJetson();
   if (state.tab === "terminal") return renderTerminalPage();
   return renderDashboard();
+}
+
+function renderJoyProfile() {
+  return `
+    <div class="page joy-profile-page">
+      <div class="joy-profile-toolbar">
+        <div>
+          <strong>Joy Profile Editor</strong>
+          <span>load, edit, test, and export controller YAML</span>
+        </div>
+        <a class="button-link" href="/joy-profile-editor" target="_blank" rel="noreferrer">Open in new tab</a>
+      </div>
+      <iframe class="joy-profile-frame" src="/joy-profile-editor" title="Joy Profile Editor"></iframe>
+    </div>
+  `;
 }
 
 function renderDashboard() {
