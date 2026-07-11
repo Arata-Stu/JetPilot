@@ -91,9 +91,11 @@ full profile YAML, export `teleop_cmd_node` parameters, export
 using the Gamepad API when the browser can see the controller.
 
 Capture buttons are available for button mappings, trigger axis/button fields,
-stick axes, stick center values, and d-pad axes/values. Axis values are captured
-from the browser Gamepad API and converted to the same `-32767..32767` style
-range used in the profile YAML.
+stick axes, stick center values, d-pad axes/values, and d-pad direction buttons.
+Axis values are captured from the browser Gamepad API and converted to the same
+`-32767..32767` style range used in the profile YAML. For sticks, use `Idle Cap`
+while not touching the stick to record the center values and estimate a
+deadzone from the observed idle noise.
 
 To generate the editor again from an existing profile:
 

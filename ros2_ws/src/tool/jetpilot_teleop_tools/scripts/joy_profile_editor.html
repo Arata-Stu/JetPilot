@@ -272,6 +272,10 @@
           <div class="field"><label>down_value</label><div class="capture-field"><input type="number" data-path="dpad.down_value"><button class="capture" data-capture-kind="axisValue" data-capture-target="dpad.down_value" data-capture-axis="dpad.y_axis">Cap</button></div></div>
           <div class="field"><label>left_value</label><div class="capture-field"><input type="number" data-path="dpad.left_value"><button class="capture" data-capture-kind="axisValue" data-capture-target="dpad.left_value" data-capture-axis="dpad.x_axis">Cap</button></div></div>
           <div class="field"><label>right_value</label><div class="capture-field"><input type="number" data-path="dpad.right_value"><button class="capture" data-capture-kind="axisValue" data-capture-target="dpad.right_value" data-capture-axis="dpad.x_axis">Cap</button></div></div>
+          <div class="field"><label>up button</label><div class="capture-field"><input type="number" data-path="dpad.up"><button class="capture" data-capture-kind="buttonPath" data-capture-target="dpad.up">Cap</button></div></div>
+          <div class="field"><label>right button</label><div class="capture-field"><input type="number" data-path="dpad.right"><button class="capture" data-capture-kind="buttonPath" data-capture-target="dpad.right">Cap</button></div></div>
+          <div class="field"><label>down button</label><div class="capture-field"><input type="number" data-path="dpad.down"><button class="capture" data-capture-kind="buttonPath" data-capture-target="dpad.down">Cap</button></div></div>
+          <div class="field"><label>left button</label><div class="capture-field"><input type="number" data-path="dpad.left"><button class="capture" data-capture-kind="buttonPath" data-capture-target="dpad.left">Cap</button></div></div>
         </div>
       </div>
     </div>
@@ -285,7 +289,7 @@
       </div>
       <div class="panel">
         <h2>Capture / 対応付け</h2>
-        <div class="muted">Captureを押してから対象を操作すると、その番号や値を対応に反映します。 / Click capture, then move or press the target control. Alt+Captureで現在値を即入力できます。 / Alt+Capture stores the current axis value immediately.</div>
+        <div class="muted">Captureを押してから対象を操作すると、その番号や値を対応に反映します。 / Click capture, then move or press the target control. Idle Capはスティックに触れずに待つと中心値とdeadzoneを推定します。 / Idle Cap measures stick center and estimates deadzone.</div>
         <div id="captureStatus" class="muted"></div>
       </div>
     </div>
@@ -337,7 +341,7 @@ function emptyProfile() {
       left: {x_axis: 0, y_axis: 1, invert_x: false, invert_y: true, center_x: 0, center_y: 0, deadzone: 2500},
       right: {x_axis: 3, y_axis: 4, invert_x: false, invert_y: true, center_x: 0, center_y: 0, deadzone: 2500}
     },
-    dpad: {type: "axis", x_axis: 6, y_axis: 7, left_value: -32767, right_value: 32767, up_value: -32767, down_value: 32767},
+    dpad: {type: "button", up: 12, right: 15, down: 13, left: 14, x_axis: 6, y_axis: 7, left_value: -32767, right_value: 32767, up_value: -32767, down_value: 32767},
     idle_axes: {}
   };
 }
@@ -533,7 +537,7 @@ function triggerBlock(name) {
 
 function stickBlock(name) {
   const s = state.profile.sticks[name] || {};
-  return `<h3>${name}</h3><div class="form-grid">
+  return `<h3>${name} <button class="capture" data-capture-kind="stickIdle" data-capture-target="${name}">Idle Cap</button></h3><div class="form-grid">
     ${field(`sticks.${name}.x_axis`, "x_axis", s.x_axis, "number", capture("axis", `sticks.${name}.x_axis`))}
     ${field(`sticks.${name}.y_axis`, "y_axis", s.y_axis, "number", capture("axis", `sticks.${name}.y_axis`))}
     ${field(`sticks.${name}.center_x`, "center_x", s.center_x, "number", capture("axisValue", `sticks.${name}.center_x`, `sticks.${name}.x_axis`))}
@@ -606,6 +610,20 @@ function axisValue(gamepad, index) {
 
 function axisRawValue(gamepad, index) {
   return Math.round(axisValue(gamepad, index) * 32767);
+}
+
+function estimateStickIdle(stick, samples) {
+  const xAxis = Number(stick.x_axis);
+  const yAxis = Number(stick.y_axis);
+  const xValues = samples.map(sample => sample[xAxis] ?? 0);
+  const yValues = samples.map(sample => sample[yAxis] ?? 0);
+  const average = values => values.reduce((sum, value) => sum + value, 0) / Math.max(1, values.length);
+  const centerX = Math.round(average(xValues) * 32767);
+  const centerY = Math.round(average(yValues) * 32767);
+  const noiseX = Math.max(...xValues.map(value => Math.abs(Math.round(value * 32767) - centerX)), 0);
+  const noiseY = Math.max(...yValues.map(value => Math.abs(Math.round(value * 32767) - centerY)), 0);
+  const deadzone = Math.max(1200, Math.min(8000, Math.ceil(Math.max(noiseX, noiseY) * 3 + 500)));
+  return {centerX, centerY, deadzone};
 }
 
 function buttonPressed(gamepad, index) {
@@ -705,6 +723,26 @@ function handleCapture(pad) {
         return;
       }
     }
+    return;
+  }
+  if (capture.kind === "stickIdle") {
+    const stick = state.profile.sticks[capture.target];
+    if (!stick) {
+      finishCapture();
+      return;
+    }
+    capture.samples.push([...pad.axes]);
+    const elapsedMs = performance.now() - capture.startedAt;
+    if (elapsedMs >= 1500) {
+      const estimate = estimateStickIdle(stick, capture.samples);
+      stick.center_x = estimate.centerX;
+      stick.center_y = estimate.centerY;
+      stick.deadzone = estimate.deadzone;
+      setStatus(
+        `${capture.target} stick idle を記録しました / Captured ${capture.target} stick idle: center ${estimate.centerX}, ${estimate.centerY}, deadzone ${estimate.deadzone}`
+      );
+      finishCapture();
+    }
   }
 }
 
@@ -728,6 +766,8 @@ document.addEventListener("click", event => {
       target: captureButton.dataset.captureTarget,
       axisPath: captureButton.dataset.captureAxis || "",
       axes: pad ? [...pad.axes] : [],
+      samples: pad ? [[...pad.axes]] : [],
+      startedAt: performance.now(),
       allowImmediate: event.altKey,
     };
     document.querySelectorAll(".capture").forEach(button => button.classList.toggle("waiting", button === captureButton));
