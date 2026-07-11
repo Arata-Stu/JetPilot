@@ -512,6 +512,30 @@ def default_html_report_path(profile_path: str) -> str:
     return root + ".html"
 
 
+def default_sibling_path(profile_path: str, filename: str) -> str:
+    directory = os.path.dirname(os.path.abspath(profile_path))
+    return os.path.join(directory, filename)
+
+
+def find_editor_template_path() -> str:
+    candidates = [
+        os.path.join(os.path.dirname(__file__), "joy_profile_editor.html"),
+    ]
+    for prefix in os.environ.get("AMENT_PREFIX_PATH", "").split(os.pathsep):
+        if prefix:
+            candidates.append(
+                os.path.join(prefix, "share", "jetpilot_teleop_tools", "web", "joy_profile_editor.html")
+            )
+            candidates.append(
+                os.path.join(prefix, "lib", "jetpilot_teleop_tools", "joy_profile_editor.html")
+            )
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    searched = "\n  ".join(candidates)
+    raise RuntimeError(f"joy_profile_editor.html が見つかりません。 / Template not found. Searched:\n  {searched}")
+
+
 def _save_legacy_html_report(path: str, profile: dict[str, Any]) -> None:
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     profile_json = json.dumps(profile, ensure_ascii=False)
@@ -776,7 +800,7 @@ render();
 
 def save_html_report(path: str, profile: dict[str, Any]) -> None:
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-    template_path = os.path.join(os.path.dirname(__file__), "joy_profile_editor.html")
+    template_path = find_editor_template_path()
     with open(template_path, encoding="utf-8") as template_file:
         page = template_file.read()
     embedded_profile = json.dumps(profile, ensure_ascii=False)
@@ -914,12 +938,16 @@ def calibrate(args: argparse.Namespace) -> None:
         profile = build_profile(device, idle)
         save_yaml(args.profile, profile)
         print(f"\nプロファイルを保存しました / Saved profile: {args.profile}")
-        if args.teleop_cmd:
-            save_yaml(args.teleop_cmd, teleop_cmd_yaml(profile))
-            print(f"teleop cmd設定を保存しました / Saved teleop cmd parameters: {args.teleop_cmd}")
-        if args.button_mapping:
-            save_yaml(args.button_mapping, button_mapping_yaml(profile))
-            print(f"ボタン設定を保存しました / Saved button mapping parameters: {args.button_mapping}")
+        if not args.no_teleop_cmd:
+            teleop_cmd_path = args.teleop_cmd or default_sibling_path(args.profile, "teleop_cmd.generated.yaml")
+            save_yaml(teleop_cmd_path, teleop_cmd_yaml(profile))
+            print(f"teleop cmd設定を保存しました / Saved teleop cmd parameters: {teleop_cmd_path}")
+        if not args.no_button_mapping:
+            button_mapping_path = args.button_mapping or default_sibling_path(
+                args.profile, "joy_button_mapping.generated.yaml"
+            )
+            save_yaml(button_mapping_path, button_mapping_yaml(profile))
+            print(f"ボタン設定を保存しました / Saved button mapping parameters: {button_mapping_path}")
         if not args.no_html_report:
             html_report = args.html_report or default_html_report_path(args.profile)
             save_html_report(html_report, profile)
@@ -961,11 +989,21 @@ def main() -> int:
     calibrate_parser.add_argument("--idle-seconds", type=float, default=2.0)
     calibrate_parser.add_argument(
         "--profile",
-        default="ros2_ws/src/tool/jetpilot_teleop_tools/config/joy_profile.yaml",
+        default="joy_profile.yaml",
         help="output full controller profile YAML",
     )
-    calibrate_parser.add_argument("--teleop-cmd", help="optional teleop_cmd_node parameter YAML output")
-    calibrate_parser.add_argument("--button-mapping", help="optional teleop_button_manager_node parameter YAML output")
+    calibrate_parser.add_argument(
+        "--teleop-cmd",
+        help="teleop_cmd_node parameter YAML output. Defaults to teleop_cmd.generated.yaml next to --profile",
+    )
+    calibrate_parser.add_argument(
+        "--button-mapping",
+        help="teleop_button_manager_node parameter YAML output. Defaults to joy_button_mapping.generated.yaml next to --profile",
+    )
+    calibrate_parser.add_argument("--no-teleop-cmd", action="store_true", help="do not generate teleop_cmd YAML")
+    calibrate_parser.add_argument(
+        "--no-button-mapping", action="store_true", help="do not generate teleop button mapping YAML"
+    )
     calibrate_parser.add_argument("--html-report", help="optional HTML report output")
     calibrate_parser.add_argument("--no-html-report", action="store_true", help="do not generate an HTML report")
     calibrate_parser.set_defaults(func=calibrate)
@@ -985,7 +1023,7 @@ def main() -> int:
     ui_parser.add_argument("--profile", help="optional profile YAML to embed")
     ui_parser.add_argument(
         "--output",
-        default="ros2_ws/src/tool/jetpilot_teleop_tools/config/joy_profile_editor.html",
+        default="joy_profile_editor.html",
         help="HTML UI output path",
     )
     ui_parser.set_defaults(func=ui)

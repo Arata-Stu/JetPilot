@@ -28,4 +28,9 @@ install(FILES
   DESTINATION share/${PROJECT_NAME}/web
 )
 
+install(FILES
+  scripts/joy_profile_editor.html
+  DESTINATION lib/${PROJECT_NAME}
+)
+
 ament_auto_package()
