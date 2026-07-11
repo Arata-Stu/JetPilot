@@ -21,6 +21,10 @@ axis centers, then walks through buttons, triggers, sticks, and d-pad inputs.
 Detection ignores already assigned inputs and requires axis movement above a
 threshold so stick noise is not accepted as a button or trigger.
 
+The terminal prompts are shown in Japanese and English so the same tool can be
+used by mixed-language teams. Calibration also writes a standalone HTML editor
+next to the profile by default, for example `joy_profile.html`.
+
 ## Check the Result
 
 ```bash
@@ -29,6 +33,33 @@ ros2 run jetpilot_teleop_tools joy_calibrator.py test \
 ```
 
 Add `--raw` to show raw axis values next to the normalized tester output.
+
+## Open the HTML Editor
+
+Open the generated HTML file in a browser:
+
+```bash
+open ros2_ws/src/tool/jetpilot_teleop_tools/config/joy_profile.html
+```
+
+The editor can load a profile YAML file, edit button/axis assignments, export
+the full profile YAML, export `teleop_cmd_node` parameters, export
+`teleop_button_manager_node` parameters, and run a browser-based Joy Tester
+using the Gamepad API when the browser can see the controller.
+
+To generate the editor again from an existing profile:
+
+```bash
+ros2 run jetpilot_teleop_tools joy_calibrator.py report \
+  --profile ros2_ws/src/tool/jetpilot_teleop_tools/config/joy_profile.yaml
+```
+
+To generate a blank editor first and load YAML from the browser UI:
+
+```bash
+ros2 run jetpilot_teleop_tools joy_calibrator.py ui
+open ros2_ws/src/tool/jetpilot_teleop_tools/config/joy_profile_editor.html
+```
 
 ## Use Generated Parameters
 

@@ -7,6 +7,8 @@ import argparse
 import array
 import fcntl
 import glob
+import html
+import json
 import os
 import select
 import struct
@@ -30,23 +32,23 @@ AXIS_DETECTION_THRESHOLD = 10000
 TRIGGER_MOVEMENT_THRESHOLD = 30000
 STICK_MOVEMENT_THRESHOLD = 22000
 BUTTON_NAMES = [
-    ("cross", "x / cross"),
-    ("circle", "circle"),
-    ("triangle", "triangle"),
-    ("square", "square"),
-    ("l1", "L1"),
-    ("r1", "R1"),
-    ("share", "share"),
-    ("options", "options"),
-    ("ps", "PS"),
-    ("l3", "L3"),
-    ("r3", "R3"),
+    ("cross", "x / cross", "× / cross"),
+    ("circle", "circle", "○ / circle"),
+    ("triangle", "triangle", "△ / triangle"),
+    ("square", "square", "□ / square"),
+    ("l1", "L1", "L1"),
+    ("r1", "R1", "R1"),
+    ("share", "share", "Share / 共有"),
+    ("options", "options", "Options"),
+    ("ps", "PS", "PS"),
+    ("l3", "L3", "L3"),
+    ("r3", "R3", "R3"),
 ]
 DPAD_DIRECTIONS = [
-    ("up", "d-pad up"),
-    ("right", "d-pad right"),
-    ("down", "d-pad down"),
-    ("left", "d-pad left"),
+    ("up", "d-pad up", "十字キー 上 / d-pad up"),
+    ("right", "d-pad right", "十字キー 右 / d-pad right"),
+    ("down", "d-pad down", "十字キー 下 / d-pad down"),
+    ("left", "d-pad left", "十字キー 左 / d-pad left"),
 ]
 
 
@@ -189,26 +191,26 @@ def select_device(path: str | None) -> JoystickDevice:
         return JoystickDevice(path)
     devices = list_devices()
     if not devices:
-        raise RuntimeError("No /dev/input/js* devices were found.")
-    print("\nDetected devices\n")
+        raise RuntimeError("/dev/input/js* デバイスが見つかりません。 / No /dev/input/js* devices were found.")
+    print("\n検出されたデバイス / Detected devices\n")
     for index, info in enumerate(devices):
         print(f"[{index}] {info.name}")
         print(f"    {info.path}")
     while True:
-        value = input("\nSelect device number: ").strip()
+        value = input("\nデバイス番号を選択 / Select device number: ").strip()
         try:
             return JoystickDevice(devices[int(value)].path)
         except (ValueError, IndexError):
-            print("Please enter one of the listed numbers.")
+            print("一覧にある番号を入力してください。 / Please enter one of the listed numbers.")
 
 
 def wait_for_enter() -> None:
-    input("\nPress Enter to continue.")
+    input("\nEnterで続行 / Press Enter to continue.")
 
 
 def observe_idle(device: JoystickDevice, duration: float) -> JoyState:
-    print("\nDo not touch the controller.")
-    print("Measuring center values and noise...\n")
+    print("\nコントローラーに触れないでください。 / Do not touch the controller.")
+    print("中心値・ノイズ幅を測定しています... / Measuring center values and noise...\n")
     samples: dict[int, list[int]] = {axis: [] for axis in device.state.axes}
     deadline = time.monotonic() + duration
     while time.monotonic() < deadline:
@@ -216,15 +218,15 @@ def observe_idle(device: JoystickDevice, duration: float) -> JoyState:
         for axis, value in device.state.axes.items():
             samples[axis].append(value)
     centers = {axis: int(sum(values) / len(values)) if values else 0 for axis, values in samples.items()}
-    print("Axis center candidates:")
+    print("axis中心候補 / Axis center candidates:")
     for axis, value in centers.items():
         spread = max(samples[axis]) - min(samples[axis]) if samples[axis] else 0
-        print(f"  axis {axis}: center {value}, noise {spread}")
+        print(f"  axis {axis}: 中心/center {value}, ノイズ/noise {spread}")
     return JoyState(axes=centers, buttons=dict(device.state.buttons))
 
 
 def confirm_detection(text: str) -> bool:
-    answer = input(f"{text}\nOK? [Enter: accept / r: retry] ").strip().lower()
+    answer = input(f"{text}\nこれでよいですか？ / OK? [Enter: 決定 / accept, r: やり直し / retry] ").strip().lower()
     return answer != "r"
 
 
@@ -236,7 +238,7 @@ def detect_button(
 ) -> int:
     while True:
         print(f"\n{prompt}")
-        print("Waiting...")
+        print("待機中... / Waiting...")
         before = device.snapshot()
         deadline = time.monotonic() + timeout
         candidate = None
@@ -248,9 +250,9 @@ def detect_button(
                         candidate = event.number
                         break
         if candidate is None:
-            print("No button press was detected.")
+            print("ボタン入力を検出できませんでした。 / No button press was detected.")
             continue
-        if confirm_detection(f"Detected: button {candidate}"):
+        if confirm_detection(f"検出 / Detected: button {candidate}"):
             assigned_buttons.add(candidate)
             return candidate
 
@@ -271,8 +273,8 @@ def collect_changes(device: JoystickDevice, duration: float) -> tuple[JoyState, 
 
 def detect_trigger(device: JoystickDevice, name: str, assigned_buttons: set[int], assigned_axes: set[int]) -> dict[str, Any]:
     while True:
-        print(f"\nSlowly press {name} all the way, then release it.")
-        print("Recording for 3 seconds...")
+        print(f"\n{name}をゆっくり最後まで押してから離してください。 / Slowly press {name} all the way, then release it.")
+        print("3秒間記録します... / Recording for 3 seconds...")
         before, axis_samples, button_samples = collect_changes(device, 3.0)
         axis_candidates = []
         for axis, values in axis_samples.items():
@@ -285,13 +287,13 @@ def detect_trigger(device: JoystickDevice, name: str, assigned_buttons: set[int]
             if compact == [0, 1, 0] and button not in assigned_buttons:
                 button_candidates.append(button)
         axis_candidates.sort(reverse=True)
-        print("\nDetected changes")
+        print("\n変化を検出しました / Detected changes")
         for movement, axis, min_value, max_value in axis_candidates[:3]:
-            print(f"  axis {axis}: min {min_value}, max {max_value}, movement {movement}")
+            print(f"  axis {axis}: 最小/min {min_value}, 最大/max {max_value}, 変化量/movement {movement}")
         for button in button_candidates[:3]:
             print(f"  button {button}: 0 -> 1 -> 0")
         if not axis_candidates and not button_candidates:
-            print("No usable trigger movement was detected.")
+            print("使えるトリガー入力を検出できませんでした。 / No usable trigger movement was detected.")
             continue
         _, axis, min_value, max_value = axis_candidates[0] if axis_candidates else (0, -1, 0, 0)
         button = button_candidates[0] if button_candidates else -1
@@ -301,7 +303,11 @@ def detect_trigger(device: JoystickDevice, name: str, assigned_buttons: set[int]
             key=lambda value: abs(value - initial_value),
         )
         inverted = pressed_value < initial_value
-        if confirm_detection(f"{name} analog = axis {axis}\n{name} digital = button {button}\ninverted = {str(inverted).lower()}"):
+        if confirm_detection(
+            f"{name} analog / アナログ = axis {axis}\n"
+            f"{name} digital / デジタル = button {button}\n"
+            f"反転 / inverted = {str(inverted).lower()}"
+        ):
             if axis >= 0:
                 assigned_axes.add(axis)
             if button >= 0:
@@ -328,8 +334,8 @@ def compact_sequence(values: list[int]) -> list[int]:
 
 def detect_stick(device: JoystickDevice, name: str, assigned_axes: set[int]) -> dict[str, Any]:
     while True:
-        print(f"\nMove the {name} stick in a large circle.")
-        print("Recording for 5 seconds...")
+        print(f"\n{name}スティックを大きく円を描くように回してください。 / Move the {name} stick in a large circle.")
+        print("5秒間記録します... / Recording for 5 seconds...")
         before, axis_samples, _ = collect_changes(device, 5.0)
         candidates = []
         for axis, values in axis_samples.items():
@@ -339,7 +345,7 @@ def detect_stick(device: JoystickDevice, name: str, assigned_axes: set[int]) -> 
                 candidates.append((movement, axis, min(values), max(values), center))
         candidates.sort(reverse=True)
         if len(candidates) < 2:
-            print("Could not find two moving axes for this stick.")
+            print("このスティック用の2軸を検出できませんでした。 / Could not find two moving axes for this stick.")
             continue
         x = candidates[0]
         y = candidates[1]
@@ -347,11 +353,11 @@ def detect_stick(device: JoystickDevice, name: str, assigned_axes: set[int]) -> 
         invert_y = True
         message = (
             f"{name.title()} stick candidate\n"
-            f"X axis: axis {x[1]}\n"
-            f"Y axis: axis {y[1]}\n"
-            f"Y inverted: {str(invert_y).lower()}\n"
-            f"Center: X {x[4]}, Y {y[4]}\n"
-            f"Range: X {x[2]}..{x[3]}, Y {y[2]}..{y[3]}"
+            f"X軸 / X axis: axis {x[1]}\n"
+            f"Y軸 / Y axis: axis {y[1]}\n"
+            f"Y反転 / Y inverted: {str(invert_y).lower()}\n"
+            f"中心 / Center: X {x[4]}, Y {y[4]}\n"
+            f"範囲 / Range: X {x[2]}..{x[3]}, Y {y[2]}..{y[3]}"
         )
         if confirm_detection(message):
             assigned_axes.update({x[1], y[1]})
@@ -372,10 +378,10 @@ def detect_stick(device: JoystickDevice, name: str, assigned_axes: set[int]) -> 
 
 def detect_dpad(device: JoystickDevice, assigned_buttons: set[int], assigned_axes: set[int]) -> dict[str, Any]:
     detections = {}
-    for key, label in DPAD_DIRECTIONS:
+    for key, _, label in DPAD_DIRECTIONS:
         while True:
-            print(f"\nPress {label}.")
-            print("Waiting...")
+            print(f"\n{label} を押してください。 / Press {label}.")
+            print("待機中... / Waiting...")
             before = device.snapshot()
             deadline = time.monotonic() + 15.0
             candidate = None
@@ -391,9 +397,9 @@ def detect_dpad(device: JoystickDevice, assigned_buttons: set[int], assigned_axe
                             candidate = ("axis", event.number, event.value)
                             break
             if candidate is None:
-                print("No d-pad input was detected.")
+                print("十字キー入力を検出できませんでした。 / No d-pad input was detected.")
                 continue
-            if confirm_detection(f"Detected: {candidate[0]} {candidate[1]} value {candidate[2]}"):
+            if confirm_detection(f"検出 / Detected: {candidate[0]} {candidate[1]} value {candidate[2]}"):
                 detections[key] = candidate
                 break
     button_numbers = [value[1] for value in detections.values() if value[0] == "button"]
@@ -441,9 +447,9 @@ def build_profile(device: JoystickDevice, idle: JoyState) -> dict[str, Any]:
     }
     total_steps = len(BUTTON_NAMES) + 2 + 2 + 4
     step = 1
-    for key, label in BUTTON_NAMES:
+    for key, _, label in BUTTON_NAMES:
         print(f"\n{step} / {total_steps}")
-        profile["buttons"][key] = detect_button(device, f"Press {label}.", assigned_buttons)
+        profile["buttons"][key] = detect_button(device, f"{label} を押してください。 / Press {label}.", assigned_buttons)
         step += 1
     for key, label in (("r2", "R2"), ("l2", "L2")):
         print(f"\n{step} / {total_steps}")
@@ -499,6 +505,284 @@ def save_yaml(path: str, data: dict[str, Any]) -> None:
     with open(path, "w", encoding="utf-8") as output:
         output.write(to_yaml(data))
         output.write("\n")
+
+
+def default_html_report_path(profile_path: str) -> str:
+    root, _ = os.path.splitext(profile_path)
+    return root + ".html"
+
+
+def _save_legacy_html_report(path: str, profile: dict[str, Any]) -> None:
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    profile_json = json.dumps(profile, ensure_ascii=False)
+    device = profile.get("device", {})
+    rows = []
+    for name, button in profile.get("buttons", {}).items():
+        rows.append(("button", name, f"button {button}", ""))
+    for name, trigger in profile.get("triggers", {}).items():
+        detail = (
+            f"axis {trigger.get('axis', -1)}, button {trigger.get('button', -1)}, "
+            f"min {trigger.get('min')}, max {trigger.get('max')}"
+        )
+        rows.append(("trigger", name, detail, f"inverted: {trigger.get('inverted', False)}"))
+    for name, stick in profile.get("sticks", {}).items():
+        detail = f"x axis {stick.get('x_axis', -1)}, y axis {stick.get('y_axis', -1)}"
+        extra = f"deadzone: {stick.get('deadzone')}, invert_y: {stick.get('invert_y', False)}"
+        rows.append(("stick", name, detail, extra))
+    dpad = profile.get("dpad", {})
+    rows.append(("dpad", dpad.get("type", "unknown"), ", ".join(f"{key}: {value}" for key, value in dpad.items()), ""))
+    rows_html = "\n".join(
+        "<tr>"
+        f"<td>{html.escape(kind)}</td>"
+        f"<td>{html.escape(name)}</td>"
+        f"<td>{html.escape(detail)}</td>"
+        f"<td>{html.escape(extra)}</td>"
+        "</tr>"
+        for kind, name, detail, extra in rows
+    )
+    title = f"{device.get('name', 'Controller')} Joy Profile"
+    page = f"""<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{html.escape(title)}</title>
+  <style>
+    :root {{
+      color-scheme: light dark;
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --text: #1e242c;
+      --muted: #667085;
+      --line: #d9dee7;
+      --accent: #1f7a8c;
+      --accent-2: #b8325f;
+    }}
+    @media (prefers-color-scheme: dark) {{
+      :root {{
+        --bg: #14171b;
+        --panel: #1d2229;
+        --text: #eef2f6;
+        --muted: #aab3bf;
+        --line: #333b46;
+      }}
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.5;
+    }}
+    main {{
+      width: min(1120px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 28px 0 48px;
+    }}
+    header {{
+      display: grid;
+      gap: 8px;
+      padding: 20px 0;
+      border-bottom: 1px solid var(--line);
+    }}
+    h1 {{ margin: 0; font-size: 28px; letter-spacing: 0; }}
+    h2 {{ margin: 0 0 14px; font-size: 18px; letter-spacing: 0; }}
+    .muted {{ color: var(--muted); }}
+    .grid {{
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+      margin-top: 20px;
+    }}
+    section {{
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 18px;
+      min-width: 0;
+    }}
+    table {{
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }}
+    th, td {{
+      padding: 10px 8px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+      word-break: break-word;
+    }}
+    th {{ color: var(--muted); font-weight: 600; }}
+    .tester {{
+      display: grid;
+      gap: 14px;
+    }}
+    .row {{
+      display: grid;
+      grid-template-columns: 120px 1fr 72px;
+      gap: 10px;
+      align-items: center;
+      font-variant-numeric: tabular-nums;
+    }}
+    .meter {{
+      height: 12px;
+      overflow: hidden;
+      background: color-mix(in srgb, var(--line), transparent 25%);
+      border-radius: 999px;
+    }}
+    .fill {{
+      height: 100%;
+      width: 50%;
+      background: var(--accent);
+      transform-origin: left center;
+    }}
+    .buttons {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
+      gap: 8px;
+    }}
+    .button-state {{
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 9px 10px;
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+    }}
+    .on {{
+      border-color: var(--accent-2);
+      background: color-mix(in srgb, var(--accent-2), transparent 84%);
+    }}
+    pre {{
+      max-height: 280px;
+      overflow: auto;
+      padding: 14px;
+      border-radius: 8px;
+      background: color-mix(in srgb, var(--line), transparent 70%);
+      font-size: 12px;
+    }}
+    @media (max-width: 820px) {{
+      .grid {{ grid-template-columns: 1fr; }}
+      .row {{ grid-template-columns: 92px 1fr 64px; }}
+    }}
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>{html.escape(str(device.get('name', 'Controller')))}</h1>
+    <div class="muted">
+      コントローラー設定レポート / Controller profile report<br>
+      path: {html.escape(str(device.get('path', '')))}
+      vendor: {html.escape(str(device.get('vendor_id', '')))}
+      product: {html.escape(str(device.get('product_id', '')))}
+    </div>
+  </header>
+
+  <div class="grid">
+    <section>
+      <h2>割り当て / Mapping</h2>
+      <table>
+        <thead><tr><th>type</th><th>name</th><th>mapping</th><th>extra</th></tr></thead>
+        <tbody>{rows_html}</tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Joy Tester</h2>
+      <div class="tester" id="tester">
+        <div class="muted">コントローラーのボタンを押してください。 / Press any controller button.</div>
+      </div>
+    </section>
+
+    <section>
+      <h2>生プロファイル / Raw Profile</h2>
+      <pre id="profile-json"></pre>
+    </section>
+  </div>
+</main>
+<script>
+const profile = {profile_json};
+document.getElementById("profile-json").textContent = JSON.stringify(profile, null, 2);
+
+function axisValue(gamepad, index) {{
+  if (index === undefined || index < 0 || index >= gamepad.axes.length) return 0;
+  return gamepad.axes[index];
+}}
+
+function buttonValue(gamepad, index) {{
+  if (index === undefined || index < 0 || index >= gamepad.buttons.length) return false;
+  return gamepad.buttons[index].pressed;
+}}
+
+function normalizedTrigger(gamepad, trigger) {{
+  const axis = axisValue(gamepad, trigger.axis);
+  const min = -1;
+  const max = 1;
+  const raw = trigger.inverted ? max - (axis - min) : axis;
+  return Math.max(0, Math.min(1, (raw - min) / (max - min)));
+}}
+
+function meterRow(label, value) {{
+  const pct = Math.round(((value + 1) / 2) * 100);
+  return `<div class="row"><div>${{label}}</div><div class="meter"><div class="fill" style="width:${{pct}}%"></div></div><div>${{value.toFixed(3)}}</div></div>`;
+}}
+
+function triggerRow(label, value) {{
+  const pct = Math.round(value * 100);
+  return `<div class="row"><div>${{label}}</div><div class="meter"><div class="fill" style="width:${{pct}}%"></div></div><div>${{value.toFixed(3)}}</div></div>`;
+}}
+
+function render() {{
+  const tester = document.getElementById("tester");
+  const pads = navigator.getGamepads ? [...navigator.getGamepads()].filter(Boolean) : [];
+  if (!pads.length) {{
+    tester.innerHTML = '<div class="muted">Gamepad APIでコントローラー待機中... / Waiting for a controller via Gamepad API...</div>';
+    requestAnimationFrame(render);
+    return;
+  }}
+  const pad = pads[0];
+  const left = profile.sticks?.left || {{}};
+  const right = profile.sticks?.right || {{}};
+  const r2 = profile.triggers?.r2 || {{}};
+  const l2 = profile.triggers?.l2 || {{}};
+  const buttons = profile.buttons || {{}};
+  const buttonHtml = Object.entries(buttons).map(([name, index]) => {{
+    const on = buttonValue(pad, index);
+    return `<div class="button-state ${{on ? 'on' : ''}}"><span>${{name}}</span><strong>${{on ? 'ON' : 'off'}}</strong></div>`;
+  }}).join("");
+  tester.innerHTML = `
+    <div class="muted">${{pad.id}}</div>
+    ${{meterRow('Left X', axisValue(pad, left.x_axis))}}
+    ${{meterRow('Left Y', axisValue(pad, left.y_axis))}}
+    ${{meterRow('Right X', axisValue(pad, right.x_axis))}}
+    ${{meterRow('Right Y', axisValue(pad, right.y_axis))}}
+    ${{triggerRow('L2', normalizedTrigger(pad, l2))}}
+    ${{triggerRow('R2', normalizedTrigger(pad, r2))}}
+    <div class="buttons">${{buttonHtml}}</div>
+  `;
+  requestAnimationFrame(render);
+}}
+render();
+</script>
+</body>
+</html>
+"""
+    with open(path, "w", encoding="utf-8") as output:
+        output.write(page)
+
+
+def save_html_report(path: str, profile: dict[str, Any]) -> None:
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    template_path = os.path.join(os.path.dirname(__file__), "joy_profile_editor.html")
+    with open(template_path, encoding="utf-8") as template_file:
+        page = template_file.read()
+    embedded_profile = json.dumps(profile, ensure_ascii=False)
+    page = page.replace("__EMBEDDED_PROFILE_JSON__", embedded_profile)
+    with open(path, "w", encoding="utf-8") as output:
+        output.write(page)
 
 
 def load_simple_yaml(path: str) -> dict[str, Any]:
@@ -629,15 +913,43 @@ def calibrate(args: argparse.Namespace) -> None:
         wait_for_enter()
         profile = build_profile(device, idle)
         save_yaml(args.profile, profile)
-        print(f"\nSaved profile: {args.profile}")
+        print(f"\nプロファイルを保存しました / Saved profile: {args.profile}")
         if args.teleop_cmd:
             save_yaml(args.teleop_cmd, teleop_cmd_yaml(profile))
-            print(f"Saved teleop cmd parameters: {args.teleop_cmd}")
+            print(f"teleop cmd設定を保存しました / Saved teleop cmd parameters: {args.teleop_cmd}")
         if args.button_mapping:
             save_yaml(args.button_mapping, button_mapping_yaml(profile))
-            print(f"Saved button mapping parameters: {args.button_mapping}")
+            print(f"ボタン設定を保存しました / Saved button mapping parameters: {args.button_mapping}")
+        if not args.no_html_report:
+            html_report = args.html_report or default_html_report_path(args.profile)
+            save_html_report(html_report, profile)
+            print(f"HTMLレポートを保存しました / Saved HTML report: {html_report}")
     finally:
         device.close()
+
+
+def report(args: argparse.Namespace) -> None:
+    profile = load_simple_yaml(args.profile)
+    output = args.output or default_html_report_path(args.profile)
+    save_html_report(output, profile)
+    print(f"HTMLレポートを保存しました / Saved HTML report: {output}")
+
+
+def ui(args: argparse.Namespace) -> None:
+    output = args.output
+    if args.profile:
+        profile = load_simple_yaml(args.profile)
+    else:
+        profile = {
+            "device": {"name": "", "path": "", "vendor_id": "", "product_id": ""},
+            "buttons": {},
+            "triggers": {},
+            "sticks": {},
+            "dpad": {},
+            "idle_axes": {},
+        }
+    save_html_report(output, profile)
+    print(f"UIを保存しました / Saved UI: {output}")
 
 
 def main() -> int:
@@ -654,6 +966,8 @@ def main() -> int:
     )
     calibrate_parser.add_argument("--teleop-cmd", help="optional teleop_cmd_node parameter YAML output")
     calibrate_parser.add_argument("--button-mapping", help="optional teleop_button_manager_node parameter YAML output")
+    calibrate_parser.add_argument("--html-report", help="optional HTML report output")
+    calibrate_parser.add_argument("--no-html-report", action="store_true", help="do not generate an HTML report")
     calibrate_parser.set_defaults(func=calibrate)
 
     tester_parser = subparsers.add_parser("test", help="show a terminal Joy Tester using a saved profile")
@@ -661,6 +975,20 @@ def main() -> int:
     tester_parser.add_argument("--device", help="device path, for example /dev/input/js0")
     tester_parser.add_argument("--raw", action="store_true", help="show raw axis values as well as normalized triggers")
     tester_parser.set_defaults(func=lambda args: tester(args.profile, args.device, args.raw))
+
+    report_parser = subparsers.add_parser("report", help="generate an HTML report from a saved profile")
+    report_parser.add_argument("--profile", required=True)
+    report_parser.add_argument("--output", help="HTML report output path")
+    report_parser.set_defaults(func=report)
+
+    ui_parser = subparsers.add_parser("ui", help="generate a standalone YAML editor UI")
+    ui_parser.add_argument("--profile", help="optional profile YAML to embed")
+    ui_parser.add_argument(
+        "--output",
+        default="ros2_ws/src/tool/jetpilot_teleop_tools/config/joy_profile_editor.html",
+        help="HTML UI output path",
+    )
+    ui_parser.set_defaults(func=ui)
 
     args = parser.parse_args()
     try:
