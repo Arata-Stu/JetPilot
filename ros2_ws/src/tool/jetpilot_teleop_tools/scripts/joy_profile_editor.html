@@ -114,6 +114,16 @@
       font-size: 12px;
       margin-bottom: 5px;
     }
+    .capture-field {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 6px;
+    }
+    .capture-field .capture {
+      min-width: 42px;
+      min-height: 38px;
+      padding: 8px 10px;
+    }
     .mapping-table {
       width: 100%;
       border-collapse: collapse;
@@ -250,12 +260,12 @@
         <h2>D-pad / 十字キー</h2>
         <div class="form-grid">
           <div class="field"><label>type</label><select data-path="dpad.type"><option>axis</option><option>button</option><option>mixed</option></select></div>
-          <div class="field"><label>x_axis</label><input type="number" data-path="dpad.x_axis"></div>
-          <div class="field"><label>y_axis</label><input type="number" data-path="dpad.y_axis"></div>
-          <div class="field"><label>up_value</label><input type="number" data-path="dpad.up_value"></div>
-          <div class="field"><label>down_value</label><input type="number" data-path="dpad.down_value"></div>
-          <div class="field"><label>left_value</label><input type="number" data-path="dpad.left_value"></div>
-          <div class="field"><label>right_value</label><input type="number" data-path="dpad.right_value"></div>
+          <div class="field"><label>x_axis</label><div class="capture-field"><input type="number" data-path="dpad.x_axis"><button class="capture" data-capture-kind="axis" data-capture-target="dpad.x_axis">Cap</button></div></div>
+          <div class="field"><label>y_axis</label><div class="capture-field"><input type="number" data-path="dpad.y_axis"><button class="capture" data-capture-kind="axis" data-capture-target="dpad.y_axis">Cap</button></div></div>
+          <div class="field"><label>up_value</label><div class="capture-field"><input type="number" data-path="dpad.up_value"><button class="capture" data-capture-kind="axisValue" data-capture-target="dpad.up_value" data-capture-axis="dpad.y_axis">Cap</button></div></div>
+          <div class="field"><label>down_value</label><div class="capture-field"><input type="number" data-path="dpad.down_value"><button class="capture" data-capture-kind="axisValue" data-capture-target="dpad.down_value" data-capture-axis="dpad.y_axis">Cap</button></div></div>
+          <div class="field"><label>left_value</label><div class="capture-field"><input type="number" data-path="dpad.left_value"><button class="capture" data-capture-kind="axisValue" data-capture-target="dpad.left_value" data-capture-axis="dpad.x_axis">Cap</button></div></div>
+          <div class="field"><label>right_value</label><div class="capture-field"><input type="number" data-path="dpad.right_value"><button class="capture" data-capture-kind="axisValue" data-capture-target="dpad.right_value" data-capture-axis="dpad.x_axis">Cap</button></div></div>
         </div>
       </div>
     </div>
@@ -269,7 +279,7 @@
       </div>
       <div class="panel">
         <h2>Capture / 対応付け</h2>
-        <div class="muted">Captureを押してからコントローラーのボタンを押すと、その番号を対応に反映します。 / Click capture, then press a controller button.</div>
+        <div class="muted">Captureを押してから対象を操作すると、その番号や値を対応に反映します。 / Click capture, then move or press the target control. Alt+Captureで現在値を即入力できます。 / Alt+Capture stores the current axis value immediately.</div>
         <div id="captureStatus" class="muted"></div>
       </div>
     </div>
@@ -304,8 +314,9 @@ const buttonNames = ["cross", "circle", "triangle", "square", "l1", "r1", "share
 const state = {
   profile: emptyProfile(),
   outputKind: "profile",
-  captureButton: null,
-  lastButtons: []
+  capture: null,
+  lastButtons: [],
+  baselineAxes: []
 };
 
 function emptyProfile() {
@@ -491,7 +502,7 @@ function renderEditor() {
     <tr>
       <td>${name}</td>
       <td><input type="number" data-button="${name}" value="${state.profile.buttons[name] ?? -1}"></td>
-      <td><button class="capture" data-capture="${name}">Capture</button></td>
+      <td><button class="capture" data-capture-kind="profileButton" data-capture-target="${name}">Capture</button></td>
     </tr>
   `).join("");
   document.getElementById("triggerFields").innerHTML = ["l2", "r2"].map(name => triggerBlock(name)).join("");
@@ -503,12 +514,12 @@ function renderEditor() {
 function triggerBlock(name) {
   const t = state.profile.triggers[name] || {};
   return `<h3>${name.toUpperCase()}</h3><div class="form-grid">
-    ${field(`triggers.${name}.axis`, "axis", t.axis, "number")}
-    ${field(`triggers.${name}.button`, "button", t.button, "number")}
-    ${field(`triggers.${name}.min`, "min", t.min, "number")}
-    ${field(`triggers.${name}.max`, "max", t.max, "number")}
-    ${field(`triggers.${name}.released`, "released", t.released, "number")}
-    ${field(`triggers.${name}.pressed`, "pressed", t.pressed, "number")}
+    ${field(`triggers.${name}.axis`, "axis", t.axis, "number", capture("axis", `triggers.${name}.axis`))}
+    ${field(`triggers.${name}.button`, "button", t.button, "number", capture("buttonPath", `triggers.${name}.button`))}
+    ${field(`triggers.${name}.min`, "min", t.min, "number", capture("axisValue", `triggers.${name}.min`, `triggers.${name}.axis`))}
+    ${field(`triggers.${name}.max`, "max", t.max, "number", capture("axisValue", `triggers.${name}.max`, `triggers.${name}.axis`))}
+    ${field(`triggers.${name}.released`, "released", t.released, "number", capture("axisValue", `triggers.${name}.released`, `triggers.${name}.axis`))}
+    ${field(`triggers.${name}.pressed`, "pressed", t.pressed, "number", capture("axisValue", `triggers.${name}.pressed`, `triggers.${name}.axis`))}
     ${field(`triggers.${name}.deadzone`, "deadzone", t.deadzone, "number")}
     ${check(`triggers.${name}.inverted`, "inverted", t.inverted)}
   </div>`;
@@ -517,18 +528,23 @@ function triggerBlock(name) {
 function stickBlock(name) {
   const s = state.profile.sticks[name] || {};
   return `<h3>${name}</h3><div class="form-grid">
-    ${field(`sticks.${name}.x_axis`, "x_axis", s.x_axis, "number")}
-    ${field(`sticks.${name}.y_axis`, "y_axis", s.y_axis, "number")}
-    ${field(`sticks.${name}.center_x`, "center_x", s.center_x, "number")}
-    ${field(`sticks.${name}.center_y`, "center_y", s.center_y, "number")}
+    ${field(`sticks.${name}.x_axis`, "x_axis", s.x_axis, "number", capture("axis", `sticks.${name}.x_axis`))}
+    ${field(`sticks.${name}.y_axis`, "y_axis", s.y_axis, "number", capture("axis", `sticks.${name}.y_axis`))}
+    ${field(`sticks.${name}.center_x`, "center_x", s.center_x, "number", capture("axisValue", `sticks.${name}.center_x`, `sticks.${name}.x_axis`))}
+    ${field(`sticks.${name}.center_y`, "center_y", s.center_y, "number", capture("axisValue", `sticks.${name}.center_y`, `sticks.${name}.y_axis`))}
     ${field(`sticks.${name}.deadzone`, "deadzone", s.deadzone, "number")}
     ${check(`sticks.${name}.invert_x`, "invert_x", s.invert_x)}
     ${check(`sticks.${name}.invert_y`, "invert_y", s.invert_y)}
   </div>`;
 }
 
-function field(path, label, value, type = "text") {
-  return `<div class="field"><label>${label}</label><input type="${type}" data-path="${path}" value="${value ?? ""}"></div>`;
+function field(path, label, value, type = "text", captureButton = "") {
+  const input = `<input type="${type}" data-path="${path}" value="${value ?? ""}">`;
+  return `<div class="field"><label>${label}</label>${captureButton ? `<div class="capture-field">${input}${captureButton}</div>` : input}</div>`;
+}
+
+function capture(kind, target, axisPath = "") {
+  return `<button class="capture" data-capture-kind="${kind}" data-capture-target="${target}" data-capture-axis="${axisPath}">Cap</button>`;
 }
 
 function check(path, label, value) {
@@ -574,6 +590,10 @@ function axisValue(gamepad, index) {
   return gamepad.axes[index];
 }
 
+function axisRawValue(gamepad, index) {
+  return Math.round(axisValue(gamepad, index) * 32767);
+}
+
 function buttonPressed(gamepad, index) {
   if (index === undefined || index < 0 || index >= gamepad.buttons.length) return false;
   return gamepad.buttons[index].pressed;
@@ -599,15 +619,7 @@ function renderTester() {
     return;
   }
   const pad = pads[0];
-  if (state.captureButton) {
-    pad.buttons.forEach((button, index) => {
-      if (button.pressed && !state.lastButtons[index]) {
-        state.profile.buttons[state.captureButton] = index;
-        state.captureButton = null;
-        renderEditor();
-      }
-    });
-  }
+  handleCapture(pad);
   state.lastButtons = pad.buttons.map(button => button.pressed);
   const left = state.profile.sticks.left;
   const right = state.profile.sticks.right;
@@ -625,10 +637,61 @@ function renderTester() {
     ${meter("R2", triggerValue(pad, state.profile.triggers.r2), 0, 1)}
     <div class="button-states">${buttons}</div>
   `;
-  document.getElementById("captureStatus").textContent = state.captureButton
-    ? `Waiting for ${state.captureButton} / ${state.captureButton} の入力待ち`
+  document.getElementById("captureStatus").textContent = state.capture
+    ? `Waiting for ${state.capture.target} / ${state.capture.target} の入力待ち`
     : "";
   requestAnimationFrame(renderTester);
+}
+
+function finishCapture() {
+  state.capture = null;
+  document.querySelectorAll(".capture").forEach(button => button.classList.remove("waiting"));
+  renderEditor();
+}
+
+function handleCapture(pad) {
+  if (!state.capture) return;
+  const capture = state.capture;
+  if (capture.kind === "profileButton" || capture.kind === "buttonPath") {
+    for (let index = 0; index < pad.buttons.length; index += 1) {
+      if (pad.buttons[index].pressed && !state.lastButtons[index]) {
+        if (capture.kind === "profileButton") state.profile.buttons[capture.target] = index;
+        else setPath(state.profile, capture.target, index);
+        finishCapture();
+        return;
+      }
+    }
+    return;
+  }
+  if (capture.kind === "axis") {
+    for (let index = 0; index < pad.axes.length; index += 1) {
+      const before = capture.axes[index] ?? 0;
+      if (Math.abs(pad.axes[index] - before) > 0.35) {
+        setPath(state.profile, capture.target, index);
+        finishCapture();
+        return;
+      }
+    }
+    return;
+  }
+  if (capture.kind === "axisValue") {
+    const configuredAxis = Number(getPath(state.profile, capture.axisPath));
+    if (Number.isInteger(configuredAxis) && configuredAxis >= 0 && configuredAxis < pad.axes.length) {
+      if (Math.abs(pad.axes[configuredAxis] - (capture.axes[configuredAxis] ?? 0)) > 0.08 || capture.allowImmediate) {
+        setPath(state.profile, capture.target, axisRawValue(pad, configuredAxis));
+        finishCapture();
+      }
+      return;
+    }
+    for (let index = 0; index < pad.axes.length; index += 1) {
+      const before = capture.axes[index] ?? 0;
+      if (Math.abs(pad.axes[index] - before) > 0.35) {
+        setPath(state.profile, capture.target, axisRawValue(pad, index));
+        finishCapture();
+        return;
+      }
+    }
+  }
 }
 
 document.querySelectorAll(".tabs button").forEach(button => {
@@ -643,10 +706,17 @@ document.addEventListener("input", event => {
 });
 
 document.addEventListener("click", event => {
-  const capture = event.target.closest("[data-capture]");
-  if (capture) {
-    state.captureButton = capture.dataset.capture;
-    document.querySelectorAll(".capture").forEach(button => button.classList.toggle("waiting", button === capture));
+  const captureButton = event.target.closest("[data-capture-kind]");
+  if (captureButton) {
+    const pad = navigator.getGamepads ? [...navigator.getGamepads()].filter(Boolean)[0] : null;
+    state.capture = {
+      kind: captureButton.dataset.captureKind,
+      target: captureButton.dataset.captureTarget,
+      axisPath: captureButton.dataset.captureAxis || "",
+      axes: pad ? [...pad.axes] : [],
+      allowImmediate: event.altKey,
+    };
+    document.querySelectorAll(".capture").forEach(button => button.classList.toggle("waiting", button === captureButton));
   }
 });
 

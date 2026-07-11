@@ -75,6 +75,11 @@ full profile YAML, export `teleop_cmd_node` parameters, export
 `teleop_button_manager_node` parameters, and run a browser-based Joy Tester
 using the Gamepad API when the browser can see the controller.
 
+Capture buttons are available for button mappings, trigger axis/button fields,
+stick axes, stick center values, and d-pad axes/values. Axis values are captured
+from the browser Gamepad API and converted to the same `-32767..32767` style
+range used in the profile YAML.
+
 To generate the editor again from an existing profile:
 
 ```bash
