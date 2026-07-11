@@ -1,0 +1,461 @@
+from __future__ import annotations
+
+import csv
+import math
+import struct
+from ast import literal_eval
+from pathlib import Path
+from typing import Any
+from urllib.parse import quote
+
+from .config import ConsoleConfig
+from .indexes import _artifact, _dir_size, _iso_mtime
+
+
+def _is_relative_to(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def resolve_allowed_path(config: ConsoleConfig, value: str) -> Path:
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        path = config.map_root / path
+    resolved = path.resolve()
+    allowed_roots = [
+        config.map_root.resolve(),
+    ]
+    if not any(_is_relative_to(resolved, root) for root in allowed_roots):
+        raise ValueError("path is outside the JetPilot workspace")
+    return resolved
+
+
+def _file_url(path: Path) -> str:
+    return f"/api/files?path={quote(str(path))}"
+
+
+def _strip_comment(line: str) -> str:
+    in_quote = ""
+    for index, char in enumerate(line):
+        if char in ("'", '"'):
+            if in_quote == char:
+                in_quote = ""
+            elif not in_quote:
+                in_quote = char
+        if char == "#" and not in_quote:
+            return line[:index]
+    return line
+
+
+def _clean_scalar(value: str) -> Any:
+    text = value.strip()
+    if text == "":
+        return ""
+    lowered = text.lower()
+    if lowered in {"null", "none", "~"}:
+        return None
+    if lowered == "true":
+        return True
+    if lowered == "false":
+        return False
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in {"'", '"'}:
+        return text[1:-1]
+    if text.startswith("[") and text.endswith("]"):
+        try:
+            return literal_eval(text)
+        except (SyntaxError, ValueError):
+            return text
+    try:
+        if any(char in text for char in ".eE"):
+            return float(text)
+        return int(text)
+    except ValueError:
+        return text
+
+
+def _yaml_lines(path: Path) -> list[tuple[int, str]]:
+    lines = []
+    for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        cleaned = _strip_comment(raw).rstrip()
+        if not cleaned.strip():
+            continue
+        indent = len(cleaned) - len(cleaned.lstrip(" "))
+        lines.append((indent, cleaned.strip()))
+    return lines
+
+
+def _next_indent(lines: list[tuple[int, str]], index: int, fallback: int) -> int:
+    if index < len(lines):
+        return lines[index][0]
+    return fallback
+
+
+def _parse_yaml_block(lines: list[tuple[int, str]], index: int, indent: int) -> tuple[Any, int]:
+    if index >= len(lines):
+        return {}, index
+    if lines[index][0] < indent:
+        return {}, index
+    if lines[index][1].startswith("- "):
+        return _parse_yaml_list(lines, index, lines[index][0])
+    return _parse_yaml_map(lines, index, indent)
+
+
+def _parse_yaml_map(lines: list[tuple[int, str]], index: int, indent: int) -> tuple[dict[str, Any], int]:
+    data: dict[str, Any] = {}
+    while index < len(lines):
+        line_indent, text = lines[index]
+        if line_indent < indent:
+            break
+        if line_indent > indent:
+            index += 1
+            continue
+        if text.startswith("- ") or ":" not in text:
+            break
+        key, value = text.split(":", 1)
+        key = key.strip()
+        value = value.strip()
+        index += 1
+        if value:
+            data[key] = _clean_scalar(value)
+        else:
+            child_indent = _next_indent(lines, index, line_indent + 2)
+            data[key], index = _parse_yaml_block(lines, index, child_indent)
+    return data, index
+
+
+def _parse_yaml_list(lines: list[tuple[int, str]], index: int, indent: int) -> tuple[list[Any], int]:
+    items: list[Any] = []
+    while index < len(lines):
+        line_indent, text = lines[index]
+        if line_indent < indent:
+            break
+        if line_indent != indent or not text.startswith("- "):
+            break
+
+        item_text = text[2:].strip()
+        index += 1
+
+        if item_text.startswith("- "):
+            nested = [_clean_scalar(item_text[2:].strip())]
+            while index < len(lines) and lines[index][0] > indent and lines[index][1].startswith("- "):
+                nested.append(_clean_scalar(lines[index][1][2:].strip()))
+                index += 1
+            items.append(nested)
+            continue
+
+        if not item_text:
+            child_indent = _next_indent(lines, index, indent + 2)
+            child, index = _parse_yaml_block(lines, index, child_indent)
+            items.append(child)
+            continue
+
+        if ":" in item_text and not item_text.startswith("["):
+            item: dict[str, Any] = {}
+            key, value = item_text.split(":", 1)
+            item[key.strip()] = _clean_scalar(value.strip()) if value.strip() else {}
+            while index < len(lines):
+                next_indent, next_text = lines[index]
+                if next_indent <= indent:
+                    break
+                if next_text.startswith("- ") and next_indent == indent:
+                    break
+                if ":" not in next_text:
+                    index += 1
+                    continue
+                child_key, child_value = next_text.split(":", 1)
+                child_key = child_key.strip()
+                child_value = child_value.strip()
+                index += 1
+                if child_value:
+                    item[child_key] = _clean_scalar(child_value)
+                else:
+                    child_indent = _next_indent(lines, index, next_indent + 2)
+                    item[child_key], index = _parse_yaml_block(lines, index, child_indent)
+            items.append(item)
+            continue
+
+        items.append(_clean_scalar(item_text))
+    return items, index
+
+
+def load_yaml(path: Path) -> dict[str, Any]:
+    lines = _yaml_lines(path)
+    data, _ = _parse_yaml_block(lines, 0, lines[0][0] if lines else 0)
+    return data if isinstance(data, dict) else {}
+
+
+def _as_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_point(row: Any) -> list[float] | None:
+    if isinstance(row, (list, tuple)) and len(row) >= 2:
+        return [_as_float(row[0]), _as_float(row[1])]
+    return None
+
+
+def _as_points(rows: Any) -> list[list[float]]:
+    points = []
+    if not isinstance(rows, list):
+        return points
+    for row in rows:
+        point = _as_point(row)
+        if point is not None:
+            points.append(point)
+    return points
+
+
+def _polyline_length(points: list[list[float]], closed: bool = False) -> float:
+    if len(points) < 2:
+        return 0.0
+    total = 0.0
+    for index in range(1, len(points)):
+        total += math.hypot(points[index][0] - points[index - 1][0], points[index][1] - points[index - 1][1])
+    if closed and len(points) >= 3:
+        total += math.hypot(points[0][0] - points[-1][0], points[0][1] - points[-1][1])
+    return total
+
+
+def _resolve_embedded_path(value: Any, base: Path) -> Path | None:
+    if not value:
+        return None
+    path = Path(str(value)).expanduser()
+    if not path.is_absolute():
+        path = base / path
+    return path.resolve()
+
+
+def _png_size(path: Path) -> tuple[int, int] | None:
+    try:
+        with path.open("rb") as handle:
+            header = handle.read(24)
+    except OSError:
+        return None
+    if header.startswith(b"\x89PNG\r\n\x1a\n") and len(header) >= 24:
+        width, height = struct.unpack(">II", header[16:24])
+        return int(width), int(height)
+    return None
+
+
+def _raster_from_hd_map(hd_map_path: Path, hd_data: dict[str, Any]) -> dict[str, Any] | None:
+    source = hd_data.get("source_raster")
+    if not isinstance(source, dict):
+        return None
+    image_path = _resolve_embedded_path(source.get("image"), hd_map_path.parent)
+    map_yaml_path = _resolve_embedded_path(source.get("map_yaml"), hd_map_path.parent)
+    image_size = source.get("image_size_px")
+    width = int(image_size[0]) if isinstance(image_size, list) and len(image_size) >= 2 else 0
+    height = int(image_size[1]) if isinstance(image_size, list) and len(image_size) >= 2 else 0
+    if image_path and (not width or not height):
+        size = _png_size(image_path)
+        if size:
+            width, height = size
+    origin = source.get("origin_xy_yaw") if isinstance(source.get("origin_xy_yaw"), list) else [0.0, 0.0, 0.0]
+    return {
+        "map_yaml_path": str(map_yaml_path) if map_yaml_path else "",
+        "image_path": str(image_path) if image_path else "",
+        "image_url": _file_url(image_path) if image_path and image_path.exists() else "",
+        "resolution_m_per_px": _as_float(source.get("resolution_m_per_px"), 0.0),
+        "origin_xy_yaw": [_as_float(origin[0]), _as_float(origin[1]), _as_float(origin[2] if len(origin) > 2 else 0.0)],
+        "width": width,
+        "height": height,
+    }
+
+
+def _raster_from_map_yaml(map_yaml_path: Path) -> dict[str, Any] | None:
+    if not map_yaml_path.exists():
+        return None
+    data = load_yaml(map_yaml_path)
+    image_path = _resolve_embedded_path(data.get("image"), map_yaml_path.parent)
+    origin = data.get("origin") if isinstance(data.get("origin"), list) else [0.0, 0.0, 0.0]
+    width = height = 0
+    if image_path:
+        size = _png_size(image_path)
+        if size:
+            width, height = size
+    return {
+        "map_yaml_path": str(map_yaml_path),
+        "image_path": str(image_path) if image_path else "",
+        "image_url": _file_url(image_path) if image_path and image_path.exists() else "",
+        "resolution_m_per_px": _as_float(data.get("resolution"), 0.0),
+        "origin_xy_yaw": [_as_float(origin[0]), _as_float(origin[1]), _as_float(origin[2] if len(origin) > 2 else 0.0)],
+        "width": width,
+        "height": height,
+    }
+
+
+def _read_hd_map(path: Path) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    if not path.exists():
+        return {"exists": False, "lanes": [], "section_gates": [], "sections": []}, None
+    data = load_yaml(path)
+    primary_lane_id = str(data.get("primary_lane_id") or "")
+    lanes = []
+    for lane in data.get("lanes", []) or []:
+        if not isinstance(lane, dict):
+            continue
+        lane_id = str(lane.get("id") or f"lane_{len(lanes) + 1:03d}")
+        closed_loop = bool(lane.get("closed_loop", True))
+        centerline = _as_points(lane.get("centerline", []))
+        lanes.append(
+            {
+                "id": lane_id,
+                "primary": lane_id == primary_lane_id,
+                "closed_loop": closed_loop,
+                "left_bound": _as_points(lane.get("left_bound", [])),
+                "right_bound": _as_points(lane.get("right_bound", [])),
+                "centerline": centerline,
+                "centerline_length_m": _polyline_length(centerline, closed_loop),
+            }
+        )
+
+    gates = []
+    for raw_gate in data.get("section_gates", []) or []:
+        if not isinstance(raw_gate, dict):
+            continue
+        line = _as_points(raw_gate.get("line", []))
+        gates.append(
+            {
+                "id": str(raw_gate.get("id") or f"gate_{len(gates) + 1:03d}"),
+                "lane_id": str(raw_gate.get("lane_id") or ""),
+                "s_m": _as_float(raw_gate.get("s_m")),
+                "line": line[:2],
+            }
+        )
+
+    sections = []
+    for raw_section in data.get("sections", []) or []:
+        if not isinstance(raw_section, dict):
+            continue
+        sections.append(
+            {
+                "id": str(raw_section.get("id") or f"section_{len(sections) + 1:03d}"),
+                "lane_id": str(raw_section.get("lane_id") or ""),
+                "start_gate_id": str(raw_section.get("start_gate_id") or ""),
+                "end_gate_id": str(raw_section.get("end_gate_id") or ""),
+                "start_s_m": _as_float(raw_section.get("start_s_m")),
+                "end_s_m": _as_float(raw_section.get("end_s_m")),
+                "speed_override_mps": raw_section.get("speed_override_mps"),
+                "speed_scale": raw_section.get("speed_scale"),
+                "class": raw_section.get("class"),
+                "policy": raw_section.get("policy"),
+            }
+        )
+
+    return (
+        {
+            "exists": True,
+            "path": str(path),
+            "primary_lane_id": primary_lane_id,
+            "lanes": lanes,
+            "section_gates": gates,
+            "sections": sections,
+        },
+        _raster_from_hd_map(path, data),
+    )
+
+
+def _read_xy_csv(path: Path, delimiter: str, x_index: int, y_index: int) -> dict[str, Any]:
+    if not path.exists():
+        return {"exists": False, "path": str(path), "points": [], "count": 0, "length_m": 0.0}
+    points: list[list[float]] = []
+    try:
+        with path.open("r", encoding="utf-8", errors="replace", newline="") as handle:
+            reader = csv.reader(handle, delimiter=delimiter)
+            for row in reader:
+                if not row or row[0].strip().startswith("#"):
+                    continue
+                try:
+                    points.append([float(row[x_index]), float(row[y_index])])
+                except (IndexError, ValueError):
+                    continue
+    except OSError:
+        points = []
+    return {
+        "exists": True,
+        "path": str(path),
+        "points": points,
+        "count": len(points),
+        "length_m": _polyline_length(points, False),
+    }
+
+
+def _map_record(map_dir: Path) -> dict[str, Any]:
+    name = map_dir.name
+    artifacts = {
+        "cuvgl_map": _artifact(map_dir / "cuvgl_map"),
+        "cuvslam_map": _artifact(map_dir / "cuvslam_map"),
+        "snapshot": _artifact(map_dir / "vslam_reference_snapshot.json"),
+        "landmark_yaml": _artifact(map_dir / "vslam_landmarks.yaml"),
+        "landmark_image": _artifact(map_dir / "vslam_landmarks.png"),
+        "hd_map": _artifact(map_dir / f"{name}_hd_map.yaml"),
+        "centerline_csv": _artifact(map_dir / f"{name}_hd_map_centerline.csv"),
+        "raceline_csv": _artifact(map_dir / f"{name}_raceline.csv"),
+        "line_preview": _artifact(map_dir / f"{name}_line_preview.png"),
+    }
+    complete_runtime = all(
+        artifacts[key]["exists"]
+        for key in ("cuvgl_map", "cuvslam_map", "hd_map", "raceline_csv")
+    )
+    return {
+        "name": name,
+        "path": str(map_dir),
+        "size_bytes": _dir_size(map_dir),
+        "modified_at": _iso_mtime(map_dir),
+        "artifacts": artifacts,
+        "complete_runtime_bundle": complete_runtime,
+    }
+
+
+def build_map_detail(config: ConsoleConfig, map_dir_value: str) -> dict[str, Any]:
+    map_dir = resolve_allowed_path(config, map_dir_value)
+    if not map_dir.exists() or not map_dir.is_dir():
+        raise FileNotFoundError(f"map folder not found: {map_dir}")
+
+    name = map_dir.name
+    hd_map_path = map_dir / f"{name}_hd_map.yaml"
+    landmark_yaml_path = map_dir / "vslam_landmarks.yaml"
+    centerline_path = map_dir / f"{name}_hd_map_centerline.csv"
+    raceline_path = map_dir / f"{name}_raceline.csv"
+    line_preview_path = map_dir / f"{name}_line_preview.png"
+
+    hd_map, raster = _read_hd_map(hd_map_path)
+    if raster is None:
+        raster = _raster_from_map_yaml(landmark_yaml_path)
+
+    preview_image = ""
+    if line_preview_path.exists():
+        preview_image = _file_url(line_preview_path)
+    elif raster and raster.get("image_url"):
+        preview_image = str(raster["image_url"])
+
+    centerline = _read_xy_csv(centerline_path, ",", 0, 1)
+    raceline = _read_xy_csv(raceline_path, ";", 1, 2)
+    speed_override_count = sum(
+        1 for section in hd_map.get("sections", []) if section.get("speed_override_mps") is not None
+    )
+    primary_lane = next((lane for lane in hd_map.get("lanes", []) if lane.get("primary")), None)
+
+    return {
+        "map": _map_record(map_dir),
+        "raster": raster,
+        "preview_image_url": preview_image,
+        "hd_map": hd_map,
+        "centerline_csv": centerline,
+        "raceline_csv": raceline,
+        "stats": {
+            "lane_count": len(hd_map.get("lanes", [])),
+            "primary_lane_id": hd_map.get("primary_lane_id") or "",
+            "primary_centerline_points": len(primary_lane.get("centerline", [])) if primary_lane else 0,
+            "primary_centerline_length_m": primary_lane.get("centerline_length_m", 0.0) if primary_lane else 0.0,
+            "section_gate_count": len(hd_map.get("section_gates", [])),
+            "section_count": len(hd_map.get("sections", [])),
+            "speed_override_count": speed_override_count,
+            "raceline_points": raceline["count"],
+        },
+    }

@@ -14,6 +14,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from .config import ConsoleConfig
 from .indexes import scan_maps, scan_rosbags
+from .map_detail import build_map_detail, resolve_allowed_path
 from .map_pipeline import (
     build_vgl_vslam_script,
     generate_preview_script,
@@ -81,6 +82,12 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/maps/local":
             self._json({"maps": scan_maps(self.server.state.config.map_root)})
+            return
+        if path == "/api/maps/detail":
+            self._map_detail(query)
+            return
+        if path == "/api/files":
+            self._local_file(query)
             return
         if path == "/api/map-builder/camera-topic-configs":
             self._json({"configs": scan_camera_topic_configs(self.server.state.config)})
@@ -187,6 +194,45 @@ class Handler(BaseHTTPRequestHandler):
             payload = file_path.read_bytes()
         except OSError:
             self._json({"error": "static file unavailable"}, HTTPStatus.NOT_FOUND)
+            return
+        content_type = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def _map_detail(self, query: dict[str, list[str]]) -> None:
+        map_dir = query.get("path", [""])[0]
+        if not map_dir:
+            self._json({"error": "path is required"}, HTTPStatus.BAD_REQUEST)
+            return
+        try:
+            self._json(build_map_detail(self.server.state.config, map_dir))
+        except FileNotFoundError as exc:
+            self._json({"error": str(exc)}, HTTPStatus.NOT_FOUND)
+        except ValueError as exc:
+            self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+        except Exception as exc:
+            self._json({"error": f"failed to read map detail: {exc}"}, HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    def _local_file(self, query: dict[str, list[str]]) -> None:
+        file_value = query.get("path", [""])[0]
+        if not file_value:
+            self._json({"error": "path is required"}, HTTPStatus.BAD_REQUEST)
+            return
+        try:
+            file_path = resolve_allowed_path(self.server.state.config, file_value)
+        except ValueError as exc:
+            self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            return
+        if not file_path.exists() or not file_path.is_file():
+            self._json({"error": "file not found"}, HTTPStatus.NOT_FOUND)
+            return
+        try:
+            payload = file_path.read_bytes()
+        except OSError:
+            self._json({"error": "file unavailable"}, HTTPStatus.NOT_FOUND)
             return
         content_type = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
         self.send_response(HTTPStatus.OK)

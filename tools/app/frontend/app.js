@@ -5,6 +5,17 @@ const state = {
   rosbags: [],
   maps: [],
   cameraTopicConfigs: [],
+  selectedMapPath: null,
+  selectedMapDetail: null,
+  mapLayers: {
+    landmark: true,
+    left_bound: true,
+    right_bound: true,
+    centerline: true,
+    raceline: true,
+    section_gates: true,
+    section_labels: true,
+  },
   selectedTaskId: null,
   terminalCollapsed: false,
   logDialogOpen: false,
@@ -31,7 +42,7 @@ const esc = (value) =>
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;");
-const js = (value) => JSON.stringify(String(value ?? ""));
+const js = (value) => esc(JSON.stringify(String(value ?? "")));
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
@@ -54,6 +65,11 @@ async function apiText(path) {
   const text = await response.text();
   if (!response.ok) throw new Error(text || `${response.status} ${response.statusText}`);
   return text;
+}
+
+function apiPath(path, params = {}) {
+  const query = new URLSearchParams(params);
+  return `${path}?${query.toString()}`;
 }
 
 function toast(message, type = "success") {
@@ -134,6 +150,10 @@ async function refreshAll() {
   state.rosbags = rosbags.rosbags || [];
   state.maps = maps.maps || [];
   state.cameraTopicConfigs = cameraTopicConfigs.configs || [];
+  if (state.selectedMapPath && !state.maps.some((item) => item.path === state.selectedMapPath)) {
+    state.selectedMapPath = null;
+    state.selectedMapDetail = null;
+  }
   if (!state.selectedTaskId && state.tasks[0]) state.selectedTaskId = state.tasks[0].task_id;
   render();
 }
@@ -169,6 +189,7 @@ function render() {
     </div>
   `;
   scrollLogToEnd();
+  requestAnimationFrame(drawMapPreview);
 }
 
 function isEditingField() {
@@ -214,6 +235,7 @@ function renderDashboard() {
   const recentBags = state.rosbags.slice(0, 3);
   return `
     <div class="page">
+      ${renderAutonomyPipeline()}
       <div class="grid-3">
         ${metric("Running tasks", running.length, `${state.tasks.length} total task records`)}
         ${metric("Rosbags", state.rosbags.length, state.config ? state.config.record_root : "")}
@@ -241,6 +263,159 @@ function renderDashboard() {
       </div>
     </div>
   `;
+}
+
+function renderAutonomyPipeline() {
+  const map = pipelineMap();
+  const steps = pipelineSteps(map);
+  const nextStep = steps.find((step) => step.status !== "done");
+  const mapName = map ? map.name : "No map selected yet";
+  return `
+    <section class="panel pipeline-panel">
+      <div class="panel-header">
+        <h2>Autonomy Pipeline</h2>
+        <span class="pipeline-target">${esc(mapName)}</span>
+        <span class="spacer"></span>
+        <button onclick="setTab('rosbags')">Rosbags</button>
+        <button onclick="setTab('map-builder')">Map Builder</button>
+        <button onclick="setTab('maps')">Maps</button>
+      </div>
+      <div class="panel-body">
+        <div class="pipeline-next">
+          <div>
+            <span>Next step</span>
+            <strong>${esc(nextStep ? nextStep.title : "Ready for Jetson")}</strong>
+          </div>
+          <p>${esc(nextStep ? nextStep.next : "The selected map has the runtime bundle needed for autonomous driving prep.")}</p>
+        </div>
+        <div class="pipeline-rail">
+          ${steps.map((step, index) => pipelineStep(step, index + 1)).join("")}
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function pipelineMap() {
+  if (state.selectedMapPath) {
+    const selected = state.maps.find((item) => item.path === state.selectedMapPath);
+    if (selected) return selected;
+  }
+  if (!state.maps.length) return null;
+  return [...state.maps].sort((a, b) => mapProgressScore(b) - mapProgressScore(a))[0];
+}
+
+function mapProgressScore(map) {
+  const keys = ["cuvgl_map", "cuvslam_map", "snapshot", "landmark_yaml", "landmark_image", "hd_map", "centerline_csv", "raceline_csv", "line_preview"];
+  return keys.reduce((score, key) => score + (map.artifacts?.[key]?.exists ? 1 : 0), 0);
+}
+
+function artifactExists(map, key) {
+  return Boolean(map?.artifacts?.[key]?.exists);
+}
+
+function hasRunningTask(kind) {
+  return state.tasks.some((task) => task.kind === kind && ["queued", "running", "stopping"].includes(task.status));
+}
+
+function pipelineSteps(map) {
+  const hasBag = state.rosbags.length > 0;
+  const hasVisualMap = artifactExists(map, "cuvgl_map") && artifactExists(map, "cuvslam_map");
+  const hasRaster = artifactExists(map, "landmark_yaml") && artifactExists(map, "landmark_image");
+  const hasHdMap = artifactExists(map, "hd_map") && artifactExists(map, "centerline_csv");
+  const hasRaceline = artifactExists(map, "raceline_csv");
+  const hasPreview = artifactExists(map, "line_preview");
+  const mapPath = map?.path || "";
+  return [
+    {
+      title: "Choose rosbag",
+      detail: "Driving log used as the source for map creation.",
+      status: hasBag ? "done" : "blocked",
+      next: hasBag ? "Use one rosbag to build the visual map." : "Record or pull a rosbag first.",
+      action: "Open Rosbags",
+      onclick: "setTab('rosbags')",
+    },
+    {
+      title: "Build visual map",
+      detail: "Creates cuVGL, cuVSLAM, and the VSLAM snapshot.",
+      status: hasRunningTask("map-build") ? "running" : hasVisualMap ? "done" : hasBag ? "ready" : "blocked",
+      next: hasVisualMap ? "Prepare the landmark raster next." : "Start VGL/VSLAM build from a selected rosbag.",
+      action: "Open Builder",
+      onclick: "setTab('map-builder')",
+    },
+    {
+      title: "Prepare landmark raster",
+      detail: "Exports the image used for HD map line editing.",
+      status: hasRunningTask("prepare-hd-raster") ? "running" : hasRaster ? "done" : hasVisualMap ? "ready" : "blocked",
+      next: hasRaster ? "Draw or inspect HD map lines." : "Generate the landmark image for this map.",
+      action: "Run Raster",
+      onclick: mapPath ? `runMapStage('prepare-hd-raster', ${js(mapPath)})` : "setTab('maps')",
+    },
+    {
+      title: "Create HD map lines",
+      detail: "Left/right bounds and primary centerline.",
+      status: hasHdMap ? "done" : hasRaster ? "ready" : "blocked",
+      next: hasHdMap ? "Generate raceline from the centerline." : "Open the map workspace and check the line state.",
+      action: "Open Workspace",
+      onclick: mapPath ? `openMapWorkspace(${js(mapPath)})` : "setTab('maps')",
+    },
+    {
+      title: "Generate raceline",
+      detail: "Builds the running line used by control.",
+      status: hasRunningTask("generate-raceline") ? "running" : hasRaceline ? "done" : hasHdMap ? "ready" : "blocked",
+      next: hasRaceline ? "Generate a preview to visually confirm it." : "Generate the raceline after HD map lines exist.",
+      action: "Run Raceline",
+      onclick: mapPath ? `runMapStage('generate-raceline', ${js(mapPath)})` : "setTab('maps')",
+    },
+    {
+      title: "Review preview",
+      detail: "Checks map shape, bounds, centerline, and raceline together.",
+      status: hasRunningTask("generate-preview") ? "running" : hasPreview ? "done" : hasRaceline ? "ready" : "blocked",
+      next: hasPreview ? "Push the map bundle to Jetson." : "Generate preview after raceline exists.",
+      action: "Run Preview",
+      onclick: mapPath ? `runMapStage('generate-preview', ${js(mapPath)})` : "setTab('maps')",
+    },
+    {
+      title: "Send to Jetson",
+      detail: "Transfers the runtime-ready map bundle.",
+      status: map?.complete_runtime_bundle ? "done" : hasRaceline ? "ready" : "blocked",
+      next: map?.complete_runtime_bundle ? "Transfer this bundle and set it for driving." : "Complete the map bundle before transfer.",
+      action: "Transfer",
+      onclick: mapPath ? `fillTransferLocal(${js(mapPath)})` : "setTab('jetson')",
+    },
+  ];
+}
+
+function pipelineStep(step, number) {
+  return `
+    <div class="pipeline-step ${esc(step.status)}">
+      <div class="pipeline-number">${esc(number)}</div>
+      <div class="pipeline-step-body">
+        <div class="pipeline-step-top">
+          <strong>${esc(step.title)}</strong>
+          <span class="status ${pipelineStatusClass(step.status)}">${pipelineStatusLabel(step.status)}</span>
+        </div>
+        <p>${esc(step.detail)}</p>
+        <button onclick="${step.onclick}" ${step.status === "blocked" ? "disabled" : ""}>${esc(step.action)}</button>
+      </div>
+    </div>
+  `;
+}
+
+function pipelineStatusLabel(status) {
+  return {
+    done: "done",
+    running: "running",
+    ready: "ready",
+    blocked: "waiting",
+  }[status] || status;
+}
+
+function pipelineStatusClass(status) {
+  if (status === "done") return "success";
+  if (status === "running") return "running";
+  if (status === "ready") return "queued";
+  return "stopped";
 }
 
 function metric(label, value, sub) {
@@ -415,42 +590,190 @@ function rosbagTable() {
 function renderMaps() {
   return `
     <div class="page">
-      <section class="panel">
-        <div class="panel-header"><h2>Local Maps</h2><span class="spacer"></span><button onclick="refreshAll()">Scan</button></div>
-        <div class="table-wrap">${state.maps.length ? mapTable() : `<div class="empty">No map folders under ${esc(state.config?.map_root || "")}</div>`}</div>
-      </section>
+      <div class="map-workspace-layout">
+        <section class="panel map-list-panel">
+          <div class="panel-header"><h2>Local Maps</h2><span class="spacer"></span><button onclick="refreshAll()">Scan</button></div>
+          <div class="panel-body">${state.maps.length ? mapList() : `<div class="empty">No map folders under ${esc(state.config?.map_root || "")}</div>`}</div>
+        </section>
+        <section class="panel map-workspace-panel">
+          <div class="panel-header">
+            <h2>Map Workspace</h2>
+            <span class="spacer"></span>
+            ${state.selectedMapPath ? `<button onclick="refreshSelectedMap()">Reload Map</button>` : ""}
+          </div>
+          <div class="panel-body">${renderMapWorkspace()}</div>
+        </section>
+      </div>
     </div>
   `;
 }
 
-function mapTable() {
+function mapList() {
   return `
-    <table>
-      <thead><tr><th>Name</th><th>Path</th><th>Artifacts</th><th>Size</th><th></th></tr></thead>
-      <tbody>
-        ${state.maps
-          .map((map) => {
-            const artifactKeys = ["cuvgl_map", "cuvslam_map", "hd_map", "centerline_csv", "raceline_csv", "line_preview"];
-            return `
-              <tr>
-                <td>${esc(map.name)}<br>${map.complete_runtime_bundle ? `<span class="status success">runtime ready</span>` : `<span class="status failed">incomplete</span>`}</td>
-                <td><div class="path" title="${esc(map.path)}">${esc(map.path)}</div></td>
-                <td><div class="chips">${artifactKeys
-                  .map((key) => `<span class="chip ${map.artifacts[key]?.exists ? "ok" : "missing"}">${key}</span>`)
-                  .join("")}</div></td>
-                <td>${fmtBytes(map.size_bytes)}</td>
-                <td class="actions">
-                  <button onclick="copyText(${js(map.path)})">Copy</button>
-                  <button onclick="runMapStage('prepare-hd-raster', ${js(map.path)})">Raster</button>
-                  <button onclick="runMapStage('generate-raceline', ${js(map.path)})">Raceline</button>
-                  <button onclick="runMapStage('generate-preview', ${js(map.path)})">Preview</button>
-                  <button onclick="fillTransferLocal(${js(map.path)})">Transfer</button>
-                </td>
-              </tr>`;
-          })
+    <div class="map-list">
+      ${state.maps
+        .map((map) => {
+          const selected = state.selectedMapPath === map.path;
+          const artifactKeys = ["cuvgl_map", "cuvslam_map", "hd_map", "centerline_csv", "raceline_csv", "line_preview"];
+          return `
+            <article class="map-list-item ${selected ? "selected" : ""}">
+              <div class="map-list-main">
+                <strong>${esc(map.name)}</strong>
+                <div class="path" title="${esc(map.path)}">${esc(map.path)}</div>
+                <div class="chips">${artifactKeys
+                  .map((key) => `<span class="chip ${map.artifacts[key]?.exists ? "ok" : "missing"}">${artifactLabel(key)}</span>`)
+                  .join("")}</div>
+              </div>
+              <div class="map-list-actions">
+                ${map.complete_runtime_bundle ? `<span class="status success">runtime ready</span>` : `<span class="status failed">incomplete</span>`}
+                <button class="primary" onclick="openMapWorkspace(${js(map.path)})">${selected ? "Viewing" : "Open"}</button>
+                <button onclick="copyText(${js(map.path)})">Copy</button>
+                <button onclick="runMapStage('prepare-hd-raster', ${js(map.path)})">Raster</button>
+                <button onclick="runMapStage('generate-raceline', ${js(map.path)})">Raceline</button>
+                <button onclick="runMapStage('generate-preview', ${js(map.path)})">Preview</button>
+                <button onclick="fillTransferLocal(${js(map.path)})">Transfer</button>
+              </div>
+            </article>`;
+        })
+        .join("")}
+    </div>
+  `;
+}
+
+function artifactLabel(key) {
+  return {
+    cuvgl_map: "cuVGL",
+    cuvslam_map: "cuVSLAM",
+    snapshot: "snapshot",
+    landmark_yaml: "landmark YAML",
+    landmark_image: "landmark image",
+    hd_map: "HD map",
+    centerline_csv: "centerline",
+    raceline_csv: "raceline",
+    line_preview: "preview",
+  }[key] || key;
+}
+
+function renderMapWorkspace() {
+  const detail = state.selectedMapDetail;
+  if (!state.selectedMapPath) {
+    return `<div class="empty">Select a map to inspect its shape, lines, sections, and runtime readiness.</div>`;
+  }
+  if (!detail || detail.map?.path !== state.selectedMapPath) {
+    return `<div class="empty">Loading map workspace...</div>`;
+  }
+  return `
+    <div class="map-workspace">
+      <div class="map-workspace-top">
+        <div>
+          <h3>${esc(detail.map.name)}</h3>
+          <div class="path" title="${esc(detail.map.path)}">${esc(detail.map.path)}</div>
+        </div>
+        <div class="actions">
+          <button onclick="runMapStage('prepare-hd-raster', ${js(detail.map.path)})">Raster</button>
+          <button onclick="runMapStage('generate-raceline', ${js(detail.map.path)})">Raceline</button>
+          <button onclick="runMapStage('generate-preview', ${js(detail.map.path)})">Preview</button>
+          <button onclick="fillTransferLocal(${js(detail.map.path)})">Transfer</button>
+        </div>
+      </div>
+      <div class="map-preview-grid">
+        <div class="map-preview-shell">
+          <canvas id="map-preview-canvas" width="900" height="620"></canvas>
+        </div>
+        <aside class="map-side-panel">
+          ${renderLayerToggles()}
+          ${renderMapInspector(detail)}
+        </aside>
+      </div>
+    </div>
+  `;
+}
+
+function renderLayerToggles() {
+  const layers = [
+    ["landmark", "Landmark"],
+    ["left_bound", "Left bound"],
+    ["right_bound", "Right bound"],
+    ["centerline", "Centerline"],
+    ["raceline", "Raceline"],
+    ["section_gates", "Section gates"],
+    ["section_labels", "Labels"],
+  ];
+  return `
+    <div class="inspector-block">
+      <h4>Layers</h4>
+      <div class="layer-grid">
+        ${layers
+          .map(
+            ([key, label]) => `
+              <label class="layer-toggle">
+                <input type="checkbox" ${state.mapLayers[key] ? "checked" : ""} onchange="toggleMapLayer(${js(key)}, this.checked)" />
+                <span>${esc(label)}</span>
+              </label>`,
+          )
           .join("")}
-      </tbody>
-    </table>
+      </div>
+    </div>
+  `;
+}
+
+function renderMapInspector(detail) {
+  const stats = detail.stats || {};
+  const artifacts = detail.map.artifacts || {};
+  const lanes = detail.hd_map?.lanes || [];
+  const sections = detail.hd_map?.sections || [];
+  return `
+    <div class="inspector-block">
+      <h4>Readiness</h4>
+      <div class="artifact-grid">
+        ${["cuvgl_map", "cuvslam_map", "landmark_image", "hd_map", "centerline_csv", "raceline_csv", "line_preview"]
+          .map((key) => `<div class="artifact-row"><span>${esc(artifactLabel(key))}</span><strong class="${artifacts[key]?.exists ? "ok" : "missing"}">${artifacts[key]?.exists ? "ok" : "missing"}</strong></div>`)
+          .join("")}
+      </div>
+    </div>
+    <div class="inspector-block">
+      <h4>Map Shape</h4>
+      <div class="stat-grid">
+        ${statTile("lanes", stats.lane_count || 0)}
+        ${statTile("primary", stats.primary_lane_id || "-")}
+        ${statTile("center pts", stats.primary_centerline_points || 0)}
+        ${statTile("sections", stats.section_count || 0)}
+        ${statTile("gates", stats.section_gate_count || 0)}
+        ${statTile("raceline pts", stats.raceline_points || 0)}
+      </div>
+    </div>
+    <div class="inspector-block">
+      <h4>Lanes</h4>
+      ${lanes.length ? lanes.map(renderLaneSummary).join("") : `<div class="notice">No HD map lanes found yet.</div>`}
+    </div>
+    <div class="inspector-block">
+      <h4>Sections</h4>
+      ${sections.length ? sections.slice(0, 8).map(renderSectionSummary).join("") : `<div class="notice">No section gates found yet.</div>`}
+      ${sections.length > 8 ? `<div class="notice">${sections.length - 8} more sections hidden in this summary.</div>` : ""}
+    </div>
+  `;
+}
+
+function statTile(label, value) {
+  return `<div class="stat-tile"><span>${esc(label)}</span><strong>${esc(value)}</strong></div>`;
+}
+
+function renderLaneSummary(lane) {
+  return `
+    <div class="summary-row">
+      <strong>${esc(lane.id)}${lane.primary ? " / primary" : ""}</strong>
+      <span>${lane.closed_loop ? "closed" : "open"} / center ${esc((lane.centerline || []).length)} pts</span>
+    </div>
+  `;
+}
+
+function renderSectionSummary(section) {
+  const speed = section.speed_override_mps == null ? "default" : `${section.speed_override_mps} m/s`;
+  return `
+    <div class="summary-row">
+      <strong>${esc(section.id)}</strong>
+      <span>${esc(section.start_gate_id)} -> ${esc(section.end_gate_id)} / ${esc(speed)}</span>
+    </div>
   `;
 }
 
@@ -947,6 +1270,183 @@ async function runMapStage(stage, mapDir) {
   selectTask(result.task.task_id);
 }
 
+async function openMapWorkspace(path) {
+  state.tab = "maps";
+  state.selectedMapPath = path;
+  state.selectedMapDetail = null;
+  render();
+  try {
+    const detail = await api(apiPath("/api/maps/detail", { path }));
+    state.selectedMapDetail = detail;
+    render();
+  } catch (error) {
+    toast(`Map load failed: ${error.message}`, "error");
+    render();
+  }
+}
+
+function refreshSelectedMap() {
+  if (!state.selectedMapPath) return;
+  return openMapWorkspace(state.selectedMapPath);
+}
+
+function toggleMapLayer(layer, checked) {
+  state.mapLayers[layer] = Boolean(checked);
+  drawMapPreview();
+}
+
+function drawMapPreview() {
+  const canvas = $("map-preview-canvas");
+  if (!canvas || !state.selectedMapDetail) return;
+  const detail = state.selectedMapDetail;
+  const imageUrl = detail.raster?.image_url || detail.preview_image_url || "";
+  const draw = (image = null) => {
+    const raster = detail.raster || {};
+    const naturalWidth = image?.naturalWidth || raster.width || 900;
+    const naturalHeight = image?.naturalHeight || raster.height || 620;
+    canvas.width = Math.max(320, naturalWidth);
+    canvas.height = Math.max(240, naturalHeight);
+    const ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#0b0d10";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    if (image && state.mapLayers.landmark) {
+      ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = "rgba(8, 10, 12, 0.08)";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    } else {
+      drawGrid(ctx, canvas.width, canvas.height);
+    }
+    drawMapLayers(ctx, detail, canvas.width, canvas.height);
+  };
+  if (imageUrl) {
+    const image = new Image();
+    image.onload = () => draw(image);
+    image.onerror = () => draw(null);
+    image.src = imageUrl;
+  } else {
+    draw(null);
+  }
+}
+
+function drawGrid(ctx, width, height) {
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.08)";
+  ctx.lineWidth = 1;
+  for (let x = 0; x < width; x += 40) {
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, height);
+    ctx.stroke();
+  }
+  for (let y = 0; y < height; y += 40) {
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(width, y);
+    ctx.stroke();
+  }
+}
+
+function drawMapLayers(ctx, detail, width, height) {
+  const toPixel = mapPointProjector(detail, width, height);
+  const lanes = detail.hd_map?.lanes || [];
+  for (const lane of lanes) {
+    if (state.mapLayers.left_bound) drawPolyline(ctx, (lane.left_bound || []).map(toPixel), "#45c478", 3, lane.closed_loop);
+    if (state.mapLayers.right_bound) drawPolyline(ctx, (lane.right_bound || []).map(toPixel), "#d878d8", 3, lane.closed_loop);
+    if (state.mapLayers.centerline) drawPolyline(ctx, (lane.centerline || []).map(toPixel), "#e7c84b", lane.primary ? 4 : 2, lane.closed_loop);
+  }
+  if (state.mapLayers.centerline) {
+    drawPolyline(ctx, (detail.centerline_csv?.points || []).map(toPixel), "#5aa8ff", 2, false);
+  }
+  if (state.mapLayers.raceline) {
+    drawPolyline(ctx, (detail.raceline_csv?.points || []).map(toPixel), "#ff6d6d", 3, false);
+  }
+  if (state.mapLayers.section_gates) {
+    for (const gate of detail.hd_map?.section_gates || []) {
+      const line = (gate.line || []).map(toPixel);
+      drawPolyline(ctx, line, "#ffffff", 2, false);
+      if (state.mapLayers.section_labels && line.length >= 2) {
+        const x = (line[0][0] + line[1][0]) * 0.5;
+        const y = (line[0][1] + line[1][1]) * 0.5;
+        drawLabel(ctx, gate.id, x + 6, y - 6);
+      }
+    }
+  }
+}
+
+function drawPolyline(ctx, points, color, width, closed) {
+  const clean = points.filter((point) => Number.isFinite(point[0]) && Number.isFinite(point[1]));
+  if (clean.length < 2) return;
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width;
+  ctx.lineJoin = "round";
+  ctx.lineCap = "round";
+  ctx.beginPath();
+  ctx.moveTo(clean[0][0], clean[0][1]);
+  for (const point of clean.slice(1)) ctx.lineTo(point[0], point[1]);
+  if (closed && clean.length >= 3) ctx.closePath();
+  ctx.stroke();
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.arc(clean[0][0], clean[0][1], Math.max(3, width + 1), 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawLabel(ctx, text, x, y) {
+  ctx.save();
+  ctx.font = "12px ui-sans-serif, system-ui";
+  const metrics = ctx.measureText(text);
+  ctx.fillStyle = "rgba(8, 10, 12, 0.78)";
+  ctx.fillRect(x - 4, y - 15, metrics.width + 8, 19);
+  ctx.fillStyle = "#f2f5f8";
+  ctx.fillText(text, x, y);
+  ctx.restore();
+}
+
+function mapPointProjector(detail, width, height) {
+  const raster = detail.raster || {};
+  if (raster.resolution_m_per_px && raster.width && raster.height) {
+    const origin = raster.origin_xy_yaw || [0, 0, 0];
+    const scaleX = width / raster.width;
+    const scaleY = height / raster.height;
+    return (point) => {
+      const dx = Number(point[0]) - Number(origin[0] || 0);
+      const dy = Number(point[1]) - Number(origin[1] || 0);
+      const yaw = Number(origin[2] || 0);
+      const cos = Math.cos(yaw);
+      const sin = Math.sin(yaw);
+      const gridX = (cos * dx + sin * dy) / raster.resolution_m_per_px;
+      const gridY = (-sin * dx + cos * dy) / raster.resolution_m_per_px;
+      return [gridX * scaleX, ((raster.height - 1) - gridY) * scaleY];
+    };
+  }
+
+  const points = collectMapPoints(detail);
+  if (!points.length) return (point) => [Number(point[0] || 0), Number(point[1] || 0)];
+  const xs = points.map((point) => Number(point[0]));
+  const ys = points.map((point) => Number(point[1]));
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  const pad = 32;
+  const spanX = Math.max(1e-6, maxX - minX);
+  const spanY = Math.max(1e-6, maxY - minY);
+  const scale = Math.min((width - pad * 2) / spanX, (height - pad * 2) / spanY);
+  return (point) => [pad + (Number(point[0]) - minX) * scale, height - pad - (Number(point[1]) - minY) * scale];
+}
+
+function collectMapPoints(detail) {
+  const points = [];
+  for (const lane of detail.hd_map?.lanes || []) {
+    points.push(...(lane.left_bound || []), ...(lane.right_bound || []), ...(lane.centerline || []));
+  }
+  for (const gate of detail.hd_map?.section_gates || []) points.push(...(gate.line || []));
+  points.push(...(detail.centerline_csv?.points || []), ...(detail.raceline_csv?.points || []));
+  return points.filter((point) => Array.isArray(point) && point.length >= 2);
+}
+
 function fillTransferLocal(path) {
   state.tab = "jetson";
   render();
@@ -1133,6 +1633,9 @@ window.updateMapDirPreview = updateMapDirPreview;
 window.startMapBuild = startMapBuild;
 window.copyMapBuildCommand = copyMapBuildCommand;
 window.runMapStage = runMapStage;
+window.openMapWorkspace = openMapWorkspace;
+window.refreshSelectedMap = refreshSelectedMap;
+window.toggleMapLayer = toggleMapLayer;
 window.fillTransferLocal = fillTransferLocal;
 window.inspectJetson = inspectJetson;
 window.copyJetsonInspect = copyJetsonInspect;
