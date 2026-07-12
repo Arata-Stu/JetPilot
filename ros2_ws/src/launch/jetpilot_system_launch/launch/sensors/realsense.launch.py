@@ -40,8 +40,10 @@ def launch_realsense(args: lu.ArgumentContainer) -> list[lut.Action]:
     parameters.append(config_yaml)
     parameters.append({
         'use_sim_time': lu.is_true(args.use_sim_time),
+        'enable_infra1': True,
+        'enable_infra2': True,
         'enable_depth': False,
-        'enable_color': False,
+        'enable_color': True,
         'enable_rgbd': False,
         'enable_accel': False,
         'enable_gyro': False,
