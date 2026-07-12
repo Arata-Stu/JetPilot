@@ -4,7 +4,7 @@ teleop_cmd_node:
     throttle_axis: 5
     reverse_axis: 2
     brake_button: -1
-    deadman_button: 4
+    deadman_button: 3
     steering_scale: 1.0
     throttle_scale: 1.0
     reverse_scale: 1.0
@@ -12,3 +12,9 @@ teleop_cmd_node:
     deadzone: 0.05
     trigger_min: -1.0
     trigger_max: 1.0
+    throttle_trigger_min: -1.0
+    throttle_trigger_max: 1.0
+    throttle_trigger_inverted: false
+    reverse_trigger_min: -1.0
+    reverse_trigger_max: 1.0
+    reverse_trigger_inverted: false

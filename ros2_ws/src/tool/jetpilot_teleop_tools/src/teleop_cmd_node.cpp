@@ -18,7 +18,7 @@ public:
     throttle_axis_ = declare_parameter<int>("throttle_axis", 5);
     reverse_axis_ = declare_parameter<int>("reverse_axis", 2);
     brake_button_ = declare_parameter<int>("brake_button", -1);
-    deadman_button_ = declare_parameter<int>("deadman_button", 4);
+    deadman_button_ = declare_parameter<int>("deadman_button", 3);
     steering_scale_ = declare_numeric_parameter("steering_scale", 1.0);
     throttle_scale_ = declare_numeric_parameter("throttle_scale", 1.0);
     reverse_scale_ = declare_numeric_parameter("reverse_scale", 1.0);
@@ -28,10 +28,10 @@ public:
     trigger_max_ = declare_numeric_parameter("trigger_max", 1.0);
     throttle_trigger_min_ = declare_numeric_parameter("throttle_trigger_min", trigger_min_);
     throttle_trigger_max_ = declare_numeric_parameter("throttle_trigger_max", trigger_max_);
-    throttle_trigger_inverted_ = declare_parameter<bool>("throttle_trigger_inverted", true);
+    throttle_trigger_inverted_ = declare_parameter<bool>("throttle_trigger_inverted", false);
     reverse_trigger_min_ = declare_numeric_parameter("reverse_trigger_min", trigger_min_);
     reverse_trigger_max_ = declare_numeric_parameter("reverse_trigger_max", trigger_max_);
-    reverse_trigger_inverted_ = declare_parameter<bool>("reverse_trigger_inverted", true);
+    reverse_trigger_inverted_ = declare_parameter<bool>("reverse_trigger_inverted", false);
 
     joy_sub_ = create_subscription<sensor_msgs::msg::Joy>(
       "/joy", 10, [this](const sensor_msgs::msg::Joy::SharedPtr msg) { handle_joy(*msg); });

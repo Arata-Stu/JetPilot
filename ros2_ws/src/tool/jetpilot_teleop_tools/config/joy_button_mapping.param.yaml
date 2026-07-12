@@ -1,7 +1,7 @@
 teleop_button_manager_node:
   ros__parameters:
     auto_button: 0
-    manual_button: 4
+    manual_button: 3
     stop_button: 1
     back_button: 6
     bag_start_button: 0

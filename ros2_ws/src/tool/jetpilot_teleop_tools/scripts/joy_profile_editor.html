@@ -424,6 +424,7 @@
 <script>
 const buttonNames = ["cross", "circle", "triangle", "square", "l1", "r1", "share", "options", "ps", "l3", "r3"];
 const buttonActions = [
+  ["deadman_button", "Teleop deadman"],
   ["auto_button", "Auto mode"],
   ["manual_button", "Manual mode"],
   ["stop_button", "Stop mode"],
@@ -455,8 +456,9 @@ function emptyProfile() {
     },
     dpad: {type: "button", up: 12, right: 15, down: 13, left: 14},
     button_mapping: {
-      auto_button: "triangle",
-      manual_button: "cross",
+      deadman_button: "triangle",
+      auto_button: "cross",
+      manual_button: "triangle",
       stop_button: "circle",
       back_button: "share",
       bag_start_button: "r1",
@@ -633,6 +635,7 @@ const yamlFloatKeys = new Set([
   "steering_offset",
   "throttle_offset",
   "offset_step",
+  "neutral_stop_required_steps",
   "neutral_stop_reverse_start",
   "neutral_stop_reverse_end",
   "neutral_stop_reverse_step",
@@ -714,6 +717,8 @@ function mergeProfile(input) {
 }
 
 function teleopCmdYaml(profile) {
+  const mapping = profile.button_mapping || {};
+  const deadmanName = mapping.deadman_button || "l1";
   const triggerBounds = trigger => {
     const released = rawToJoyAxisValue(Number(trigger.released ?? 0));
     const pressed = rawToJoyAxisValue(Number(trigger.pressed ?? 32767));
@@ -732,7 +737,7 @@ function teleopCmdYaml(profile) {
         throttle_axis: profile.triggers.r2.axis,
         reverse_axis: profile.triggers.l2.axis,
         brake_button: profile.buttons.circle ?? -1,
-        deadman_button: profile.buttons.l1 ?? -1,
+        deadman_button: profile.buttons[deadmanName] ?? -1,
         steering_scale: profile.sticks.left.invert_x ? -1.0 : 1.0,
         throttle_scale: 1.0,
         reverse_scale: 1.0,
@@ -760,8 +765,8 @@ function buttonMappingYaml(profile) {
   return {
     teleop_button_manager_node: {
       ros__parameters: {
-        auto_button: buttonIndex("auto_button", "triangle"),
-        manual_button: buttonIndex("manual_button", "cross"),
+        auto_button: buttonIndex("auto_button", "cross"),
+        manual_button: buttonIndex("manual_button", "triangle"),
         stop_button: buttonIndex("stop_button", "circle"),
         back_button: buttonIndex("back_button", "share"),
         bag_start_button: buttonIndex("bag_start_button", "r1"),

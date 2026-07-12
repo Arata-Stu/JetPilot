@@ -15,7 +15,7 @@ public:
   : Node("teleop_button_manager_node")
   {
     auto_button_ = declare_parameter<int>("auto_button", 0);
-    manual_button_ = declare_parameter<int>("manual_button", 4);
+    manual_button_ = declare_parameter<int>("manual_button", 3);
     stop_button_ = declare_parameter<int>("stop_button", 1);
     back_button_ = declare_parameter<int>("back_button", 6);
     bag_start_button_ = declare_parameter<int>("bag_start_button", 0);
