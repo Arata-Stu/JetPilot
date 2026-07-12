@@ -21,6 +21,8 @@ joy_profile.yaml
 joy_profile.html
 teleop_cmd.param.yaml
 joy_button_mapping.param.yaml
+serial_reader_node.param.yaml
+pca9685_rc_driver_node.param.yaml
 ```
 
 The wizard first asks which `/dev/input/js*` device to use, observes the idle
@@ -103,6 +105,12 @@ runtime action, such as auto/manual/stop mode changes or bag start/stop. The
 `joy_button_mapping.param.yaml` output resolves those choices to numeric
 button indices for `teleop_button_manager_node`.
 
+Use the `RC / ESC` tab to tune the Propo receiver path and hardware output path.
+It writes `serial_reader_node.param.yaml` for `rc_serial_reader` and
+`pca9685_rc_driver_node.param.yaml` for the PCA9685 servo/ESC driver. These
+cover PWM min/neutral/max values, deadbands, inversion, gains, output pulse
+widths, throttle limits, and ESC direction-change assist.
+
 For L2/R2, use `Released Cap` while the trigger is not pressed and `Pressed Cap`
 while it is fully pressed. Browsers often expose L2/R2 as analog buttons rather
 than axes, so the editor prefers the trigger `button` value for these captures
@@ -138,10 +146,12 @@ ros2 launch jetpilot_system_launch bringup.launch.py \
 ```
 
 The full `joy_profile.yaml` is intended for calibration and tester tools. The
-`teleop_cmd.param.yaml` and `joy_button_mapping.param.yaml` files are
-the runtime inputs for the current ROS nodes. `bringup.launch.py` and
-`tool.launch.py` use the generated files from `ROS2_WS/joy_profiles` by default
-when they exist, and fall back to the package defaults before calibration.
+`teleop_cmd.param.yaml`, `joy_button_mapping.param.yaml`,
+`serial_reader_node.param.yaml`, and `pca9685_rc_driver_node.param.yaml` files
+are the runtime inputs for the current ROS nodes. `bringup.launch.py`,
+`tool.launch.py`, and `vehicle.launch.py` use the generated files from
+`ROS2_WS/joy_profiles` by default when they exist, and fall back to the package
+defaults before calibration.
 
 When running inside Docker, host paths and container paths are not the same.
 The browser UI can download YAML files to the host, but `Save to Docker` writes
@@ -152,6 +162,8 @@ If `ROS2_WS` is not set, the default is `/workspaces/ros2_ws`:
 /workspaces/ros2_ws/joy_profiles/joy_profile.yaml
 /workspaces/ros2_ws/joy_profiles/teleop_cmd.param.yaml
 /workspaces/ros2_ws/joy_profiles/joy_button_mapping.param.yaml
+/workspaces/ros2_ws/joy_profiles/serial_reader_node.param.yaml
+/workspaces/ros2_ws/joy_profiles/pca9685_rc_driver_node.param.yaml
 ```
 
 You can still override the runtime files explicitly when needed:

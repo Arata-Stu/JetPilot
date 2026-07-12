@@ -7,12 +7,12 @@ import isaac_ros_launch_utils.all_types as lut
 from launch.conditions import IfCondition
 
 
-def joy_profile_path(filename: str, fallback_package_path: str) -> str:
+def workspace_param_path(filename: str, fallback_package: str, fallback_package_path: str) -> str:
     ros2_ws = os.environ.get('ROS2_WS', '/workspaces/ros2_ws')
     generated_path = os.path.join(ros2_ws, 'joy_profiles', filename)
     if os.path.exists(generated_path):
         return generated_path
-    return lu.get_path('jetpilot_teleop_tools', fallback_package_path)
+    return lu.get_path(fallback_package, fallback_package_path)
 
 
 def generate_launch_description() -> lut.LaunchDescription:
@@ -36,13 +36,25 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('bag_manager_param', lu.get_path('jetpilot_bag_tools', 'config/bag_manager.param.yaml'), cli=True)
     args.add_arg(
         'teleop_cmd_param',
-        joy_profile_path('teleop_cmd.param.yaml', 'config/teleop_cmd.param.yaml'),
+        workspace_param_path(
+            'teleop_cmd.param.yaml',
+            'jetpilot_teleop_tools',
+            'config/teleop_cmd.param.yaml'),
         cli=True)
     args.add_arg(
         'teleop_button_mapping_param',
-        joy_profile_path('joy_button_mapping.param.yaml', 'config/joy_button_mapping.param.yaml'),
+        workspace_param_path(
+            'joy_button_mapping.param.yaml',
+            'jetpilot_teleop_tools',
+            'config/joy_button_mapping.param.yaml'),
         cli=True)
-    args.add_arg('serial_reader_param', lu.get_path('rc_serial_reader', 'config/serial_reader_node.param.yaml'), cli=True)
+    args.add_arg(
+        'serial_reader_param',
+        workspace_param_path(
+            'serial_reader_node.param.yaml',
+            'rc_serial_reader',
+            'config/serial_reader_node.param.yaml'),
+        cli=True)
     args.add_arg('rc_channels_topic', '/rc/channels', cli=True)
     args.add_arg('propo_control_topic', '/propo/control_cmd', cli=True)
     args.add_arg('joy_autorepeat_rate', 50.0, cli=True)
@@ -93,7 +105,10 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('vehicle_interface_launch', 'launch/pca9685_rc_interface.launch.xml', cli=True)
     args.add_arg(
         'vehicle_driver_param',
-        lu.get_path('pca9685_rc_driver', 'config/pca9685_rc_driver_node.param.yaml'),
+        workspace_param_path(
+            'pca9685_rc_driver_node.param.yaml',
+            'pca9685_rc_driver',
+            'config/pca9685_rc_driver_node.param.yaml'),
         cli=True)
     args.add_arg('vehicle_control_topic', '/vehicle/control_cmd', cli=True)
     args.add_arg('publish_vehicle_description', True, cli=True)

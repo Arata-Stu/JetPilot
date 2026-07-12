@@ -228,6 +228,7 @@
   <nav class="tabs">
     <button class="active" data-tab="edit">Mapping</button>
     <button data-tab="tester">Joy Tester</button>
+    <button data-tab="rcEsc">RC / ESC</button>
     <button data-tab="yaml">YAML I/O</button>
   </nav>
 
@@ -305,6 +306,95 @@
     </div>
   </section>
 
+  <section class="view" id="rcEsc">
+    <div class="grid">
+      <div class="panel span">
+        <h2>Propo Receiver / プロポ入力</h2>
+        <div class="muted">Pro MicroからJetsonへ届くPWM値を、ステアリング・スロットル・モード入力として正規化します。 / Normalize PWM values received from Pro Micro.</div>
+        <div class="form-grid">
+          <div class="field"><label>device</label><input data-rc-path="serial.device"></div>
+          <div class="field"><label>baud_rate</label><input type="number" data-rc-path="serial.baud_rate"></div>
+          <div class="field"><label>poll_rate_hz</label><input type="number" step="1" data-rc-path="serial.poll_rate_hz"></div>
+          <div class="field"><label>deadband_us</label><input type="number" data-rc-path="serial.deadband_us"></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>CH1 Steering / ステアリング</h2>
+        <div class="form-grid">
+          <div class="field"><label>min_us</label><input type="number" data-rc-path="serial.ch1_min_us"></div>
+          <div class="field"><label>neutral_us</label><input type="number" data-rc-path="serial.ch1_neutral_us"></div>
+          <div class="field"><label>max_us</label><input type="number" data-rc-path="serial.ch1_max_us"></div>
+          <div class="field"><label>gain</label><input type="number" step="0.01" data-rc-path="serial.steering_gain"></div>
+          <div class="field"><label>invert</label><input type="checkbox" data-rc-path="serial.invert_steering"></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>CH2 Throttle / スロットル</h2>
+        <div class="form-grid">
+          <div class="field"><label>min_us</label><input type="number" data-rc-path="serial.ch2_min_us"></div>
+          <div class="field"><label>neutral_us</label><input type="number" data-rc-path="serial.ch2_neutral_us"></div>
+          <div class="field"><label>max_us</label><input type="number" data-rc-path="serial.ch2_max_us"></div>
+          <div class="field"><label>gain</label><input type="number" step="0.01" data-rc-path="serial.throttle_gain"></div>
+          <div class="field"><label>invert</label><input type="checkbox" data-rc-path="serial.invert_throttle"></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>CH3 Mode / モード</h2>
+        <div class="form-grid">
+          <div class="field"><label>min_us</label><input type="number" data-rc-path="serial.ch3_min_us"></div>
+          <div class="field"><label>neutral_us</label><input type="number" data-rc-path="serial.ch3_neutral_us"></div>
+          <div class="field"><label>max_us</label><input type="number" data-rc-path="serial.ch3_max_us"></div>
+          <div class="field"><label>switch_deadband_us</label><input type="number" data-rc-path="serial.mode_switch_deadband_us"></div>
+          <div class="field"><label>low_mode</label><input data-rc-path="serial.ch3_low_mode"></div>
+          <div class="field"><label>mid_mode</label><input data-rc-path="serial.ch3_mid_mode"></div>
+          <div class="field"><label>high_mode</label><input data-rc-path="serial.ch3_high_mode"></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>PCA9685 Output / 出力</h2>
+        <div class="form-grid">
+          <div class="field"><label>i2c_device</label><input data-rc-path="driver.i2c_device"></div>
+          <div class="field"><label>i2c_address</label><input type="number" data-rc-path="driver.i2c_address"></div>
+          <div class="field"><label>steering_channel</label><input type="number" data-rc-path="driver.steering_channel"></div>
+          <div class="field"><label>throttle_channel</label><input type="number" data-rc-path="driver.throttle_channel"></div>
+          <div class="field"><label>max_throttle</label><input type="number" step="0.01" data-rc-path="driver.max_throttle"></div>
+          <div class="field"><label>max_throttle_slew_rate</label><input type="number" step="0.1" data-rc-path="driver.max_throttle_slew_rate"></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>Servo / ESC Pulse Width</h2>
+        <div class="form-grid">
+          <div class="field"><label>steering_min_us</label><input type="number" data-rc-path="driver.steering_min_pulse_us"></div>
+          <div class="field"><label>steering_neutral_us</label><input type="number" data-rc-path="driver.steering_neutral_pulse_us"></div>
+          <div class="field"><label>steering_max_us</label><input type="number" data-rc-path="driver.steering_max_pulse_us"></div>
+          <div class="field"><label>throttle_min_us</label><input type="number" data-rc-path="driver.throttle_min_pulse_us"></div>
+          <div class="field"><label>throttle_neutral_us</label><input type="number" data-rc-path="driver.throttle_neutral_pulse_us"></div>
+          <div class="field"><label>throttle_max_us</label><input type="number" data-rc-path="driver.throttle_max_pulse_us"></div>
+          <div class="field"><label>steering_output_gain</label><input type="number" step="0.01" data-rc-path="driver.steering_output_gain"></div>
+          <div class="field"><label>throttle_output_gain</label><input type="number" step="0.01" data-rc-path="driver.throttle_output_gain"></div>
+          <div class="field"><label>steering_output_offset</label><input type="number" step="0.01" data-rc-path="driver.steering_output_offset"></div>
+          <div class="field"><label>throttle_output_offset</label><input type="number" step="0.01" data-rc-path="driver.throttle_output_offset"></div>
+        </div>
+      </div>
+
+      <div class="panel span">
+        <h2>ESC Assist / ESC補助</h2>
+        <div class="form-grid">
+          <div class="field"><label>direction_change_assist</label><input type="checkbox" data-rc-path="driver.esc_direction_change_assist_enabled"></div>
+          <div class="field"><label>direction_deadband</label><input type="number" step="0.01" data-rc-path="driver.esc_direction_deadband"></div>
+          <div class="field"><label>brake_throttle</label><input type="number" step="0.01" data-rc-path="driver.esc_brake_throttle"></div>
+          <div class="field"><label>brake_duration_s</label><input type="number" step="0.01" data-rc-path="driver.esc_brake_duration_s"></div>
+          <div class="field"><label>neutral_duration_s</label><input type="number" step="0.01" data-rc-path="driver.esc_neutral_duration_s"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
   <section class="view" id="yaml">
     <div class="grid">
       <div class="panel">
@@ -317,6 +407,8 @@
           <button data-output="profile">Profile YAML</button>
           <button data-output="teleop">teleop_cmd YAML</button>
           <button data-output="buttons">button_mapping YAML</button>
+          <button data-output="rc">rc_serial YAML</button>
+          <button data-output="esc">pca9685 YAML</button>
         </div>
         <textarea id="yamlOutput" spellcheck="false"></textarea>
         <div class="toolbar">
@@ -341,6 +433,7 @@ const buttonActions = [
 ];
 const state = {
   profile: emptyProfile(),
+  rcEsc: emptyRcEscProfile(),
   outputKind: "profile",
   capture: null,
   lastCapture: null,
@@ -353,8 +446,8 @@ function emptyProfile() {
     device: {name: "DualShock4", path: "/dev/input/js0", vendor_id: "054c", product_id: "09cc"},
     buttons: Object.fromEntries(buttonNames.map((name, index) => [name, index])),
     triggers: {
-      l2: {axis: 2, button: 6, released: -32767, pressed: 32767, deadzone: 500, inverted: false},
-      r2: {axis: 5, button: 7, released: -32767, pressed: 32767, deadzone: 500, inverted: false}
+      l2: {axis: 2, button: 6, released: 0, pressed: 32767, deadzone: 500, inverted: false},
+      r2: {axis: 5, button: 7, released: 0, pressed: 32767, deadzone: 500, inverted: false}
     },
     sticks: {
       left: {x_axis: 0, y_axis: 1, invert_x: false, invert_y: true, center_x: 0, center_y: 0, deadzone: 2500},
@@ -371,6 +464,75 @@ function emptyProfile() {
       hold_time_s: 1.0
     },
     idle_axes: {}
+  };
+}
+
+function emptyRcEscProfile() {
+  return {
+    serial: {
+      device: "/dev/ttyACM0",
+      baud_rate: 115200,
+      poll_rate_hz: 100.0,
+      publish_cmd: true,
+      publish_mode_request: false,
+      control_authority: "hardware_mux",
+      frame_id: "rc_receiver",
+      ch1_min_us: 1000,
+      ch1_neutral_us: 1500,
+      ch1_max_us: 2000,
+      ch2_min_us: 1000,
+      ch2_neutral_us: 1500,
+      ch2_max_us: 2000,
+      ch3_min_us: 1000,
+      ch3_neutral_us: 1500,
+      ch3_max_us: 2000,
+      deadband_us: 20,
+      mode_switch_deadband_us: 120,
+      steering_gain: 1.0,
+      throttle_gain: 1.0,
+      invert_steering: false,
+      invert_throttle: false,
+      ch3_low_mode: "STOP",
+      ch3_mid_mode: "PROPO",
+      ch3_high_mode: "AUTO"
+    },
+    driver: {
+      i2c_device: "/dev/i2c-1",
+      i2c_address: 64,
+      pwm_frequency_hz: 50.0,
+      vehicle_output_rate_hz: 100.0,
+      steering_channel: 0,
+      throttle_channel: 1,
+      throttle_inversion: false,
+      steering_inversion: false,
+      throttle_gain: 1.0,
+      steering_gain: 1.0,
+      max_throttle: 0.7,
+      max_throttle_slew_rate: 4.0,
+      esc_direction_change_assist_enabled: true,
+      esc_direction_deadband: 0.03,
+      esc_brake_throttle: 0.35,
+      esc_brake_duration_s: 0.10,
+      esc_neutral_duration_s: 0.05,
+      steering_offset: 0.0,
+      throttle_offset: 0.0,
+      offset_step: 0.0,
+      neutral_stop_assist_enabled: false,
+      neutral_stop_required_steps: 10,
+      neutral_stop_reverse_start: -0.01,
+      neutral_stop_reverse_end: -0.08,
+      neutral_stop_reverse_step: -0.01,
+      steering_output_gain: -0.65,
+      steering_output_offset: 0.0,
+      throttle_output_gain: 0.8,
+      throttle_output_offset: 0.0,
+      steering_min_pulse_us: 1000.0,
+      steering_neutral_pulse_us: 1500.0,
+      steering_max_pulse_us: 2000.0,
+      throttle_min_pulse_us: 1000.0,
+      throttle_neutral_pulse_us: 1500.0,
+      throttle_max_pulse_us: 2000.0
+    }
   };
 }
 
@@ -507,6 +669,17 @@ function mergeProfile(input) {
 }
 
 function teleopCmdYaml(profile) {
+  const triggerBounds = trigger => {
+    const released = rawToJoyAxisValue(Number(trigger.released ?? 0));
+    const pressed = rawToJoyAxisValue(Number(trigger.pressed ?? 32767));
+    return {
+      min: Math.min(released, pressed),
+      max: Math.max(released, pressed),
+      inverted: pressed < released
+    };
+  };
+  const throttleBounds = triggerBounds(profile.triggers.r2);
+  const reverseBounds = triggerBounds(profile.triggers.l2);
   return {
     teleop_cmd_node: {
       ros__parameters: {
@@ -520,14 +693,14 @@ function teleopCmdYaml(profile) {
         reverse_scale: 1.0,
         brake_value: 1.0,
         deadzone: 0.05,
-        trigger_min: -1.0,
+        trigger_min: 0.0,
         trigger_max: 1.0,
-        throttle_trigger_min: -1.0,
-        throttle_trigger_max: 1.0,
-        throttle_trigger_inverted: Boolean(profile.triggers.r2.inverted),
-        reverse_trigger_min: -1.0,
-        reverse_trigger_max: 1.0,
-        reverse_trigger_inverted: Boolean(profile.triggers.l2.inverted)
+        throttle_trigger_min: throttleBounds.min,
+        throttle_trigger_max: throttleBounds.max,
+        throttle_trigger_inverted: throttleBounds.inverted,
+        reverse_trigger_min: reverseBounds.min,
+        reverse_trigger_max: reverseBounds.max,
+        reverse_trigger_inverted: reverseBounds.inverted
       }
     }
   };
@@ -552,6 +725,14 @@ function buttonMappingYaml(profile) {
       }
     }
   };
+}
+
+function serialReaderYaml(rcEsc) {
+  return {serial_reader_node: {ros__parameters: {...rcEsc.serial}}};
+}
+
+function pca9685DriverYaml(rcEsc) {
+  return {pca9685_rc_driver_node: {ros__parameters: {...rcEsc.driver}}};
 }
 
 function renderEditor() {
@@ -581,8 +762,17 @@ function renderEditor() {
   document.getElementById("triggerFields").innerHTML = ["l2", "r2"].map(name => triggerBlock(name)).join("");
   document.getElementById("stickFields").innerHTML = ["left", "right"].map(name => stickBlock(name)).join("");
   document.getElementById("deviceSummary").textContent = `${state.profile.device.name || "Controller"} ${state.profile.device.path || ""}`;
+  renderRcEsc();
   updateCaptureClasses();
   syncOutputs();
+}
+
+function renderRcEsc() {
+  document.querySelectorAll("[data-rc-path]").forEach(input => {
+    const value = getPath(state.rcEsc, input.dataset.rcPath);
+    if (input.type === "checkbox") input.checked = Boolean(value);
+    else input.value = value ?? "";
+  });
 }
 
 function buttonSelect(action, selected) {
@@ -645,6 +835,11 @@ function readForm() {
   document.querySelectorAll("[data-button-action]").forEach(select => {
     state.profile.button_mapping[select.dataset.buttonAction] = select.value;
   });
+  document.querySelectorAll("[data-rc-path]").forEach(input => {
+    const oldValue = getPath(state.rcEsc, input.dataset.rcPath);
+    const value = input.type === "checkbox" ? input.checked : coerce(input.value, oldValue);
+    setPath(state.rcEsc, input.dataset.rcPath, value);
+  });
 }
 
 function setStatus(message) {
@@ -658,9 +853,11 @@ function syncOutputs(showStatus = false) {
   let output = profileOutput;
   if (state.outputKind === "teleop") output = teleopCmdYaml(state.profile);
   if (state.outputKind === "buttons") output = buttonMappingYaml(state.profile);
+  if (state.outputKind === "rc") output = serialReaderYaml(state.rcEsc);
+  if (state.outputKind === "esc") output = pca9685DriverYaml(state.rcEsc);
   document.getElementById("yamlOutput").value = toYaml(output) + "\n";
   if (showStatus) {
-    const labels = {profile: "Profile YAML", teleop: "teleop_cmd YAML", buttons: "button_mapping YAML"};
+    const labels = {profile: "Profile YAML", teleop: "teleop_cmd YAML", buttons: "button_mapping YAML", rc: "rc_serial YAML", esc: "pca9685 YAML"};
     setStatus(`${labels[state.outputKind]} を生成しました / Generated ${labels[state.outputKind]} at ${new Date().toLocaleTimeString()}`);
   }
 }
@@ -672,6 +869,8 @@ function generatedFiles() {
     "joy_profile.yaml": toYaml(profileOutput) + "\n",
     "teleop_cmd.param.yaml": toYaml(teleopCmdYaml(state.profile)) + "\n",
     "joy_button_mapping.param.yaml": toYaml(buttonMappingYaml(state.profile)) + "\n",
+    "serial_reader_node.param.yaml": toYaml(serialReaderYaml(state.rcEsc)) + "\n",
+    "pca9685_rc_driver_node.param.yaml": toYaml(pca9685DriverYaml(state.rcEsc)) + "\n",
   };
 }
 
@@ -742,6 +941,11 @@ function buttonAnalogValue(gamepad, index) {
 
 function analogToRaw(value) {
   return Math.round(Math.max(0, Math.min(1, value)) * 65534 - 32767);
+}
+
+function rawToJoyAxisValue(value) {
+  if (!Number.isFinite(value)) return 0;
+  return Math.max(-1, Math.min(1, value / 32767));
 }
 
 function estimateStickIdle(stick, samples) {
@@ -945,11 +1149,11 @@ document.querySelectorAll(".tabs button").forEach(button => {
 });
 
 document.addEventListener("input", event => {
-  if (event.target.matches("[data-path], [data-button], [data-button-action]")) syncOutputs();
+  if (event.target.matches("[data-path], [data-button], [data-button-action], [data-rc-path]")) syncOutputs();
 });
 
 document.addEventListener("change", event => {
-  if (event.target.matches("[data-path], [data-button], [data-button-action]")) syncOutputs();
+  if (event.target.matches("[data-path], [data-button], [data-button-action], [data-rc-path]")) syncOutputs();
 });
 
 document.addEventListener("click", event => {
@@ -1000,7 +1204,13 @@ document.querySelectorAll("[data-output]").forEach(button => {
 });
 
 document.getElementById("downloadOutput").addEventListener("click", () => {
-  const names = {profile: "joy_profile.yaml", teleop: "teleop_cmd.param.yaml", buttons: "joy_button_mapping.param.yaml"};
+  const names = {
+    profile: "joy_profile.yaml",
+    teleop: "teleop_cmd.param.yaml",
+    buttons: "joy_button_mapping.param.yaml",
+    rc: "serial_reader_node.param.yaml",
+    esc: "pca9685_rc_driver_node.param.yaml"
+  };
   download(names[state.outputKind], document.getElementById("yamlOutput").value);
 });
 

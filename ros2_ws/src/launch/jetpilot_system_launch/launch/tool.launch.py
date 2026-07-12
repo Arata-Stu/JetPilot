@@ -6,12 +6,12 @@ import isaac_ros_launch_utils as lu
 import isaac_ros_launch_utils.all_types as lut
 
 
-def joy_profile_path(filename: str, fallback_package_path: str) -> str:
+def workspace_param_path(filename: str, fallback_package: str, fallback_package_path: str) -> str:
     ros2_ws = os.environ.get('ROS2_WS', '/workspaces/ros2_ws')
     generated_path = os.path.join(ros2_ws, 'joy_profiles', filename)
     if os.path.exists(generated_path):
         return generated_path
-    return lu.get_path('jetpilot_teleop_tools', fallback_package_path)
+    return lu.get_path(fallback_package, fallback_package_path)
 
 
 def add_nodes(args: lu.ArgumentContainer):
@@ -106,13 +106,25 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('bag_manager_param', lu.get_path('jetpilot_bag_tools', 'config/bag_manager.param.yaml'), cli=True)
     args.add_arg(
         'teleop_cmd_param',
-        joy_profile_path('teleop_cmd.param.yaml', 'config/teleop_cmd.param.yaml'),
+        workspace_param_path(
+            'teleop_cmd.param.yaml',
+            'jetpilot_teleop_tools',
+            'config/teleop_cmd.param.yaml'),
         cli=True)
     args.add_arg(
         'teleop_button_mapping_param',
-        joy_profile_path('joy_button_mapping.param.yaml', 'config/joy_button_mapping.param.yaml'),
+        workspace_param_path(
+            'joy_button_mapping.param.yaml',
+            'jetpilot_teleop_tools',
+            'config/joy_button_mapping.param.yaml'),
         cli=True)
-    args.add_arg('serial_reader_param', lu.get_path('rc_serial_reader', 'config/serial_reader_node.param.yaml'), cli=True)
+    args.add_arg(
+        'serial_reader_param',
+        workspace_param_path(
+            'serial_reader_node.param.yaml',
+            'rc_serial_reader',
+            'config/serial_reader_node.param.yaml'),
+        cli=True)
     args.add_arg('enable_bag_manager', False, cli=True)
     args.add_arg('enable_joy', False, cli=True)
     args.add_arg('enable_teleop', False, cli=True)

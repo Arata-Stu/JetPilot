@@ -1,7 +1,17 @@
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import isaac_ros_launch_utils as lu
 import isaac_ros_launch_utils.all_types as lut
+
+
+def workspace_param_path(filename: str, fallback_package: str, fallback_package_path: str) -> str:
+    ros2_ws = os.environ.get('ROS2_WS', '/workspaces/ros2_ws')
+    generated_path = os.path.join(ros2_ws, 'joy_profiles', filename)
+    if os.path.exists(generated_path):
+        return generated_path
+    return lu.get_path(fallback_package, fallback_package_path)
 
 
 def add_vehicle(args: lu.ArgumentContainer):
@@ -43,7 +53,10 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('vehicle_control_topic', '/vehicle/control_cmd', cli=True)
     args.add_arg(
         'vehicle_driver_param',
-        lu.get_path('pca9685_rc_driver', 'config/pca9685_rc_driver_node.param.yaml'),
+        workspace_param_path(
+            'pca9685_rc_driver_node.param.yaml',
+            'pca9685_rc_driver',
+            'config/pca9685_rc_driver_node.param.yaml'),
         cli=True)
     args.add_arg('publish_vehicle_description', True, cli=True)
     args.add_arg('vehicle_description_base_frame', 'base_link', cli=True)
