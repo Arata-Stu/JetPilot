@@ -1,7 +1,8 @@
 /**:
   ros__parameters:
     # JetPilot default: RGB + stereo infrared only.
-    # Keep depth/pointcloud/filter/IMU paths disabled unless a workflow needs them.
+    # Unknown or device-dependent parameters are intentionally omitted so the
+    # RealSense driver can keep its own validated defaults.
     #
     # Common compact profile candidates:
     #   depth_module.infra_profile: "424x240x15", "424x240x30", "640x480x15", "640x480x30"
@@ -9,23 +10,21 @@
     #   rgb_camera.color_profile: "424x240x15", "424x240x30", "640x480x15", "640x480x30"
     # If the camera rejects a profile, verify supported modes with rs-enumerate-devices.
 
+    # Device selection / node basics.
     serial_no: ""
     usb_port_id: ""
     device_type: ""
-    rosbag_filename: ""
-    json_file_path: ""
     wait_for_device_timeout: -1.0
     reconnect_timeout: 6.0
     initial_reset: false
-    start_type_description_service: true
     use_sim_time: false
-    diagnostics_period: 0.0
 
     camera_name: "realsense"
     base_frame_id: "camera_link"
     publish_tf: true
     tf_publish_rate: 0.0
 
+    # Enable only RGB and the stereo infrared pair by default.
     enable_infra1: true
     enable_infra2: true
     enable_color: true
@@ -34,241 +33,33 @@
     enable_accel: false
     enable_gyro: false
     enable_sync: false
-    hold_back_imu_for_frames: false
-    unite_imu_method: 0
 
+    # Small profiles for Jetson bringup. Increase after stability is confirmed.
+    depth_module.infra_profile: "640x480x15"
+    depth_module.infra1_format: "Y8"
+    depth_module.infra2_format: "Y8"
+    depth_module.depth_profile: "640x480x15"
+    depth_module.depth_format: "Z16"
+    rgb_camera.color_profile: "640x480x15"
+    rgb_camera.color_format: "RGB8"
+
+    # Keep optional processing off unless a workflow explicitly needs it.
+    align_depth.enable: false
+    colorizer.enable: false
+    decimation_filter.enable: false
+    disparity_filter.enable: false
+    disparity_to_depth.enable: false
+    hdr_merge.enable: false
+    hole_filling_filter.enable: false
+    pointcloud.enable: false
+    spatial_filter.enable: false
+    temporal_filter.enable: false
+
+    # Transport QoS only. Image transport plugin parameters are omitted because
+    # the RealSense wrapper derives plugin class names internally.
     infra1_qos: "SENSOR_DATA"
     infra1_info_qos: "SENSOR_DATA"
     infra2_qos: "SENSOR_DATA"
     infra2_info_qos: "SENSOR_DATA"
     color_qos: "SENSOR_DATA"
     color_info_qos: "SENSOR_DATA"
-    depth_qos: "SENSOR_DATA"
-    depth_info_qos: "SENSOR_DATA"
-    accel_qos: "SENSOR_DATA"
-    accel_info_qos: "SENSOR_DATA"
-    gyro_qos: "SENSOR_DATA"
-    gyro_info_qos: "SENSOR_DATA"
-
-    depth_module.depth_profile: "640x480x15"
-    depth_module.depth_format: "Z16"
-    depth_module.infra_profile: "640x480x15"
-    depth_module.infra1_format: "Y8"
-    depth_module.infra2_format: "Y8"
-    depth_module.frames_queue_size: 16
-    depth_module.global_time_enabled: false
-    depth_module.enable_auto_exposure: true
-    depth_module.exposure: 8500
-    depth_module.gain: 16
-    depth_module.auto_exposure_limit: 0
-    depth_module.auto_exposure_limit_toggle: false
-    depth_module.auto_gain_limit: 0
-    depth_module.auto_gain_limit_toggle: false
-    depth_module.auto_exposure_roi.top: 0
-    depth_module.auto_exposure_roi.bottom: 479
-    depth_module.auto_exposure_roi.left: 0
-    depth_module.auto_exposure_roi.right: 639
-    depth_module.emitter_enabled: 0
-    depth_module.emitter_on_off: false
-    depth_module.emitter_always_on: false
-    depth_module.laser_power: 0.0
-    depth_module.hdr_enabled: false
-    depth_module.sequence_id: 0
-    depth_module.sequence_name: 0
-    depth_module.sequence_size: 2
-    depth_module.inter_cam_sync_mode: 0
-    depth_module.output_trigger_enabled: false
-    depth_module.error_polling_enabled: true
-    depth_module.visual_preset: 0
-
-    rgb_camera.color_profile: "640x480x15"
-    rgb_camera.color_format: "RGB8"
-    rgb_camera.frames_queue_size: 16
-    rgb_camera.global_time_enabled: false
-    rgb_camera.enable_auto_exposure: true
-    rgb_camera.auto_exposure_priority: false
-    rgb_camera.exposure: 166
-    rgb_camera.gain: 64
-    rgb_camera.enable_auto_white_balance: true
-    rgb_camera.white_balance: 4600.0
-    rgb_camera.brightness: 0
-    rgb_camera.contrast: 50
-    rgb_camera.saturation: 64
-    rgb_camera.sharpness: 50
-    rgb_camera.gamma: 300
-    rgb_camera.hue: 0
-    rgb_camera.backlight_compensation: false
-    rgb_camera.power_line_frequency: 3
-    rgb_camera.auto_exposure_roi.top: 0
-    rgb_camera.auto_exposure_roi.bottom: 479
-    rgb_camera.auto_exposure_roi.left: 0
-    rgb_camera.auto_exposure_roi.right: 639
-
-    accel_fps: 0
-    gyro_fps: 0
-    angular_velocity_cov: 0.01
-    linear_accel_cov: 0.01
-    motion_module.enable_motion_correction: true
-    motion_module.frames_queue_size: 16
-    motion_module.global_time_enabled: false
-    motion_module.gyro_sensitivity: 1
-
-    align_depth.enable: false
-    align_depth.frames_queue_size: 16
-    clip_distance: -2.0
-
-    colorizer.enable: false
-    colorizer.frames_queue_size: 16
-    colorizer.color_scheme: 0
-    colorizer.histogram_equalization_enabled: true
-    colorizer.max_distance: 6.0
-    colorizer.min_distance: 0.0
-    colorizer.stream_filter: 1
-    colorizer.stream_format_filter: 1
-    colorizer.stream_index_filter: -1
-    colorizer.visual_preset: 0
-
-    decimation_filter.enable: false
-    decimation_filter.frames_queue_size: 16
-    decimation_filter.filter_magnitude: 2
-    decimation_filter.stream_filter: 1
-    decimation_filter.stream_format_filter: 1
-    decimation_filter.stream_index_filter: -1
-
-    disparity_filter.enable: false
-    disparity_to_depth.enable: false
-
-    filter_by_sequence_id.enable: false
-    filter_by_sequence_id.frames_queue_size: 16
-    filter_by_sequence_id.sequence_id: 1
-
-    hdr_merge.enable: false
-    hdr_merge.frames_queue_size: 16
-
-    hole_filling_filter.enable: false
-    hole_filling_filter.frames_queue_size: 16
-    hole_filling_filter.holes_fill: 1
-    hole_filling_filter.stream_filter: 1
-    hole_filling_filter.stream_format_filter: 1
-    hole_filling_filter.stream_index_filter: -1
-
-    pointcloud.enable: false
-    pointcloud.allow_no_texture_points: false
-    pointcloud.filter_magnitude: 2
-    pointcloud.frames_queue_size: 16
-    pointcloud.ordered_pc: false
-    pointcloud.pointcloud_qos: "SENSOR_DATA"
-    pointcloud.stream_filter: 2
-    pointcloud.stream_format_filter: 0
-    pointcloud.stream_index_filter: 0
-
-    spatial_filter.enable: false
-    spatial_filter.frames_queue_size: 16
-    spatial_filter.filter_magnitude: 2
-    spatial_filter.filter_smooth_alpha: 0.5
-    spatial_filter.filter_smooth_delta: 20
-    spatial_filter.holes_fill: 0
-    spatial_filter.stream_filter: 1
-    spatial_filter.stream_format_filter: 1
-    spatial_filter.stream_index_filter: -1
-
-    temporal_filter.enable: false
-    temporal_filter.frames_queue_size: 16
-    temporal_filter.filter_smooth_alpha: 0.4
-    temporal_filter.filter_smooth_delta: 20
-    temporal_filter.holes_fill: 3
-    temporal_filter.stream_filter: 1
-    temporal_filter.stream_format_filter: 1
-    temporal_filter.stream_index_filter: -1
-
-    qos_overrides./parameter_events.publisher.depth: 1000
-    qos_overrides./parameter_events.publisher.durability: "volatile"
-    qos_overrides./parameter_events.publisher.history: "keep_last"
-    qos_overrides./parameter_events.publisher.reliability: "reliable"
-
-    realsense.color.image_raw.enable_pub_plugins: ["image_transport/compressed_pub"]
-    realsense.color.image_raw.format: "jpeg"
-    realsense.color.image_raw.jpeg_quality: 80
-    realsense.color.image_raw.png_level: 1
-    realsense.color.image_raw.depth_max: 10.0
-    realsense.color.image_raw.depth_quantization: 100.0
-    realsense.color.image_raw.keyframe_frequency: 64
-    realsense.color.image_raw.optimize_for: "QUALITY"
-    realsense.color.image_raw.quality: 80
-    realsense.color.image_raw.target_bitrate: 800000
-    realsense.color.image_raw.compressed.format: "jpeg"
-    realsense.color.image_raw.compressed.jpeg_quality: 80
-    realsense.color.image_raw.compressed.png_level: 1
-    realsense.color.image_raw.compressed.tiff.res_unit: "inch"
-    realsense.color.image_raw.compressed.tiff.xdpi: -1
-    realsense.color.image_raw.compressed.tiff.ydpi: -1
-    realsense.color.image_raw.compressedDepth.format: "png"
-    realsense.color.image_raw.compressedDepth.depth_max: 10.0
-    realsense.color.image_raw.compressedDepth.depth_quantization: 100.0
-    realsense.color.image_raw.compressedDepth.png_level: 1
-    realsense.color.image_raw.theora.keyframe_frequency: 64
-    realsense.color.image_raw.theora.optimize_for: "QUALITY"
-    realsense.color.image_raw.theora.quality: 80
-    realsense.color.image_raw.theora.target_bitrate: 800000
-    realsense.color.image_raw.tiff.res_unit: "inch"
-    realsense.color.image_raw.tiff.xdpi: -1
-    realsense.color.image_raw.tiff.ydpi: -1
-    realsense.color.image_raw.zstd.zstd_level: 1
-
-    realsense.infra1.image_rect_raw.enable_pub_plugins: ["image_transport/compressed_pub"]
-    realsense.infra1.image_rect_raw.format: "jpeg"
-    realsense.infra1.image_rect_raw.jpeg_quality: 80
-    realsense.infra1.image_rect_raw.png_level: 1
-    realsense.infra1.image_rect_raw.depth_max: 10.0
-    realsense.infra1.image_rect_raw.depth_quantization: 100.0
-    realsense.infra1.image_rect_raw.keyframe_frequency: 64
-    realsense.infra1.image_rect_raw.optimize_for: "QUALITY"
-    realsense.infra1.image_rect_raw.quality: 80
-    realsense.infra1.image_rect_raw.target_bitrate: 800000
-    realsense.infra1.image_rect_raw.compressed.format: "jpeg"
-    realsense.infra1.image_rect_raw.compressed.jpeg_quality: 80
-    realsense.infra1.image_rect_raw.compressed.png_level: 1
-    realsense.infra1.image_rect_raw.compressed.tiff.res_unit: "inch"
-    realsense.infra1.image_rect_raw.compressed.tiff.xdpi: -1
-    realsense.infra1.image_rect_raw.compressed.tiff.ydpi: -1
-    realsense.infra1.image_rect_raw.compressedDepth.format: "png"
-    realsense.infra1.image_rect_raw.compressedDepth.depth_max: 10.0
-    realsense.infra1.image_rect_raw.compressedDepth.depth_quantization: 100.0
-    realsense.infra1.image_rect_raw.compressedDepth.png_level: 1
-    realsense.infra1.image_rect_raw.theora.keyframe_frequency: 64
-    realsense.infra1.image_rect_raw.theora.optimize_for: "QUALITY"
-    realsense.infra1.image_rect_raw.theora.quality: 80
-    realsense.infra1.image_rect_raw.theora.target_bitrate: 800000
-    realsense.infra1.image_rect_raw.tiff.res_unit: "inch"
-    realsense.infra1.image_rect_raw.tiff.xdpi: -1
-    realsense.infra1.image_rect_raw.tiff.ydpi: -1
-    realsense.infra1.image_rect_raw.zstd.zstd_level: 1
-
-    realsense.infra2.image_rect_raw.enable_pub_plugins: ["image_transport/compressed_pub"]
-    realsense.infra2.image_rect_raw.format: "jpeg"
-    realsense.infra2.image_rect_raw.jpeg_quality: 80
-    realsense.infra2.image_rect_raw.png_level: 1
-    realsense.infra2.image_rect_raw.depth_max: 10.0
-    realsense.infra2.image_rect_raw.depth_quantization: 100.0
-    realsense.infra2.image_rect_raw.keyframe_frequency: 64
-    realsense.infra2.image_rect_raw.optimize_for: "QUALITY"
-    realsense.infra2.image_rect_raw.quality: 80
-    realsense.infra2.image_rect_raw.target_bitrate: 800000
-    realsense.infra2.image_rect_raw.compressed.format: "jpeg"
-    realsense.infra2.image_rect_raw.compressed.jpeg_quality: 80
-    realsense.infra2.image_rect_raw.compressed.png_level: 1
-    realsense.infra2.image_rect_raw.compressed.tiff.res_unit: "inch"
-    realsense.infra2.image_rect_raw.compressed.tiff.xdpi: -1
-    realsense.infra2.image_rect_raw.compressed.tiff.ydpi: -1
-    realsense.infra2.image_rect_raw.compressedDepth.format: "png"
-    realsense.infra2.image_rect_raw.compressedDepth.depth_max: 10.0
-    realsense.infra2.image_rect_raw.compressedDepth.depth_quantization: 100.0
-    realsense.infra2.image_rect_raw.compressedDepth.png_level: 1
-    realsense.infra2.image_rect_raw.theora.keyframe_frequency: 64
-    realsense.infra2.image_rect_raw.theora.optimize_for: "QUALITY"
-    realsense.infra2.image_rect_raw.theora.quality: 80
-    realsense.infra2.image_rect_raw.theora.target_bitrate: 800000
-    realsense.infra2.image_rect_raw.tiff.res_unit: "inch"
-    realsense.infra2.image_rect_raw.tiff.xdpi: -1
-    realsense.infra2.image_rect_raw.tiff.ydpi: -1
-    realsense.infra2.image_rect_raw.zstd.zstd_level: 1
