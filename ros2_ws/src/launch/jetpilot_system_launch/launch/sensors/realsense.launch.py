@@ -57,6 +57,7 @@ def launch_realsense(args: lu.ArgumentContainer) -> list[lut.Action]:
         'hdr_merge.enable': False,
         'hole_filling_filter.enable': False,
         'pointcloud.enable': False,
+        'enable_pointcloud': False,
         'spatial_filter.enable': False,
         'temporal_filter.enable': False,
     })
