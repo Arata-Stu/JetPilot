@@ -105,6 +105,8 @@ case "$CODEC" in
     ;;
   mjpeg)
     PIPELINE+=(
+      ! videoconvert
+      ! "video/x-raw,format=I420"
       ! jpegenc quality="$JPEG_QUALITY"
       ! rtpjpegpay pt=26 mtu="$MTU"
     )
@@ -188,4 +190,3 @@ echo
 echo "Log: $log_file"
 
 "${PIPELINE[@]}" 2>&1 | tee "$log_file"
-
