@@ -119,7 +119,7 @@ private:
     } else {
       cmd.steering = 0.0F;
       cmd.throttle = 0.0F;
-      cmd.brake = 1.0F;
+      cmd.brake = 0.0F;
       cmd.reverse = 0.0F;
     }
 
