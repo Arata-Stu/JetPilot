@@ -9,6 +9,7 @@
   <buildtool_depend>ament_cmake_auto</buildtool_depend>
 
   <depend>jetpilot_msgs</depend>
+  <depend>rcl_interfaces</depend>
   <depend>rclcpp</depend>
   <depend>sensor_msgs</depend>
 

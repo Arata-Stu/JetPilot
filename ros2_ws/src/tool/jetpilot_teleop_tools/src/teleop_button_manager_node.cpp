@@ -4,6 +4,7 @@
 
 #include "jetpilot_msgs/msg/bag_request.hpp"
 #include "jetpilot_msgs/msg/operation_mode_request.hpp"
+#include "rcl_interfaces/msg/parameter_descriptor.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/joy.hpp"
 
@@ -31,7 +32,9 @@ public:
 private:
   double declare_numeric_parameter(const std::string & name, const double default_value)
   {
-    declare_parameter(name);
+    rcl_interfaces::msg::ParameterDescriptor descriptor;
+    descriptor.dynamic_typing = true;
+    declare_parameter(name, rclcpp::ParameterType::PARAMETER_NOT_SET, descriptor, false);
 
     rclcpp::Parameter parameter;
     if (!get_parameter(name, parameter) ||
