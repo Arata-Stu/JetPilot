@@ -859,6 +859,8 @@ def button_mapping_yaml(profile: dict[str, Any]) -> dict[str, Any]:
                 "back_button": buttons.get("share", -1),
                 "bag_start_button": buttons.get("r1", -1),
                 "bag_stop_button": buttons.get("l1", -1),
+                "steer_offset_inc_button": profile.get("dpad", {}).get("right", -1),
+                "steer_offset_dec_button": profile.get("dpad", {}).get("left", -1),
                 "hold_time_s": 1.0,
             }
         }

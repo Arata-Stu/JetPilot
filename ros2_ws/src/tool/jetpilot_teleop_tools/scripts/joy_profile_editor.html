@@ -422,7 +422,10 @@
 
 <script id="embeddedProfile" type="application/json">__EMBEDDED_PROFILE_JSON__</script>
 <script>
-const buttonNames = ["cross", "circle", "triangle", "square", "l1", "r1", "share", "options", "ps", "l3", "r3"];
+const buttonNames = [
+  "cross", "circle", "triangle", "square", "l1", "r1", "share", "options", "ps", "l3", "r3",
+  "dpad_left", "dpad_right"
+];
 const buttonActions = [
   ["deadman_button", "Teleop deadman"],
   ["auto_button", "Auto mode"],
@@ -431,6 +434,8 @@ const buttonActions = [
   ["back_button", "Back / modifier"],
   ["bag_start_button", "Bag start"],
   ["bag_stop_button", "Bag stop"],
+  ["steer_offset_inc_button", "Steer offset right"],
+  ["steer_offset_dec_button", "Steer offset left"],
 ];
 const state = {
   profile: emptyProfile(),
@@ -465,6 +470,8 @@ function emptyProfile() {
       back_button: "share",
       bag_start_button: "r1",
       bag_stop_button: "l1",
+      steer_offset_inc_button: "dpad_right",
+      steer_offset_dec_button: "dpad_left",
       hold_time_s: 1.0
     },
     idle_axes: {}
@@ -520,7 +527,7 @@ function emptyRcEscProfile() {
       esc_neutral_duration_s: 0.05,
       steering_offset: 0.0,
       throttle_offset: 0.0,
-      offset_step: 0.0,
+      offset_step: 0.01,
       neutral_stop_assist_enabled: false,
       neutral_stop_required_steps: 10,
       neutral_stop_reverse_start: -0.01,
@@ -761,6 +768,8 @@ function buttonMappingYaml(profile) {
   const mapping = profile.button_mapping || {};
   const buttonIndex = (action, fallbackName) => {
     const selectedName = mapping[action] || fallbackName;
+    if (selectedName === "dpad_right") return Number(profile.dpad?.right ?? -1);
+    if (selectedName === "dpad_left") return Number(profile.dpad?.left ?? -1);
     return Number(profile.buttons[selectedName] ?? -1);
   };
   return {
@@ -772,6 +781,8 @@ function buttonMappingYaml(profile) {
         back_button: buttonIndex("back_button", "share"),
         bag_start_button: buttonIndex("bag_start_button", "r1"),
         bag_stop_button: buttonIndex("bag_stop_button", "l1"),
+        steer_offset_inc_button: buttonIndex("steer_offset_inc_button", "dpad_right"),
+        steer_offset_dec_button: buttonIndex("steer_offset_dec_button", "dpad_left"),
         hold_time_s: Number(mapping.hold_time_s ?? 1.0)
       }
     }

@@ -7,6 +7,7 @@
 #include "rcl_interfaces/msg/parameter_descriptor.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/joy.hpp"
+#include "std_msgs/msg/bool.hpp"
 
 class TeleopButtonManagerNode : public rclcpp::Node
 {
@@ -18,13 +19,17 @@ public:
     manual_button_ = declare_parameter<int>("manual_button", 3);
     stop_button_ = declare_parameter<int>("stop_button", 1);
     back_button_ = declare_parameter<int>("back_button", 6);
-    bag_start_button_ = declare_parameter<int>("bag_start_button", 0);
-    bag_stop_button_ = declare_parameter<int>("bag_stop_button", 1);
+    bag_start_button_ = declare_parameter<int>("bag_start_button", 5);
+    bag_stop_button_ = declare_parameter<int>("bag_stop_button", 4);
+    steer_offset_inc_button_ = declare_parameter<int>("steer_offset_inc_button", 15);
+    steer_offset_dec_button_ = declare_parameter<int>("steer_offset_dec_button", 14);
     hold_time_s_ = declare_numeric_parameter("hold_time_s", 1.0);
 
     mode_pub_ = create_publisher<jetpilot_msgs::msg::OperationModeRequest>(
       "/operation_mode/request", 10);
     bag_pub_ = create_publisher<jetpilot_msgs::msg::BagRequest>("/bag/request", 10);
+    steer_offset_inc_pub_ = create_publisher<std_msgs::msg::Bool>("/steer_offset_inc", 10);
+    steer_offset_dec_pub_ = create_publisher<std_msgs::msg::Bool>("/steer_offset_dec", 10);
     joy_sub_ = create_subscription<sensor_msgs::msg::Joy>(
       "/joy", 10, [this](const sensor_msgs::msg::Joy::SharedPtr msg) { handle_joy(*msg); });
   }
@@ -98,6 +103,20 @@ private:
     return false;
   }
 
+  bool pressed_once(std::vector<HoldState> & states, const size_t state_index, const bool pressed)
+  {
+    auto & state = state_for(states, state_index);
+    if (!pressed) {
+      state.pressed = false;
+      return false;
+    }
+    if (!state.pressed) {
+      state.pressed = true;
+      return true;
+    }
+    return false;
+  }
+
   void publish_mode_request(const uint8_t mode, const std::string & source)
   {
     jetpilot_msgs::msg::OperationModeRequest request;
@@ -118,6 +137,13 @@ private:
     bag_pub_->publish(request);
   }
 
+  void publish_bool(rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr publisher)
+  {
+    std_msgs::msg::Bool msg;
+    msg.data = true;
+    publisher->publish(msg);
+  }
+
   void handle_joy(const sensor_msgs::msg::Joy & joy)
   {
     const auto current_time = now();
@@ -132,11 +158,17 @@ private:
     if (held_once(states_, 2, !back && button_pressed(joy, stop_button_), current_time)) {
       publish_mode_request(jetpilot_msgs::msg::OperationModeRequest::STOP, "joy_stop_hold");
     }
-    if (held_once(states_, 3, back && button_pressed(joy, bag_start_button_), current_time)) {
+    if (pressed_once(states_, 3, button_pressed(joy, bag_start_button_))) {
       publish_bag_request(jetpilot_msgs::msg::BagRequest::START, "joy_start");
     }
-    if (held_once(states_, 4, back && button_pressed(joy, bag_stop_button_), current_time)) {
+    if (pressed_once(states_, 4, button_pressed(joy, bag_stop_button_))) {
       publish_bag_request(jetpilot_msgs::msg::BagRequest::STOP, "joy_stop");
+    }
+    if (pressed_once(states_, 5, button_pressed(joy, steer_offset_inc_button_))) {
+      publish_bool(steer_offset_inc_pub_);
+    }
+    if (pressed_once(states_, 6, button_pressed(joy, steer_offset_dec_button_))) {
+      publish_bool(steer_offset_dec_pub_);
     }
   }
 
@@ -146,10 +178,14 @@ private:
   int back_button_;
   int bag_start_button_;
   int bag_stop_button_;
+  int steer_offset_inc_button_;
+  int steer_offset_dec_button_;
   double hold_time_s_;
   std::vector<HoldState> states_;
   rclcpp::Publisher<jetpilot_msgs::msg::OperationModeRequest>::SharedPtr mode_pub_;
   rclcpp::Publisher<jetpilot_msgs::msg::BagRequest>::SharedPtr bag_pub_;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr steer_offset_inc_pub_;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr steer_offset_dec_pub_;
   rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr joy_sub_;
 };
 
