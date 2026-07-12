@@ -186,7 +186,7 @@
     qos_overrides./parameter_events.publisher.history: "keep_last"
     qos_overrides./parameter_events.publisher.reliability: "reliable"
 
-    realsense.color.image_raw.enable_pub_plugins: ["compressed"]
+    realsense.color.image_raw.enable_pub_plugins: ["image_transport/compressed_pub"]
     realsense.color.image_raw.format: "jpeg"
     realsense.color.image_raw.jpeg_quality: 80
     realsense.color.image_raw.png_level: 1
@@ -215,7 +215,7 @@
     realsense.color.image_raw.tiff.ydpi: -1
     realsense.color.image_raw.zstd.zstd_level: 1
 
-    realsense.infra1.image_rect_raw.enable_pub_plugins: ["compressed"]
+    realsense.infra1.image_rect_raw.enable_pub_plugins: ["image_transport/compressed_pub"]
     realsense.infra1.image_rect_raw.format: "jpeg"
     realsense.infra1.image_rect_raw.jpeg_quality: 80
     realsense.infra1.image_rect_raw.png_level: 1
@@ -244,7 +244,7 @@
     realsense.infra1.image_rect_raw.tiff.ydpi: -1
     realsense.infra1.image_rect_raw.zstd.zstd_level: 1
 
-    realsense.infra2.image_rect_raw.enable_pub_plugins: ["compressed"]
+    realsense.infra2.image_rect_raw.enable_pub_plugins: ["image_transport/compressed_pub"]
     realsense.infra2.image_rect_raw.format: "jpeg"
     realsense.infra2.image_rect_raw.jpeg_quality: 80
     realsense.infra2.image_rect_raw.png_level: 1
