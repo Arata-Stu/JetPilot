@@ -34,6 +34,8 @@ def declare_string_array_parameter(
         name,
         default_value if default_value is not None else Parameter.Type.STRING_ARRAY,
     )
+    if parameter.value is None:
+        return []
     return [str(item) for item in parameter.value]
 
 
