@@ -1,0 +1,27 @@
+serial_reader_node:
+  ros__parameters:
+    device: /dev/ttyACM0
+    baud_rate: 115200
+    poll_rate_hz: 100.0
+    publish_cmd: true
+    publish_mode_request: false
+    control_authority: hardware_mux
+    frame_id: rc_receiver
+    ch1_min_us: 1000
+    ch1_neutral_us: 1500
+    ch1_max_us: 2000
+    ch2_min_us: 1000
+    ch2_neutral_us: 1500
+    ch2_max_us: 2000
+    ch3_min_us: 1000
+    ch3_neutral_us: 1500
+    ch3_max_us: 2000
+    deadband_us: 20
+    mode_switch_deadband_us: 120
+    steering_gain: 1.0
+    throttle_gain: 1.0
+    invert_steering: false
+    invert_throttle: false
+    ch3_low_mode: STOP
+    ch3_mid_mode: PROPO
+    ch3_high_mode: AUTO

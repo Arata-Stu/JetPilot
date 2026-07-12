@@ -1,0 +1,66 @@
+device:
+  name: DualShock4
+  path: /dev/input/js0
+  vendor_id: 054c
+  product_id: 09cc
+buttons:
+  cross: 1
+  circle: 2
+  triangle: 3
+  square: 0
+  l1: 4
+  r1: 5
+  share: 8
+  options: 9
+  ps: 12
+  l3: 10
+  r3: 11
+triggers:
+  l2:
+    axis: 3
+    button: 6
+    released: -32767
+    pressed: 32767
+    deadzone: 500.0
+    inverted: false
+  r2:
+    axis: 4
+    button: 7
+    released: -32767
+    pressed: 32767
+    deadzone: 500.0
+    inverted: false
+sticks:
+  left:
+    x_axis: 0
+    y_axis: 1
+    invert_x: false
+    invert_y: true
+    center_x: 0
+    center_y: 0
+    deadzone: 2500.0
+  right:
+    x_axis: 2
+    y_axis: 5
+    invert_x: false
+    invert_y: true
+    center_x: 0
+    center_y: 0
+    deadzone: 2500.0
+dpad:
+  type: button
+  up: 12
+  right: 15
+  down: 13
+  left: 14
+button_mapping:
+  deadman_button: triangle
+  auto_button: square
+  manual_button: triangle
+  stop_button: cross
+  back_button: l3
+  bag_start_button: r1
+  bag_stop_button: l1
+  hold_time_s: 0.5
+idle_axes:
+

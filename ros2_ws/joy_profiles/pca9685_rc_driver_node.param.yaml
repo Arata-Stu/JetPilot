@@ -1,0 +1,37 @@
+pca9685_rc_driver_node:
+  ros__parameters:
+    i2c_device: /dev/i2c-7
+    i2c_address: 64
+    pwm_frequency_hz: 50.0
+    vehicle_output_rate_hz: 100.0
+    steering_channel: 0
+    throttle_channel: 1
+    throttle_inversion: false
+    steering_inversion: false
+    throttle_gain: 1.0
+    steering_gain: 1.0
+    max_throttle: 0.7
+    max_throttle_slew_rate: 4.0
+    esc_direction_change_assist_enabled: true
+    esc_direction_deadband: 0.03
+    esc_brake_throttle: 0.35
+    esc_brake_duration_s: 0.1
+    esc_neutral_duration_s: 0.05
+    steering_offset: 0.0
+    throttle_offset: 0.0
+    offset_step: 0.0
+    neutral_stop_assist_enabled: false
+    neutral_stop_required_steps: 10
+    neutral_stop_reverse_start: -0.01
+    neutral_stop_reverse_end: -0.08
+    neutral_stop_reverse_step: -0.01
+    steering_output_gain: 0.65
+    steering_output_offset: 0.0
+    throttle_output_gain: 1.0
+    throttle_output_offset: 0.0
+    steering_min_pulse_us: 1000.0
+    steering_neutral_pulse_us: 1500.0
+    steering_max_pulse_us: 2000.0
+    throttle_min_pulse_us: 750.0
+    throttle_neutral_pulse_us: 1500.0
+    throttle_max_pulse_us: 2250.0
