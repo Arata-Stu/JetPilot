@@ -121,7 +121,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--input-bag", required=True, help="Input rosbag directory or storage file")
     parser.add_argument("--output-bag", required=True, help="Output rosbag directory")
     parser.add_argument("--topic", action="append", default=None, help="Topic to rewrite. Can be passed multiple times.")
-    parser.add_argument("--frame-id", default="camera_infra2_optical_frame")
+    parser.add_argument("--frame-id", default="realsense_infra2_optical_frame")
     parser.add_argument("--storage-id", default="mcap")
     parser.add_argument("--overwrite", action="store_true")
     return parser

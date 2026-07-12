@@ -177,8 +177,8 @@
     odom_frame: "odom"
     base_frame: "base_link"
     # Match the camera_info frame_id used by both RealSense and ELP launch paths.
-    camera_optical_frames: ['camera_infra1_optical_frame', 'camera_infra2_optical_frame']
-    imu_frame: "camera_gyro_optical_frame"
+    camera_optical_frames: ['realsense_infra1_optical_frame', 'realsense_infra2_optical_frame']
+    imu_frame: "realsense_gyro_optical_frame"
     
     # ============================================
     # Message Parameters

@@ -119,7 +119,7 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('vehicle_control_topic', '/vehicle/control_cmd', cli=True)
     args.add_arg('publish_vehicle_description', True, cli=True)
     args.add_arg('vehicle_description_base_frame', 'base_link', cli=True)
-    args.add_arg('vehicle_description_camera_frame', 'camera_link', cli=True)
+    args.add_arg('vehicle_description_camera_frame', 'realsense_camera_link', cli=True)
     args.add_arg('vehicle_description_camera_x', '0.2075', cli=True)
     args.add_arg('vehicle_description_camera_y', '0.019', cli=True)
     args.add_arg('vehicle_description_camera_z', '0.065', cli=True)

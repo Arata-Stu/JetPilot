@@ -52,7 +52,7 @@ def add_nodes(args: lu.ArgumentContainer):
             args.run_standalone),
     ]
 
-    camera_optical_frames = 'camera_infra1_optical_frame,camera_infra2_optical_frame'
+    camera_optical_frames = 'realsense_infra1_optical_frame,realsense_infra2_optical_frame'
     base_frame = args.localization_base_frame
     if enable_vgl:
         cuvgl_map_dir = os.path.join(args.map_dir, 'cuvgl_map') if args.map_dir else ''
