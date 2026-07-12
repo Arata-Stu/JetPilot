@@ -9,15 +9,30 @@ from typing import List, Optional
 
 import rclpy
 from jetpilot_msgs.msg import BagRequest, BagStatus
-from rcl_interfaces.msg import ParameterDescriptor, ParameterType
 from rclpy.node import Node
+from rclpy.parameter import Parameter
 
 
-def declare_string_array_parameter(node: Node, name: str) -> List[str]:
+DEFAULT_TOPICS = [
+    "/joy",
+    "/rc/channels",
+    "/teleop/control_cmd",
+    "/propo/control_cmd",
+    "/auto/control_cmd",
+    "/operation_mode/request",
+    "/operation_mode/state",
+    "/vehicle/control_cmd",
+    "/bag/request",
+    "/bag/status",
+]
+
+
+def declare_string_array_parameter(
+    node: Node, name: str, default_value: Optional[List[str]] = None
+) -> List[str]:
     parameter = node.declare_parameter(
         name,
-        [],
-        ParameterDescriptor(type=ParameterType.PARAMETER_STRING_ARRAY),
+        default_value if default_value is not None else Parameter.Type.STRING_ARRAY,
     )
     return [str(item) for item in parameter.value]
 
@@ -27,7 +42,7 @@ class BagManagerNode(Node):
         super().__init__("bag_manager_node")
         self.output_dir = Path(self.declare_parameter("output_dir", "/tmp/jetpilot_bags").value)
         self.record_all = bool(self.declare_parameter("record_all", True).value)
-        self.topics = declare_string_array_parameter(self, "topics")
+        self.topics = declare_string_array_parameter(self, "topics", DEFAULT_TOPICS)
         self.exclude_topics = declare_string_array_parameter(self, "exclude_topics")
         self.storage_id = str(self.declare_parameter("storage_id", "mcap").value)
         self.serialization_format = str(self.declare_parameter("serialization_format", "").value)

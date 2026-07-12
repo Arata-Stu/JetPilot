@@ -44,7 +44,7 @@ private:
   {
     rcl_interfaces::msg::ParameterDescriptor descriptor;
     descriptor.dynamic_typing = true;
-    declare_parameter(name, rclcpp::ParameterType::PARAMETER_NOT_SET, descriptor, false);
+    declare_parameter(name, rclcpp::ParameterValue(default_value), descriptor, false);
 
     rclcpp::Parameter parameter;
     if (!get_parameter(name, parameter) ||
