@@ -69,6 +69,7 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('enable_sensor_kit', False, cli=True)
     args.add_arg('sensor_kit_camera_name', 'realsense', cli=True)
     args.add_arg('sensor_kit_container_name', 'sensor_kit_container', cli=True)
+    args.add_arg('sensor_kit_enable_color', False, cli=True)
 
     args.add_arg('enable_localization', False, cli=True)
     args.add_arg('localization_camera_name', 'realsense', cli=True)
@@ -223,6 +224,7 @@ def generate_launch_description() -> lut.LaunchDescription:
             launch_arguments={
                 'camera_name': args.sensor_kit_camera_name,
                 'container_name': args.sensor_kit_container_name,
+                'enable_color': args.sensor_kit_enable_color,
                 'use_sim_time': args.use_sim_time,
             },
             condition=IfCondition(args.enable_sensor_kit),

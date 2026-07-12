@@ -43,7 +43,7 @@ def launch_realsense(args: lu.ArgumentContainer) -> list[lut.Action]:
         'enable_infra1': True,
         'enable_infra2': True,
         'enable_depth': False,
-        'enable_color': True,
+        'enable_color': lu.is_true(args.enable_color),
         'enable_rgbd': False,
         'enable_accel': False,
         'enable_gyro': False,
@@ -57,28 +57,9 @@ def launch_realsense(args: lu.ArgumentContainer) -> list[lut.Action]:
         'hdr_merge.enable': False,
         'hole_filling_filter.enable': False,
         'pointcloud.enable': False,
-        'enable_pointcloud': False,
         'spatial_filter.enable': False,
         'temporal_filter.enable': False,
     })
-
-    remappings = [
-        ('infra1/image_rect_raw', 'left/image_rect'),
-        ('infra1/camera_info', 'left/camera_info_rect'),
-        ('infra1/image_rect_raw/compressed', 'left/image_rect/compressed'),
-        ('infra2/image_rect_raw', 'right/image_rect'),
-        ('infra2/camera_info', 'right/camera_info_rect'),
-        ('infra2/image_rect_raw/compressed', 'right/image_rect/compressed'),
-    ]
-
-    remapping_with_ns = []
-    for remapping in remappings:
-        remapping_with_ns.append(
-            (
-                f'{args.camera_name}/{remapping[0]}',
-                f'{args.camera_name}/{remapping[1]}',
-            )
-        )
 
     realsense_node = lut.ComposableNode(
         package="realsense2_camera",
@@ -86,7 +67,6 @@ def launch_realsense(args: lu.ArgumentContainer) -> list[lut.Action]:
         name=args.camera_name,
         namespace='',
         parameters=parameters,
-        remappings=remapping_with_ns,
     )
 
     actions.append(
@@ -114,6 +94,7 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('container_name', 'nova_container')
     args.add_arg('run_standalone', False)
     args.add_arg('camera_name', 'realsense')
+    args.add_arg('enable_color', False)
     args.add_arg('use_sim_time', False)
     args.add_opaque_function(launch_realsense)
 

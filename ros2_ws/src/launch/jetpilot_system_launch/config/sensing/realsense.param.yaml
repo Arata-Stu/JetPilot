@@ -1,6 +1,6 @@
 /**:
   ros__parameters:
-    # JetPilot default: RGB + stereo infrared only.
+    # JetPilot default: stereo infrared only.
     # Unknown or device-dependent parameters are intentionally omitted so the
     # RealSense driver can keep its own validated defaults.
     #
@@ -24,10 +24,11 @@
     publish_tf: true
     tf_publish_rate: 0.0
 
-    # Enable only RGB and the stereo infrared pair by default.
+    # Enable only the stereo infrared pair by default. RGB is disabled because
+    # some D435I units can expose depth/motion while the RGB sensor is unavailable.
     enable_infra1: true
     enable_infra2: true
-    enable_color: true
+    enable_color: false
     enable_depth: false
     enable_rgbd: false
     enable_accel: false
@@ -38,8 +39,11 @@
     depth_module.infra_profile: "640x480x15"
     depth_module.infra1_format: "Y8"
     depth_module.infra2_format: "Y8"
-    rgb_camera.color_profile: "640x480x15"
-    rgb_camera.color_format: "RGB8"
+    # Enable these only after RGB is visible in RealSense Viewer.
+    # enable_color: true
+    # rgb_camera.color_profile: "424x240x6"
+    # rgb_camera.color_profile: "640x480x15"
+    # rgb_camera.color_format: "RGB8"
 
     # Keep optional processing off unless a workflow explicitly needs it.
     align_depth.enable: false
@@ -50,7 +54,6 @@
     hdr_merge.enable: false
     hole_filling_filter.enable: false
     pointcloud.enable: false
-    enable_pointcloud: false
     spatial_filter.enable: false
     temporal_filter.enable: false
 
