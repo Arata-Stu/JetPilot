@@ -21,7 +21,7 @@ def add_nodes(args: lu.ArgumentContainer):
     if lu.is_true(args.enable_bag_manager):
         actions.append(lu.Node(
             package='jetpilot_bag_tools',
-            executable='bag_manager_node',
+            executable='bag_manager_node.py',
             name='bag_manager_node',
             output='screen',
             parameters=[args.bag_manager_param, {'use_sim_time': use_sim_time}],
