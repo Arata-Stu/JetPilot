@@ -38,7 +38,26 @@ def launch_realsense(args: lu.ArgumentContainer) -> list[lut.Action]:
     )
 
     parameters.append(config_yaml)
-    parameters.append({'use_sim_time': lu.is_true(args.use_sim_time)})
+    parameters.append({
+        'use_sim_time': lu.is_true(args.use_sim_time),
+        'enable_depth': False,
+        'enable_color': False,
+        'enable_rgbd': False,
+        'enable_accel': False,
+        'enable_gyro': False,
+        'enable_sync': False,
+        'align_depth.enable': False,
+        'colorizer.enable': False,
+        'decimation_filter.enable': False,
+        'disparity_filter.enable': False,
+        'disparity_to_depth.enable': False,
+        'filter_by_sequence_id.enable': False,
+        'hdr_merge.enable': False,
+        'hole_filling_filter.enable': False,
+        'pointcloud.enable': False,
+        'spatial_filter.enable': False,
+        'temporal_filter.enable': False,
+    })
 
     remappings = [
         ('infra1/image_rect_raw', 'left/image_rect'),

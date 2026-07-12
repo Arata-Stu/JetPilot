@@ -4,16 +4,45 @@
     # Keep this explicit so VSLAM/VGL can rely on camera_infra*_optical_frame.
     publish_tf: true
     tf_publish_rate: 0.0
+    initial_reset: false
+    reconnect_timeout: 6.0
+    wait_for_device_timeout: -1.0
 
+    # JetPilot uses the stereo infrared pair for VSLAM/VGL. Keep every derived
+    # depth/color/pointcloud path disabled so the wrapper does not start
+    # synthetic streams that are not needed for this runtime.
     enable_infra1: true
     enable_infra2: true
     enable_depth: false
-    enable_color: true
-    pointcloud.enable: false
-    align_depth.enable: false
+    enable_color: false
+    enable_rgbd: false
+    enable_accel: false
+    enable_gyro: false
+    enable_sync: false
+    hold_back_imu_for_frames: false
 
     depth_module.depth_profile: "640x480x30"
     depth_module.infra_profile: "640x480x30"
+    depth_module.infra1_format: "Y8"
+    depth_module.infra2_format: "Y8"
+    depth_module.emitter_enabled: 0
+    depth_module.emitter_on_off: false
+    depth_module.emitter_always_on: false
+    depth_module.laser_power: 0.0
+
+    align_depth.enable: false
+    decimation_filter.enable: false
+    disparity_filter.enable: false
+    disparity_to_depth.enable: false
+    filter_by_sequence_id.enable: false
+    hdr_merge.enable: false
+    hole_filling_filter.enable: false
+    pointcloud.enable: false
+    pointcloud.allow_no_texture_points: false
+    spatial_filter.enable: false
+    temporal_filter.enable: false
+    colorizer.enable: false
+
     depth_qos: "SENSOR_DATA"
     depth_info_qos: "SENSOR_DATA"
     infra1_qos: "SENSOR_DATA"
