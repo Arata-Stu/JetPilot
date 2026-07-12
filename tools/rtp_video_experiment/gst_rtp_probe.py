@@ -120,6 +120,7 @@ def sender_pipeline(Gst, args: argparse.Namespace) -> str:
         )
     elif args.codec == "mjpeg":
         codec_desc = (
+            "! videoconvert ! video/x-raw,format=I420 "
             f"! jpegenc quality={args.jpeg_quality} "
             "! identity name=encode_done signal-handoffs=true "
             f"! rtpjpegpay pt=26 mtu={args.mtu}"
@@ -378,4 +379,3 @@ def run() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(run())
-
