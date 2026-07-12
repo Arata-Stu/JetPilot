@@ -1,9 +1,15 @@
 from __future__ import annotations
 
 import argparse
+import array
+import fcntl
+import glob
 import json
 import mimetypes
+import os
+import select
 import shlex
+import struct
 import subprocess
 import time
 from http import HTTPStatus
@@ -23,6 +29,70 @@ from .map_pipeline import (
     scan_camera_topic_configs,
 )
 from .tasks import TaskManager
+
+
+JS_EVENT_BUTTON = 0x01
+JS_EVENT_AXIS = 0x02
+JS_EVENT_INIT = 0x80
+JSIOCGAXES = 0x80016A11
+JSIOCGBUTTONS = 0x80016A12
+JSIOCGNAME = lambda length: 0x80006A13 + (length << 16)
+
+
+def read_js_device_snapshot(path_text: str = "/dev/input/js0", duration_s: float = 0.03) -> dict[str, Any]:
+    path = Path(path_text)
+    if not path.exists():
+        devices = sorted(glob.glob("/dev/input/js*"))
+        if not devices:
+            return {"ok": False, "error": "no /dev/input/js* devices found", "path": path_text}
+        path = Path(devices[0])
+
+    fd = os.open(str(path), os.O_RDONLY | os.O_NONBLOCK)
+    try:
+        axes_count = array.array("B", [0])
+        buttons_count = array.array("B", [0])
+        name_buffer = array.array("B", [0] * 128)
+        fcntl.ioctl(fd, JSIOCGAXES, axes_count, True)
+        fcntl.ioctl(fd, JSIOCGBUTTONS, buttons_count, True)
+        try:
+            fcntl.ioctl(fd, JSIOCGNAME(len(name_buffer)), name_buffer, True)
+            name = name_buffer.tobytes().split(b"\0", 1)[0].decode(errors="replace")
+        except OSError:
+            name = path.name
+
+        axes = [0 for _ in range(int(axes_count[0]))]
+        buttons = [0 for _ in range(int(buttons_count[0]))]
+        deadline = time.monotonic() + duration_s
+        while time.monotonic() < deadline:
+            ready, _, _ = select.select([fd], [], [], max(0.0, deadline - time.monotonic()))
+            if not ready:
+                break
+            while True:
+                try:
+                    data = os.read(fd, 8)
+                except BlockingIOError:
+                    break
+                if len(data) != 8:
+                    break
+                _, value, event_type, number = struct.unpack("IhBB", data)
+                kind = event_type & ~JS_EVENT_INIT
+                if kind == JS_EVENT_AXIS and number < len(axes):
+                    axes[number] = int(value)
+                elif kind == JS_EVENT_BUTTON and number < len(buttons):
+                    buttons[number] = int(value)
+
+        return {
+            "ok": True,
+            "path": str(path),
+            "name": name,
+            "axes": axes,
+            "axes_normalized": [max(-1.0, min(1.0, value / 32767.0)) for value in axes],
+            "buttons": buttons,
+        }
+    except OSError as exc:
+        return {"ok": False, "error": str(exc), "path": str(path)}
+    finally:
+        os.close(fd)
 
 
 class ConsoleState:
@@ -55,6 +125,10 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/config":
             self._json(self.server.state.config.as_json())
+            return
+        if path == "/api/joy/js0":
+            device_path = query.get("path", ["/dev/input/js0"])[0] or "/dev/input/js0"
+            self._json(read_js_device_snapshot(device_path))
             return
         if path in {"/joy-profile-editor", "/joy-profile-editor.html"}:
             self._joy_profile_editor()

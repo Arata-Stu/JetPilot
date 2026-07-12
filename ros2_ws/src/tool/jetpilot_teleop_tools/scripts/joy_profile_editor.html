@@ -439,6 +439,8 @@ const state = {
   capture: null,
   lastCapture: null,
   lastButtons: [],
+  backendJoy: null,
+  backendJoyError: "",
   baselineAxes: []
 };
 
@@ -962,20 +964,67 @@ function download(filename, text) {
   URL.revokeObjectURL(url);
 }
 
-function axisValue(gamepad, index) {
-  if (index === undefined || index < 0 || index >= gamepad.axes.length) return 0;
-  return gamepad.axes[index];
+function joySnapshotToInput(snapshot) {
+  if (!snapshot?.ok) return null;
+  const axes = Array.isArray(snapshot.axes_normalized) ? snapshot.axes_normalized : [];
+  const rawAxes = Array.isArray(snapshot.axes) ? snapshot.axes : axes.map(value => Math.round(value * 32767));
+  const buttons = Array.isArray(snapshot.buttons)
+    ? snapshot.buttons.map(value => ({pressed: Number(value) !== 0, value: Number(value) !== 0 ? 1 : 0}))
+    : [];
+  return {
+    id: `${snapshot.name || "js device"} (${snapshot.path || "/dev/input/js0"})`,
+    source: "backend-js",
+    axes,
+    rawAxes,
+    buttons,
+  };
 }
 
-function axisRawValue(gamepad, index) {
-  return Math.round(axisValue(gamepad, index) * 32767);
+async function pollBackendJoy() {
+  try {
+    const response = await fetch("/api/joy/js0", {cache: "no-store"});
+    const payload = await response.json();
+    if (payload.ok) {
+      state.backendJoy = joySnapshotToInput(payload);
+      state.backendJoyError = "";
+    } else {
+      state.backendJoy = null;
+      state.backendJoyError = payload.error || "backend joy unavailable";
+    }
+  } catch (error) {
+    state.backendJoy = null;
+    state.backendJoyError = String(error);
+  }
 }
 
-function normalizedStickAxis(gamepad, stick, axisName) {
+function currentInput() {
+  if (state.backendJoy) return state.backendJoy;
+  const pads = navigator.getGamepads ? [...navigator.getGamepads()].filter(Boolean) : [];
+  if (!pads.length) return null;
+  return pads[0];
+}
+
+function inputSourceLabel(input) {
+  if (!input) return "";
+  if (input.source === "backend-js") return "source: /dev/input/js0";
+  return "source: Browser Gamepad API";
+}
+
+function axisValue(input, index) {
+  if (index === undefined || index < 0 || index >= input.axes.length) return 0;
+  return input.axes[index];
+}
+
+function axisRawValue(input, index) {
+  if (input.rawAxes && index >= 0 && index < input.rawAxes.length) return Number(input.rawAxes[index] || 0);
+  return Math.round(axisValue(input, index) * 32767);
+}
+
+function normalizedStickAxis(input, stick, axisName) {
   const axis = Number(stick[`${axisName}_axis`]);
   const center = Number(stick[`center_${axisName}`] ?? 0);
   const deadzone = Number(stick.deadzone ?? 0);
-  const raw = axisRawValue(gamepad, axis);
+  const raw = axisRawValue(input, axis);
   const delta = raw - center;
   if (Math.abs(delta) <= deadzone) return 0;
   const range = delta >= 0 ? 32767 - center : center + 32767;
@@ -983,9 +1032,9 @@ function normalizedStickAxis(gamepad, stick, axisName) {
   return stick[`invert_${axisName}`] ? -normalized : normalized;
 }
 
-function buttonAnalogValue(gamepad, index) {
-  if (index === undefined || index < 0 || index >= gamepad.buttons.length) return null;
-  return gamepad.buttons[index].value;
+function buttonAnalogValue(input, index) {
+  if (index === undefined || index < 0 || index >= input.buttons.length) return null;
+  return input.buttons[index].value;
 }
 
 function analogToRaw(value) {
@@ -1018,17 +1067,17 @@ function updateTriggerRange(trigger) {
   trigger.inverted = pressed < released;
 }
 
-function buttonPressed(gamepad, index) {
-  if (index === undefined || index < 0 || index >= gamepad.buttons.length) return false;
-  return gamepad.buttons[index].pressed;
+function buttonPressed(input, index) {
+  if (index === undefined || index < 0 || index >= input.buttons.length) return false;
+  return input.buttons[index].pressed;
 }
 
-function triggerValue(gamepad, trigger) {
-  const buttonValue = buttonAnalogValue(gamepad, trigger.button);
+function triggerValue(input, trigger) {
+  const buttonValue = buttonAnalogValue(input, trigger.button);
   if (buttonValue !== null) {
     return trigger.inverted ? 1 - buttonValue : buttonValue;
   }
-  const axis = axisValue(gamepad, trigger.axis);
+  const axis = axisValue(input, trigger.axis);
   const value = (axis + 1) / 2;
   return Math.max(0, Math.min(1, trigger.inverted ? 1 - value : value));
 }
@@ -1040,29 +1089,29 @@ function meter(label, value, min = -1, max = 1) {
 
 function renderTester() {
   const target = document.getElementById("liveTester");
-  const pads = navigator.getGamepads ? [...navigator.getGamepads()].filter(Boolean) : [];
-  if (!pads.length) {
-    target.innerHTML = `<div class="muted">Gamepad APIでコントローラー待機中... / Waiting for a controller via Gamepad API...</div>`;
+  const input = currentInput();
+  if (!input) {
+    const detail = state.backendJoyError ? `<div class="muted">${state.backendJoyError}</div>` : "";
+    target.innerHTML = `<div class="muted">Jetson /dev/input/js0 を待機中... / Waiting for /dev/input/js0...</div>${detail}`;
     requestAnimationFrame(renderTester);
     return;
   }
-  const pad = pads[0];
-  handleCapture(pad);
-  state.lastButtons = pad.buttons.map(button => button.pressed);
+  handleCapture(input);
+  state.lastButtons = input.buttons.map(button => button.pressed);
   const left = state.profile.sticks.left;
   const right = state.profile.sticks.right;
   const buttons = Object.entries(state.profile.buttons).map(([name, index]) => {
-    const on = buttonPressed(pad, index);
+    const on = buttonPressed(input, index);
     return `<div class="button-state ${on ? "on" : ""}"><span>${name}</span><strong>${on ? "ON" : "off"}</strong></div>`;
   }).join("");
   target.innerHTML = `
-    <div class="muted">${pad.id}</div>
-    ${meter("Left X", normalizedStickAxis(pad, left, "x"))}
-    ${meter("Left Y", normalizedStickAxis(pad, left, "y"))}
-    ${meter("Right X", normalizedStickAxis(pad, right, "x"))}
-    ${meter("Right Y", normalizedStickAxis(pad, right, "y"))}
-    ${meter("L2", triggerValue(pad, state.profile.triggers.l2), 0, 1)}
-    ${meter("R2", triggerValue(pad, state.profile.triggers.r2), 0, 1)}
+    <div class="muted">${inputSourceLabel(input)} / ${input.id}</div>
+    ${meter("Left X", normalizedStickAxis(input, left, "x"))}
+    ${meter("Left Y", normalizedStickAxis(input, left, "y"))}
+    ${meter("Right X", normalizedStickAxis(input, right, "x"))}
+    ${meter("Right Y", normalizedStickAxis(input, right, "y"))}
+    ${meter("L2", triggerValue(input, state.profile.triggers.l2), 0, 1)}
+    ${meter("R2", triggerValue(input, state.profile.triggers.r2), 0, 1)}
     <div class="button-states">${buttons}</div>
   `;
   document.getElementById("captureStatus").textContent = state.capture
@@ -1208,13 +1257,13 @@ document.addEventListener("change", event => {
 document.addEventListener("click", event => {
   const captureButton = event.target.closest("[data-capture-kind]");
   if (captureButton) {
-    const pad = navigator.getGamepads ? [...navigator.getGamepads()].filter(Boolean)[0] : null;
+    const input = currentInput();
     state.capture = {
       kind: captureButton.dataset.captureKind,
       target: captureButton.dataset.captureTarget,
       axisPath: captureButton.dataset.captureAxis || "",
-      axes: pad ? [...pad.axes] : [],
-      samples: pad ? [[...pad.axes]] : [],
+      axes: input ? [...input.axes] : [],
+      samples: input ? [[...input.axes]] : [],
       startedAt: performance.now(),
       allowImmediate: event.altKey,
     };
@@ -1273,6 +1322,8 @@ try {
 } catch {
   setProfile(emptyProfile());
 }
+pollBackendJoy();
+window.setInterval(pollBackendJoy, 50);
 renderTester();
 </script>
 </body>

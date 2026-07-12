@@ -33,6 +33,12 @@ from __future__ import annotations
 
 import json
 import os
+import array
+import fcntl
+import glob
+import select
+import struct
+import time
 import sys
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -42,6 +48,13 @@ from urllib.parse import unquote, urlparse
 
 HOST = sys.argv[1]
 PORT = int(sys.argv[2])
+
+JS_EVENT_BUTTON = 0x01
+JS_EVENT_AXIS = 0x02
+JS_EVENT_INIT = 0x80
+JSIOCGAXES = 0x80016A11
+JSIOCGBUTTONS = 0x80016A12
+JSIOCGNAME = lambda length: 0x80006A13 + (length << 16)
 
 
 def candidate_paths() -> list[Path]:
@@ -73,6 +86,62 @@ def resolve_output_path(path_text: str) -> Path:
     return path
 
 
+def read_js_device_snapshot(path_text: str = "/dev/input/js0", duration_s: float = 0.03) -> dict[str, object]:
+    path = Path(path_text)
+    if not path.exists():
+        devices = sorted(glob.glob("/dev/input/js*"))
+        if not devices:
+            return {"ok": False, "error": "no /dev/input/js* devices found", "path": path_text}
+        path = Path(devices[0])
+
+    fd = os.open(str(path), os.O_RDONLY | os.O_NONBLOCK)
+    try:
+        axes_count = array.array("B", [0])
+        buttons_count = array.array("B", [0])
+        name_buffer = array.array("B", [0] * 128)
+        fcntl.ioctl(fd, JSIOCGAXES, axes_count, True)
+        fcntl.ioctl(fd, JSIOCGBUTTONS, buttons_count, True)
+        try:
+            fcntl.ioctl(fd, JSIOCGNAME(len(name_buffer)), name_buffer, True)
+            name = name_buffer.tobytes().split(b"\0", 1)[0].decode(errors="replace")
+        except OSError:
+            name = path.name
+
+        axes = [0 for _ in range(int(axes_count[0]))]
+        buttons = [0 for _ in range(int(buttons_count[0]))]
+        deadline = time.monotonic() + duration_s
+        while time.monotonic() < deadline:
+            ready, _, _ = select.select([fd], [], [], max(0.0, deadline - time.monotonic()))
+            if not ready:
+                break
+            while True:
+                try:
+                    data = os.read(fd, 8)
+                except BlockingIOError:
+                    break
+                if len(data) != 8:
+                    break
+                _, value, event_type, number = struct.unpack("IhBB", data)
+                kind = event_type & ~JS_EVENT_INIT
+                if kind == JS_EVENT_AXIS and number < len(axes):
+                    axes[number] = int(value)
+                elif kind == JS_EVENT_BUTTON and number < len(buttons):
+                    buttons[number] = int(value)
+
+        return {
+            "ok": True,
+            "path": str(path),
+            "name": name,
+            "axes": axes,
+            "axes_normalized": [max(-1.0, min(1.0, value / 32767.0)) for value in axes],
+            "buttons": buttons,
+        }
+    except OSError as exc:
+        return {"ok": False, "error": str(exc), "path": str(path)}
+    finally:
+        os.close(fd)
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args: object) -> None:
         print(f"[{self.log_date_time_string()}] {fmt % args}")
@@ -84,6 +153,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/health":
             self._json({"ok": True})
+            return
+        if path == "/api/joy/js0":
+            self._json(read_js_device_snapshot())
             return
         self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
 
