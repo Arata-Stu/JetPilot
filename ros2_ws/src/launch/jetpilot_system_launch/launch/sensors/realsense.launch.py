@@ -21,7 +21,6 @@ import isaac_ros_launch_utils.all_types as lut
 import isaac_ros_launch_utils as lu
 
 from ament_index_python.packages import get_package_share_directory
-from launch.conditions import IfCondition
 from launch_ros.actions import ComposableNodeContainer
 
 
@@ -74,15 +73,14 @@ def launch_realsense(args: lu.ArgumentContainer) -> list[lut.Action]:
         )
     )
 
-    actions.append(
-        ComposableNodeContainer(
+    if lu.is_true(args.run_standalone):
+        actions.append(ComposableNodeContainer(
             name=args.container_name,
             namespace='',
             package='rclcpp_components',
             executable='component_container_mt',
             composable_node_descriptions=[],
             output='screen',
-            condition=IfCondition(lu.is_true(args.run_standalone)),
         ))
     actions.append(lu.load_composable_nodes(args.container_name, [realsense_node]))
 
