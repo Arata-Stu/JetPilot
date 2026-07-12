@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <cmath>
 #include <memory>
+#include <string>
 
 #include "jetpilot_msgs/msg/control_command.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -17,18 +18,18 @@ public:
     reverse_axis_ = declare_parameter<int>("reverse_axis", 2);
     brake_button_ = declare_parameter<int>("brake_button", -1);
     deadman_button_ = declare_parameter<int>("deadman_button", 4);
-    steering_scale_ = declare_parameter<double>("steering_scale", 1.0);
-    throttle_scale_ = declare_parameter<double>("throttle_scale", 1.0);
-    reverse_scale_ = declare_parameter<double>("reverse_scale", 1.0);
-    brake_value_ = std::clamp(declare_parameter<double>("brake_value", 1.0), 0.0, 1.0);
-    deadzone_ = std::clamp(declare_parameter<double>("deadzone", 0.05), 0.0, 1.0);
-    trigger_min_ = declare_parameter<double>("trigger_min", -1.0);
-    trigger_max_ = declare_parameter<double>("trigger_max", 1.0);
-    throttle_trigger_min_ = declare_parameter<double>("throttle_trigger_min", trigger_min_);
-    throttle_trigger_max_ = declare_parameter<double>("throttle_trigger_max", trigger_max_);
+    steering_scale_ = declare_numeric_parameter("steering_scale", 1.0);
+    throttle_scale_ = declare_numeric_parameter("throttle_scale", 1.0);
+    reverse_scale_ = declare_numeric_parameter("reverse_scale", 1.0);
+    brake_value_ = std::clamp(declare_numeric_parameter("brake_value", 1.0), 0.0, 1.0);
+    deadzone_ = std::clamp(declare_numeric_parameter("deadzone", 0.05), 0.0, 1.0);
+    trigger_min_ = declare_numeric_parameter("trigger_min", -1.0);
+    trigger_max_ = declare_numeric_parameter("trigger_max", 1.0);
+    throttle_trigger_min_ = declare_numeric_parameter("throttle_trigger_min", trigger_min_);
+    throttle_trigger_max_ = declare_numeric_parameter("throttle_trigger_max", trigger_max_);
     throttle_trigger_inverted_ = declare_parameter<bool>("throttle_trigger_inverted", true);
-    reverse_trigger_min_ = declare_parameter<double>("reverse_trigger_min", trigger_min_);
-    reverse_trigger_max_ = declare_parameter<double>("reverse_trigger_max", trigger_max_);
+    reverse_trigger_min_ = declare_numeric_parameter("reverse_trigger_min", trigger_min_);
+    reverse_trigger_max_ = declare_numeric_parameter("reverse_trigger_max", trigger_max_);
     reverse_trigger_inverted_ = declare_parameter<bool>("reverse_trigger_inverted", true);
 
     joy_sub_ = create_subscription<sensor_msgs::msg::Joy>(
@@ -38,6 +39,29 @@ public:
   }
 
 private:
+  double declare_numeric_parameter(const std::string & name, const double default_value)
+  {
+    declare_parameter(name);
+
+    rclcpp::Parameter parameter;
+    if (!get_parameter(name, parameter) ||
+      parameter.get_type() == rclcpp::ParameterType::PARAMETER_NOT_SET)
+    {
+      return default_value;
+    }
+    if (parameter.get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE) {
+      return parameter.as_double();
+    }
+    if (parameter.get_type() == rclcpp::ParameterType::PARAMETER_INTEGER) {
+      return static_cast<double>(parameter.as_int());
+    }
+
+    RCLCPP_WARN(
+      get_logger(), "Parameter '%s' must be numeric; using default %.3f", name.c_str(),
+      default_value);
+    return default_value;
+  }
+
   static bool has_axis(const sensor_msgs::msg::Joy & joy, const int index)
   {
     return index >= 0 && static_cast<size_t>(index) < joy.axes.size();

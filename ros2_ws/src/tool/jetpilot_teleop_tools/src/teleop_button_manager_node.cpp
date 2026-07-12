@@ -19,7 +19,7 @@ public:
     back_button_ = declare_parameter<int>("back_button", 6);
     bag_start_button_ = declare_parameter<int>("bag_start_button", 0);
     bag_stop_button_ = declare_parameter<int>("bag_stop_button", 1);
-    hold_time_s_ = declare_parameter<double>("hold_time_s", 1.0);
+    hold_time_s_ = declare_numeric_parameter("hold_time_s", 1.0);
 
     mode_pub_ = create_publisher<jetpilot_msgs::msg::OperationModeRequest>(
       "/operation_mode/request", 10);
@@ -29,6 +29,29 @@ public:
   }
 
 private:
+  double declare_numeric_parameter(const std::string & name, const double default_value)
+  {
+    declare_parameter(name);
+
+    rclcpp::Parameter parameter;
+    if (!get_parameter(name, parameter) ||
+      parameter.get_type() == rclcpp::ParameterType::PARAMETER_NOT_SET)
+    {
+      return default_value;
+    }
+    if (parameter.get_type() == rclcpp::ParameterType::PARAMETER_DOUBLE) {
+      return parameter.as_double();
+    }
+    if (parameter.get_type() == rclcpp::ParameterType::PARAMETER_INTEGER) {
+      return static_cast<double>(parameter.as_int());
+    }
+
+    RCLCPP_WARN(
+      get_logger(), "Parameter '%s' must be numeric; using default %.3f", name.c_str(),
+      default_value);
+    return default_value;
+  }
+
   struct HoldState
   {
     bool pressed{false};

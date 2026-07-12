@@ -606,10 +606,55 @@ function parseYaml(text) {
   return root;
 }
 
-function yamlScalar(value) {
+const yamlFloatKeys = new Set([
+  "poll_rate_hz",
+  "steering_gain",
+  "throttle_gain",
+  "hold_time_s",
+  "steering_scale",
+  "throttle_scale",
+  "reverse_scale",
+  "brake_value",
+  "deadzone",
+  "trigger_min",
+  "trigger_max",
+  "throttle_trigger_min",
+  "throttle_trigger_max",
+  "reverse_trigger_min",
+  "reverse_trigger_max",
+  "pwm_frequency_hz",
+  "vehicle_output_rate_hz",
+  "max_throttle",
+  "max_throttle_slew_rate",
+  "esc_direction_deadband",
+  "esc_brake_throttle",
+  "esc_brake_duration_s",
+  "esc_neutral_duration_s",
+  "steering_offset",
+  "throttle_offset",
+  "offset_step",
+  "neutral_stop_reverse_start",
+  "neutral_stop_reverse_end",
+  "neutral_stop_reverse_step",
+  "steering_output_gain",
+  "steering_output_offset",
+  "throttle_output_gain",
+  "throttle_output_offset",
+  "steering_min_pulse_us",
+  "steering_neutral_pulse_us",
+  "steering_max_pulse_us",
+  "throttle_min_pulse_us",
+  "throttle_neutral_pulse_us",
+  "throttle_max_pulse_us"
+]);
+
+function yamlScalar(value, key = "") {
   if (typeof value === "boolean") return value ? "true" : "false";
   if (value === null || value === undefined) return "null";
-  if (typeof value === "number") return String(value);
+  if (typeof value === "number") {
+    if (Number.isInteger(value) && yamlFloatKeys.has(key)) return `${value}.0`;
+    return String(value);
+  }
   const text = String(value);
   if (!text || /[:#\[\]{}&,!*|>'"%@`]/.test(text)) return `"${text.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
   return text;
@@ -623,7 +668,7 @@ function toYaml(value, indent = 0) {
   if (value && typeof value === "object") {
     return Object.entries(value).map(([key, child]) => {
       if (child && typeof child === "object") return `${pad}${key}:\n${toYaml(child, indent + 2)}`;
-      return `${pad}${key}: ${yamlScalar(child)}`;
+      return `${pad}${key}: ${yamlScalar(child, key)}`;
     }).join("\n");
   }
   return `${pad}${yamlScalar(value)}`;
