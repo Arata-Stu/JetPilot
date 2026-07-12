@@ -66,6 +66,12 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('enable_control', False, cli=True)
     args.add_arg('control_param', lu.get_path('jetpilot_control', 'config/autonomous_control.param.yaml'), cli=True)
 
+    args.add_arg('enable_sensor_kit', False, cli=True)
+    args.add_arg('enable_realsense', True, cli=True)
+    args.add_arg('sensor_kit_camera_name', 'realsense', cli=True)
+    args.add_arg('sensor_kit_container_name', 'sensor_kit_container', cli=True)
+    args.add_arg('sensor_kit_run_standalone', True, cli=True)
+
     args.add_arg('enable_localization', False, cli=True)
     args.add_arg('localization_camera_name', 'realsense', cli=True)
     args.add_arg('localization_container_name', 'nova_container', cli=True)
@@ -210,6 +216,20 @@ def generate_launch_description() -> lut.LaunchDescription:
                 'use_sim_time': args.use_sim_time,
             },
             condition=IfCondition(args.enable_control),
+        ))
+
+    actions.append(
+        lu.include(
+            'jetpilot_system_launch',
+            'launch/sensor_kit.launch.py',
+            launch_arguments={
+                'enable_realsense': args.enable_realsense,
+                'camera_name': args.sensor_kit_camera_name,
+                'container_name': args.sensor_kit_container_name,
+                'run_standalone': args.sensor_kit_run_standalone,
+                'use_sim_time': args.use_sim_time,
+            },
+            condition=IfCondition(args.enable_sensor_kit),
         ))
 
     actions.append(
