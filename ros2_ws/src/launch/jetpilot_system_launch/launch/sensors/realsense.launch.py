@@ -42,7 +42,7 @@ def launch_realsense(args: lu.ArgumentContainer) -> list[lut.Action]:
         'use_sim_time': lu.is_true(args.use_sim_time),
         'enable_infra1': True,
         'enable_infra2': True,
-        'enable_depth': False,
+        'enable_depth': lu.is_true(args.enable_depth),
         'enable_color': lu.is_true(args.enable_color),
         'enable_rgbd': False,
         'enable_accel': False,
@@ -94,6 +94,7 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('container_name', 'nova_container')
     args.add_arg('run_standalone', False)
     args.add_arg('camera_name', 'realsense')
+    args.add_arg('enable_depth', False)
     args.add_arg('enable_color', False)
     args.add_arg('use_sim_time', False)
     args.add_opaque_function(launch_realsense)

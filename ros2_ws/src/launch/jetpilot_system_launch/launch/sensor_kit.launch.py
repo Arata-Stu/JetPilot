@@ -12,6 +12,7 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('camera_name', 'realsense', cli=True)
     args.add_arg('container_name', 'sensor_kit_container', cli=True)
     args.add_arg('run_standalone', True, cli=True)
+    args.add_arg('enable_depth', False, cli=True)
     args.add_arg('enable_color', False, cli=True)
     args.add_arg('use_sim_time', False, cli=True)
 
@@ -24,6 +25,7 @@ def generate_launch_description() -> lut.LaunchDescription:
                 'camera_name': args.camera_name,
                 'container_name': args.container_name,
                 'run_standalone': args.run_standalone,
+                'enable_depth': args.enable_depth,
                 'enable_color': args.enable_color,
                 'use_sim_time': args.use_sim_time,
             },
