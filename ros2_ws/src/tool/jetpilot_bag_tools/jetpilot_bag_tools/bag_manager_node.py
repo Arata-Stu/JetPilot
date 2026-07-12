@@ -9,7 +9,17 @@ from typing import List, Optional
 
 import rclpy
 from jetpilot_msgs.msg import BagRequest, BagStatus
+from rcl_interfaces.msg import ParameterDescriptor, ParameterType
 from rclpy.node import Node
+
+
+def declare_string_array_parameter(node: Node, name: str) -> List[str]:
+    parameter = node.declare_parameter(
+        name,
+        [],
+        ParameterDescriptor(type=ParameterType.PARAMETER_STRING_ARRAY),
+    )
+    return [str(item) for item in parameter.value]
 
 
 class BagManagerNode(Node):
@@ -17,8 +27,8 @@ class BagManagerNode(Node):
         super().__init__("bag_manager_node")
         self.output_dir = Path(self.declare_parameter("output_dir", "/tmp/jetpilot_bags").value)
         self.record_all = bool(self.declare_parameter("record_all", True).value)
-        self.topics = list(self.declare_parameter("topics", []).value)
-        self.exclude_topics = list(self.declare_parameter("exclude_topics", []).value)
+        self.topics = declare_string_array_parameter(self, "topics")
+        self.exclude_topics = declare_string_array_parameter(self, "exclude_topics")
         self.storage_id = str(self.declare_parameter("storage_id", "mcap").value)
         self.serialization_format = str(self.declare_parameter("serialization_format", "").value)
         self.max_bag_size = int(self.declare_parameter("max_bag_size", 0).value)
@@ -39,7 +49,7 @@ class BagManagerNode(Node):
         self.no_discovery = bool(self.declare_parameter("no_discovery", False).value)
         self.snapshot_mode = bool(self.declare_parameter("snapshot_mode", False).value)
         self.start_paused = bool(self.declare_parameter("start_paused", False).value)
-        self.extra_args = list(self.declare_parameter("extra_args", []).value)
+        self.extra_args = declare_string_array_parameter(self, "extra_args")
         self.status_period_s = float(self.declare_parameter("status_period_s", 1.0).value)
 
         self.process: Optional[subprocess.Popen] = None
