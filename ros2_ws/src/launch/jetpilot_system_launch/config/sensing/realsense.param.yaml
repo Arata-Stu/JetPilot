@@ -7,8 +7,8 @@
 
     enable_infra1: true
     enable_infra2: true
-    enable_depth: true
-    enable_color: false
+    enable_depth: false
+    enable_color: true
 
     depth_module.depth_profile: "640x480x30"
     depth_module.infra_profile: "640x480x30"
