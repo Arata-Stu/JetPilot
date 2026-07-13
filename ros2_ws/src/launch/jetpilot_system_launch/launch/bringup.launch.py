@@ -67,6 +67,8 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('control_param', lu.get_path('jetpilot_control', 'config/autonomous_control.param.yaml'), cli=True)
 
     args.add_arg('enable_sensor_kit', False, cli=True)
+    args.add_arg('sensor_kit_interface_pkg', 'jetpilot_system_launch', cli=True)
+    args.add_arg('sensor_kit_interface_launch', 'launch/sensors/realsense.launch.py', cli=True)
     args.add_arg('sensor_kit_camera_name', 'realsense', cli=True)
     args.add_arg('sensor_kit_container_name', 'sensor_kit_container', cli=True)
     args.add_arg('sensor_kit_enable_depth', False, cli=True)
@@ -223,6 +225,8 @@ def generate_launch_description() -> lut.LaunchDescription:
             'jetpilot_system_launch',
             'launch/sensor_kit.launch.py',
             launch_arguments={
+                'sensor_interface_pkg': args.sensor_kit_interface_pkg,
+                'sensor_interface_launch': args.sensor_kit_interface_launch,
                 'camera_name': args.sensor_kit_camera_name,
                 'container_name': args.sensor_kit_container_name,
                 'enable_depth': args.sensor_kit_enable_depth,

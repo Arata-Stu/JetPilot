@@ -8,6 +8,9 @@ from launch.conditions import IfCondition
 def generate_launch_description() -> lut.LaunchDescription:
     args = lu.ArgumentContainer()
 
+    args.add_arg('enable_sensor_interface', True, cli=True)
+    args.add_arg('sensor_interface_pkg', 'jetpilot_system_launch', cli=True)
+    args.add_arg('sensor_interface_launch', 'launch/sensors/realsense.launch.py', cli=True)
     args.add_arg('enable_realsense', True, cli=True)
     args.add_arg('camera_name', 'realsense', cli=True)
     args.add_arg('container_name', 'sensor_kit_container', cli=True)
@@ -19,8 +22,8 @@ def generate_launch_description() -> lut.LaunchDescription:
     actions = args.get_launch_actions()
     actions.append(
         lu.include(
-            'jetpilot_system_launch',
-            'launch/sensors/realsense.launch.py',
+            str(args.sensor_interface_pkg),
+            str(args.sensor_interface_launch),
             launch_arguments={
                 'camera_name': args.camera_name,
                 'container_name': args.container_name,
@@ -29,7 +32,24 @@ def generate_launch_description() -> lut.LaunchDescription:
                 'enable_color': args.enable_color,
                 'use_sim_time': args.use_sim_time,
             },
-            condition=IfCondition(args.enable_realsense),
+            condition=IfCondition(lut.AndSubstitution(
+                lu.is_true(args.enable_sensor_interface),
+                lu.is_true(args.enable_realsense),
+            )),
+        ))
+    actions.append(
+        lu.log_info([
+            'Sensor interface: ',
+            args.sensor_interface_pkg,
+            '/',
+            args.sensor_interface_launch,
+            ', camera: ',
+            args.camera_name,
+        ],
+            condition=IfCondition(lut.AndSubstitution(
+                lu.is_true(args.enable_sensor_interface),
+                lu.is_true(args.enable_realsense),
+            )),
         ))
 
     return lut.LaunchDescription(actions)

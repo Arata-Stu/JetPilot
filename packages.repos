@@ -39,3 +39,8 @@ repositories:
     type: git
     url: https://github.com/carbuncle01/jetpilot_vesc_interface.git
     version: jetpilot-v1.0.0
+
+  
+  # Sensor
+  
+  ## 
