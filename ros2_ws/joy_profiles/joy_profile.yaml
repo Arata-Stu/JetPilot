@@ -61,6 +61,7 @@ button_mapping:
   back_button: l3
   bag_start_button: r1
   bag_stop_button: l1
+  steer_offset_inc_button: dpad_right
+  steer_offset_dec_button: dpad_left
   hold_time_s: 0.5
 idle_axes:
-
