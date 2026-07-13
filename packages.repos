@@ -27,3 +27,15 @@ repositories:
     type: git
     url: https://github.com/carbuncle01/pca9685_rc_interface.git
     version: jetpilot-v1.0.0
+
+  ## vesc 
+  ros2_ws/src/vehicle/vesc_interface/vesc:
+    type: git
+    url: https://github.com/carbuncle01/vesc.git
+    version: jetpilot-v1.0.0
+  
+  ## jetpilot vesc adapter
+  ros2_ws/src/vehicle/vesc_interface/jetpilot_vesc_interface:
+    type: git
+    url: https://github.com/carbuncle01/jetpilot_vesc_interface.git
+    version: jetpilot-v1.0.0
