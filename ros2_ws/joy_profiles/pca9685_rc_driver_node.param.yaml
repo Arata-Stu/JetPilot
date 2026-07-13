@@ -19,7 +19,7 @@ pca9685_rc_driver_node:
     esc_neutral_duration_s: 0.05
     steering_offset: 0.0
     throttle_offset: 0.0
-    offset_step: 0.0
+    offset_step: 0.01
     neutral_stop_assist_enabled: false
     neutral_stop_required_steps: 10
     neutral_stop_reverse_start: -0.01
