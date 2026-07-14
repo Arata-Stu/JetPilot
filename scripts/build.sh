@@ -229,7 +229,7 @@ echo ""
 echo "Starting colcon build with --symlink-install..."
 
 if [[ "$BUILD_MODE" == "select" ]]; then
-  colcon build --symlink-install --packages-select "${SELECTED_PACKAGES[@]}"
+  colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release --packages-select "${SELECTED_PACKAGES[@]}"
 else
-  colcon build --symlink-install
+  colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
 fi
