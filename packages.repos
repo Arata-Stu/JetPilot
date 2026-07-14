@@ -42,4 +42,10 @@ repositories:
 
   
   # Sensor
-  ## 
+  
+  ## openeb_ros2 Event Camera Driver
+  ros2_ws/src/sensing/openeb_ros2:
+    type: git
+    url: https://github.com/carbuncle01/openeb_ros2.git
+    version: main
+
