@@ -17,6 +17,10 @@ lib/
 isaac_ros_assets/
 tmp/
 
+# CenturyArks SilkyEvCam plugin source is distributed separately.
+tools/isaac-ros-cli/docker/silky_evcam_plugin_source/*
+!tools/isaac-ros-cli/docker/silky_evcam_plugin_source/README.md
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

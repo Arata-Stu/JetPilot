@@ -150,6 +150,17 @@ export ISAAC_DIR="${ISAAC_ROS_WS}"
 cd "${RC_AS_ROOT}"
 vcs import < packages.repos
 
+# CenturyArks SilkyEvCam plugin source を Docker build context に配置
+# 公式からの plugin install / zip 入手は CLI では行えないため、事前にユーザーが実施する
+mkdir -p "${RC_AS_ROOT}/tools/isaac-ros-cli/docker/silky_evcam_plugin_source"
+cd "${HOME}/Downloads"
+unzip SilkyEvCam_plugin_Source_for_MV511.zip
+cp -av \
+  SilkyEvCam_plugin_Source_for_MV511/hal \
+  SilkyEvCam_plugin_Source_for_MV511/hal_psee_plugins \
+  SilkyEvCam_plugin_Source_for_MV511/licensing \
+  "${RC_AS_ROOT}/tools/isaac-ros-cli/docker/silky_evcam_plugin_source/"
+
 # Isaac ROS CLI 用の設定ファイルを作成
 mkdir -p "${ISAAC_ROS_WS}/.isaac-ros-cli"
 cat > "${ISAAC_ROS_WS}/.isaac-ros-cli/config.yaml" <<'EOF'
@@ -157,6 +168,7 @@ docker:
   image:
     additional_image_keys:
       - realsense
+      - silky_evcam
       - additional_setting
 EOF
 
@@ -172,6 +184,7 @@ grep -n 'python_ws.*workspaces/python_ws' /usr/lib/isaac-ros-cli/run_dev.py
 grep -n 'record.*workspaces/record' /usr/lib/isaac-ros-cli/run_dev.py
 grep -n 'map.*workspaces/map' /usr/lib/isaac-ros-cli/run_dev.py
 grep -n -- '-v /dev:/dev' /usr/lib/isaac-ros-cli/run_dev.py
+ls -l /etc/isaac-ros-cli/docker/Dockerfile.silky_evcam
 ls -l /etc/isaac-ros-cli/docker/Dockerfile.additional_setting
 ```
 
