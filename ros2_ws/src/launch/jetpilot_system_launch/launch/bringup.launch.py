@@ -33,20 +33,23 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('enable_teleop', True, cli=True)
     args.add_arg('enable_rc_serial', False, cli=True)
     args.add_arg('control_authority', 'hardware_mux', cli=True)
-    args.add_arg('bag_manager_param', lu.get_path('jetpilot_bag_tools', 'config/bag_manager.param.yaml'), cli=True)
+    args.add_arg(
+        'bag_manager_param',
+        lu.get_path('jetpilot_system_launch', 'config/tool/bag_manager.param.yaml'),
+        cli=True)
     args.add_arg(
         'teleop_cmd_param',
         workspace_param_path(
             'teleop_cmd.param.yaml',
-            'jetpilot_teleop_tools',
-            'config/teleop_cmd.param.yaml'),
+            'jetpilot_system_launch',
+            'config/tool/teleop_cmd.param.yaml'),
         cli=True)
     args.add_arg(
         'teleop_button_mapping_param',
         workspace_param_path(
             'joy_button_mapping.param.yaml',
-            'jetpilot_teleop_tools',
-            'config/joy_button_mapping.param.yaml'),
+            'jetpilot_system_launch',
+            'config/tool/joy_button_mapping.param.yaml'),
         cli=True)
     args.add_arg(
         'serial_reader_param',
@@ -60,13 +63,19 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('joy_autorepeat_rate', 50.0, cli=True)
     args.add_arg('joy_deadzone', 0.05, cli=True)
     args.add_arg('joy_device_path', '', cli=True)
-    args.add_arg('joy_prefer_evdev', True, cli=True)
+    args.add_arg('joy_prefer_evdev', False, cli=True)
 
     args.add_arg('enable_operation', True, cli=True)
-    args.add_arg('operation_param', lu.get_path('jetpilot_operation', 'config/operation.param.yaml'), cli=True)
+    args.add_arg(
+        'operation_param',
+        lu.get_path('jetpilot_system_launch', 'config/operation/operation.param.yaml'),
+        cli=True)
 
     args.add_arg('enable_control', False, cli=True)
-    args.add_arg('control_param', lu.get_path('jetpilot_control', 'config/autonomous_control.param.yaml'), cli=True)
+    args.add_arg(
+        'control_param',
+        lu.get_path('jetpilot_system_launch', 'config/control/autonomous_control.param.yaml'),
+        cli=True)
 
     args.add_arg('enable_sensor_kit', False, cli=True)
     args.add_arg('sensor_kit_interface_pkg', 'jetpilot_system_launch', cli=True)

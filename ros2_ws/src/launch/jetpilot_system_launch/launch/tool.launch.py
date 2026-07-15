@@ -105,20 +105,23 @@ def add_nodes(args: lu.ArgumentContainer):
 def generate_launch_description() -> lut.LaunchDescription:
     args = lu.ArgumentContainer()
 
-    args.add_arg('bag_manager_param', lu.get_path('jetpilot_bag_tools', 'config/bag_manager.param.yaml'), cli=True)
+    args.add_arg(
+        'bag_manager_param',
+        lu.get_path('jetpilot_system_launch', 'config/tool/bag_manager.param.yaml'),
+        cli=True)
     args.add_arg(
         'teleop_cmd_param',
         workspace_param_path(
             'teleop_cmd.param.yaml',
-            'jetpilot_teleop_tools',
-            'config/teleop_cmd.param.yaml'),
+            'jetpilot_system_launch',
+            'config/tool/teleop_cmd.param.yaml'),
         cli=True)
     args.add_arg(
         'teleop_button_mapping_param',
         workspace_param_path(
             'joy_button_mapping.param.yaml',
-            'jetpilot_teleop_tools',
-            'config/joy_button_mapping.param.yaml'),
+            'jetpilot_system_launch',
+            'config/tool/joy_button_mapping.param.yaml'),
         cli=True)
     args.add_arg(
         'serial_reader_param',
@@ -137,7 +140,7 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('joy_autorepeat_rate', 50.0, cli=True)
     args.add_arg('joy_deadzone', 0.05, cli=True)
     args.add_arg('joy_device_path', '', cli=True)
-    args.add_arg('joy_prefer_evdev', True, cli=True)
+    args.add_arg('joy_prefer_evdev', False, cli=True)
     args.add_arg('enable_vslam_snapshot', False, cli=True)
     args.add_arg(
         'vslam_snapshot_output',

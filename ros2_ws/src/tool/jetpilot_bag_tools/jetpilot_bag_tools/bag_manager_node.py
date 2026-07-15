@@ -14,16 +14,60 @@ from rclpy.parameter import Parameter
 
 
 DEFAULT_TOPICS = [
+    # Control and operation state.
     "/joy",
     "/rc/channels",
     "/teleop/control_cmd",
     "/propo/control_cmd",
     "/auto/control_cmd",
+    "/vehicle/control_cmd",
     "/operation_mode/request",
     "/operation_mode/state",
-    "/vehicle/control_cmd",
     "/bag/request",
     "/bag/status",
+    # Vehicle interface feedback.
+    "/commands/motor/speed",
+    "/commands/motor/brake",
+    "/commands/servo/position",
+    "/sensors/core",
+    "/sensors/imu",
+    "/sensors/imu/raw",
+    "/sensors/servo_position_command",
+    # TF and robot description.
+    "/tf",
+    "/tf_static",
+    "/robot_description",
+    "/joint_states",
+    # SilkyEvCam event camera.
+    "/event_camera/camera_info",
+    "/event_camera/events",
+    "/event_camera/events_raw",
+    "/event_camera/event_image",
+    "/event_camera/diagnostics",
+    # RealSense RGB / depth candidates. CameraInfo is required for offline VSLAM.
+    "/realsense/color/camera_info",
+    "/realsense/color/image_raw",
+    "/realsense/color/image_raw/compressed",
+    "/realsense/color/metadata",
+    "/realsense/depth/camera_info",
+    "/realsense/depth/image_rect_raw",
+    "/realsense/depth/image_rect_raw/compressedDepth",
+    "/realsense/depth/metadata",
+    # RealSense stereo infrared candidates. CameraInfo is required for offline VSLAM.
+    "/realsense/infra1/camera_info",
+    "/realsense/infra1/image_rect_raw",
+    "/realsense/infra1/image_rect_raw/compressed",
+    "/realsense/infra1/image_rect_raw/compressedDepth",
+    "/realsense/infra1/image_rect_raw/zstd",
+    "/realsense/infra1/metadata",
+    "/realsense/infra2/camera_info",
+    "/realsense/infra2/image_rect_raw",
+    "/realsense/infra2/image_rect_raw/compressed",
+    "/realsense/infra2/image_rect_raw/compressedDepth",
+    "/realsense/infra2/image_rect_raw/zstd",
+    "/realsense/infra2/metadata",
+    "/realsense/extrinsics/depth_to_infra1",
+    "/realsense/extrinsics/depth_to_infra2",
 ]
 
 
