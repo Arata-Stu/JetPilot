@@ -472,7 +472,7 @@ function emptyProfile() {
       bag_stop_button: "l1",
       steer_offset_inc_button: "dpad_right",
       steer_offset_dec_button: "dpad_left",
-      hold_time_s: 1.0
+      hold_time_s: 0.1
     },
     idle_axes: {}
   };
@@ -783,7 +783,7 @@ function buttonMappingYaml(profile) {
         bag_stop_button: buttonIndex("bag_stop_button", "l1"),
         steer_offset_inc_button: buttonIndex("steer_offset_inc_button", "dpad_right"),
         steer_offset_dec_button: buttonIndex("steer_offset_dec_button", "dpad_left"),
-        hold_time_s: Number(mapping.hold_time_s ?? 1.0)
+        hold_time_s: Number(mapping.hold_time_s ?? 0.1)
       }
     }
   };

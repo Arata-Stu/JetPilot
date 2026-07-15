@@ -23,7 +23,7 @@ public:
     bag_stop_button_ = declare_parameter<int>("bag_stop_button", 4);
     steer_offset_inc_button_ = declare_parameter<int>("steer_offset_inc_button", 15);
     steer_offset_dec_button_ = declare_parameter<int>("steer_offset_dec_button", 14);
-    hold_time_s_ = declare_numeric_parameter("hold_time_s", 1.0);
+    hold_time_s_ = declare_numeric_parameter("hold_time_s", 0.1);
 
     mode_pub_ = create_publisher<jetpilot_msgs::msg::OperationModeRequest>(
       "/operation_mode/request", 10);
