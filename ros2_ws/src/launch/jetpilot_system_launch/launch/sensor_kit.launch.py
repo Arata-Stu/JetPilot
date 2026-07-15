@@ -2,40 +2,35 @@
 
 import isaac_ros_launch_utils as lu
 import isaac_ros_launch_utils.all_types as lut
-from launch.conditions import IfCondition
-
 
 def add_sensor_interface(args: lu.ArgumentContainer):
+    if not (
+        lu.is_true(args.enable_sensor_interface) and
+        lu.is_true(args.enable_realsense)
+    ):
+        return []
+
     return [
         lu.include(
             str(args.sensor_interface_pkg),
             str(args.sensor_interface_launch),
             launch_arguments={
-                'camera_name': args.camera_name,
-                'container_name': args.container_name,
-                'run_standalone': args.run_standalone,
-                'enable_depth': args.enable_depth,
-                'enable_color': args.enable_color,
-                'use_sim_time': args.use_sim_time,
+                'camera_name': str(args.camera_name),
+                'container_name': str(args.container_name),
+                'run_standalone': str(lu.is_true(args.run_standalone)).lower(),
+                'enable_depth': str(lu.is_true(args.enable_depth)).lower(),
+                'enable_color': str(lu.is_true(args.enable_color)).lower(),
+                'use_sim_time': str(lu.is_true(args.use_sim_time)).lower(),
             },
-            condition=IfCondition(lut.AndSubstitution(
-                lu.is_true(args.enable_sensor_interface),
-                lu.is_true(args.enable_realsense),
-            )),
         ),
         lu.log_info([
             'Sensor interface: ',
-            args.sensor_interface_pkg,
+            str(args.sensor_interface_pkg),
             '/',
-            args.sensor_interface_launch,
+            str(args.sensor_interface_launch),
             ', camera: ',
-            args.camera_name,
-        ],
-            condition=IfCondition(lut.AndSubstitution(
-                lu.is_true(args.enable_sensor_interface),
-                lu.is_true(args.enable_realsense),
-            )),
-        ),
+            str(args.camera_name),
+        ]),
     ]
 
 
