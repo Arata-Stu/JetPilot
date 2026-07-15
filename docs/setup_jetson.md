@@ -192,8 +192,8 @@ docker:
   image:
     additional_image_keys:
       - realsense
-      - additional_setting
       - silky_evcam
+      - additional_setting
 EOF
 
 # Isaac ROS CLI のビルドとインストール
