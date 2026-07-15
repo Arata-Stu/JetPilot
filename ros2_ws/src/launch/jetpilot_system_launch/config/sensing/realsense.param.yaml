@@ -5,9 +5,9 @@
     # RealSense driver can keep its own validated defaults.
     #
     # Common compact profile candidates:
-    #   depth_module.infra_profile: "424x240x15", "424x240x30", "640x480x15", "640x480x30"
-    #   depth_module.depth_profile: "424x240x15", "424x240x30", "640x480x15", "640x480x30"
-    #   rgb_camera.color_profile: "424x240x15", "424x240x30", "640x480x15", "640x480x30"
+    #   depth_module.infra_profile: "424x240x30", "424x240x60", "424x240x90", "640x480x30"
+    #   depth_module.depth_profile: "424x240x30", "640x480x30"
+    #   rgb_camera.color_profile: "424x240x60", "640x360x60", "640x480x60"
     # If the camera rejects a profile, verify supported modes with rs-enumerate-devices.
 
     # Device selection / node basics.
@@ -35,19 +35,20 @@
     enable_gyro: false
     enable_sync: false
 
-    # Small profiles for Jetson bringup. Increase after stability is confirmed.
-    depth_module.infra_profile: "640x480x15"
+    # RGB is used for FPV and should remain 60 fps by default. Stereo infrared
+    # is for localization and can use a different profile, including 90 fps.
+    depth_module.infra_profile: "424x240x90"
     depth_module.infra1_format: "Y8"
     depth_module.infra2_format: "Y8"
     # Enable depth only for diagnostics if infra frames are advertised but do not flow.
     # enable_depth: true
     # depth_module.depth_profile: "640x480x15"
     # depth_module.depth_format: "Z16"
-    # Enable these only after RGB is visible in RealSense Viewer.
+    # enable_color is controlled by launch. It is enabled automatically when
+    # sensor_kit_enable_rtp_stream is true.
     # enable_color: true
-    # rgb_camera.color_profile: "424x240x6"
-    # rgb_camera.color_profile: "640x480x15"
-    # rgb_camera.color_format: "RGB8"
+    rgb_camera.color_profile: "424x240x60"
+    rgb_camera.color_format: "RGB8"
 
     # Keep optional processing off unless a workflow explicitly needs it.
     align_depth.enable: false

@@ -1,0 +1,14 @@
+image_rtp_sender:
+  ros__parameters:
+    image_topic: "/realsense/color/image_raw"
+    host: "127.0.0.1"
+    port: 5004
+    codec: "h264"
+    fps: 60
+    bitrate: 4000000
+    gop: 60
+    mtu: 1200
+    payload: 96
+    encoder: "auto"
+    h264_encoder_extra: "num-B-Frames=0 preset-level=1"
+    h265_encoder_extra: "num-B-Frames=0 preset-level=1"

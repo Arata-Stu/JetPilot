@@ -1,0 +1,25 @@
+<launch>
+  <arg name="image_topic" default="/realsense/color/image_raw"/>
+  <arg name="host" default="127.0.0.1"/>
+  <arg name="port" default="5004"/>
+  <arg name="codec" default="h264"/>
+  <arg name="fps" default="60"/>
+  <arg name="bitrate" default="4000000"/>
+  <arg name="gop" default="60"/>
+  <arg name="mtu" default="1200"/>
+  <arg name="payload" default="96"/>
+  <arg name="use_sim_time" default="false"/>
+
+  <node pkg="jetpilot_rtp_tools" exec="image_rtp_sender_node" name="image_rtp_sender" output="screen">
+    <param name="image_topic" value="$(var image_topic)"/>
+    <param name="host" value="$(var host)"/>
+    <param name="port" value="$(var port)"/>
+    <param name="codec" value="$(var codec)"/>
+    <param name="fps" value="$(var fps)"/>
+    <param name="bitrate" value="$(var bitrate)"/>
+    <param name="gop" value="$(var gop)"/>
+    <param name="mtu" value="$(var mtu)"/>
+    <param name="payload" value="$(var payload)"/>
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+  </node>
+</launch>

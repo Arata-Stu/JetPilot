@@ -84,6 +84,16 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('sensor_kit_container_name', 'sensor_kit_container', cli=True)
     args.add_arg('sensor_kit_enable_depth', False, cli=True)
     args.add_arg('sensor_kit_enable_color', False, cli=True)
+    args.add_arg('sensor_kit_enable_rtp_stream', False, cli=True)
+    args.add_arg('sensor_kit_rtp_image_topic', '/realsense/color/image_raw', cli=True)
+    args.add_arg('sensor_kit_rtp_host', '127.0.0.1', cli=True)
+    args.add_arg('sensor_kit_rtp_port', '5004', cli=True)
+    args.add_arg('sensor_kit_rtp_codec', 'h264', cli=True)
+    args.add_arg('sensor_kit_rtp_fps', '60', cli=True)
+    args.add_arg('sensor_kit_rtp_bitrate', '4000000', cli=True)
+    args.add_arg('sensor_kit_rtp_gop', '60', cli=True)
+    args.add_arg('sensor_kit_rtp_mtu', '1200', cli=True)
+    args.add_arg('sensor_kit_rtp_payload', '96', cli=True)
 
     args.add_arg('enable_localization', False, cli=True)
     args.add_arg('localization_camera_name', 'realsense', cli=True)
@@ -244,6 +254,16 @@ def generate_launch_description() -> lut.LaunchDescription:
                 'container_name': args.sensor_kit_container_name,
                 'enable_depth': args.sensor_kit_enable_depth,
                 'enable_color': args.sensor_kit_enable_color,
+                'enable_rtp_stream': args.sensor_kit_enable_rtp_stream,
+                'rtp_image_topic': args.sensor_kit_rtp_image_topic,
+                'rtp_host': args.sensor_kit_rtp_host,
+                'rtp_port': args.sensor_kit_rtp_port,
+                'rtp_codec': args.sensor_kit_rtp_codec,
+                'rtp_fps': args.sensor_kit_rtp_fps,
+                'rtp_bitrate': args.sensor_kit_rtp_bitrate,
+                'rtp_gop': args.sensor_kit_rtp_gop,
+                'rtp_mtu': args.sensor_kit_rtp_mtu,
+                'rtp_payload': args.sensor_kit_rtp_payload,
                 'use_sim_time': args.use_sim_time,
             },
             condition=IfCondition(args.enable_sensor_kit),

@@ -43,7 +43,7 @@ def launch_realsense(args: lu.ArgumentContainer) -> list[lut.Action]:
         'enable_infra1': True,
         'enable_infra2': True,
         'enable_depth': lu.is_true(args.enable_depth),
-        'enable_color': lu.is_true(args.enable_color),
+        'enable_color': lu.is_true(args.enable_color) or lu.is_true(args.enable_rtp_stream),
         'enable_rgbd': False,
         'enable_accel': False,
         'enable_gyro': False,
@@ -67,7 +67,39 @@ def launch_realsense(args: lu.ArgumentContainer) -> list[lut.Action]:
         name=args.camera_name,
         namespace='',
         parameters=parameters,
+        extra_arguments=[{'use_intra_process_comms': True}],
     )
+    composable_nodes = [realsense_node]
+
+    if lu.is_true(args.enable_rtp_stream):
+        rtp_config_yaml = os.path.join(
+            get_package_share_directory('jetpilot_system_launch'),
+            'config/sensing',
+            'image_rtp_sender.param.yaml'
+        )
+        rtp_sender_node = lut.ComposableNode(
+            package='jetpilot_rtp_tools',
+            plugin='jetpilot_rtp_tools::ImageRtpSenderComponent',
+            name='image_rtp_sender',
+            namespace='',
+            parameters=[
+                rtp_config_yaml,
+                {
+                    'image_topic': args.rtp_image_topic,
+                    'host': args.rtp_host,
+                    'port': lut.ParameterValue(args.rtp_port, value_type=int),
+                    'codec': args.rtp_codec,
+                    'fps': lut.ParameterValue(args.rtp_fps, value_type=int),
+                    'bitrate': lut.ParameterValue(args.rtp_bitrate, value_type=int),
+                    'gop': lut.ParameterValue(args.rtp_gop, value_type=int),
+                    'mtu': lut.ParameterValue(args.rtp_mtu, value_type=int),
+                    'payload': lut.ParameterValue(args.rtp_payload, value_type=int),
+                    'use_sim_time': lu.is_true(args.use_sim_time),
+                },
+            ],
+            extra_arguments=[{'use_intra_process_comms': True}],
+        )
+        composable_nodes.append(rtp_sender_node)
 
     actions.append(
         lu.log_info(
@@ -84,7 +116,7 @@ def launch_realsense(args: lu.ArgumentContainer) -> list[lut.Action]:
             composable_node_descriptions=[],
             output='screen',
         ))
-    actions.append(lu.load_composable_nodes(args.container_name, [realsense_node]))
+    actions.append(lu.load_composable_nodes(args.container_name, composable_nodes))
 
     return actions
 
@@ -96,6 +128,16 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('camera_name', 'realsense')
     args.add_arg('enable_depth', False)
     args.add_arg('enable_color', False)
+    args.add_arg('enable_rtp_stream', False)
+    args.add_arg('rtp_image_topic', '/realsense/color/image_raw')
+    args.add_arg('rtp_host', '127.0.0.1')
+    args.add_arg('rtp_port', '5004')
+    args.add_arg('rtp_codec', 'h264')
+    args.add_arg('rtp_fps', '60')
+    args.add_arg('rtp_bitrate', '4000000')
+    args.add_arg('rtp_gop', '60')
+    args.add_arg('rtp_mtu', '1200')
+    args.add_arg('rtp_payload', '96')
     args.add_arg('use_sim_time', False)
     args.add_opaque_function(launch_realsense)
 

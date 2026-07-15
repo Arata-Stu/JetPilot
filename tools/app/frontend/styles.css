@@ -288,6 +288,19 @@ textarea {
   font-size: 12px;
 }
 
+.check-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  color: var(--soft);
+  font-size: 12px;
+}
+
+.check-row input {
+  width: auto;
+}
+
 .field-hint {
   overflow: hidden;
   color: var(--muted);

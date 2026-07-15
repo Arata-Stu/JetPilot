@@ -17,6 +17,16 @@ const state = {
     section_labels: true,
   },
   selectedTaskId: null,
+  fpv: {
+    codec: "h264",
+    width: 424,
+    height: 240,
+    fps: 60,
+    port: 5004,
+    payload: 96,
+    displaySink: "glimagesink",
+    noDisplay: false,
+  },
   terminalCollapsed: false,
   logDialogOpen: false,
   logStickToEnd: true,
@@ -30,6 +40,7 @@ const tabs = [
   ["rosbags", "Rosbags"],
   ["map-builder", "Map Builder"],
   ["joy-profile", "Joy Profile"],
+  ["fpv", "FPV"],
   ["maps", "Maps"],
   ["jetson", "Jetson"],
   ["terminal", "Terminal"],
@@ -207,6 +218,7 @@ function renderPage() {
   if (state.tab === "rosbags") return renderRosbags();
   if (state.tab === "map-builder") return renderMapBuilder();
   if (state.tab === "joy-profile") return renderJoyProfile();
+  if (state.tab === "fpv") return renderFpv();
   if (state.tab === "maps") return renderMaps();
   if (state.tab === "jetson") return renderJetson();
   if (state.tab === "terminal") return renderTerminalPage();
@@ -224,6 +236,76 @@ function renderJoyProfile() {
         <a class="button-link" href="/joy-profile-editor" target="_blank" rel="noreferrer">Open in new tab</a>
       </div>
       <iframe class="joy-profile-frame" src="/joy-profile-editor" title="Joy Profile Editor"></iframe>
+    </div>
+  `;
+}
+
+function renderFpv() {
+  const running = state.tasks.filter((task) => task.kind === "fpv-viewer" && ["queued", "running", "stopping"].includes(task.status));
+  const fpv = state.fpv;
+  return `
+    <div class="page fpv-page">
+      <section class="panel">
+        <div class="panel-header">
+          <h2>FPV RTP Viewer</h2>
+          <span class="spacer"></span>
+          <button onclick="copyFpvReceiverCommand()">Copy Command</button>
+          <button class="primary" onclick="startFpvViewer()">Start Viewer</button>
+        </div>
+        <div class="panel-body">
+          <div class="form-grid">
+            <div class="field">
+              <label>Codec</label>
+              <select id="fpv-codec" onchange="updateFpvCommandPreview()">
+                ${["h264", "h265", "mjpeg", "raw"].map((codec) => `<option value="${codec}" ${fpv.codec === codec ? "selected" : ""}>${codec}</option>`).join("")}
+              </select>
+            </div>
+            <div class="field">
+              <label>Display sink</label>
+              <select id="fpv-display-sink" onchange="updateFpvCommandPreview()">
+                ${["glimagesink", "autovideosink", "xvimagesink", "ximagesink"].map((sink) => `<option value="${sink}" ${fpv.displaySink === sink ? "selected" : ""}>${sink}</option>`).join("")}
+              </select>
+            </div>
+            <div class="field">
+              <label>Width</label>
+              <input id="fpv-width" type="number" min="1" value="${esc(fpv.width)}" oninput="updateFpvCommandPreview()" />
+            </div>
+            <div class="field">
+              <label>Height</label>
+              <input id="fpv-height" type="number" min="1" value="${esc(fpv.height)}" oninput="updateFpvCommandPreview()" />
+            </div>
+            <div class="field">
+              <label>FPS</label>
+              <input id="fpv-fps" type="number" min="1" value="${esc(fpv.fps)}" oninput="updateFpvCommandPreview()" />
+            </div>
+            <div class="field">
+              <label>Port</label>
+              <input id="fpv-port" type="number" min="1" value="${esc(fpv.port)}" oninput="updateFpvCommandPreview()" />
+            </div>
+            <div class="field">
+              <label>Payload</label>
+              <input id="fpv-payload" type="number" min="0" value="${esc(fpv.payload)}" oninput="updateFpvCommandPreview()" />
+            </div>
+            <label class="check-row">
+              <input id="fpv-no-display" type="checkbox" ${fpv.noDisplay ? "checked" : ""} onchange="updateFpvCommandPreview()" />
+              <span>Receive without display</span>
+            </label>
+            <div class="field full">
+              <label>Receiver command</label>
+              <textarea id="fpv-command" readonly>${esc(buildFpvReceiverCommand(readFpvForm(false)))}</textarea>
+            </div>
+            <div class="actions full">
+              <button class="primary" onclick="startFpvViewer()">Start Viewer</button>
+              <button onclick="copyFpvReceiverCommand()">Copy Command</button>
+              ${running.length ? `<button class="danger" onclick="stopTask(${js(running[0].task_id)})">Stop Running Viewer</button>` : ""}
+            </div>
+          </div>
+        </div>
+      </section>
+      <section class="panel">
+        <div class="panel-header"><h2>FPV Tasks</h2><span class="spacer"></span><button onclick="refreshAll()">Refresh</button></div>
+        <div class="panel-body">${renderTaskTable(state.tasks.filter((task) => task.kind === "fpv-viewer").slice(0, 8))}</div>
+      </section>
     </div>
   `;
 }
@@ -1176,6 +1258,71 @@ async function runCustomCommand() {
   selectTask(result.task.task_id);
 }
 
+function readNumberInput(id, fallback) {
+  const value = Number($(id)?.value);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function readFpvForm(updateState = true) {
+  const next = {
+    codec: $("fpv-codec")?.value || state.fpv.codec,
+    width: readNumberInput("fpv-width", state.fpv.width),
+    height: readNumberInput("fpv-height", state.fpv.height),
+    fps: readNumberInput("fpv-fps", state.fpv.fps),
+    port: readNumberInput("fpv-port", state.fpv.port),
+    payload: readNumberInput("fpv-payload", state.fpv.payload),
+    displaySink: $("fpv-display-sink")?.value || state.fpv.displaySink,
+    noDisplay: Boolean($("fpv-no-display")?.checked ?? state.fpv.noDisplay),
+  };
+  if (updateState) state.fpv = next;
+  return next;
+}
+
+function buildFpvReceiverCommand(fpv = state.fpv) {
+  const env = [
+    `CODEC=${sh(fpv.codec)}`,
+    `WIDTH=${sh(fpv.width)}`,
+    `HEIGHT=${sh(fpv.height)}`,
+    `FPS=${sh(fpv.fps)}`,
+    `PORT=${sh(fpv.port)}`,
+    `PAYLOAD=${sh(fpv.payload)}`,
+    `DISPLAY_SINK=${sh(fpv.displaySink)}`,
+  ];
+  if (fpv.noDisplay) env.push("NO_DISPLAY=true");
+  return `${env.join(" ")} ./tools/rtp_video_experiment/rtp_receiver.sh`;
+}
+
+async function startFpvViewer() {
+  const fpv = readFpvForm();
+  const command = buildFpvReceiverCommand(fpv);
+  const result = await api("/api/tasks/run", {
+    method: "POST",
+    body: JSON.stringify({
+      title: `FPV RTP Viewer ${fpv.codec} ${fpv.width}x${fpv.height}@${fpv.fps}`,
+      kind: "fpv-viewer",
+      command,
+      cwd: state.config?.repo_root || "",
+    }),
+  });
+  await refreshAll();
+  selectTask(result.task.task_id);
+  toast("FPV viewer started");
+}
+
+function copyFpvReceiverCommand() {
+  const fpv = readFpvForm();
+  const command = buildFpvReceiverCommand(fpv);
+  const preview = $("fpv-command");
+  if (preview) preview.value = command;
+  copyText(command, "FPV receiver command copied");
+}
+
+function updateFpvCommandPreview() {
+  const fpv = readFpvForm();
+  const preview = $("fpv-command");
+  if (preview) preview.value = buildFpvReceiverCommand(fpv);
+}
+
 function fillMapDir() {
   const select = $("build-rosbag");
   const bagPath = select?.value || state.rosbags[0]?.path || "";
@@ -1623,6 +1770,9 @@ window.copySelectedTaskCommand = copySelectedTaskCommand;
 window.copySelectedTaskLog = copySelectedTaskLog;
 window.stopTask = stopTask;
 window.runCustomCommand = runCustomCommand;
+window.startFpvViewer = startFpvViewer;
+window.copyFpvReceiverCommand = copyFpvReceiverCommand;
+window.updateFpvCommandPreview = updateFpvCommandPreview;
 window.fillMapDir = fillMapDir;
 window.useRosbag = useRosbag;
 window.selectedCameraTopicConfig = selectedCameraTopicConfig;
