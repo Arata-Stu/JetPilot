@@ -134,6 +134,17 @@ sudo udevadm trigger && \
 echo "Successfully added udev rules"
 ```
 
+### 4.5 CenturyArks SilkyEvCam udev ルールの設定
+
+SilkyEvCam を Docker コンテナ内の通常ユーザーから扱えるようにするため、host 側に udev ルールを適用します。
+
+```bash
+cd "${RC_AS_ROOT}"
+./scripts/install_silky_evcam_udev_rules.sh
+```
+
+適用後、SilkyEvCam を抜き差しし、Docker コンテナを再起動してください。
+
 ---
 
 ## 5. ワークスペースと Isaac ROS CLI の構築
