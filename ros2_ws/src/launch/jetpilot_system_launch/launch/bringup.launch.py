@@ -59,6 +59,8 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('propo_control_topic', '/propo/control_cmd', cli=True)
     args.add_arg('joy_autorepeat_rate', 50.0, cli=True)
     args.add_arg('joy_deadzone', 0.05, cli=True)
+    args.add_arg('joy_device_path', '', cli=True)
+    args.add_arg('joy_prefer_evdev', True, cli=True)
 
     args.add_arg('enable_operation', True, cli=True)
     args.add_arg('operation_param', lu.get_path('jetpilot_operation', 'config/operation.param.yaml'), cli=True)
@@ -184,6 +186,8 @@ def generate_launch_description() -> lut.LaunchDescription:
                 'propo_control_topic': args.propo_control_topic,
                 'joy_autorepeat_rate': args.joy_autorepeat_rate,
                 'joy_deadzone': args.joy_deadzone,
+                'joy_device_path': args.joy_device_path,
+                'joy_prefer_evdev': args.joy_prefer_evdev,
                 'enable_vslam_snapshot': args.enable_vslam_snapshot,
                 'vslam_snapshot_output': args.vslam_snapshot_output,
                 'vslam_snapshot_path_topic': args.vslam_snapshot_path_topic,

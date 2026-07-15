@@ -34,8 +34,10 @@ def add_nodes(args: lu.ArgumentContainer):
             name='custom_joy_node',
             output='screen',
             parameters=[{
+                'device_path': str(args.joy_device_path),
                 'publish_rate_hz': float(args.joy_autorepeat_rate),
                 'deadzone': float(args.joy_deadzone),
+                'prefer_evdev': lu.is_true(args.joy_prefer_evdev),
                 'use_sim_time': use_sim_time,
             }],
         ))
@@ -134,6 +136,8 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('propo_control_topic', '/propo/control_cmd', cli=True)
     args.add_arg('joy_autorepeat_rate', 50.0, cli=True)
     args.add_arg('joy_deadzone', 0.05, cli=True)
+    args.add_arg('joy_device_path', '', cli=True)
+    args.add_arg('joy_prefer_evdev', True, cli=True)
     args.add_arg('enable_vslam_snapshot', False, cli=True)
     args.add_arg(
         'vslam_snapshot_output',
