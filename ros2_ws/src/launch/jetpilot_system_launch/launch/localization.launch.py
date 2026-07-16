@@ -185,7 +185,7 @@ def add_nodes(args: lu.ArgumentContainer):
 
         if enable_occupancy_map_lifecycle_manager:
             actions.append(lut.TimerAction(
-                period=5.0,
+                period='5.0',
                 actions=[
                     lu.Node(
                         package='nav2_lifecycle_manager',
