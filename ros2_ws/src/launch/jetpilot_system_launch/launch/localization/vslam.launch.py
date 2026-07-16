@@ -92,9 +92,6 @@ def add_vslam(args: lu.ArgumentContainer) -> list[lut.Action]:
     if args.vslam_camera_optical_frames:
         camera_optical_frames = args.vslam_camera_optical_frames.split(',')
 
-    # Isaac Simかどうかで値を動的に切り替えるロジック
-    image_jitter_threshold_ms = 51.0 if lu.is_true(args.is_sim) else 34.0
-
     # =========================================================================
     # 1. YAMLファイルのパスを取得
     # =========================================================================
@@ -114,8 +111,6 @@ def add_vslam(args: lu.ArgumentContainer) -> list[lut.Action]:
         # スクリプト内で動的に計算されるパラメータ
         'num_cameras': num_cameras,
         'min_num_images': num_cameras,
-        'image_jitter_threshold_ms': lut.ParameterValue(
-            str(image_jitter_threshold_ms), value_type=float),
         'camera_optical_frames': camera_optical_frames,
         'enable_localization_n_mapping': lut.ParameterValue(args.vslam_enable_slam, value_type=bool),
         'enable_ground_constraint_in_odometry': lut.ParameterValue(args.vslam_enable_ground_constraint_in_odometry, value_type=bool),
