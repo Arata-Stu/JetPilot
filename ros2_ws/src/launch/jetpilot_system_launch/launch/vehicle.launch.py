@@ -36,8 +36,8 @@ def add_vehicle(args: lu.ArgumentContainer):
             condition=IfCondition(publish_description),
         ),
         lu.include(
-            str(args.vehicle_interface_pkg),
-            str(args.vehicle_interface_launch),
+            args.vehicle_interface_pkg,
+            args.vehicle_interface_launch,
             launch_arguments={
                 'vehicle_control_topic': args.vehicle_control_topic,
                 'driver_param': args.vehicle_driver_param,

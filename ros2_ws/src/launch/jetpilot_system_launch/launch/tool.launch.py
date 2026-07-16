@@ -34,9 +34,10 @@ def add_nodes(args: lu.ArgumentContainer):
             name='custom_joy_node',
             output='screen',
             parameters=[{
-                'device_path': str(args.joy_device_path),
-                'publish_rate_hz': float(args.joy_autorepeat_rate),
-                'deadzone': float(args.joy_deadzone),
+                'device_path': args.joy_device_path,
+                'publish_rate_hz': lut.ParameterValue(
+                    args.joy_autorepeat_rate, value_type=float),
+                'deadzone': lut.ParameterValue(args.joy_deadzone, value_type=float),
                 'prefer_evdev': lu.is_true(args.joy_prefer_evdev),
                 'use_sim_time': use_sim_time,
             }],
@@ -94,7 +95,7 @@ def add_nodes(args: lu.ArgumentContainer):
                 '--odom-topic', args.vslam_snapshot_odom_topic,
                 '--landmarks-topic', args.vslam_snapshot_landmarks_topic,
                 '--output', args.vslam_snapshot_output,
-                '--write-interval-sec', str(args.vslam_snapshot_write_interval_s),
+                '--write-interval-sec', args.vslam_snapshot_write_interval_s,
             ],
             parameters=[{'use_sim_time': use_sim_time}],
         ))
