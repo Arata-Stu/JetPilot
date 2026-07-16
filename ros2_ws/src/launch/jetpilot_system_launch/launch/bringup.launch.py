@@ -60,8 +60,8 @@ def generate_launch_description() -> lut.LaunchDescription:
         cli=True)
     args.add_arg('rc_channels_topic', '/rc/channels', cli=True)
     args.add_arg('propo_control_topic', '/propo/control_cmd', cli=True)
-    args.add_arg('joy_autorepeat_rate', 50.0, cli=True)
-    args.add_arg('joy_deadzone', 0.05, cli=True)
+    args.add_arg('joy_autorepeat_rate', '50.0', cli=True)
+    args.add_arg('joy_deadzone', '0.05', cli=True)
     args.add_arg('joy_device_path', '', cli=True)
     args.add_arg('joy_prefer_evdev', False, cli=True)
 
@@ -204,8 +204,8 @@ def generate_launch_description() -> lut.LaunchDescription:
                 'control_authority': args.control_authority,
                 'rc_channels_topic': args.rc_channels_topic,
                 'propo_control_topic': args.propo_control_topic,
-                'joy_autorepeat_rate': args.joy_autorepeat_rate,
-                'joy_deadzone': args.joy_deadzone,
+                'joy_autorepeat_rate': str(args.joy_autorepeat_rate),
+                'joy_deadzone': str(args.joy_deadzone),
                 'joy_device_path': args.joy_device_path,
                 'joy_prefer_evdev': args.joy_prefer_evdev,
                 'enable_vslam_snapshot': args.enable_vslam_snapshot,
