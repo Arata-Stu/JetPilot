@@ -29,6 +29,13 @@ const state = {
     primaryLaneId: "lane_001",
     lanes: [],
   },
+  sectionEditor: {
+    enabled: false,
+    mapPath: "",
+    dirty: false,
+    selectedGateId: "",
+    gates: [],
+  },
   selectedTaskId: null,
   fpv: {
     host: "",
@@ -63,6 +70,7 @@ const tabs = [
 ];
 
 const mapPreviewImages = new Map();
+let selectedMapRefreshInFlight = false;
 
 const $ = (id) => document.getElementById(id);
 const esc = (value) =>
@@ -505,8 +513,18 @@ function isActiveTask(task) {
   return ["queued", "running", "stopping"].includes(task.status);
 }
 
+function isFinishedTask(task) {
+  return task && ["success", "failed", "stopped", "lost"].includes(task.status);
+}
+
 function isMapTask(task) {
   return ["map-build", "prepare-hd-raster", "generate-raceline", "generate-preview"].includes(task.kind);
+}
+
+function mapTaskFinishedSince(previous, next) {
+  if (!isMapTask(next) || !isFinishedTask(next)) return false;
+  if (!previous) return true;
+  return previous.status !== next.status || previous.ended_at !== next.ended_at;
 }
 
 function mapTaskSignature(tasks) {
@@ -906,6 +924,7 @@ function renderMapWorkspace() {
         </div>
         <aside class="map-side-panel">
           ${renderHdMapEditor(detail)}
+          ${renderSectionGateEditor(detail)}
           ${renderLayerToggles()}
           ${renderMapInspector(detail)}
         </aside>
@@ -997,6 +1016,38 @@ function renderEditorCounts(lane) {
     `R ${lane.right_bound.length}`,
     `C ${lane.centerline.length}`,
   ].join(" / ");
+}
+
+function renderSectionGateEditor(detail) {
+  const editor = ensureSectionEditor(detail);
+  const lane = sectionEditorLane(detail);
+  const ready = Boolean(detail.hd_map?.exists && lane?.centerline?.length >= 2);
+  const selected = Boolean(editor.selectedGateId);
+  const status = !detail.hd_map?.exists ? "Need HD map" : !ready ? "Need centerline" : editor.dirty ? "Unsaved" : "Ready";
+  return `
+    <div class="inspector-block section-editor-block">
+      <div class="inspector-title-row">
+        <h4>Section Gates</h4>
+        <span id="section-editor-status" class="${ready ? (editor.dirty ? "dirty" : "ok") : "warn"}">${esc(status)}</span>
+      </div>
+      <div class="editor-actions">
+        <button class="${editor.enabled ? "primary" : ""}" onclick="toggleSectionEditor()" ${ready ? "" : "disabled"}>${editor.enabled ? "Editing" : "Edit"}</button>
+        <button id="section-editor-save" onclick="saveSectionGatesFromEditor()" ${editor.enabled && ready ? "" : "disabled"}>Save</button>
+        <button id="section-editor-delete" class="danger" onclick="deleteSelectedSectionGate()" ${editor.enabled && selected ? "" : "disabled"}>Delete Gate</button>
+      </div>
+      <div id="section-editor-counts" class="editor-counts">${renderSectionEditorCounts(detail)}</div>
+    </div>
+  `;
+}
+
+function renderSectionEditorCounts(detail) {
+  const gates = sectionGatesForDetail(detail) || detail.hd_map?.section_gates || [];
+  const gateCount = gates.length;
+  const lane = sectionEditorLane(detail);
+  const laneGateCount = gates.filter((gate) => !lane?.id || gate.lane_id === lane.id).length;
+  const sectionCount = lane?.closed_loop ? laneGateCount : Math.max(0, laneGateCount - 1);
+  const selected = state.sectionEditor.selectedGateId ? ` / selected ${state.sectionEditor.selectedGateId}` : "";
+  return `G ${gateCount} / S ${sectionCount}${selected}`;
 }
 
 function renderMapInspector(detail) {
@@ -1417,7 +1468,11 @@ async function selectTask(taskId, options = {}) {
     if (chunk) state.logText += chunk;
     if (payload.task) {
       const index = state.tasks.findIndex((item) => item.task_id === payload.task.task_id);
+      const previous = index >= 0 ? state.tasks[index] : null;
       if (index >= 0) state.tasks[index] = payload.task;
+      if (mapTaskFinishedSince(previous, payload.task)) {
+        refreshSelectedMapData({ preserveViewport: true }).catch(() => {});
+      }
     }
     updateLogOnly(chunk, append);
   };
@@ -1751,6 +1806,207 @@ function activeEditorLane() {
   return state.mapEditor.lanes[0];
 }
 
+function cloneSectionGate(gate) {
+  return {
+    id: gate.id || "gate_001",
+    lane_id: gate.lane_id || "",
+    s_m: Number(gate.s_m || 0),
+    line: cloneMapPolyline(gate.line || []).slice(0, 2),
+  };
+}
+
+function ensureSectionEditor(detail, options = {}) {
+  const mapPath = detail?.map?.path || "";
+  if (!mapPath) return state.sectionEditor;
+  if (options.force || state.sectionEditor.mapPath !== mapPath) {
+    state.sectionEditor = {
+      ...state.sectionEditor,
+      mapPath,
+      dirty: false,
+      selectedGateId: "",
+      gates: (detail.hd_map?.section_gates || []).map(cloneSectionGate),
+    };
+  }
+  return state.sectionEditor;
+}
+
+function sectionEditorLane(detail) {
+  const lanes = detail?.hd_map?.lanes || [];
+  return lanes.find((lane) => lane.primary) || lanes[0] || null;
+}
+
+function sectionGatesForDetail(detail) {
+  if (!state.sectionEditor.enabled || state.sectionEditor.mapPath !== detail?.map?.path) return null;
+  return state.sectionEditor.gates;
+}
+
+function updateSectionEditorChrome() {
+  const detail = state.selectedMapDetail;
+  if (!detail || state.sectionEditor.mapPath !== detail.map?.path) return;
+  const lane = sectionEditorLane(detail);
+  const ready = Boolean(detail.hd_map?.exists && lane?.centerline?.length >= 2);
+  const status = $("section-editor-status");
+  if (status) {
+    status.textContent = !detail.hd_map?.exists ? "Need HD map" : !ready ? "Need centerline" : state.sectionEditor.dirty ? "Unsaved" : "Ready";
+    status.className = ready ? (state.sectionEditor.dirty ? "dirty" : "ok") : "warn";
+  }
+  const save = $("section-editor-save");
+  if (save) save.disabled = !(state.sectionEditor.enabled && ready);
+  const del = $("section-editor-delete");
+  if (del) del.disabled = !(state.sectionEditor.enabled && state.sectionEditor.selectedGateId);
+  const counts = $("section-editor-counts");
+  if (counts) counts.textContent = renderSectionEditorCounts(detail);
+}
+
+function toggleSectionEditor() {
+  if (!state.selectedMapDetail) return;
+  ensureSectionEditor(state.selectedMapDetail);
+  state.sectionEditor.enabled = !state.sectionEditor.enabled;
+  if (state.sectionEditor.enabled) {
+    state.mapEditor.enabled = false;
+    state.mapEditor.dragging = null;
+    state.mapEditor.selected = null;
+    state.mapLayers.centerline = true;
+    state.mapLayers.section_gates = true;
+    state.mapLayers.section_labels = true;
+  }
+  state.sectionEditor.selectedGateId = "";
+  render();
+}
+
+function nextSectionGateId() {
+  const existing = new Set(state.sectionEditor.gates.map((gate) => gate.id));
+  let index = 1;
+  while (existing.has(`gate_${String(index).padStart(3, "0")}`)) index += 1;
+  return `gate_${String(index).padStart(3, "0")}`;
+}
+
+function projectPointToLane(point, lane) {
+  const centerline = lane?.centerline || [];
+  if (centerline.length < 2) return null;
+  let best = null;
+  let sBefore = 0;
+  const segmentCount = lane.closed_loop && centerline.length >= 3 ? centerline.length : centerline.length - 1;
+  for (let index = 0; index < segmentCount; index += 1) {
+    const start = centerline[index];
+    const end = centerline[(index + 1) % centerline.length];
+    const vx = Number(end[0]) - Number(start[0]);
+    const vy = Number(end[1]) - Number(start[1]);
+    const segmentLength = Math.hypot(vx, vy);
+    if (segmentLength <= 1.0e-9) continue;
+    const rawT = ((point[0] - start[0]) * vx + (point[1] - start[1]) * vy) / (segmentLength * segmentLength);
+    const t = Math.max(0, Math.min(1, rawT));
+    const projected = [Number(start[0]) + vx * t, Number(start[1]) + vy * t];
+    const distance = pointDistance(point, projected);
+    if (!best || distance < best.distance) {
+      best = { point: projected, distance, s_m: sBefore + segmentLength * t, direction: [vx / segmentLength, vy / segmentLength] };
+    }
+    sBefore += segmentLength;
+  }
+  return best;
+}
+
+function gateLineForLaneProjection(lane, projection) {
+  const laneLength = polylineWorldLength(lane.centerline || [], lane.closed_loop);
+  const fraction = laneLength > 1.0e-9 ? projection.s_m / laneLength : 0;
+  if ((lane.left_bound || []).length >= 2 && (lane.right_bound || []).length >= 2) {
+    return [
+      samplePolylineAt(lane.left_bound, fraction, lane.closed_loop),
+      samplePolylineAt(lane.right_bound, fraction, lane.closed_loop),
+    ];
+  }
+  const width = 0.5;
+  const normal = [-projection.direction[1], projection.direction[0]];
+  return [
+    [projection.point[0] + normal[0] * width, projection.point[1] + normal[1] * width],
+    [projection.point[0] - normal[0] * width, projection.point[1] - normal[1] * width],
+  ];
+}
+
+function nearestSectionGate(detail, pixel, hitRadius) {
+  const gates = sectionGatesForDetail(detail) || [];
+  const canvas = $("map-preview-canvas");
+  if (!canvas) return null;
+  const toPixel = mapPointProjector(detail, canvas.width, canvas.height);
+  let best = null;
+  for (const gate of gates) {
+    const line = (gate.line || []).map(toPixel);
+    if (line.length < 2) continue;
+    const midpoint = [(line[0][0] + line[1][0]) * 0.5, (line[0][1] + line[1][1]) * 0.5];
+    const distance = pointDistance(pixel, midpoint);
+    if (distance <= hitRadius && (!best || distance < best.distance)) best = { gate, distance };
+  }
+  return best?.gate || null;
+}
+
+function handleSectionEditorPointerDown(event) {
+  const detail = state.selectedMapDetail;
+  if (!detail || !state.sectionEditor.enabled || state.sectionEditor.mapPath !== detail.map?.path) return false;
+  if (event.button != null && event.button !== 0) return false;
+  event.preventDefault();
+  const { canvas, point, hitRadius } = canvasEventInfo(event);
+  const nearest = nearestSectionGate(detail, point, hitRadius * 1.3);
+  if (nearest) {
+    state.sectionEditor.selectedGateId = nearest.id;
+    updateSectionEditorChrome();
+    drawMapPreview();
+    return true;
+  }
+  const world = mapPixelToWorld(detail, canvas.width, canvas.height, point);
+  const lane = sectionEditorLane(detail);
+  const projection = world && lane ? projectPointToLane(world, lane) : null;
+  if (!projection || !lane) return false;
+  const resolution = Number(detail.raster?.resolution_m_per_px || 0);
+  const maxDistanceM = Math.max(0.25, hitRadius * (resolution || 0.02) * 2.0);
+  if (projection.distance > maxDistanceM) return false;
+  const gate = {
+    id: nextSectionGateId(),
+    lane_id: lane.id || detail.hd_map?.primary_lane_id || "lane_001",
+    s_m: projection.s_m,
+    line: gateLineForLaneProjection(lane, projection),
+  };
+  state.sectionEditor.gates.push(gate);
+  state.sectionEditor.gates.sort((a, b) => Number(a.s_m || 0) - Number(b.s_m || 0));
+  state.sectionEditor.selectedGateId = gate.id;
+  state.sectionEditor.dirty = true;
+  updateSectionEditorChrome();
+  drawMapPreview();
+  return true;
+}
+
+function deleteSelectedSectionGate() {
+  if (!state.selectedMapDetail || !state.sectionEditor.enabled || !state.sectionEditor.selectedGateId) return;
+  state.sectionEditor.gates = state.sectionEditor.gates.filter((gate) => gate.id !== state.sectionEditor.selectedGateId);
+  state.sectionEditor.selectedGateId = "";
+  state.sectionEditor.dirty = true;
+  updateSectionEditorChrome();
+  drawMapPreview();
+}
+
+async function saveSectionGatesFromEditor() {
+  const detail = state.selectedMapDetail;
+  if (!detail) return;
+  ensureSectionEditor(detail);
+  try {
+    const saved = await api("/api/maps/save-section-gates", {
+      method: "POST",
+      body: JSON.stringify({
+        map_dir: detail.map.path,
+        section_gates: state.sectionEditor.gates,
+      }),
+    });
+    state.selectedMapDetail = saved;
+    state.selectedMapPath = saved.map.path;
+    ensureSectionEditor(saved, { force: true });
+    state.sectionEditor.enabled = true;
+    state.sectionEditor.dirty = false;
+    toast("Section gates saved");
+    render();
+  } catch (error) {
+    toast(`Section gate save failed: ${error.message}`, "error");
+  }
+}
+
 function editorLanesForDetail(detail) {
   if (!state.mapEditor.enabled || state.mapEditor.mapPath !== detail?.map?.path) return null;
   return state.mapEditor.lanes;
@@ -1789,6 +2045,10 @@ function toggleHdMapEditor() {
   if (!state.selectedMapDetail) return;
   ensureMapEditor(state.selectedMapDetail);
   state.mapEditor.enabled = !state.mapEditor.enabled;
+  if (state.mapEditor.enabled) {
+    state.sectionEditor.enabled = false;
+    state.sectionEditor.selectedGateId = "";
+  }
   state.mapEditor.selected = null;
   state.mapEditor.dragging = null;
   render();
@@ -2115,6 +2375,7 @@ function nearestEditorPoint(detail, pixel, hitRadius) {
 }
 
 function handleMapEditorPointerDown(event) {
+  if (state.sectionEditor.enabled && handleSectionEditorPointerDown(event)) return;
   const detail = state.selectedMapDetail;
   if (!detail || !state.mapEditor.enabled || state.mapEditor.mapPath !== detail.map?.path) return;
   if (!mapEditorRasterReady(detail)) return;
@@ -2206,12 +2467,22 @@ function deleteNearestEditorPoint(event) {
 }
 
 function handleMapEditorDoubleClick(event) {
+  if (state.sectionEditor.enabled) {
+    event.preventDefault();
+    deleteSelectedSectionGate();
+    return;
+  }
   if (!state.mapEditor.enabled) return;
   event.preventDefault();
   deleteNearestEditorPoint(event);
 }
 
 function handleMapEditorContextMenu(event) {
+  if (state.sectionEditor.enabled) {
+    event.preventDefault();
+    deleteSelectedSectionGate();
+    return;
+  }
   if (!state.mapEditor.enabled) return;
   event.preventDefault();
   deleteNearestEditorPoint(event);
@@ -2270,6 +2541,46 @@ async function openMapWorkspace(path) {
   } catch (error) {
     toast(`Map load failed: ${error.message}`, "error");
     render();
+  }
+}
+
+function selectedMapReplacement(path) {
+  return state.maps.find((item) => item.path === path)
+    || state.maps.find((item) => item.path.startsWith(`${path}/`))
+    || state.maps.find((item) => path.startsWith(`${item.path}/`));
+}
+
+async function refreshSelectedMapData(options = {}) {
+  if (!state.selectedMapPath || selectedMapRefreshInFlight) return;
+  selectedMapRefreshInFlight = true;
+  const preserveAnchor = options.preserveViewport ? mapEditorViewportCenterAnchor() : null;
+  try {
+    const maps = await api("/api/maps/local");
+    state.maps = maps.maps || [];
+    const replacement = selectedMapReplacement(state.selectedMapPath);
+    if (replacement) state.selectedMapPath = replacement.path;
+    if (!state.selectedMapPath) return;
+
+    const detail = await api(apiPath("/api/maps/detail", { path: state.selectedMapPath }));
+    state.selectedMapDetail = detail;
+    state.selectedMapPath = detail.map.path;
+    const index = state.maps.findIndex((item) => item.path === detail.map.path);
+    if (index >= 0) state.maps[index] = detail.map;
+
+    if (options.render === false) {
+      updateTaskChrome();
+      updateMapEditorChrome();
+      drawMapPreview();
+    } else {
+      render();
+      if (preserveAnchor) {
+        requestAnimationFrame(() => requestAnimationFrame(() => restoreMapEditorZoomAnchor(preserveAnchor)));
+      }
+    }
+  } catch (error) {
+    console.warn("Selected map refresh failed", error);
+  } finally {
+    selectedMapRefreshInFlight = false;
   }
 }
 
@@ -2363,9 +2674,11 @@ function drawMapLayers(ctx, detail, width, height) {
     drawPolyline(ctx, (detail.raceline_csv?.points || []).map(toPixel), "#ff6d6d", 3, false);
   }
   if (state.mapLayers.section_gates) {
-    for (const gate of detail.hd_map?.section_gates || []) {
+    const gates = sectionGatesForDetail(detail) || detail.hd_map?.section_gates || [];
+    for (const gate of gates) {
       const line = (gate.line || []).map(toPixel);
-      drawPolyline(ctx, line, "#ffffff", 2, false);
+      const selected = state.sectionEditor.enabled && gate.id === state.sectionEditor.selectedGateId;
+      drawPolyline(ctx, line, selected ? "#57c7c2" : "#ffffff", selected ? 4 : 2, false);
       if (state.mapLayers.section_labels && line.length >= 2) {
         const x = (line[0][0] + line[1][0]) * 0.5;
         const y = (line[0][1] + line[1][1]) * 0.5;
@@ -2692,6 +3005,9 @@ window.toggleHdMapEditor = toggleHdMapEditor;
 window.setMapEditorField = setMapEditorField;
 window.toggleEditorClosedLoop = toggleEditorClosedLoop;
 window.toggleEditorCenterline = toggleEditorCenterline;
+window.toggleSectionEditor = toggleSectionEditor;
+window.deleteSelectedSectionGate = deleteSelectedSectionGate;
+window.saveSectionGatesFromEditor = saveSectionGatesFromEditor;
 window.zoomMapEditor = zoomMapEditor;
 window.resetMapEditorZoom = resetMapEditorZoom;
 window.handleMapEditorPointerDown = handleMapEditorPointerDown;
@@ -2723,12 +3039,19 @@ setInterval(() => {
   api("/api/tasks")
     .then(async (data) => {
       const nextTasks = data.tasks || [];
+      const mapTaskFinished = nextTasks.some((task) =>
+        mapTaskFinishedSince(state.tasks.find((item) => item.task_id === task.task_id), task),
+      );
       if (shouldRefreshMapsAfterTaskPoll(state.tasks, nextTasks)) {
         state.tasks = nextTasks;
         await refreshAll();
         return;
       }
       state.tasks = nextTasks;
+      if (mapTaskFinished && state.selectedMapPath) {
+        await refreshSelectedMapData({ preserveViewport: state.tab === "maps" });
+        return;
+      }
       if (state.tab === "maps" && state.selectedMapDetail) {
         updateTaskChrome();
         return;

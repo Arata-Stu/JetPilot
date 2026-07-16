@@ -868,6 +868,10 @@ tr:last-child td {
   background: #12181b;
 }
 
+.section-editor-block {
+  background: #10171a;
+}
+
 .editor-actions,
 .editor-field-row,
 .editor-zoom-row,
@@ -875,6 +879,11 @@ tr:last-child td {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
+}
+
+.editor-actions button {
+  min-height: 42px;
+  white-space: normal;
 }
 
 .editor-field-row {

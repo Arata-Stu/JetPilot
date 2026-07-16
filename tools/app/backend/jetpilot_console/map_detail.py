@@ -436,6 +436,124 @@ def _write_centerline_csv(path: Path, lane: dict[str, Any]) -> None:
             )
 
 
+def _lanes_from_hd_data(data: dict[str, Any]) -> list[dict[str, Any]]:
+    lanes: list[dict[str, Any]] = []
+    raw_lanes = data.get("lanes")
+    if not isinstance(raw_lanes, list):
+        return lanes
+    for index, raw_lane in enumerate(raw_lanes, start=1):
+        if not isinstance(raw_lane, dict):
+            continue
+        lane_id = _sanitize_id(str(raw_lane.get("id") or ""), f"lane_{index:03d}")
+        lanes.append(
+            {
+                "id": lane_id,
+                "closed_loop": bool(raw_lane.get("closed_loop", True)),
+                "left_bound": _as_points(raw_lane.get("left_bound", [])),
+                "right_bound": _as_points(raw_lane.get("right_bound", [])),
+                "centerline": _as_points(raw_lane.get("centerline", [])),
+            }
+        )
+    return lanes
+
+
+def _payload_section_gates(value: Any, lane_ids: set[str]) -> list[dict[str, Any]]:
+    gates: list[dict[str, Any]] = []
+    if not isinstance(value, list):
+        return gates
+    fallback_lane_id = sorted(lane_ids)[0] if lane_ids else "lane_001"
+    used_ids: set[str] = set()
+    for index, raw_gate in enumerate(value, start=1):
+        if not isinstance(raw_gate, dict):
+            continue
+        gate_id = _sanitize_id(str(raw_gate.get("id") or ""), f"gate_{index:03d}")
+        if gate_id in used_ids:
+            gate_id = f"gate_{index:03d}"
+        used_ids.add(gate_id)
+        lane_id = _sanitize_id(str(raw_gate.get("lane_id") or ""), fallback_lane_id)
+        if lane_ids and lane_id not in lane_ids:
+            lane_id = fallback_lane_id
+        line = _payload_points(raw_gate.get("line"))[:2]
+        if len(line) < 2:
+            continue
+        gates.append(
+            {
+                "id": gate_id,
+                "lane_id": lane_id,
+                "s_m": _as_float(raw_gate.get("s_m"), 0.0),
+                "line": line,
+            }
+        )
+    return sorted(gates, key=lambda gate: (str(gate["lane_id"]), float(gate["s_m"]), str(gate["id"])))
+
+
+def _section_preserve_key(section: dict[str, Any]) -> tuple[str, str, str]:
+    return (
+        str(section.get("lane_id") or ""),
+        str(section.get("start_gate_id") or ""),
+        str(section.get("end_gate_id") or ""),
+    )
+
+
+def _build_sections_for_gates(
+    previous_sections: Any,
+    gates: list[dict[str, Any]],
+    lanes: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    preserved: dict[tuple[str, str, str], dict[str, Any]] = {}
+    if isinstance(previous_sections, list):
+        for section in previous_sections:
+            if isinstance(section, dict):
+                preserved[_section_preserve_key(section)] = section
+
+    lane_by_id = {str(lane["id"]): lane for lane in lanes}
+    gates_by_lane: dict[str, list[dict[str, Any]]] = {}
+    for gate in gates:
+        gates_by_lane.setdefault(str(gate["lane_id"]), []).append(gate)
+
+    sections: list[dict[str, Any]] = []
+    section_index = 1
+    for lane_id, lane_gates in sorted(gates_by_lane.items()):
+        lane = lane_by_id.get(lane_id)
+        if lane is None or len(lane_gates) < 2:
+            continue
+        sorted_gates = sorted(lane_gates, key=lambda gate: float(gate["s_m"]))
+        closed_loop = bool(lane.get("closed_loop", True))
+        lane_length = _polyline_length(lane.get("centerline", []), closed_loop)
+        pair_count = len(sorted_gates) if closed_loop else len(sorted_gates) - 1
+        for index in range(pair_count):
+            start_gate = sorted_gates[index]
+            end_gate = sorted_gates[(index + 1) % len(sorted_gates)]
+            if not closed_loop and index + 1 >= len(sorted_gates):
+                continue
+            key = (lane_id, str(start_gate["id"]), str(end_gate["id"]))
+            previous = preserved.get(key, {})
+            section: dict[str, Any] = {
+                "id": str(previous.get("id") or f"section_{section_index:03d}"),
+                "lane_id": lane_id,
+                "start_gate_id": str(start_gate["id"]),
+                "end_gate_id": str(end_gate["id"]),
+                "start_s_m": float(start_gate["s_m"]),
+                "end_s_m": float(end_gate["s_m"]),
+            }
+            if closed_loop:
+                section["wrap"] = float(start_gate["s_m"]) > float(end_gate["s_m"])
+                section["lane_length_m"] = lane_length
+            for key_name in (
+                "speed_override_mps",
+                "speed_scale",
+                "class",
+                "policy",
+                "allow_overtake",
+                "note",
+            ):
+                if key_name in previous:
+                    section[key_name] = previous.get(key_name)
+            sections.append(section)
+            section_index += 1
+    return sections
+
+
 def _resolve_embedded_path(value: Any, base: Path) -> Path | None:
     if not value:
         return None
@@ -746,4 +864,46 @@ def save_hd_map(config: ConsoleConfig, payload: dict[str, Any]) -> dict[str, Any
     hd_map_path.parent.mkdir(parents=True, exist_ok=True)
     _write_hd_map_yaml(hd_map_path, raster, lanes, primary_lane_id, centerline_path, previous_data)
     _write_centerline_csv(centerline_path, primary_lane)
+    return build_map_detail(config, str(map_dir))
+
+
+def save_section_gates(config: ConsoleConfig, payload: dict[str, Any]) -> dict[str, Any]:
+    map_dir_value = str(payload.get("map_dir") or "")
+    if not map_dir_value:
+        raise ValueError("map_dir is required")
+    map_dir = resolve_allowed_path(config, map_dir_value)
+    if not map_dir.exists() or not map_dir.is_dir():
+        raise FileNotFoundError(f"map folder not found: {map_dir}")
+
+    name = map_dir.name
+    hd_map_path = map_dir / f"{name}_hd_map.yaml"
+    if not hd_map_path.exists():
+        raise FileNotFoundError("HD map YAML is required before editing section gates. Save the HD map first.")
+
+    data = load_yaml(hd_map_path)
+    raster = _raster_from_hd_map(hd_map_path, data)
+    if not raster:
+        raise ValueError("HD map source_raster metadata is missing. Re-save the HD map before editing section gates.")
+
+    lanes = _lanes_from_hd_data(data)
+    if not lanes:
+        raise ValueError("HD map has no lanes")
+    primary_lane_id = _sanitize_id(str(data.get("primary_lane_id") or ""), lanes[0]["id"])
+    lane_ids = {str(lane["id"]) for lane in lanes}
+    if primary_lane_id not in lane_ids:
+        primary_lane_id = lanes[0]["id"]
+
+    gates = _payload_section_gates(payload.get("section_gates"), lane_ids)
+    updated_data = dict(data)
+    updated_data["section_gates"] = gates
+    updated_data["sections"] = _build_sections_for_gates(data.get("sections"), gates, lanes)
+
+    exports = data.get("exports")
+    centerline_path = None
+    if isinstance(exports, dict):
+        centerline_path = _resolve_embedded_path(exports.get("primary_centerline_csv"), hd_map_path.parent)
+    if centerline_path is None:
+        centerline_path = map_dir / f"{name}_hd_map_centerline.csv"
+
+    _write_hd_map_yaml(hd_map_path, raster, lanes, primary_lane_id, centerline_path, updated_data)
     return build_map_detail(config, str(map_dir))
