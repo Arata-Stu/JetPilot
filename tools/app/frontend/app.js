@@ -181,11 +181,22 @@ async function refreshAll() {
   state.cameraTopicConfigs = cameraTopicConfigs.configs || [];
   state.localIps = localIps.ips || [];
   if (!state.fpv.host && state.localIps[0]) state.fpv.host = state.localIps[0];
+  let selectedMapReloadPath = null;
   if (state.selectedMapPath && !state.maps.some((item) => item.path === state.selectedMapPath)) {
-    state.selectedMapPath = null;
+    const replacement = state.maps.find((item) => item.path.startsWith(`${state.selectedMapPath}/`))
+      || state.maps.find((item) => state.selectedMapPath.startsWith(`${item.path}/`));
+    state.selectedMapPath = replacement?.path || null;
     state.selectedMapDetail = null;
+    selectedMapReloadPath = replacement?.path || null;
   }
   if (!state.selectedTaskId && state.tasks[0]) state.selectedTaskId = state.tasks[0].task_id;
+  if (selectedMapReloadPath) {
+    try {
+      state.selectedMapDetail = await api(apiPath("/api/maps/detail", { path: selectedMapReloadPath }));
+    } catch {
+      state.selectedMapDetail = null;
+    }
+  }
   render();
 }
 
@@ -383,7 +394,7 @@ function renderAutonomyPipeline() {
   const map = pipelineMap();
   const steps = pipelineSteps(map);
   const nextStep = steps.find((step) => step.status !== "done");
-  const mapName = map ? map.name : "No map selected yet";
+  const mapName = map ? mapDisplayName(map) : "No map selected yet";
   return `
     <section class="panel pipeline-panel">
       <div class="panel-header">
@@ -771,10 +782,12 @@ function mapList() {
         .map((map) => {
           const selected = state.selectedMapPath === map.path;
           const artifactKeys = ["cuvgl_map", "cuvslam_map", "hd_map", "centerline_csv", "raceline_csv", "line_preview"];
+          const title = mapDisplayName(map);
           return `
             <article class="map-list-item ${selected ? "selected" : ""}">
               <div class="map-list-main">
-                <strong>${esc(map.name)}</strong>
+                <strong title="${esc(map.name)}">${esc(title)}</strong>
+                ${title !== map.name ? `<span class="map-list-subtitle" title="${esc(map.name)}">${esc(map.name)}</span>` : ""}
                 <div class="path" title="${esc(map.path)}">${esc(map.path)}</div>
                 <div class="chips">${artifactKeys
                   .map((key) => `<span class="chip ${map.artifacts[key]?.exists ? "ok" : "missing"}">${artifactLabel(key)}</span>`)
@@ -795,6 +808,10 @@ function mapList() {
         .join("")}
     </div>
   `;
+}
+
+function mapDisplayName(map) {
+  return map?.display_name || map?.name || "map";
 }
 
 function artifactLabel(key) {
@@ -823,7 +840,7 @@ function renderMapWorkspace() {
     <div class="map-workspace">
       <div class="map-workspace-top">
         <div>
-          <h3>${esc(detail.map.name)}</h3>
+          <h3>${esc(mapDisplayName(detail.map))}</h3>
           <div class="path" title="${esc(detail.map.path)}">${esc(detail.map.path)}</div>
         </div>
         <div class="actions">
@@ -1798,15 +1815,29 @@ function mapEditorAnchorFromPoint(clientX, clientY) {
   };
 }
 
+function shellViewportCenter(shell) {
+  const rect = shell.getBoundingClientRect();
+  return {
+    x: rect.left + shell.clientWidth * 0.5,
+    y: rect.top + shell.clientHeight * 0.5,
+  };
+}
+
 function mapEditorViewportCenterAnchor() {
   const canvas = $("map-preview-canvas");
   const shell = canvas?.parentElement;
   if (!canvas || !shell) return null;
-  const shellRect = shell.getBoundingClientRect();
-  return mapEditorAnchorFromPoint(
-    shellRect.left + shell.clientWidth * 0.5,
-    shellRect.top + shell.clientHeight * 0.5,
-  );
+  const center = shellViewportCenter(shell);
+  return mapEditorAnchorFromPoint(center.x, center.y);
+}
+
+function scrollContentOffset(element, scroller) {
+  const elementRect = element.getBoundingClientRect();
+  const scrollerRect = scroller.getBoundingClientRect();
+  return {
+    x: elementRect.left - scrollerRect.left + scroller.scrollLeft,
+    y: elementRect.top - scrollerRect.top + scroller.scrollTop,
+  };
 }
 
 function restoreMapEditorZoomAnchor(anchor) {
@@ -1816,8 +1847,11 @@ function restoreMapEditorZoomAnchor(anchor) {
   if (!canvas || !shell) return;
   const rect = canvas.getBoundingClientRect();
   if (!rect.width || !rect.height) return;
-  shell.scrollLeft = Math.max(0, canvas.offsetLeft + anchor.sourceX * rect.width / canvas.width - anchor.viewportX);
-  shell.scrollTop = Math.max(0, canvas.offsetTop + anchor.sourceY * rect.height / canvas.height - anchor.viewportY);
+  const offset = scrollContentOffset(canvas, shell);
+  const targetLeft = offset.x + anchor.sourceX * rect.width / canvas.width - anchor.viewportX;
+  const targetTop = offset.y + anchor.sourceY * rect.height / canvas.height - anchor.viewportY;
+  shell.scrollLeft = Math.max(0, Math.min(targetLeft, shell.scrollWidth - shell.clientWidth));
+  shell.scrollTop = Math.max(0, Math.min(targetTop, shell.scrollHeight - shell.clientHeight));
 }
 
 function setMapEditorZoom(value, options = {}) {

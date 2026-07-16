@@ -72,6 +72,37 @@ def _looks_like_map_dir(path: Path) -> bool:
     return any(path.glob("*_hd_map.yaml")) or any(path.glob("*_raceline.csv"))
 
 
+def _map_dir_score(path: Path) -> int:
+    score = 0
+    if (path / "cuvgl_map").exists():
+        score += 10
+    if (path / "cuvslam_map").exists():
+        score += 10
+    if (path / "vslam_reference_snapshot.json").exists():
+        score += 5
+    if (path / "vslam_landmarks.yaml").exists():
+        score += 4
+    if (path / "vslam_landmarks.png").exists():
+        score += 4
+    if any(path.glob("*_hd_map.yaml")):
+        score += 20
+    if any(path.glob("*_hd_map_centerline.csv")):
+        score += 10
+    if any(path.glob("*_raceline.csv")):
+        score += 10
+    if any(path.glob("*_line_preview.png")):
+        score += 5
+    return score
+
+
+def _display_name(map_root: Path, map_dir: Path) -> str:
+    try:
+        parts = map_dir.relative_to(map_root).parts
+    except ValueError:
+        parts = ()
+    return parts[0] if len(parts) > 1 else map_dir.name
+
+
 def _candidate_map_dirs(map_root: Path, max_depth: int = 3) -> Iterable[Path]:
     if not map_root.exists():
         return []
@@ -90,9 +121,35 @@ def _candidate_map_dirs(map_root: Path, max_depth: int = 3) -> Iterable[Path]:
     return sorted(candidates)
 
 
+def _collapse_map_dirs(map_root: Path, candidates: Iterable[Path]) -> list[Path]:
+    grouped: dict[Path, list[Path]] = {}
+    for candidate in candidates:
+        try:
+            relative = candidate.relative_to(map_root)
+        except ValueError:
+            grouped.setdefault(candidate, []).append(candidate)
+            continue
+        top = map_root / relative.parts[0] if relative.parts else candidate
+        grouped.setdefault(top, []).append(candidate)
+
+    collapsed = []
+    for group in grouped.values():
+        collapsed.append(
+            max(
+                group,
+                key=lambda path: (
+                    _map_dir_score(path),
+                    _iso_mtime(path),
+                    len(path.parts),
+                ),
+            )
+        )
+    return sorted(collapsed, key=lambda path: (_display_name(map_root, path), str(path)))
+
+
 def scan_maps(map_root: Path) -> list[dict[str, object]]:
     maps: list[dict[str, object]] = []
-    for map_dir in _candidate_map_dirs(map_root):
+    for map_dir in _collapse_map_dirs(map_root, _candidate_map_dirs(map_root)):
         name = map_dir.name
         artifacts = {
             "cuvgl_map": _artifact(map_dir / "cuvgl_map"),
@@ -112,6 +169,7 @@ def scan_maps(map_root: Path) -> list[dict[str, object]]:
         maps.append(
             {
                 "name": name,
+                "display_name": _display_name(map_root, map_dir),
                 "path": str(map_dir),
                 "size_bytes": _dir_size(map_dir),
                 "modified_at": _iso_mtime(map_dir),

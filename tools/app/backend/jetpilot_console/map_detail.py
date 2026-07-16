@@ -599,7 +599,15 @@ def _read_xy_csv(path: Path, delimiter: str, x_index: int, y_index: int) -> dict
     }
 
 
-def _map_record(map_dir: Path) -> dict[str, Any]:
+def _display_name(map_root: Path, map_dir: Path) -> str:
+    try:
+        parts = map_dir.relative_to(map_root).parts
+    except ValueError:
+        parts = ()
+    return parts[0] if len(parts) > 1 else map_dir.name
+
+
+def _map_record(map_dir: Path, map_root: Path | None = None) -> dict[str, Any]:
     name = map_dir.name
     artifacts = {
         "cuvgl_map": _artifact(map_dir / "cuvgl_map"),
@@ -618,6 +626,7 @@ def _map_record(map_dir: Path) -> dict[str, Any]:
     )
     return {
         "name": name,
+        "display_name": _display_name(map_root, map_dir) if map_root is not None else name,
         "path": str(map_dir),
         "size_bytes": _dir_size(map_dir),
         "modified_at": _iso_mtime(map_dir),
@@ -656,7 +665,7 @@ def build_map_detail(config: ConsoleConfig, map_dir_value: str) -> dict[str, Any
     primary_lane = next((lane for lane in hd_map.get("lanes", []) if lane.get("primary")), None)
 
     return {
-        "map": _map_record(map_dir),
+        "map": _map_record(map_dir, config.map_root),
         "raster": raster,
         "preview_image_url": preview_image,
         "hd_map": hd_map,

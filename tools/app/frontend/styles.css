@@ -695,7 +695,7 @@ tr:last-child td {
 
 .map-list-item {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
   align-items: start;
   border: 1px solid var(--line);
@@ -716,7 +716,15 @@ tr:last-child td {
 }
 
 .map-list-main strong {
+  overflow-wrap: anywhere;
+  line-height: 1.25;
+}
+
+.map-list-subtitle {
   overflow: hidden;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -724,9 +732,13 @@ tr:last-child td {
 .map-list-actions {
   display: flex;
   flex-wrap: wrap;
-  justify-content: flex-end;
+  justify-content: flex-start;
   gap: 7px;
-  max-width: 220px;
+  max-width: none;
+}
+
+.map-list-main .path {
+  max-width: none;
 }
 
 .map-workspace {
