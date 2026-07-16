@@ -792,6 +792,69 @@ tr:last-child td {
   text-transform: uppercase;
 }
 
+.inspector-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.inspector-title-row span {
+  overflow: hidden;
+  max-width: 150px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 11px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inspector-title-row span.ok {
+  border-color: #2e6d4c;
+  color: #9ee3bd;
+}
+
+.inspector-title-row span.dirty {
+  border-color: #755d2b;
+  color: #f0cc75;
+}
+
+.inspector-title-row span.warn {
+  border-color: #754146;
+  color: #ffb7be;
+}
+
+.map-editor-block {
+  background: #12181b;
+}
+
+.editor-actions,
+.editor-field-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.editor-field-row {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.editor-field-row button.active {
+  border-color: #38658a;
+  background: #18314a;
+}
+
+.editor-counts {
+  overflow: hidden;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .layer-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

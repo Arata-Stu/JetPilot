@@ -22,7 +22,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from .config import ConsoleConfig
 from .indexes import scan_maps, scan_rosbags
-from .map_detail import build_map_detail, resolve_allowed_path
+from .map_detail import build_map_detail, resolve_allowed_path, save_hd_map
 from .map_pipeline import (
     build_vgl_vslam_script,
     generate_preview_script,
@@ -270,6 +270,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/maps/generate-preview":
             self._start_map_stage(body, "generate-preview")
             return
+        if path == "/api/maps/save-hd-map":
+            self._save_hd_map(body)
+            return
 
         self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
 
@@ -336,6 +339,16 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
         except Exception as exc:
             self._json({"error": f"failed to read map detail: {exc}"}, HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    def _save_hd_map(self, body: dict[str, Any]) -> None:
+        try:
+            self._json(save_hd_map(self.server.state.config, body))
+        except FileNotFoundError as exc:
+            self._json({"error": str(exc)}, HTTPStatus.NOT_FOUND)
+        except ValueError as exc:
+            self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+        except Exception as exc:
+            self._json({"error": f"failed to save HD map: {exc}"}, HTTPStatus.INTERNAL_SERVER_ERROR)
 
     def _local_file(self, query: dict[str, list[str]]) -> None:
         file_value = query.get("path", [""])[0]

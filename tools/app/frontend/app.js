@@ -17,6 +17,16 @@ const state = {
     section_gates: true,
     section_labels: true,
   },
+  mapEditor: {
+    enabled: false,
+    mapPath: "",
+    activeField: "left_bound",
+    dirty: false,
+    selected: null,
+    dragging: null,
+    primaryLaneId: "lane_001",
+    lanes: [],
+  },
   selectedTaskId: null,
   fpv: {
     host: "",
@@ -49,6 +59,8 @@ const tabs = [
   ["jetson", "Jetson"],
   ["terminal", "Terminal"],
 ];
+
+const mapPreviewImages = new Map();
 
 const $ = (id) => document.getElementById(id);
 const esc = (value) =>
@@ -455,6 +467,7 @@ function mapTaskSignature(tasks) {
 }
 
 function shouldRefreshMapsAfterTaskPoll(previousTasks, nextTasks) {
+  if (state.tab === "maps") return false;
   const previousActive = previousTasks.some((task) => isMapTask(task) && isActiveTask(task));
   const nextActive = nextTasks.some((task) => isMapTask(task) && isActiveTask(task));
   return previousActive || nextActive || mapTaskSignature(previousTasks) !== mapTaskSignature(nextTasks);
@@ -770,6 +783,7 @@ function mapList() {
                 ${map.complete_runtime_bundle ? `<span class="status success">runtime ready</span>` : `<span class="status failed">incomplete</span>`}
                 <button class="primary" onclick="openMapWorkspace(${js(map.path)})">${selected ? "Viewing" : "Open"}</button>
                 <button onclick="copyText(${js(map.path)})">Copy</button>
+                <button onclick="copyHdMapEditorCommand(${js(map.path)})">Editor Cmd</button>
                 <button onclick="runMapStage('prepare-hd-raster', ${js(map.path)})">Raster</button>
                 <button onclick="runMapStage('generate-raceline', ${js(map.path)})">Raceline</button>
                 <button onclick="runMapStage('generate-preview', ${js(map.path)})">Preview</button>
@@ -813,6 +827,7 @@ function renderMapWorkspace() {
         </div>
         <div class="actions">
           <button onclick="runMapStage('prepare-hd-raster', ${js(detail.map.path)})">Raster</button>
+          <button onclick="copyHdMapEditorCommand(${js(detail.map.path)})">Editor Cmd</button>
           <button onclick="runMapStage('generate-raceline', ${js(detail.map.path)})">Raceline</button>
           <button onclick="runMapStage('generate-preview', ${js(detail.map.path)})">Preview</button>
           <button onclick="fillTransferLocal(${js(detail.map.path)})">Transfer</button>
@@ -820,9 +835,20 @@ function renderMapWorkspace() {
       </div>
       <div class="map-preview-grid">
         <div class="map-preview-shell">
-          <canvas id="map-preview-canvas" width="900" height="620"></canvas>
+          <canvas
+            id="map-preview-canvas"
+            width="900"
+            height="620"
+            onpointerdown="handleMapEditorPointerDown(event)"
+            onpointermove="handleMapEditorPointerMove(event)"
+            onpointerup="handleMapEditorPointerUp(event)"
+            onpointerleave="handleMapEditorPointerUp(event)"
+            ondblclick="handleMapEditorDoubleClick(event)"
+            oncontextmenu="handleMapEditorContextMenu(event)"
+          ></canvas>
         </div>
         <aside class="map-side-panel">
+          ${renderHdMapEditor(detail)}
           ${renderLayerToggles()}
           ${renderMapInspector(detail)}
         </aside>
@@ -857,6 +883,51 @@ function renderLayerToggles() {
       </div>
     </div>
   `;
+}
+
+function renderHdMapEditor(detail) {
+  const editor = ensureMapEditor(detail);
+  const lane = activeEditorLane();
+  const rasterReady = mapEditorRasterReady(detail);
+  const issue = editorLaneIssue(lane);
+  const selected = Boolean(editor.selected);
+  const status = !rasterReady ? "Raster required" : issue || (editor.dirty ? "Unsaved" : "Ready");
+  const canSave = editor.enabled && rasterReady && !issue;
+  return `
+    <div class="inspector-block map-editor-block">
+      <div class="inspector-title-row">
+        <h4>HD Map Edit</h4>
+        <span id="map-editor-status" class="${issue || !rasterReady ? "warn" : editor.dirty ? "dirty" : "ok"}">${esc(status)}</span>
+      </div>
+      <div class="editor-actions">
+        <button class="${editor.enabled ? "primary" : ""}" onclick="toggleHdMapEditor()">${editor.enabled ? "Editing" : "Edit"}</button>
+        <button onclick="saveHdMapFromEditor()" ${canSave ? "" : "disabled"}>Save</button>
+        <button class="danger" onclick="deleteSelectedEditorPoint()" ${editor.enabled && selected ? "" : "disabled"}>Delete Pt</button>
+      </div>
+      <div class="editor-field-row">
+        ${editorFieldButton("left_bound", "Left")}
+        ${editorFieldButton("right_bound", "Right")}
+      </div>
+      <label class="layer-toggle">
+        <input type="checkbox" ${lane.closed_loop ? "checked" : ""} onchange="toggleEditorClosedLoop(this.checked)" ${editor.enabled ? "" : "disabled"} />
+        <span>Closed loop</span>
+      </label>
+      <div id="map-editor-counts" class="editor-counts">${renderEditorCounts(lane)}</div>
+    </div>
+  `;
+}
+
+function editorFieldButton(field, label) {
+  const active = state.mapEditor.activeField === field;
+  return `<button class="${active ? "active" : ""}" onclick="setMapEditorField(${js(field)})" ${state.mapEditor.enabled ? "" : "disabled"}>${esc(label)}</button>`;
+}
+
+function renderEditorCounts(lane) {
+  return [
+    `L ${lane.left_bound.length}`,
+    `R ${lane.right_bound.length}`,
+    `C ${lane.centerline.length}`,
+  ].join(" / ");
 }
 
 function renderMapInspector(detail) {
@@ -1524,6 +1595,439 @@ function copyMapBuildCommand() {
   copyText(`jetpilot_map build-vgl-vslam --rosbag ${sh(rosbag)} --map-dir ${sh(mapDir)} --steps ${sh(steps)}${topicArg}`);
 }
 
+function mapNameFromPath(mapPath) {
+  const parts = trimTrailingSlash(mapPath).split("/").filter(Boolean);
+  return parts[parts.length - 1] || "map";
+}
+
+function hdMapEditorCommand(mapPath) {
+  const cleanPath = trimTrailingSlash(mapPath);
+  const mapName = mapNameFromPath(cleanPath);
+  const python = state.config?.python_bin || "python3";
+  const pythonWs = trimTrailingSlash(state.config?.python_ws || "python_ws");
+  return [
+    sh(python),
+    sh(`${pythonWs}/map_tools/hd_map_editor.py`),
+    "--map-yaml",
+    sh(`${cleanPath}/vslam_landmarks.yaml`),
+    "--output",
+    sh(`${cleanPath}/${mapName}_hd_map.yaml`),
+    "--centerline-output",
+    sh(`${cleanPath}/${mapName}_hd_map_centerline.csv`),
+  ].join(" ");
+}
+
+function copyHdMapEditorCommand(mapPath) {
+  copyText(hdMapEditorCommand(mapPath), "HD map editor command copied");
+}
+
+function cloneMapPoint(point) {
+  return [Number(point?.[0] || 0), Number(point?.[1] || 0)];
+}
+
+function cloneMapPolyline(points = []) {
+  return points
+    .filter((point) => Array.isArray(point) && point.length >= 2)
+    .map(cloneMapPoint)
+    .filter((point) => Number.isFinite(point[0]) && Number.isFinite(point[1]));
+}
+
+function defaultEditorLane() {
+  return {
+    id: "lane_001",
+    primary: true,
+    closed_loop: true,
+    left_bound: [],
+    right_bound: [],
+    centerline: [],
+  };
+}
+
+function laneForEditorFromDetail(detail) {
+  const lanes = detail?.hd_map?.lanes || [];
+  const source = lanes.find((lane) => lane.primary) || lanes[0];
+  if (!source) return defaultEditorLane();
+  return {
+    id: source.id || "lane_001",
+    primary: true,
+    closed_loop: source.closed_loop !== false,
+    left_bound: cloneMapPolyline(source.left_bound || []),
+    right_bound: cloneMapPolyline(source.right_bound || []),
+    centerline: cloneMapPolyline(source.centerline || []),
+  };
+}
+
+function ensureMapEditor(detail, options = {}) {
+  const mapPath = detail?.map?.path || "";
+  if (!mapPath) return state.mapEditor;
+  if (options.force || state.mapEditor.mapPath !== mapPath || !state.mapEditor.lanes.length) {
+    const lane = laneForEditorFromDetail(detail);
+    state.mapEditor = {
+      ...state.mapEditor,
+      mapPath,
+      dirty: false,
+      selected: null,
+      dragging: null,
+      primaryLaneId: lane.id,
+      lanes: [lane],
+    };
+  }
+  return state.mapEditor;
+}
+
+function activeEditorLane() {
+  if (!state.mapEditor.lanes.length) state.mapEditor.lanes = [defaultEditorLane()];
+  return state.mapEditor.lanes[0];
+}
+
+function editorLanesForDetail(detail) {
+  if (!state.mapEditor.enabled || state.mapEditor.mapPath !== detail?.map?.path) return null;
+  return state.mapEditor.lanes;
+}
+
+function mapEditorRasterReady(detail) {
+  const raster = detail?.raster || {};
+  return Boolean(raster.resolution_m_per_px && raster.width && raster.height);
+}
+
+function editorLaneIssue(lane) {
+  if (!lane) return "No lane";
+  const boundPoints = lane.closed_loop ? 3 : 2;
+  const centerlinePoints = lane.closed_loop ? 3 : 2;
+  if ((lane.left_bound || []).length < boundPoints) return `Left needs ${boundPoints}`;
+  if ((lane.right_bound || []).length < boundPoints) return `Right needs ${boundPoints}`;
+  if ((lane.centerline || []).length < centerlinePoints) return `Center needs ${centerlinePoints}`;
+  return "";
+}
+
+function setMapEditorField(field) {
+  if (!["left_bound", "right_bound"].includes(field)) return;
+  state.mapEditor.activeField = field;
+  render();
+}
+
+function toggleHdMapEditor() {
+  if (!state.selectedMapDetail) return;
+  ensureMapEditor(state.selectedMapDetail);
+  state.mapEditor.enabled = !state.mapEditor.enabled;
+  state.mapEditor.selected = null;
+  state.mapEditor.dragging = null;
+  render();
+}
+
+function toggleEditorClosedLoop(checked) {
+  if (!state.selectedMapDetail || !state.mapEditor.enabled) return;
+  ensureMapEditor(state.selectedMapDetail);
+  const lane = activeEditorLane();
+  lane.closed_loop = Boolean(checked);
+  regenerateEditorCenterline(lane);
+  markMapEditorDirty();
+  render();
+}
+
+function markMapEditorDirty() {
+  state.mapEditor.dirty = true;
+  updateMapEditorChrome();
+}
+
+function updateMapEditorChrome() {
+  const detail = state.selectedMapDetail;
+  if (!detail || state.mapEditor.mapPath !== detail.map?.path) return;
+  const lane = activeEditorLane();
+  const status = $("map-editor-status");
+  if (status) {
+    const rasterReady = mapEditorRasterReady(detail);
+    const issue = editorLaneIssue(lane);
+    status.textContent = !rasterReady ? "Raster required" : issue || (state.mapEditor.dirty ? "Unsaved" : "Ready");
+    status.className = issue || !rasterReady ? "warn" : state.mapEditor.dirty ? "dirty" : "ok";
+  }
+  const counts = $("map-editor-counts");
+  if (counts) counts.textContent = renderEditorCounts(lane);
+}
+
+function pointDistance(a, b) {
+  return Math.hypot(Number(a[0]) - Number(b[0]), Number(a[1]) - Number(b[1]));
+}
+
+function polylineWorldLength(points, closedLoop) {
+  if (points.length < 2) return 0;
+  let total = 0;
+  for (let index = 1; index < points.length; index += 1) total += pointDistance(points[index], points[index - 1]);
+  if (closedLoop && points.length >= 3) total += pointDistance(points[0], points[points.length - 1]);
+  return total;
+}
+
+function samplePolylineAt(points, fraction, closedLoop) {
+  if (!points.length) return [0, 0];
+  if (points.length === 1) return cloneMapPoint(points[0]);
+  const segments = [];
+  const segmentCount = closedLoop && points.length >= 3 ? points.length : points.length - 1;
+  let total = 0;
+  for (let index = 0; index < segmentCount; index += 1) {
+    const start = points[index];
+    const end = points[(index + 1) % points.length];
+    const length = pointDistance(start, end);
+    segments.push({ start, end, length });
+    total += length;
+  }
+  if (total <= 1.0e-9) return cloneMapPoint(points[0]);
+  const normalized = closedLoop ? ((fraction % 1) + 1) % 1 : Math.max(0, Math.min(1, fraction));
+  let target = normalized * total;
+  for (const segment of segments) {
+    if (target <= segment.length || segment === segments[segments.length - 1]) {
+      const ratio = segment.length <= 1.0e-9 ? 0 : target / segment.length;
+      return [
+        segment.start[0] + (segment.end[0] - segment.start[0]) * ratio,
+        segment.start[1] + (segment.end[1] - segment.start[1]) * ratio,
+      ];
+    }
+    target -= segment.length;
+  }
+  return cloneMapPoint(points[points.length - 1]);
+}
+
+function openRightBoundForEditor(left, right) {
+  if (left.length < 2 || right.length < 2) return right;
+  const forward = pointDistance(left[0], right[0]) + pointDistance(left[left.length - 1], right[right.length - 1]);
+  const reversed = pointDistance(left[0], right[right.length - 1]) + pointDistance(left[left.length - 1], right[0]);
+  return reversed < forward ? [...right].reverse() : right;
+}
+
+function closedRightBoundAlignment(left, right) {
+  if (left.length < 3 || right.length < 3) return { points: right, offset: 0 };
+  const probeCount = 64;
+  const fractions = Array.from({ length: probeCount }, (_, index) => index / probeCount);
+  const leftProbe = fractions.map((fraction) => samplePolylineAt(left, fraction, true));
+  let best = { points: right, offset: 0, score: Number.POSITIVE_INFINITY };
+  for (const candidate of [right, [...right].reverse()]) {
+    for (let shift = 0; shift < probeCount; shift += 1) {
+      const offset = shift / probeCount;
+      let score = 0;
+      for (let index = 0; index < fractions.length; index += 1) {
+        const point = samplePolylineAt(candidate, fractions[index] + offset, true);
+        const dx = leftProbe[index][0] - point[0];
+        const dy = leftProbe[index][1] - point[1];
+        score += dx * dx + dy * dy;
+      }
+      if (score < best.score) best = { points: candidate, offset, score };
+    }
+  }
+  return best;
+}
+
+function dedupePolyline(points) {
+  const result = [];
+  for (const point of points) {
+    const last = result[result.length - 1];
+    if (!last || pointDistance(last, point) > 1.0e-6) result.push(point);
+  }
+  return result;
+}
+
+function regenerateEditorCenterline(lane) {
+  const minimum = lane.closed_loop ? 3 : 2;
+  if (lane.left_bound.length < minimum || lane.right_bound.length < minimum) {
+    lane.centerline = [];
+    return;
+  }
+  const leftLength = polylineWorldLength(lane.left_bound, lane.closed_loop);
+  const rightLength = polylineWorldLength(lane.right_bound, lane.closed_loop);
+  const averageLength = 0.5 * (leftLength + rightLength);
+  const spacingCount = averageLength > 1.0e-9 ? Math.ceil(averageLength / 0.1) + (lane.closed_loop ? 0 : 1) : 0;
+  const sampleCount = Math.max(lane.closed_loop ? 8 : 2, lane.left_bound.length, lane.right_bound.length, spacingCount);
+  const count = Math.max(2, Math.min(2000, sampleCount));
+  const alignment = lane.closed_loop
+    ? closedRightBoundAlignment(lane.left_bound, lane.right_bound)
+    : { points: openRightBoundForEditor(lane.left_bound, lane.right_bound), offset: 0 };
+  const centerline = [];
+  for (let index = 0; index < count; index += 1) {
+    const fraction = lane.closed_loop ? index / count : index / Math.max(1, count - 1);
+    const left = samplePolylineAt(lane.left_bound, fraction, lane.closed_loop);
+    const right = samplePolylineAt(alignment.points, fraction + alignment.offset, lane.closed_loop);
+    centerline.push([(left[0] + right[0]) * 0.5, (left[1] + right[1]) * 0.5]);
+  }
+  lane.centerline = dedupePolyline(centerline);
+}
+
+function canvasEventInfo(event) {
+  const canvas = event.currentTarget || $("map-preview-canvas");
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = canvas.width / Math.max(1, rect.width);
+  const scaleY = canvas.height / Math.max(1, rect.height);
+  return {
+    canvas,
+    point: [(event.clientX - rect.left) * scaleX, (event.clientY - rect.top) * scaleY],
+    hitRadius: 12 * Math.max(scaleX, scaleY),
+  };
+}
+
+function mapPixelToWorld(detail, width, height, pixel) {
+  const raster = detail?.raster || {};
+  if (!raster.resolution_m_per_px || !raster.width || !raster.height) return null;
+  const origin = raster.origin_xy_yaw || [0, 0, 0];
+  const scaleX = width / raster.width;
+  const scaleY = height / raster.height;
+  const gridX = pixel[0] / scaleX;
+  const gridY = (raster.height - 1) - pixel[1] / scaleY;
+  const localX = gridX * raster.resolution_m_per_px;
+  const localY = gridY * raster.resolution_m_per_px;
+  const yaw = Number(origin[2] || 0);
+  const cos = Math.cos(yaw);
+  const sin = Math.sin(yaw);
+  return [
+    Number(origin[0] || 0) + cos * localX - sin * localY,
+    Number(origin[1] || 0) + sin * localX + cos * localY,
+  ];
+}
+
+function nearestEditorPoint(detail, pixel, hitRadius) {
+  const lane = activeEditorLane();
+  const canvas = $("map-preview-canvas");
+  if (!canvas) return null;
+  const toPixel = mapPointProjector(detail, canvas.width, canvas.height);
+  let best = null;
+  for (const field of ["left_bound", "right_bound"]) {
+    for (let index = 0; index < lane[field].length; index += 1) {
+      const candidate = toPixel(lane[field][index]);
+      const distance = pointDistance(candidate, pixel);
+      if (distance <= hitRadius && (!best || distance < best.distance)) {
+        best = { field, index, distance };
+      }
+    }
+  }
+  return best ? { field: best.field, index: best.index } : null;
+}
+
+function handleMapEditorPointerDown(event) {
+  const detail = state.selectedMapDetail;
+  if (!detail || !state.mapEditor.enabled || state.mapEditor.mapPath !== detail.map?.path) return;
+  if (!mapEditorRasterReady(detail)) return;
+  if (event.button != null && event.button !== 0) return;
+  event.preventDefault();
+  ensureMapEditor(detail);
+  const { canvas, point, hitRadius } = canvasEventInfo(event);
+  const lane = activeEditorLane();
+  const nearest = nearestEditorPoint(detail, point, hitRadius);
+  if (nearest) {
+    state.mapEditor.activeField = nearest.field;
+    state.mapEditor.selected = nearest;
+    state.mapEditor.dragging = nearest;
+  } else {
+    const world = mapPixelToWorld(detail, canvas.width, canvas.height, point);
+    if (!world) return;
+    const field = state.mapEditor.activeField;
+    lane[field].push(world);
+    state.mapEditor.selected = { field, index: lane[field].length - 1 };
+    state.mapEditor.dragging = { ...state.mapEditor.selected };
+    regenerateEditorCenterline(lane);
+    markMapEditorDirty();
+  }
+  if (canvas.setPointerCapture && event.pointerId != null) canvas.setPointerCapture(event.pointerId);
+  updateMapEditorChrome();
+  drawMapPreview();
+}
+
+function handleMapEditorPointerMove(event) {
+  const detail = state.selectedMapDetail;
+  const drag = state.mapEditor.dragging;
+  if (!detail || !drag || !state.mapEditor.enabled || state.mapEditor.mapPath !== detail.map?.path) return;
+  event.preventDefault();
+  const { canvas, point } = canvasEventInfo(event);
+  const world = mapPixelToWorld(detail, canvas.width, canvas.height, point);
+  if (!world) return;
+  const lane = activeEditorLane();
+  if (!lane[drag.field]?.[drag.index]) return;
+  lane[drag.field][drag.index] = world;
+  regenerateEditorCenterline(lane);
+  markMapEditorDirty();
+  drawMapPreview();
+}
+
+function handleMapEditorPointerUp(event) {
+  if (!state.mapEditor.dragging) return;
+  state.mapEditor.dragging = null;
+  const canvas = event.currentTarget || $("map-preview-canvas");
+  if (canvas?.releasePointerCapture && event.pointerId != null) {
+    try {
+      canvas.releasePointerCapture(event.pointerId);
+    } catch {
+      // Pointer capture may already be released by the browser.
+    }
+  }
+  render();
+}
+
+function deleteEditorPoint(target) {
+  if (!target) return false;
+  const lane = activeEditorLane();
+  if (!lane[target.field] || !lane[target.field][target.index]) return false;
+  lane[target.field].splice(target.index, 1);
+  state.mapEditor.selected = null;
+  state.mapEditor.dragging = null;
+  regenerateEditorCenterline(lane);
+  markMapEditorDirty();
+  return true;
+}
+
+function deleteSelectedEditorPoint() {
+  if (!state.selectedMapDetail || !state.mapEditor.enabled) return;
+  if (deleteEditorPoint(state.mapEditor.selected)) render();
+}
+
+function deleteNearestEditorPoint(event) {
+  const detail = state.selectedMapDetail;
+  if (!detail || !state.mapEditor.enabled || state.mapEditor.mapPath !== detail.map?.path) return;
+  const { point, hitRadius } = canvasEventInfo(event);
+  const nearest = nearestEditorPoint(detail, point, hitRadius * 1.3);
+  if (deleteEditorPoint(nearest)) render();
+}
+
+function handleMapEditorDoubleClick(event) {
+  if (!state.mapEditor.enabled) return;
+  event.preventDefault();
+  deleteNearestEditorPoint(event);
+}
+
+function handleMapEditorContextMenu(event) {
+  if (!state.mapEditor.enabled) return;
+  event.preventDefault();
+  deleteNearestEditorPoint(event);
+}
+
+async function saveHdMapFromEditor() {
+  const detail = state.selectedMapDetail;
+  if (!detail) return;
+  ensureMapEditor(detail);
+  const lane = activeEditorLane();
+  const issue = editorLaneIssue(lane);
+  if (issue) {
+    toast(issue, "error");
+    return;
+  }
+  const wasEnabled = state.mapEditor.enabled;
+  try {
+    const saved = await api("/api/maps/save-hd-map", {
+      method: "POST",
+      body: JSON.stringify({
+        map_dir: detail.map.path,
+        primary_lane_id: state.mapEditor.primaryLaneId,
+        lanes: state.mapEditor.lanes,
+      }),
+    });
+    state.selectedMapDetail = saved;
+    state.selectedMapPath = saved.map.path;
+    const mapIndex = state.maps.findIndex((item) => item.path === saved.map.path);
+    if (mapIndex >= 0) state.maps[mapIndex] = saved.map;
+    ensureMapEditor(saved, { force: true });
+    state.mapEditor.enabled = wasEnabled;
+    state.mapEditor.dirty = false;
+    toast("HD map saved");
+    render();
+  } catch (error) {
+    toast(`HD map save failed: ${error.message}`, "error");
+  }
+}
+
 async function runMapStage(stage, mapDir) {
   const endpoint = `/api/maps/${stage}`;
   const result = await api(endpoint, { method: "POST", body: JSON.stringify({ map_dir: mapDir }) });
@@ -1581,10 +2085,18 @@ function drawMapPreview() {
     drawMapLayers(ctx, detail, canvas.width, canvas.height);
   };
   if (imageUrl) {
-    const image = new Image();
+    const cached = mapPreviewImages.get(imageUrl);
+    if (cached?.complete) {
+      draw(cached.naturalWidth ? cached : null);
+      return;
+    }
+    const image = cached || new Image();
     image.onload = () => draw(image);
     image.onerror = () => draw(null);
-    image.src = imageUrl;
+    if (!cached) {
+      mapPreviewImages.set(imageUrl, image);
+      image.src = imageUrl;
+    }
   } else {
     draw(null);
   }
@@ -1609,13 +2121,17 @@ function drawGrid(ctx, width, height) {
 
 function drawMapLayers(ctx, detail, width, height) {
   const toPixel = mapPointProjector(detail, width, height);
-  const lanes = detail.hd_map?.lanes || [];
+  const editorLanes = editorLanesForDetail(detail);
+  const lanes = editorLanes || detail.hd_map?.lanes || [];
   for (const lane of lanes) {
     if (state.mapLayers.left_bound) drawPolyline(ctx, (lane.left_bound || []).map(toPixel), "#45c478", 3, lane.closed_loop);
     if (state.mapLayers.right_bound) drawPolyline(ctx, (lane.right_bound || []).map(toPixel), "#d878d8", 3, lane.closed_loop);
     if (state.mapLayers.centerline) drawPolyline(ctx, (lane.centerline || []).map(toPixel), "#e7c84b", lane.primary ? 4 : 2, lane.closed_loop);
   }
-  if (state.mapLayers.centerline) {
+  if (editorLanes) {
+    drawEditorPointHandles(ctx, detail, toPixel);
+  }
+  if (!editorLanes && state.mapLayers.centerline) {
     drawPolyline(ctx, (detail.centerline_csv?.points || []).map(toPixel), "#5aa8ff", 2, false);
   }
   if (state.mapLayers.raceline) {
@@ -1632,6 +2148,33 @@ function drawMapLayers(ctx, detail, width, height) {
       }
     }
   }
+}
+
+function drawEditorPointHandles(ctx, detail, toPixel) {
+  if (!state.mapEditor.enabled || state.mapEditor.mapPath !== detail?.map?.path) return;
+  const lane = activeEditorLane();
+  const selected = state.mapEditor.selected;
+  const fields = [
+    ["left_bound", "#45c478"],
+    ["right_bound", "#d878d8"],
+  ];
+  ctx.save();
+  for (const [field, color] of fields) {
+    const points = lane[field] || [];
+    for (let index = 0; index < points.length; index += 1) {
+      const [x, y] = toPixel(points[index]);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+      const isSelected = selected?.field === field && selected?.index === index;
+      ctx.beginPath();
+      ctx.fillStyle = color;
+      ctx.strokeStyle = isSelected ? "#ffffff" : "rgba(8, 10, 12, 0.86)";
+      ctx.lineWidth = isSelected ? 3 : 2;
+      ctx.arc(x, y, isSelected ? 6 : 4.5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    }
+  }
+  ctx.restore();
 }
 
 function drawPolyline(ctx, points, color, width, closed) {
@@ -1919,6 +2462,16 @@ window.runMapStage = runMapStage;
 window.openMapWorkspace = openMapWorkspace;
 window.refreshSelectedMap = refreshSelectedMap;
 window.toggleMapLayer = toggleMapLayer;
+window.toggleHdMapEditor = toggleHdMapEditor;
+window.setMapEditorField = setMapEditorField;
+window.toggleEditorClosedLoop = toggleEditorClosedLoop;
+window.handleMapEditorPointerDown = handleMapEditorPointerDown;
+window.handleMapEditorPointerMove = handleMapEditorPointerMove;
+window.handleMapEditorPointerUp = handleMapEditorPointerUp;
+window.handleMapEditorDoubleClick = handleMapEditorDoubleClick;
+window.handleMapEditorContextMenu = handleMapEditorContextMenu;
+window.deleteSelectedEditorPoint = deleteSelectedEditorPoint;
+window.saveHdMapFromEditor = saveHdMapFromEditor;
 window.fillTransferLocal = fillTransferLocal;
 window.inspectJetson = inspectJetson;
 window.copyJetsonInspect = copyJetsonInspect;
@@ -1930,6 +2483,7 @@ window.startJetsonPull = startJetsonPull;
 window.startJetsonPush = startJetsonPush;
 window.copyPullCommand = copyPullCommand;
 window.copyPushCommand = copyPushCommand;
+window.copyHdMapEditorCommand = copyHdMapEditorCommand;
 
 refreshAll().catch((error) => {
   $("app").innerHTML = `<div class="content"><div class="notice">Failed to load JetPilot Console: ${esc(error.message)}</div></div>`;
@@ -1945,6 +2499,10 @@ setInterval(() => {
         return;
       }
       state.tasks = nextTasks;
+      if (state.tab === "maps" && state.selectedMapDetail) {
+        updateTaskChrome();
+        return;
+      }
       if (!isEditingField() && !logHistoryIsBeingRead()) render();
       else updateTaskChrome();
     })

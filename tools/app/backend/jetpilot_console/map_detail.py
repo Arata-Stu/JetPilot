@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import math
 import struct
 from ast import literal_eval
@@ -220,6 +221,219 @@ def _polyline_length(points: list[list[float]], closed: bool = False) -> float:
     if closed and len(points) >= 3:
         total += math.hypot(points[0][0] - points[-1][0], points[0][1] - points[-1][1])
     return total
+
+
+def _fmt_float(value: float) -> str:
+    normalized = 0.0 if abs(value) < 5.0e-13 else float(value)
+    return f"{normalized:.9g}"
+
+
+def _quote_yaml_string(value: str) -> str:
+    return json.dumps(value, ensure_ascii=True)
+
+
+def _sanitize_id(value: str, fallback: str) -> str:
+    allowed = [char for char in value.strip() if char.isalnum() or char in ("_", "-", ".")]
+    result = "".join(allowed)
+    return result or fallback
+
+
+def _payload_points(value: Any) -> list[list[float]]:
+    points: list[list[float]] = []
+    if not isinstance(value, list):
+        return points
+    for row in value:
+        if not isinstance(row, (list, tuple)) or len(row) < 2:
+            continue
+        try:
+            x = float(row[0])
+            y = float(row[1])
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(x) and math.isfinite(y):
+            points.append([x, y])
+    return points
+
+
+def _segment_distance(point: list[float], start: list[float], end: list[float]) -> float:
+    vx = end[0] - start[0]
+    vy = end[1] - start[1]
+    denom = vx * vx + vy * vy
+    if denom <= 1.0e-12:
+        return math.hypot(point[0] - start[0], point[1] - start[1])
+    t = ((point[0] - start[0]) * vx + (point[1] - start[1]) * vy) / denom
+    t = max(0.0, min(1.0, t))
+    closest_x = start[0] + vx * t
+    closest_y = start[1] + vy * t
+    return math.hypot(point[0] - closest_x, point[1] - closest_y)
+
+
+def _nearest_distance(point: list[float], polyline: list[list[float]], closed_loop: bool) -> float:
+    if not polyline:
+        return 0.0
+    if len(polyline) == 1:
+        return math.hypot(point[0] - polyline[0][0], point[1] - polyline[0][1])
+    segment_count = len(polyline) if closed_loop and len(polyline) >= 3 else len(polyline) - 1
+    return min(
+        _segment_distance(point, polyline[index], polyline[(index + 1) % len(polyline)])
+        for index in range(segment_count)
+    )
+
+
+def _lane_export_issue(lane: dict[str, Any]) -> str | None:
+    closed_loop = bool(lane.get("closed_loop", True))
+    bound_points = 3 if closed_loop else 2
+    centerline_points = 3 if closed_loop else 2
+    if len(lane.get("left_bound", [])) < bound_points:
+        return f"left bound needs at least {bound_points} points"
+    if len(lane.get("right_bound", [])) < bound_points:
+        return f"right bound needs at least {bound_points} points"
+    if len(lane.get("centerline", [])) < centerline_points:
+        return f"centerline needs at least {centerline_points} points"
+    return None
+
+
+def _append_world_points(lines: list[str], field_name: str, points: list[list[float]]) -> None:
+    if not points:
+        lines.append(f"    {field_name}: []")
+        return
+    lines.append(f"    {field_name}:")
+    for point in points:
+        lines.append(f"      - [{_fmt_float(point[0])}, {_fmt_float(point[1])}, 0.0]")
+
+
+def _yaml_scalar(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if value is None:
+        return "null"
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return _fmt_float(float(value))
+    return _quote_yaml_string(str(value))
+
+
+def _append_preserved_section_gates(lines: list[str], gates: Any) -> None:
+    if not isinstance(gates, list) or not gates:
+        return
+    lines.append("section_gates:")
+    for index, gate in enumerate(gates, start=1):
+        if not isinstance(gate, dict):
+            continue
+        gate_id = _sanitize_id(str(gate.get("id") or ""), f"gate_{index:03d}")
+        lane_id = _sanitize_id(str(gate.get("lane_id") or ""), "lane_001")
+        lines.append(f"  - id: {_quote_yaml_string(gate_id)}")
+        lines.append(f"    lane_id: {_quote_yaml_string(lane_id)}")
+        lines.append(f"    s_m: {_fmt_float(_as_float(gate.get('s_m'), 0.0))}")
+        line = _as_points(gate.get("line", []))[:2]
+        if line:
+            lines.append("    line:")
+            for point in line:
+                lines.append(f"      - [{_fmt_float(point[0])}, {_fmt_float(point[1])}, 0.0]")
+        else:
+            lines.append("    line: []")
+
+
+def _append_preserved_sections(lines: list[str], sections: Any) -> None:
+    if not isinstance(sections, list) or not sections:
+        return
+    keys = (
+        "id",
+        "lane_id",
+        "start_gate_id",
+        "end_gate_id",
+        "start_s_m",
+        "end_s_m",
+        "wrap",
+        "lane_length_m",
+        "speed_override_mps",
+        "speed_scale",
+        "class",
+        "policy",
+        "allow_overtake",
+        "note",
+    )
+    lines.append("sections:")
+    for index, section in enumerate(sections, start=1):
+        if not isinstance(section, dict):
+            continue
+        first = True
+        emitted = False
+        for key in keys:
+            if key not in section or section[key] is None:
+                continue
+            prefix = "  - " if first else "    "
+            lines.append(f"{prefix}{key}: {_yaml_scalar(section[key])}")
+            first = False
+            emitted = True
+        if not emitted:
+            lines.append(f"  - id: {_quote_yaml_string(f'section_{index:03d}')}")
+
+
+def _write_hd_map_yaml(
+    output_path: Path,
+    raster: dict[str, Any],
+    lanes: list[dict[str, Any]],
+    primary_lane_id: str,
+    centerline_csv_path: Path,
+    previous_data: dict[str, Any],
+) -> None:
+    origin = raster.get("origin_xy_yaw") or [0.0, 0.0, 0.0]
+    lines = [
+        "format: tamiya_local_hd_map_v1",
+        "frame_id: map",
+        "units: meter",
+        f"primary_lane_id: {_quote_yaml_string(primary_lane_id)}",
+        "source_raster:",
+        f"  map_yaml: {_quote_yaml_string(str(raster.get('map_yaml_path') or ''))}",
+        f"  image: {_quote_yaml_string(str(raster.get('image_path') or ''))}",
+        f"  resolution_m_per_px: {_fmt_float(_as_float(raster.get('resolution_m_per_px'), 0.0))}",
+        (
+            "  origin_xy_yaw: "
+            f"[{_fmt_float(_as_float(origin[0] if len(origin) > 0 else 0.0))}, "
+            f"{_fmt_float(_as_float(origin[1] if len(origin) > 1 else 0.0))}, "
+            f"{_fmt_float(_as_float(origin[2] if len(origin) > 2 else 0.0))}]"
+        ),
+        f"  image_size_px: [{int(raster.get('width') or 0)}, {int(raster.get('height') or 0)}]",
+        "exports:",
+        f"  primary_centerline_csv: {_quote_yaml_string(str(centerline_csv_path))}",
+        "lanes:",
+    ]
+    for lane in lanes:
+        lane_id = str(lane["id"])
+        lines.extend(
+            [
+                f"  - id: {_quote_yaml_string(lane_id)}",
+                f"    closed_loop: {'true' if lane.get('closed_loop', True) else 'false'}",
+            ]
+        )
+        _append_world_points(lines, "left_bound", lane["left_bound"])
+        _append_world_points(lines, "right_bound", lane["right_bound"])
+        _append_world_points(lines, "centerline", lane["centerline"])
+    _append_preserved_section_gates(lines, previous_data.get("section_gates"))
+    _append_preserved_sections(lines, previous_data.get("sections"))
+    output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _write_centerline_csv(path: Path, lane: dict[str, Any]) -> None:
+    issue = _lane_export_issue(lane)
+    if issue is not None:
+        raise ValueError(f"Lane {lane['id']} cannot export centerline CSV: {issue}.")
+    centerline = lane["centerline"]
+    left_bound = lane["left_bound"]
+    right_bound = lane["right_bound"]
+    closed_loop = bool(lane.get("closed_loop", True))
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        handle.write("# x_m,y_m,w_tr_right_m,w_tr_left_m\n")
+        writer = csv.writer(handle)
+        for point in centerline:
+            writer.writerow(
+                [
+                    f"{point[0]:.6f}",
+                    f"{point[1]:.6f}",
+                    f"{_nearest_distance(point, right_bound, closed_loop):.6f}",
+                    f"{_nearest_distance(point, left_bound, closed_loop):.6f}",
+                ]
+            )
 
 
 def _resolve_embedded_path(value: Any, base: Path) -> Path | None:
@@ -459,3 +673,68 @@ def build_map_detail(config: ConsoleConfig, map_dir_value: str) -> dict[str, Any
             "raceline_points": raceline["count"],
         },
     }
+
+
+def save_hd_map(config: ConsoleConfig, payload: dict[str, Any]) -> dict[str, Any]:
+    map_dir_value = str(payload.get("map_dir") or "")
+    if not map_dir_value:
+        raise ValueError("map_dir is required")
+    map_dir = resolve_allowed_path(config, map_dir_value)
+    if not map_dir.exists() or not map_dir.is_dir():
+        raise FileNotFoundError(f"map folder not found: {map_dir}")
+
+    name = map_dir.name
+    hd_map_path = map_dir / f"{name}_hd_map.yaml"
+    landmark_yaml_path = map_dir / "vslam_landmarks.yaml"
+    centerline_path = map_dir / f"{name}_hd_map_centerline.csv"
+
+    previous_data = load_yaml(hd_map_path) if hd_map_path.exists() else {}
+    raster = _raster_from_map_yaml(landmark_yaml_path)
+    if raster is None and hd_map_path.exists():
+        raster = _raster_from_hd_map(hd_map_path, previous_data)
+    if not raster:
+        raise FileNotFoundError("vslam_landmarks.yaml is required before editing the HD map. Run Raster first.")
+    if not raster.get("resolution_m_per_px") or not raster.get("width") or not raster.get("height"):
+        raise ValueError("raster metadata is incomplete. Re-run Raster before saving the HD map.")
+
+    raw_lanes = payload.get("lanes")
+    if not isinstance(raw_lanes, list) or not raw_lanes:
+        raise ValueError("at least one lane is required")
+
+    lanes: list[dict[str, Any]] = []
+    used_ids: set[str] = set()
+    for index, raw_lane in enumerate(raw_lanes, start=1):
+        if not isinstance(raw_lane, dict):
+            continue
+        fallback_id = f"lane_{index:03d}"
+        lane_id = _sanitize_id(str(raw_lane.get("id") or ""), fallback_id)
+        if lane_id in used_ids:
+            lane_id = fallback_id
+        used_ids.add(lane_id)
+        lanes.append(
+            {
+                "id": lane_id,
+                "closed_loop": bool(raw_lane.get("closed_loop", True)),
+                "left_bound": _payload_points(raw_lane.get("left_bound")),
+                "right_bound": _payload_points(raw_lane.get("right_bound")),
+                "centerline": _payload_points(raw_lane.get("centerline")),
+            }
+        )
+
+    if not lanes:
+        raise ValueError("at least one valid lane is required")
+
+    primary_lane_id = _sanitize_id(str(payload.get("primary_lane_id") or ""), lanes[0]["id"])
+    lane_by_id = {str(lane["id"]): lane for lane in lanes}
+    if primary_lane_id not in lane_by_id:
+        primary_lane_id = lanes[0]["id"]
+    primary_lane = lane_by_id[primary_lane_id]
+
+    output_issue = _lane_export_issue(primary_lane)
+    if output_issue is not None:
+        raise ValueError(f"Lane {primary_lane_id} cannot be saved for raceline export: {output_issue}.")
+
+    hd_map_path.parent.mkdir(parents=True, exist_ok=True)
+    _write_hd_map_yaml(hd_map_path, raster, lanes, primary_lane_id, centerline_path, previous_data)
+    _write_centerline_csv(centerline_path, primary_lane)
+    return build_map_detail(config, str(map_dir))

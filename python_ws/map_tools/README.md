@@ -2,6 +2,13 @@
 
 Utilities for creating and checking local HD map artifacts.
 
+## Browser HD map editor
+
+The JetPilot Console Maps workspace can edit the primary HD map lane directly
+on the landmark raster. It writes the same `<map_name>_hd_map.yaml` and
+`<map_name>_hd_map_centerline.csv` files as the Python editor, so the Raceline
+and Preview stages can run immediately after saving.
+
 ## HD map editor
 
 `hd_map_editor.py` opens a raster map YAML as the background and writes an

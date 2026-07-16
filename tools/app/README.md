@@ -53,6 +53,7 @@ Implemented in this MVP:
 - Staged map workflow task entry points:
   - VGL/VSLAM build
   - HD raster preparation
+  - browser HD map editing and save
   - raceline generation
   - preview generation
 - The Map Builder UI is tuned for the current VSLAM/VGL workflow. Occupancy-map
@@ -153,23 +154,27 @@ editor.
 ### HD Map Workspace
 
 - Browser canvas editor for the landmark raster.
+- Current editor scope:
+  - one primary lane
+  - left/right bound point add, move, and delete
+  - closed/open loop toggle
+  - centerline generation from bounds
+  - save `<map_name>_hd_map.yaml`
+  - save `<map_name>_hd_map_centerline.csv`
 - Layers:
   - landmark raster
-  - VSLAM path
   - left bound
   - right bound
   - generated centerline
   - generated raceline
+  - section gates
 - Right-side inspector:
-  - active lane
   - closed/open loop
-  - smoothing settings
-  - centerline spacing
-  - raceline parameters
   - artifact status
+  - lane and section summaries
 - Actions:
-  - save HD map YAML
-  - generate centerline CSV
+  - prepare landmark raster
+  - edit and save HD map YAML/centerline CSV
   - generate raceline
   - generate line preview
   - copy paths and commands
@@ -262,23 +267,20 @@ GET  /api/tasks
 GET  /api/tasks/{task_id}
 POST /api/tasks/{task_id}/stop
 GET  /api/tasks/{task_id}/log?tail=400
-WS   /api/tasks/{task_id}/stream
+SSE  /api/tasks/{task_id}/stream
 
 GET  /api/rosbags/local
-GET  /api/rosbags/jetson
 POST /api/transfers/jetson-to-local
 
 GET  /api/maps/local
-GET  /api/maps/jetson
+GET  /api/maps/detail?path=/workspaces/map/course_a
 GET  /api/map-builder/camera-topic-configs
 POST /api/maps/build-vgl-vslam
-POST /api/maps/{map_id}/prepare-hd-raster
-POST /api/maps/{map_id}/generate-raceline
-POST /api/maps/{map_id}/generate-preview
+POST /api/maps/prepare-hd-raster
+POST /api/maps/save-hd-map
+POST /api/maps/generate-raceline
+POST /api/maps/generate-preview
 POST /api/transfers/local-to-jetson
-
-GET  /api/hd-map/{map_id}
-PUT  /api/hd-map/{map_id}
 ```
 
 ## Pipeline Stages
@@ -291,7 +293,7 @@ restartable stages:
 2. Build VGL map and compute VSLAM map/snapshot
 3. Prepare landmark raster for editing
 4. Edit HD map in browser
-5. Generate centerline CSV
+5. Save HD map YAML and centerline CSV
 6. Generate raceline
 7. Generate preview image
 8. Transfer complete bundle to Jetson
@@ -339,19 +341,20 @@ Keep the HD map file format compatible with the current Python tools:
 - `centerline`
 - `exports.primary_centerline_csv`
 
-The first browser editor should implement:
+The browser editor currently implements:
 
-- pan and zoom
 - point add/move/delete
-- lane selection
 - left/right bound editing
 - centerline generation from bounds
 - save/load existing HD map YAML
-- undo/redo
-- copy path buttons
+- primary centerline CSV export
+- preservation of existing `section_gates` and `sections` blocks on save
 
 Then add:
 
+- pan and zoom
+- lane selection
+- undo/redo
 - curve assist
 - VSLAM path overlay
 - raceline overlay
