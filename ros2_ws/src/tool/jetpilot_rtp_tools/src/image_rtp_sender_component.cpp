@@ -144,7 +144,7 @@ std::string ImageRtpSenderComponent::build_pipeline_description(
 {
   std::ostringstream pipeline;
   pipeline
-    << "appsrc name=src is-live=true format=time block=false do-timestamp=false "
+    << "appsrc name=src is-live=true format=time block=false do-timestamp=true "
     << "caps=video/x-raw,format=" << format.gst_format
     << ",width=" << msg.width
     << ",height=" << msg.height
@@ -423,10 +423,9 @@ void ImageRtpSenderComponent::image_callback(const sensor_msgs::msg::Image::Cons
     return;
   }
 
-  const GstClockTime duration = gst_util_uint64_scale_int(GST_SECOND, 1, fps_);
-  GST_BUFFER_PTS(buffer) = frame_index_ * duration;
+  GST_BUFFER_PTS(buffer) = GST_CLOCK_TIME_NONE;
   GST_BUFFER_DTS(buffer) = GST_CLOCK_TIME_NONE;
-  GST_BUFFER_DURATION(buffer) = duration;
+  GST_BUFFER_DURATION(buffer) = gst_util_uint64_scale_int(GST_SECOND, 1, fps_);
   ++frame_index_;
 
   const GstFlowReturn result = gst_app_src_push_buffer(GST_APP_SRC(appsrc_), buffer);
