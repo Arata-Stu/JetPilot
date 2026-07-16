@@ -144,11 +144,7 @@ std::string ImageRtpSenderComponent::build_pipeline_description(
 {
   std::ostringstream pipeline;
   pipeline
-    << "appsrc name=src is-live=true format=time block=false do-timestamp=true "
-    << "caps=video/x-raw,format=" << format.gst_format
-    << ",width=" << msg.width
-    << ",height=" << msg.height
-    << ",framerate=" << fps_ << "/1 "
+    << "appsrc name=src "
     << "! queue leaky=downstream max-size-buffers=1 max-size-bytes=0 max-size-time=0 ";
 
   if (codec_ == "raw") {
@@ -251,8 +247,26 @@ bool ImageRtpSenderComponent::start_pipeline(
     return false;
   }
 
+  GstCaps * caps = gst_caps_new_simple(
+    "video/x-raw",
+    "format", G_TYPE_STRING, format.gst_format.c_str(),
+    "width", G_TYPE_INT, static_cast<int>(msg.width),
+    "height", G_TYPE_INT, static_cast<int>(msg.height),
+    "framerate", GST_TYPE_FRACTION, fps_, 1,
+    nullptr);
+  gst_app_src_set_caps(GST_APP_SRC(appsrc), caps);
+  gst_caps_unref(caps);
+
   gst_app_src_set_stream_type(GST_APP_SRC(appsrc), GST_APP_STREAM_TYPE_STREAM);
-  g_object_set(G_OBJECT(appsrc), "max-buffers", 1, nullptr);
+  g_object_set(
+    G_OBJECT(appsrc),
+    "is-live", TRUE,
+    "format", GST_FORMAT_TIME,
+    "block", FALSE,
+    "do-timestamp", TRUE,
+    "max-buffers", 1,
+    "max-bytes", 0,
+    nullptr);
   gst_app_src_set_latency(GST_APP_SRC(appsrc), 0, 0);
 
   const auto state_change = gst_element_set_state(pipeline, GST_STATE_PLAYING);
@@ -275,6 +289,9 @@ bool ImageRtpSenderComponent::start_pipeline(
   RCLCPP_INFO(
     get_logger(), "Started RTP pipeline: %s",
     pipeline_description.c_str());
+  RCLCPP_INFO(
+    get_logger(), "RTP input caps: video/x-raw,format=%s,width=%u,height=%u,framerate=%d/1",
+    format.gst_format.c_str(), msg.width, msg.height, fps_);
   return true;
 }
 
