@@ -15,6 +15,7 @@
   <exec_depend>jetpilot_operation</exec_depend>
   <exec_depend>jetpilot_teleop_tools</exec_depend>
   <exec_depend>jetpilot_rtp_tools</exec_depend>
+  <exec_depend>openeb_ros2</exec_depend>
   <exec_depend>pca9685_rc_driver</exec_depend>
   <exec_depend>rc_serial_reader</exec_depend>
   <exec_depend>jetpilot_vesc_interface</exec_depend>
