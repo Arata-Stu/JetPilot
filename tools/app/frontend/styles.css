@@ -571,6 +571,30 @@ tr:last-child td {
   white-space: nowrap;
 }
 
+.pipeline-map-chooser {
+  display: grid;
+  grid-template-columns: auto minmax(280px, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #11161a;
+  padding: 10px 12px;
+}
+
+.pipeline-map-chooser label,
+.pipeline-map-chooser span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.pipeline-map-chooser strong {
+  color: var(--soft);
+  font-size: 13px;
+}
+
 .pipeline-next {
   display: grid;
   grid-template-columns: minmax(220px, 0.42fr) minmax(0, 1fr);
@@ -846,7 +870,8 @@ tr:last-child td {
 
 .editor-actions,
 .editor-field-row,
-.editor-zoom-row {
+.editor-zoom-row,
+.editor-toggle-row {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
@@ -856,9 +881,18 @@ tr:last-child td {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.editor-field-row button {
+  min-height: 42px;
+  white-space: normal;
+}
+
 .editor-zoom-row {
   grid-template-columns: 42px minmax(0, 1fr) 42px auto;
   align-items: center;
+}
+
+.editor-toggle-row {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .editor-field-row button.active {

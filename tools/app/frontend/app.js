@@ -25,6 +25,7 @@ const state = {
     selected: null,
     dragging: null,
     zoom: 1,
+    showCenterline: true,
     primaryLaneId: "lane_001",
     lanes: [],
   },
@@ -406,6 +407,7 @@ function renderAutonomyPipeline() {
         <button onclick="setTab('maps')">Maps</button>
       </div>
       <div class="panel-body">
+        ${renderPipelineMapChooser(map)}
         <div class="pipeline-next">
           <div>
             <span>Next step</span>
@@ -419,6 +421,34 @@ function renderAutonomyPipeline() {
       </div>
     </section>
   `;
+}
+
+function renderPipelineMapChooser(map) {
+  if (!state.maps.length) {
+    return `<div class="pipeline-map-chooser"><span>Target map</span><strong>No map available yet</strong><button onclick="setTab('map-builder')">Map Builder</button></div>`;
+  }
+  const selectedPath = map?.path || "";
+  return `
+    <div class="pipeline-map-chooser">
+      <label for="pipeline-map-select">Target map</label>
+      <select id="pipeline-map-select" onchange="selectPipelineMap(this.value)">
+        ${state.maps
+          .map((item) => {
+            const label = mapOptionLabel(item);
+            return `<option value="${esc(item.path)}" ${item.path === selectedPath ? "selected" : ""}>${esc(label)}</option>`;
+          })
+          .join("")}
+      </select>
+      <button onclick="${selectedPath ? `openMapWorkspace(${js(selectedPath)})` : "setTab('maps')"}" ${selectedPath ? "" : "disabled"}>Open Target</button>
+    </div>
+  `;
+}
+
+function mapOptionLabel(map) {
+  const display = mapDisplayName(map);
+  const suffix = map.name && map.name !== display ? ` / ${map.name}` : "";
+  const stateLabel = map.complete_runtime_bundle ? "ready" : "incomplete";
+  return `${display}${suffix} - ${stateLabel}`;
 }
 
 function pipelineMap() {
@@ -435,6 +465,14 @@ function pipelineMap() {
   }
   if (!state.maps.length) return null;
   return [...state.maps].sort((a, b) => mapProgressScore(b) - mapProgressScore(a))[0];
+}
+
+function selectPipelineMap(path) {
+  const selected = state.maps.find((item) => item.path === path);
+  if (!selected) return;
+  state.selectedMapPath = selected.path;
+  if (state.selectedMapDetail?.map?.path !== selected.path) state.selectedMapDetail = null;
+  render();
 }
 
 function mapProgressScore(map) {
@@ -530,9 +568,9 @@ function pipelineSteps(map) {
       title: "Generate raceline",
       detail: "Builds the running line used by control.",
       status: hasRunningTask("generate-raceline") ? "running" : hasRaceline ? "done" : hasHdMap ? "ready" : "blocked",
-      next: hasRaceline ? "Generate a preview to visually confirm it." : "Generate the raceline after HD map lines exist.",
-      action: "Run Raceline",
-      onclick: mapPath ? `runMapStage('generate-raceline', ${js(mapPath)})` : "setTab('maps')",
+      next: hasRaceline ? "Open the workspace to see the red raceline overlay, or generate a preview image next." : "Generate the raceline after HD map lines exist.",
+      action: hasRaceline ? "View Raceline" : "Run Raceline",
+      onclick: mapPath ? (hasRaceline ? `openMapWorkspace(${js(mapPath)})` : `runMapStage('generate-raceline', ${js(mapPath)})`) : "setTab('maps')",
     },
     {
       title: "Review preview",
@@ -924,8 +962,8 @@ function renderHdMapEditor(detail) {
         <button id="map-editor-delete" class="danger" onclick="deleteSelectedEditorPoint()" ${editor.enabled && selected ? "" : "disabled"}>Delete Pt</button>
       </div>
       <div class="editor-field-row">
-        ${editorFieldButton("left_bound", "Left")}
-        ${editorFieldButton("right_bound", "Right")}
+        ${editorFieldButton("left_bound", "Left boundary")}
+        ${editorFieldButton("right_bound", "Right boundary")}
       </div>
       <div class="editor-zoom-row">
         <button onclick="zoomMapEditor(0.75)">-</button>
@@ -933,10 +971,16 @@ function renderHdMapEditor(detail) {
         <button onclick="zoomMapEditor(1.3333333333)">+</button>
         <span id="map-editor-zoom-value">${esc(mapEditorZoomLabel())}</span>
       </div>
-      <label class="layer-toggle">
-        <input id="map-editor-closed-loop" type="checkbox" ${lane.closed_loop ? "checked" : ""} onchange="toggleEditorClosedLoop(this.checked)" ${editor.enabled ? "" : "disabled"} />
-        <span>Closed loop</span>
-      </label>
+      <div class="editor-toggle-row">
+        <label class="layer-toggle">
+          <input id="map-editor-closed-loop" type="checkbox" ${lane.closed_loop ? "checked" : ""} onchange="toggleEditorClosedLoop(this.checked)" ${editor.enabled ? "" : "disabled"} />
+          <span>Closed loop</span>
+        </label>
+        <label class="layer-toggle">
+          <input id="map-editor-show-centerline" type="checkbox" ${editor.showCenterline ? "checked" : ""} onchange="toggleEditorCenterline(this.checked)" />
+          <span>Center line</span>
+        </label>
+      </div>
       <div id="map-editor-counts" class="editor-counts">${renderEditorCounts(lane)}</div>
     </div>
   `;
@@ -1761,6 +1805,12 @@ function toggleEditorClosedLoop(checked) {
   drawMapPreview();
 }
 
+function toggleEditorCenterline(checked) {
+  state.mapEditor.showCenterline = Boolean(checked);
+  updateMapEditorChrome();
+  drawMapPreview();
+}
+
 function markMapEditorDirty() {
   state.mapEditor.dirty = true;
   updateMapEditorChrome();
@@ -1794,6 +1844,8 @@ function updateMapEditorChrome() {
     closedLoop.checked = Boolean(lane.closed_loop);
     closedLoop.disabled = !state.mapEditor.enabled;
   }
+  const showCenterline = $("map-editor-show-centerline");
+  if (showCenterline) showCenterline.checked = Boolean(state.mapEditor.showCenterline);
   const counts = $("map-editor-counts");
   if (counts) counts.textContent = renderEditorCounts(lane);
   const zoom = $("map-editor-zoom-value");
@@ -2295,10 +2347,11 @@ function drawMapLayers(ctx, detail, width, height) {
   const toPixel = mapPointProjector(detail, width, height);
   const editorLanes = editorLanesForDetail(detail);
   const lanes = editorLanes || detail.hd_map?.lanes || [];
+  const showCenterline = state.mapLayers.centerline && (!editorLanes || state.mapEditor.showCenterline);
   for (const lane of lanes) {
     if (state.mapLayers.left_bound) drawPolyline(ctx, (lane.left_bound || []).map(toPixel), "#45c478", 3, lane.closed_loop);
     if (state.mapLayers.right_bound) drawPolyline(ctx, (lane.right_bound || []).map(toPixel), "#d878d8", 3, lane.closed_loop);
-    if (state.mapLayers.centerline) drawPolyline(ctx, (lane.centerline || []).map(toPixel), "#e7c84b", lane.primary ? 4 : 2, lane.closed_loop);
+    if (showCenterline) drawPolyline(ctx, (lane.centerline || []).map(toPixel), "#e7c84b", lane.primary ? 4 : 2, lane.closed_loop);
   }
   if (editorLanes) {
     drawEditorPointHandles(ctx, detail, toPixel);
@@ -2616,6 +2669,7 @@ window.copySelectedTaskCommand = copySelectedTaskCommand;
 window.copySelectedTaskLog = copySelectedTaskLog;
 window.stopTask = stopTask;
 window.runCustomCommand = runCustomCommand;
+window.selectPipelineMap = selectPipelineMap;
 window.startFpvViewer = startFpvViewer;
 window.copyFpvReceiverCommand = copyFpvReceiverCommand;
 window.copyFpvJetsonCommand = copyFpvJetsonCommand;
@@ -2637,6 +2691,7 @@ window.toggleMapLayer = toggleMapLayer;
 window.toggleHdMapEditor = toggleHdMapEditor;
 window.setMapEditorField = setMapEditorField;
 window.toggleEditorClosedLoop = toggleEditorClosedLoop;
+window.toggleEditorCenterline = toggleEditorCenterline;
 window.zoomMapEditor = zoomMapEditor;
 window.resetMapEditorZoom = resetMapEditorZoom;
 window.handleMapEditorPointerDown = handleMapEditorPointerDown;
