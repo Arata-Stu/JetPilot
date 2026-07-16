@@ -95,12 +95,12 @@ def add_visual_global_localization(args: lu.ArgumentContainer) -> list[lut.Actio
     params = {
         'num_cameras': num_cameras,
         'stereo_localizer_cam_ids': stereo_localizer_cam_ids,
-        'map_dir': str(args.vgl_map_dir),
-        'config_dir': str(args.vgl_config_dir),
-        'model_dir': str(args.vgl_model_dir),
-        'debug_dir': str(args.vgl_debug_dir),
-        'debug_map_raw_dir': str(args.vgl_debug_map_raw_dir),
-        'base_frame': str(args.vgl_base_frame),
+        'map_dir': args.vgl_map_dir,
+        'config_dir': args.vgl_config_dir,
+        'model_dir': args.vgl_model_dir,
+        'debug_dir': args.vgl_debug_dir,
+        'debug_map_raw_dir': args.vgl_debug_map_raw_dir,
+        'base_frame': args.vgl_base_frame,
         'use_sim_time': lut.ParameterValue(args.use_sim_time, value_type=bool),
     }
     

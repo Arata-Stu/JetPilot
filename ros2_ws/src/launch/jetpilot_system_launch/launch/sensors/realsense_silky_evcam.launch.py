@@ -42,7 +42,7 @@ def launch_sensor_kit(args: lu.ArgumentContainer) -> list[lut.Action]:
         actions.extend([
             lu.include(
                 'openeb_ros2',
-                str(args.silky_evcam_launch),
+                args.silky_evcam_launch,
                 launch_arguments={
                     'namespace': args.silky_evcam_namespace,
                     'serial': args.silky_evcam_serial,
