@@ -35,9 +35,8 @@ def add_nodes(args: lu.ArgumentContainer):
             output='screen',
             parameters=[{
                 'device_path': args.joy_device_path,
-                'publish_rate_hz': lut.ParameterValue(
-                    args.joy_autorepeat_rate, value_type=float),
-                'deadzone': lut.ParameterValue(args.joy_deadzone, value_type=float),
+                'publish_rate_hz': args.joy_autorepeat_rate,
+                'deadzone': args.joy_deadzone,
                 'prefer_evdev': lu.is_true(args.joy_prefer_evdev),
                 'use_sim_time': use_sim_time,
             }],
