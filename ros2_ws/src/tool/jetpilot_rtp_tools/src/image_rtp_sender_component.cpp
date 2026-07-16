@@ -145,6 +145,8 @@ std::string ImageRtpSenderComponent::build_pipeline_description(
   std::ostringstream pipeline;
   pipeline
     << "appsrc name=src "
+    << "! videoconvert "
+    << "! video/x-raw,format=RGB "
     << "! queue leaky=downstream max-size-buffers=1 max-size-bytes=0 max-size-time=0 ";
 
   if (codec_ == "raw") {
