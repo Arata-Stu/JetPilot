@@ -920,8 +920,8 @@ function renderHdMapEditor(detail) {
       </div>
       <div class="editor-actions">
         <button class="${editor.enabled ? "primary" : ""}" onclick="toggleHdMapEditor()">${editor.enabled ? "Editing" : "Edit"}</button>
-        <button onclick="saveHdMapFromEditor()" ${canSave ? "" : "disabled"}>Save</button>
-        <button class="danger" onclick="deleteSelectedEditorPoint()" ${editor.enabled && selected ? "" : "disabled"}>Delete Pt</button>
+        <button id="map-editor-save" onclick="saveHdMapFromEditor()" ${canSave ? "" : "disabled"}>Save</button>
+        <button id="map-editor-delete" class="danger" onclick="deleteSelectedEditorPoint()" ${editor.enabled && selected ? "" : "disabled"}>Delete Pt</button>
       </div>
       <div class="editor-field-row">
         ${editorFieldButton("left_bound", "Left")}
@@ -934,7 +934,7 @@ function renderHdMapEditor(detail) {
         <span id="map-editor-zoom-value">${esc(mapEditorZoomLabel())}</span>
       </div>
       <label class="layer-toggle">
-        <input type="checkbox" ${lane.closed_loop ? "checked" : ""} onchange="toggleEditorClosedLoop(this.checked)" ${editor.enabled ? "" : "disabled"} />
+        <input id="map-editor-closed-loop" type="checkbox" ${lane.closed_loop ? "checked" : ""} onchange="toggleEditorClosedLoop(this.checked)" ${editor.enabled ? "" : "disabled"} />
         <span>Closed loop</span>
       </label>
       <div id="map-editor-counts" class="editor-counts">${renderEditorCounts(lane)}</div>
@@ -944,7 +944,7 @@ function renderHdMapEditor(detail) {
 
 function editorFieldButton(field, label) {
   const active = state.mapEditor.activeField === field;
-  return `<button class="${active ? "active" : ""}" onclick="setMapEditorField(${js(field)})" ${state.mapEditor.enabled ? "" : "disabled"}>${esc(label)}</button>`;
+  return `<button id="map-editor-field-${esc(field)}" class="${active ? "active" : ""}" onclick="setMapEditorField(${js(field)})" ${state.mapEditor.enabled ? "" : "disabled"}>${esc(label)}</button>`;
 }
 
 function renderEditorCounts(lane) {
@@ -1738,7 +1738,7 @@ function editorLaneIssue(lane) {
 function setMapEditorField(field) {
   if (!["left_bound", "right_bound"].includes(field)) return;
   state.mapEditor.activeField = field;
-  render();
+  updateMapEditorChrome();
 }
 
 function toggleHdMapEditor() {
@@ -1757,7 +1757,8 @@ function toggleEditorClosedLoop(checked) {
   lane.closed_loop = Boolean(checked);
   regenerateEditorCenterline(lane);
   markMapEditorDirty();
-  render();
+  updateMapEditorChrome();
+  drawMapPreview();
 }
 
 function markMapEditorDirty() {
@@ -1769,12 +1770,29 @@ function updateMapEditorChrome() {
   const detail = state.selectedMapDetail;
   if (!detail || state.mapEditor.mapPath !== detail.map?.path) return;
   const lane = activeEditorLane();
+  const rasterReady = mapEditorRasterReady(detail);
+  const issue = editorLaneIssue(lane);
+  const selected = Boolean(state.mapEditor.selected);
   const status = $("map-editor-status");
   if (status) {
-    const rasterReady = mapEditorRasterReady(detail);
-    const issue = editorLaneIssue(lane);
     status.textContent = !rasterReady ? "Raster required" : issue || (state.mapEditor.dirty ? "Unsaved" : "Ready");
     status.className = issue || !rasterReady ? "warn" : state.mapEditor.dirty ? "dirty" : "ok";
+  }
+  const save = $("map-editor-save");
+  if (save) save.disabled = !(state.mapEditor.enabled && rasterReady && !issue);
+  const del = $("map-editor-delete");
+  if (del) del.disabled = !(state.mapEditor.enabled && selected);
+  for (const field of ["left_bound", "right_bound"]) {
+    const button = $(`map-editor-field-${field}`);
+    if (button) {
+      button.disabled = !state.mapEditor.enabled;
+      button.classList.toggle("active", state.mapEditor.activeField === field);
+    }
+  }
+  const closedLoop = $("map-editor-closed-loop");
+  if (closedLoop) {
+    closedLoop.checked = Boolean(lane.closed_loop);
+    closedLoop.disabled = !state.mapEditor.enabled;
   }
   const counts = $("map-editor-counts");
   if (counts) counts.textContent = renderEditorCounts(lane);
@@ -2100,7 +2118,8 @@ function handleMapEditorPointerUp(event) {
       // Pointer capture may already be released by the browser.
     }
   }
-  render();
+  updateMapEditorChrome();
+  drawMapPreview();
 }
 
 function deleteEditorPoint(target) {
@@ -2117,7 +2136,10 @@ function deleteEditorPoint(target) {
 
 function deleteSelectedEditorPoint() {
   if (!state.selectedMapDetail || !state.mapEditor.enabled) return;
-  if (deleteEditorPoint(state.mapEditor.selected)) render();
+  if (deleteEditorPoint(state.mapEditor.selected)) {
+    updateMapEditorChrome();
+    drawMapPreview();
+  }
 }
 
 function deleteNearestEditorPoint(event) {
@@ -2125,7 +2147,10 @@ function deleteNearestEditorPoint(event) {
   if (!detail || !state.mapEditor.enabled || state.mapEditor.mapPath !== detail.map?.path) return;
   const { point, hitRadius } = canvasEventInfo(event);
   const nearest = nearestEditorPoint(detail, point, hitRadius * 1.3);
-  if (deleteEditorPoint(nearest)) render();
+  if (deleteEditorPoint(nearest)) {
+    updateMapEditorChrome();
+    drawMapPreview();
+  }
 }
 
 function handleMapEditorDoubleClick(event) {
