@@ -19,6 +19,7 @@ import isaac_ros_launch_utils as lu
 import isaac_ros_launch_utils.all_types as lut
 from launch.conditions import IfCondition
 import os
+import yaml
 
 
 def localization_component_container(container_name: str, run_standalone: bool):
@@ -30,6 +31,25 @@ def localization_component_container(container_name: str, run_standalone: bool):
         output='screen',
         condition=IfCondition(lu.is_true(run_standalone)),
     )
+
+
+def camera_optical_frames_from_topic_config(topic_config_file: str) -> str:
+    if not topic_config_file or not os.path.exists(topic_config_file):
+        return 'realsense_infra1_optical_frame,realsense_infra2_optical_frame'
+
+    with open(topic_config_file, 'r', encoding='utf-8') as file:
+        config = yaml.safe_load(file) or {}
+
+    frames = []
+    for camera in config.get('stereo_cameras', []):
+        if not isinstance(camera, dict):
+            continue
+        for key in ('left_frame_id', 'right_frame_id'):
+            frame = camera.get(key)
+            if frame:
+                frames.append(str(frame))
+
+    return ','.join(frames) if frames else 'realsense_infra1_optical_frame,realsense_infra2_optical_frame'
 
 
 def add_nodes(args: lu.ArgumentContainer):
@@ -52,7 +72,7 @@ def add_nodes(args: lu.ArgumentContainer):
             args.run_standalone),
     ]
 
-    camera_optical_frames = 'realsense_infra1_optical_frame,realsense_infra2_optical_frame'
+    camera_optical_frames = camera_optical_frames_from_topic_config(args.vgl_topic_config_file)
     base_frame = args.localization_base_frame
     if enable_vgl:
         cuvgl_map_dir = os.path.join(args.map_dir, 'cuvgl_map') if args.map_dir else ''

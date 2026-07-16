@@ -1,0 +1,8 @@
+stereo_cameras:
+  - name: legacy_camera
+    left: /camera/left/image_raw
+    left_camera_info: /camera/left/camera_info
+    left_frame_id: camera_left_optical_frame
+    right: /camera/right/image_raw
+    right_camera_info: /camera/right/camera_info
+    right_frame_id: camera_right_optical_frame

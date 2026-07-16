@@ -4,6 +4,7 @@ import os
 
 import isaac_ros_launch_utils as lu
 import isaac_ros_launch_utils.all_types as lut
+from launch.conditions import IfCondition
 
 
 def workspace_param_path(filename: str, fallback_package: str, fallback_package_path: str) -> str:
@@ -16,13 +17,30 @@ def workspace_param_path(filename: str, fallback_package: str, fallback_package_
 
 def add_vehicle(args: lu.ArgumentContainer):
     return [
+        lu.Node(
+            name='vehicle_camera_static_transform_publisher',
+            package='tf2_ros',
+            executable='static_transform_publisher',
+            arguments=[
+                '--x', args.vehicle_description_camera_x,
+                '--y', args.vehicle_description_camera_y,
+                '--z', args.vehicle_description_camera_z,
+                '--roll', args.vehicle_description_camera_roll,
+                '--pitch', args.vehicle_description_camera_pitch,
+                '--yaw', args.vehicle_description_camera_yaw,
+                '--frame-id', args.vehicle_description_base_frame,
+                '--child-frame-id', args.vehicle_description_camera_frame,
+            ],
+            output='screen',
+            condition=IfCondition(args.publish_vehicle_description),
+        ),
         lu.include(
             str(args.vehicle_interface_pkg),
             str(args.vehicle_interface_launch),
             launch_arguments={
                 'vehicle_control_topic': args.vehicle_control_topic,
                 'driver_param': args.vehicle_driver_param,
-                'publish_description': args.publish_vehicle_description,
+                'publish_description': 'false',
                 'description_base_frame': args.vehicle_description_base_frame,
                 'description_camera_frame': args.vehicle_description_camera_frame,
                 'description_camera_x': args.vehicle_description_camera_x,
@@ -42,6 +60,12 @@ def add_vehicle(args: lu.ArgumentContainer):
             ', input: ',
             args.vehicle_control_topic,
         ]),
+        lu.log_info([
+            'Vehicle camera TF: ',
+            args.vehicle_description_base_frame,
+            ' -> ',
+            args.vehicle_description_camera_frame,
+        ], condition=IfCondition(args.publish_vehicle_description)),
     ]
 
 
