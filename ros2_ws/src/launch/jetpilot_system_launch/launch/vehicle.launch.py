@@ -16,6 +16,7 @@ def workspace_param_path(filename: str, fallback_package: str, fallback_package_
 
 
 def add_vehicle(args: lu.ArgumentContainer):
+    publish_description = str(lu.is_true(args.publish_vehicle_description)).lower()
     return [
         lu.Node(
             name='vehicle_camera_static_transform_publisher',
@@ -32,7 +33,7 @@ def add_vehicle(args: lu.ArgumentContainer):
                 '--child-frame-id', args.vehicle_description_camera_frame,
             ],
             output='screen',
-            condition=IfCondition(args.publish_vehicle_description),
+            condition=IfCondition(publish_description),
         ),
         lu.include(
             str(args.vehicle_interface_pkg),
@@ -65,7 +66,7 @@ def add_vehicle(args: lu.ArgumentContainer):
             args.vehicle_description_base_frame,
             ' -> ',
             args.vehicle_description_camera_frame,
-        ], condition=IfCondition(args.publish_vehicle_description)),
+        ], condition=IfCondition(publish_description)),
     ]
 
 
