@@ -34,7 +34,9 @@ const state = {
   logStickToEnd: true,
   logText: "",
   stream: null,
+  jetsonTarget: null,
   jetsonInspect: null,
+  jetsonInspectBusy: false,
 };
 
 const tabs = [
@@ -899,8 +901,11 @@ function renderJetson() {
 
 function renderJetsonTarget() {
   const config = state.config || {};
-  const host = state.jetsonInspect?.host || (config.jetson_ips || [])[0] || "";
-  const user = state.jetsonInspect?.user || config.jetson_user || "tamiya";
+  const target = state.jetsonTarget || {};
+  const host = target.host || state.jetsonInspect?.host || (config.jetson_ips || [])[0] || "";
+  const user = target.user || state.jetsonInspect?.user || config.jetson_user || "tamiya";
+  const mapRoot = target.map_root || config.jetson_map_root || "";
+  const recordRoot = target.record_root || config.jetson_record_root || "";
   return `
     <div class="form-grid jetson-target">
       <div class="field">
@@ -913,15 +918,18 @@ function renderJetsonTarget() {
       </div>
       <div class="field full">
         <label>Remote map root</label>
-        <input id="jetson-map-root" value="${esc(config.jetson_map_root || "")}" />
+        <input id="jetson-map-root" value="${esc(mapRoot)}" />
       </div>
       <div class="field full">
         <label>Remote rosbag root</label>
-        <input id="jetson-record-root" value="${esc(config.jetson_record_root || "")}" />
+        <input id="jetson-record-root" value="${esc(recordRoot)}" />
       </div>
       <div class="actions full">
-        <button class="primary" onclick="inspectJetson()">Inspect Jetson</button>
+        <button class="primary" onclick="inspectJetson()" ${state.jetsonInspectBusy ? "disabled" : ""}>
+          ${state.jetsonInspectBusy ? "Inspecting..." : "Inspect Jetson"}
+        </button>
         <button onclick="copyJetsonInspect()">Copy SSH</button>
+        ${state.jetsonInspectBusy ? `<span class="inline-status">Checking SSH connection...</span>` : ""}
       </div>
       <div class="quick-hosts full">
         ${(config.jetson_ips || [])
@@ -934,6 +942,17 @@ function renderJetsonTarget() {
 
 function renderJetsonSummary() {
   const result = state.jetsonInspect;
+  if (state.jetsonInspectBusy && !result) {
+    return `
+      <div class="remote-state">
+        <div class="state-tile checking"><span>SSH</span><strong>checking</strong></div>
+        <div class="state-tile"><span>latest</span><strong>-</strong></div>
+        <div class="state-tile"><span>maps</span><strong>-</strong></div>
+        <div class="state-tile"><span>rosbags</span><strong>-</strong></div>
+      </div>
+      <div class="notice">Inspect Jetson is running. This can take up to about 12 seconds when the Jetson is slow or unreachable.</div>
+    `;
+  }
   if (!result) {
     return `
       <div class="remote-state">
@@ -948,13 +967,16 @@ function renderJetsonSummary() {
   const latest = firstContentLine(sections.latest) || "-";
   const maps = contentLines(sections.maps).length;
   const rosbags = contentLines(sections.rosbags).length;
+  const checkedAt = result.inspected_at ? new Date(result.inspected_at).toLocaleString() : "";
   return `
     <div class="remote-state">
-      <div class="state-tile ${result.ok ? "ok" : "bad"}"><span>SSH</span><strong>${result.ok ? "online" : "failed"}</strong></div>
+      <div class="state-tile ${state.jetsonInspectBusy ? "checking" : result.ok ? "ok" : "bad"}"><span>SSH</span><strong>${state.jetsonInspectBusy ? "checking" : result.ok ? "online" : "failed"}</strong></div>
       <div class="state-tile"><span>latest</span><strong title="${esc(latest)}">${esc(shortName(latest))}</strong></div>
       <div class="state-tile"><span>maps</span><strong>${esc(maps)}</strong></div>
       <div class="state-tile"><span>rosbags</span><strong>${esc(rosbags)}</strong></div>
     </div>
+    ${checkedAt ? `<div class="inline-summary">Last inspected: ${esc(checkedAt)}</div>` : ""}
+    ${state.jetsonInspectBusy ? `<div class="notice">Inspect Jetson is running. Previous results are still shown until the new check finishes.</div>` : ""}
     ${sectionOutput("Disk", sections.disk)}
     ${sectionOutput("Maps", sections.maps)}
     ${sectionOutput("Rosbags", sections.rosbags)}
@@ -1653,15 +1675,32 @@ function fillTransferLocal(path) {
 }
 
 async function inspectJetson() {
-  const params = new URLSearchParams({
+  const target = {
     host: $("jetson-host").value,
     user: $("jetson-user").value,
     map_root: $("jetson-map-root").value,
     record_root: $("jetson-record-root").value,
-  });
-  const result = await api(`/api/jetson/inspect?${params.toString()}`);
-  state.jetsonInspect = result;
+  };
+  state.jetsonTarget = target;
+  state.jetsonInspectBusy = true;
   render();
+  const params = new URLSearchParams(target);
+  try {
+    const result = await api(`/api/jetson/inspect?${params.toString()}`);
+    state.jetsonInspect = { ...result, inspected_at: new Date().toISOString() };
+  } catch (error) {
+    state.jetsonInspect = {
+      ok: false,
+      host: target.host,
+      user: target.user,
+      error: error.message || String(error),
+      output: "",
+      inspected_at: new Date().toISOString(),
+    };
+  } finally {
+    state.jetsonInspectBusy = false;
+    render();
+  }
 }
 
 function copyJetsonInspect() {
@@ -1736,12 +1775,12 @@ function copyPullCommand() {
     return;
   }
   const target = jetsonTarget();
-  copyText(`rsync -avhP --info=progress2 ${sh(`${target.user}@${target.host}:${pullRemotePath()}`)} ${sh(trimTrailingSlash(pullLocalPath()) + "/")}`);
+  copyText(`rsync -avhP ${sh(`${target.user}@${target.host}:${pullRemotePath()}`)} ${sh(trimTrailingSlash(pullLocalPath()) + "/")}`);
 }
 
 function copyPushCommand() {
   const target = jetsonTarget();
-  copyText(`rsync -avhP --info=progress2 ${sh(trimTrailingSlash($("push-local").value) + "/")} ${sh(`${target.user}@${target.host}:${trimTrailingSlash($("push-remote").value)}/`)}`);
+  copyText(`rsync -avhP ${sh(trimTrailingSlash($("push-local").value) + "/")} ${sh(`${target.user}@${target.host}:${trimTrailingSlash($("push-remote").value)}/`)}`);
 }
 
 function parseJetsonOutput(output) {

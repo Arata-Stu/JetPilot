@@ -489,6 +489,19 @@ find {shlex.quote(record_root)} -name metadata.yaml -printf '%TY-%Tm-%Td %TH:%TM
                 timeout=12,
                 check=False,
             )
+            error = None
+            if result.returncode != 0:
+                output = result.stdout.strip()
+                if "Permission denied" in output or "BatchMode" in output:
+                    error = (
+                        "SSH password prompts are not supported by Inspect Jetson. "
+                        "Set up SSH key authentication or an ssh-agent for this host, "
+                        f"then retry: ssh {remote}"
+                    )
+                elif output:
+                    error = output.splitlines()[-1]
+                else:
+                    error = f"ssh exited with code {result.returncode}"
             return {
                 "ok": result.returncode == 0,
                 "host": host,
@@ -496,6 +509,7 @@ find {shlex.quote(record_root)} -name metadata.yaml -printf '%TY-%Tm-%Td %TH:%TM
                 "command": command,
                 "exit_code": result.returncode,
                 "output": result.stdout,
+                "error": error,
             }
         except Exception as exc:
             return {"ok": False, "host": host, "user": user, "error": str(exc), "command": command}
@@ -517,7 +531,7 @@ find {shlex.quote(record_root)} -name metadata.yaml -printf '%TY-%Tm-%Td %TH:%TM
                 return
             script = (
                 f"set -euo pipefail\nmkdir -p {shlex.quote(local_path)}\n"
-                f"rsync -avhP --info=progress2 {shlex.quote(remote + ':' + remote_path)} "
+                f"rsync -avhP {shlex.quote(remote + ':' + remote_path)} "
                 f"{shlex.quote(local_path.rstrip('/') + '/')}\n"
             )
             title = "Transfer Jetson to notebook"
@@ -530,7 +544,7 @@ find {shlex.quote(record_root)} -name metadata.yaml -printf '%TY-%Tm-%Td %TH:%TM
             script = (
                 f"set -euo pipefail\nssh {shlex.quote(remote)} "
                 f"{shlex.quote('mkdir -p ' + shlex.quote(remote_path))}\n"
-                f"rsync -avhP --info=progress2 {shlex.quote(local_path.rstrip('/') + '/')} "
+                f"rsync -avhP {shlex.quote(local_path.rstrip('/') + '/')} "
                 f"{shlex.quote(remote + ':' + remote_path.rstrip('/') + '/')}\n"
             )
             title = "Transfer notebook to Jetson"

@@ -318,6 +318,16 @@ textarea {
   gap: 8px;
 }
 
+.inline-status,
+.inline-summary {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.inline-summary {
+  margin: -4px 0 10px;
+}
+
 .mini-list {
   display: grid;
   gap: 8px;
@@ -401,6 +411,10 @@ textarea {
 
 .state-tile.bad {
   border-color: #873b3b;
+}
+
+.state-tile.checking {
+  border-color: #8a6a24;
 }
 
 .section-output {
