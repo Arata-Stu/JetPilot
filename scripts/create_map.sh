@@ -21,7 +21,7 @@ VSLAM_LANDMARKS_TOPIC="${VSLAM_LANDMARKS_TOPIC:-/visual_slam/vis/landmarks_cloud
 VSLAM_SNAPSHOT_WRITE_INTERVAL_S="${VSLAM_SNAPSHOT_WRITE_INTERVAL_S:-5.0}"
 JETSON_REMOTE_USER="${JETSON_REMOTE_USER:-tamiya}"
 JETSON_REMOTE_IPS="${JETSON_REMOTE_IPS:-10.42.0.1 192.168.55.1 192.168.11.190}"
-JETSON_MAP_ROOT="${JETSON_MAP_ROOT:-/home/tamiya/workspaces/${PKG_NAME}/map}"
+JETSON_MAP_ROOT="${JETSON_MAP_ROOT:-/home/tamiya/workspaces/JetPilot/map}"
 VGL_TENSORRT_EXPORT_SCRIPT="${VGL_TENSORRT_EXPORT_SCRIPT:-${SCRIPT_DIR}/export_vgl_tensorrt_engines.sh}"
 
 die() {
@@ -36,11 +36,15 @@ ensure_workspace_overlay() {
   if ! command -v ros2 >/dev/null 2>&1; then
     [[ -f "$setup_file" ]] || die "ros2 command was not found and workspace setup is unavailable: $setup_file"
     # shellcheck disable=SC1090
+    set +u
     source "$setup_file"
+    set -u
   elif ! ros2 pkg prefix "$JETPILOT_LAUNCH_PACKAGE" >/dev/null 2>&1 && [[ -f "$setup_file" ]]; then
     echo "Sourcing workspace overlay: $setup_file"
     # shellcheck disable=SC1090
+    set +u
     source "$setup_file"
+    set -u
   fi
 
   command -v ros2 >/dev/null 2>&1 || die "ros2 command was not found"

@@ -31,12 +31,16 @@ ensure_workspace_overlay() {
     [[ -f "$setup_file" ]] \
       || die "ros2 command was not found and workspace setup is unavailable: $setup_file"
     # shellcheck disable=SC1090
+    set +u
     source "$setup_file"
+    set -u
   elif ! ros2 pkg prefix isaac_ros_visual_mapping >/dev/null 2>&1 \
     && [[ -f "$setup_file" ]]; then
     echo "Sourcing workspace overlay: $setup_file"
     # shellcheck disable=SC1090
+    set +u
     source "$setup_file"
+    set -u
   fi
 
   command -v ros2 >/dev/null 2>&1 || die "ros2 command was not found"

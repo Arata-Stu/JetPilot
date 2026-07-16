@@ -12,7 +12,7 @@ def _q(value: str | Path) -> str:
 
 def _source_ros_setup(config: ConsoleConfig) -> str:
     setup = config.ros2_ws / "install" / "setup.bash"
-    return f'if [ -f {_q(setup)} ]; then source {_q(setup)}; fi'
+    return f'if [ -f {_q(setup)} ]; then set +u; source {_q(setup)}; set -u; fi'
 
 
 def default_topic_config(config: ConsoleConfig) -> Path:
