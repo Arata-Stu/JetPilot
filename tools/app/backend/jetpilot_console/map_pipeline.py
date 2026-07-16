@@ -96,19 +96,33 @@ def build_vgl_vslam_script(
     topic_config_path = topic_config or str(default_topic_config(config))
     create_steps = " ".join(shlex.quote(step) for step in steps.split())
     rviz_value = "true" if enable_rviz else "false"
-    snapshot = Path(map_dir) / "vslam_reference_snapshot.json"
-    cuvslam_map = Path(map_dir) / "cuvslam_map"
     return f"""set -euo pipefail
 {_source_ros_setup(config)}
 mkdir -p {_q(map_dir)}
+requested_map_dir={_q(map_dir)}
 export FOUNDATIONSTEREO_MODEL_RES={_q(fs_model_res)}
 echo "[stage] create cuVGL map"
 ros2 run isaac_mapping_ros create_map_offline.py \\
   --sensor_data_bag={_q(rosbag)} \\
-  --base_output_folder={_q(map_dir)} \\
+  --base_output_folder="$requested_map_dir" \\
   --camera_topic_config={_q(topic_config_path)} \\
   --fs_model_res={_q(fs_model_res)} \\
   --steps_to_run {create_steps}
+generated_map_dir="$requested_map_dir"
+latest_candidate=""
+while IFS= read -r -d '' candidate; do
+  if [ -d "$candidate/cuvgl_map" ]; then
+    if [ -z "$latest_candidate" ] || [ "$candidate" -nt "$latest_candidate" ]; then
+      latest_candidate="$candidate"
+    fi
+  fi
+done < <(find "$requested_map_dir" -mindepth 1 -maxdepth 1 -type d -print0 2>/dev/null || true)
+if [ -n "$latest_candidate" ]; then
+  generated_map_dir="$latest_candidate"
+fi
+echo "[stage] using map artifacts folder: $generated_map_dir"
+snapshot="$generated_map_dir/vslam_reference_snapshot.json"
+cuvslam_map="$generated_map_dir/cuvslam_map"
 echo "[stage] offline eval for cuVSLAM snapshot"
 ros2 launch {_q(config.launch_package)} bringup.launch.py \\
   use_sim_time:=true \\
@@ -121,7 +135,7 @@ ros2 launch {_q(config.launch_package)} bringup.launch.py \\
   enable_localization:=true \\
   vslam_enable_slam:=true \\
   vslam_enable_visualization:=true \\
-  vslam_save_map_folder_path:={_q(cuvslam_map)} \\
+  vslam_save_map_folder_path:="$cuvslam_map" \\
   enable_vgl:=true \\
   vgl_topic_config_file:={_q(topic_config_path)} \\
   vgl_model_dir:={_q(output_model_dir)} \\
@@ -132,11 +146,11 @@ ros2 launch {_q(config.launch_package)} bringup.launch.py \\
   enable_teleop:=false \\
   enable_rc_serial:=false \\
   enable_vslam_snapshot:=true \\
-  vslam_snapshot_output:={_q(snapshot)} \\
+  vslam_snapshot_output:="$snapshot" \\
   vslam_snapshot_landmarks_topic:=/visual_slam/vis/landmarks_cloud \\
   vslam_snapshot_write_interval_s:=5.0 \\
   rosbag:={_q(rosbag)} \\
-  map_dir:={_q(map_dir)}
+  map_dir:="$generated_map_dir"
 """
 
 
@@ -144,10 +158,17 @@ def prepare_hd_raster_script(config: ConsoleConfig, map_dir: str) -> str:
     map_path = Path(map_dir)
     return f"""set -euo pipefail
 {_source_ros_setup(config)}
+map_dir={_q(map_path)}
+snapshot="$map_dir/vslam_reference_snapshot.json"
+parent_snapshot="$(dirname "$map_dir")/vslam_reference_snapshot.json"
+if [ ! -f "$snapshot" ] && [ -f "$parent_snapshot" ]; then
+  echo "[stage] using parent VSLAM snapshot: $parent_snapshot"
+  snapshot="$parent_snapshot"
+fi
 ros2 run vslam_map_tools export_aligned_landmarks_offline.py \\
-  --snapshot {_q(map_path / "vslam_reference_snapshot.json")} \\
-  --output-image {_q(map_path / "vslam_landmarks.png")} \\
-  --output-yaml {_q(map_path / "vslam_landmarks.yaml")} \\
+  --snapshot "$snapshot" \\
+  --output-image "$map_dir/vslam_landmarks.png" \\
+  --output-yaml "$map_dir/vslam_landmarks.yaml" \\
   --no-path \\
   --require-landmarks
 """

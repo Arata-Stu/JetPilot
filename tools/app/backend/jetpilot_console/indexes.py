@@ -62,10 +62,32 @@ def _artifact(path: Path) -> dict[str, object]:
     }
 
 
-def _candidate_map_dirs(map_root: Path) -> Iterable[Path]:
+def _looks_like_map_dir(path: Path) -> bool:
+    if (path / "cuvgl_map").exists() or (path / "cuvslam_map").exists():
+        return True
+    if (path / "vslam_reference_snapshot.json").exists():
+        return True
+    if (path / "vslam_landmarks.yaml").exists() or (path / "vslam_landmarks.png").exists():
+        return True
+    return any(path.glob("*_hd_map.yaml")) or any(path.glob("*_raceline.csv"))
+
+
+def _candidate_map_dirs(map_root: Path, max_depth: int = 3) -> Iterable[Path]:
     if not map_root.exists():
         return []
-    return sorted([path for path in map_root.iterdir() if path.is_dir()])
+    candidates: list[Path] = []
+    for root, dirs, _ in os.walk(map_root):
+        path = Path(root)
+        try:
+            depth = len(path.relative_to(map_root).parts)
+        except ValueError:
+            depth = 0
+        dirs[:] = [name for name in dirs if not name.startswith(".")]
+        if depth >= max_depth:
+            dirs[:] = []
+        if depth > 0 and _looks_like_map_dir(path):
+            candidates.append(path)
+    return sorted(candidates)
 
 
 def scan_maps(map_root: Path) -> list[dict[str, object]]:
@@ -98,4 +120,3 @@ def scan_maps(map_root: Path) -> list[dict[str, object]]:
             }
         )
     return maps
-

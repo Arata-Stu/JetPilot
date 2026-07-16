@@ -400,15 +400,35 @@ function renderAutonomyPipeline() {
 function pipelineMap() {
   if (state.selectedMapPath) {
     const selected = state.maps.find((item) => item.path === state.selectedMapPath);
-    if (selected) return selected;
+    if (selected) {
+      const selectedScore = mapProgressScore(selected);
+      const nested = [...state.maps]
+        .filter((item) => item.path.startsWith(`${selected.path}/`))
+        .sort((a, b) => mapProgressScore(b) - mapProgressScore(a))[0];
+      if (nested && mapProgressScore(nested) > selectedScore) return nested;
+      return selected;
+    }
   }
   if (!state.maps.length) return null;
   return [...state.maps].sort((a, b) => mapProgressScore(b) - mapProgressScore(a))[0];
 }
 
 function mapProgressScore(map) {
-  const keys = ["cuvgl_map", "cuvslam_map", "snapshot", "landmark_yaml", "landmark_image", "hd_map", "centerline_csv", "raceline_csv", "line_preview"];
-  return keys.reduce((score, key) => score + (map.artifacts?.[key]?.exists ? 1 : 0), 0);
+  const weights = {
+    cuvgl_map: 10,
+    cuvslam_map: 10,
+    snapshot: 5,
+    landmark_yaml: 2,
+    landmark_image: 2,
+    hd_map: 3,
+    centerline_csv: 3,
+    raceline_csv: 3,
+    line_preview: 1,
+  };
+  return Object.entries(weights).reduce(
+    (score, [key, weight]) => score + (map.artifacts?.[key]?.exists ? weight : 0),
+    0,
+  );
 }
 
 function artifactExists(map, key) {
@@ -417,6 +437,27 @@ function artifactExists(map, key) {
 
 function hasRunningTask(kind) {
   return state.tasks.some((task) => task.kind === kind && ["queued", "running", "stopping"].includes(task.status));
+}
+
+function isActiveTask(task) {
+  return ["queued", "running", "stopping"].includes(task.status);
+}
+
+function isMapTask(task) {
+  return ["map-build", "prepare-hd-raster", "generate-raceline", "generate-preview"].includes(task.kind);
+}
+
+function mapTaskSignature(tasks) {
+  return tasks
+    .filter(isMapTask)
+    .map((task) => `${task.task_id}:${task.status}:${task.ended_at || ""}`)
+    .join("|");
+}
+
+function shouldRefreshMapsAfterTaskPoll(previousTasks, nextTasks) {
+  const previousActive = previousTasks.some((task) => isMapTask(task) && isActiveTask(task));
+  const nextActive = nextTasks.some((task) => isMapTask(task) && isActiveTask(task));
+  return previousActive || nextActive || mapTaskSignature(previousTasks) !== mapTaskSignature(nextTasks);
 }
 
 function pipelineSteps(map) {
@@ -1896,8 +1937,14 @@ refreshAll().catch((error) => {
 
 setInterval(() => {
   api("/api/tasks")
-    .then((data) => {
-      state.tasks = data.tasks || [];
+    .then(async (data) => {
+      const nextTasks = data.tasks || [];
+      if (shouldRefreshMapsAfterTaskPoll(state.tasks, nextTasks)) {
+        state.tasks = nextTasks;
+        await refreshAll();
+        return;
+      }
+      state.tasks = nextTasks;
       if (!isEditingField() && !logHistoryIsBeingRead()) render();
       else updateTaskChrome();
     })
