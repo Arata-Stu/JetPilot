@@ -755,6 +755,7 @@ tr:last-child td {
 
 .map-preview-shell {
   min-width: 0;
+  max-height: 72vh;
   overflow: auto;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -764,10 +765,11 @@ tr:last-child td {
 
 #map-preview-canvas {
   display: block;
-  width: 100%;
-  max-height: 68vh;
+  width: auto;
+  height: auto;
+  max-width: none;
+  max-height: none;
   border-radius: 6px;
-  object-fit: contain;
 }
 
 .map-side-panel {
@@ -831,7 +833,8 @@ tr:last-child td {
 }
 
 .editor-actions,
-.editor-field-row {
+.editor-field-row,
+.editor-zoom-row {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
@@ -841,9 +844,22 @@ tr:last-child td {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.editor-zoom-row {
+  grid-template-columns: 42px minmax(0, 1fr) 42px auto;
+  align-items: center;
+}
+
 .editor-field-row button.active {
   border-color: #38658a;
   background: #18314a;
+}
+
+.editor-zoom-row span {
+  min-width: 48px;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  text-align: right;
 }
 
 .editor-counts {

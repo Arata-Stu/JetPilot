@@ -24,6 +24,7 @@ const state = {
     dirty: false,
     selected: null,
     dragging: null,
+    zoom: 1,
     primaryLaneId: "lane_001",
     lanes: [],
   },
@@ -845,6 +846,7 @@ function renderMapWorkspace() {
             onpointerleave="handleMapEditorPointerUp(event)"
             ondblclick="handleMapEditorDoubleClick(event)"
             oncontextmenu="handleMapEditorContextMenu(event)"
+            onwheel="handleMapEditorWheel(event)"
           ></canvas>
         </div>
         <aside class="map-side-panel">
@@ -907,6 +909,12 @@ function renderHdMapEditor(detail) {
       <div class="editor-field-row">
         ${editorFieldButton("left_bound", "Left")}
         ${editorFieldButton("right_bound", "Right")}
+      </div>
+      <div class="editor-zoom-row">
+        <button onclick="zoomMapEditor(0.75)">-</button>
+        <button onclick="resetMapEditorZoom()">Fit</button>
+        <button onclick="zoomMapEditor(1.3333333333)">+</button>
+        <span id="map-editor-zoom-value">${esc(mapEditorZoomLabel())}</span>
       </div>
       <label class="layer-toggle">
         <input type="checkbox" ${lane.closed_loop ? "checked" : ""} onchange="toggleEditorClosedLoop(this.checked)" ${editor.enabled ? "" : "disabled"} />
@@ -1660,6 +1668,7 @@ function laneForEditorFromDetail(detail) {
 function ensureMapEditor(detail, options = {}) {
   const mapPath = detail?.map?.path || "";
   if (!mapPath) return state.mapEditor;
+  const sameMap = state.mapEditor.mapPath === mapPath;
   if (options.force || state.mapEditor.mapPath !== mapPath || !state.mapEditor.lanes.length) {
     const lane = laneForEditorFromDetail(detail);
     state.mapEditor = {
@@ -1668,6 +1677,7 @@ function ensureMapEditor(detail, options = {}) {
       dirty: false,
       selected: null,
       dragging: null,
+      zoom: sameMap ? state.mapEditor.zoom : 1,
       primaryLaneId: lane.id,
       lanes: [lane],
     };
@@ -1688,6 +1698,14 @@ function editorLanesForDetail(detail) {
 function mapEditorRasterReady(detail) {
   const raster = detail?.raster || {};
   return Boolean(raster.resolution_m_per_px && raster.width && raster.height);
+}
+
+function clampMapEditorZoom(value) {
+  return Math.max(0.25, Math.min(32, Number(value) || 1));
+}
+
+function mapEditorZoomLabel() {
+  return `${Math.round((state.mapEditor.zoom || 1) * 100)}%`;
 }
 
 function editorLaneIssue(lane) {
@@ -1743,6 +1761,100 @@ function updateMapEditorChrome() {
   }
   const counts = $("map-editor-counts");
   if (counts) counts.textContent = renderEditorCounts(lane);
+  const zoom = $("map-editor-zoom-value");
+  if (zoom) zoom.textContent = mapEditorZoomLabel();
+}
+
+function mapCanvasFitScale(canvas, width, height) {
+  const shell = canvas?.parentElement;
+  if (!shell || !width || !height) return 1;
+  const styles = window.getComputedStyle(shell);
+  const paddingX = Number.parseFloat(styles.paddingLeft || "0") + Number.parseFloat(styles.paddingRight || "0");
+  const paddingY = Number.parseFloat(styles.paddingTop || "0") + Number.parseFloat(styles.paddingBottom || "0");
+  const contentWidth = Math.max(260, shell.clientWidth - paddingX);
+  const contentHeight = Math.max(260, window.innerHeight * 0.68 - paddingY);
+  return Math.max(0.01, Math.min(contentWidth / width, contentHeight / height, 1));
+}
+
+function applyMapCanvasDisplay(canvas, width, height) {
+  const fitScale = mapCanvasFitScale(canvas, width, height);
+  const displayScale = fitScale * clampMapEditorZoom(state.mapEditor.zoom || 1);
+  canvas.style.width = `${Math.max(160, Math.round(width * displayScale))}px`;
+  canvas.style.height = `${Math.max(120, Math.round(height * displayScale))}px`;
+}
+
+function mapEditorAnchorFromPoint(clientX, clientY) {
+  const canvas = $("map-preview-canvas");
+  const shell = canvas?.parentElement;
+  if (!canvas || !shell) return null;
+  const rect = canvas.getBoundingClientRect();
+  const shellRect = shell.getBoundingClientRect();
+  if (!rect.width || !rect.height) return null;
+  return {
+    sourceX: (clientX - rect.left) * canvas.width / rect.width,
+    sourceY: (clientY - rect.top) * canvas.height / rect.height,
+    viewportX: clientX - shellRect.left,
+    viewportY: clientY - shellRect.top,
+  };
+}
+
+function mapEditorViewportCenterAnchor() {
+  const canvas = $("map-preview-canvas");
+  const shell = canvas?.parentElement;
+  if (!canvas || !shell) return null;
+  const shellRect = shell.getBoundingClientRect();
+  return mapEditorAnchorFromPoint(
+    shellRect.left + shell.clientWidth * 0.5,
+    shellRect.top + shell.clientHeight * 0.5,
+  );
+}
+
+function restoreMapEditorZoomAnchor(anchor) {
+  if (!anchor) return;
+  const canvas = $("map-preview-canvas");
+  const shell = canvas?.parentElement;
+  if (!canvas || !shell) return;
+  const rect = canvas.getBoundingClientRect();
+  if (!rect.width || !rect.height) return;
+  shell.scrollLeft = Math.max(0, canvas.offsetLeft + anchor.sourceX * rect.width / canvas.width - anchor.viewportX);
+  shell.scrollTop = Math.max(0, canvas.offsetTop + anchor.sourceY * rect.height / canvas.height - anchor.viewportY);
+}
+
+function setMapEditorZoom(value, options = {}) {
+  state.mapEditor.zoom = clampMapEditorZoom(value);
+  drawMapPreview();
+  requestAnimationFrame(() => {
+    if (options.resetScroll) {
+      const shell = $("map-preview-canvas")?.parentElement;
+      if (shell) {
+        shell.scrollLeft = 0;
+        shell.scrollTop = 0;
+      }
+    } else {
+      restoreMapEditorZoomAnchor(options.anchor || null);
+    }
+    updateMapEditorChrome();
+  });
+}
+
+function zoomMapEditor(factor) {
+  setMapEditorZoom((state.mapEditor.zoom || 1) * Number(factor || 1), {
+    anchor: mapEditorViewportCenterAnchor(),
+  });
+}
+
+function resetMapEditorZoom() {
+  setMapEditorZoom(1, { resetScroll: true });
+}
+
+function handleMapEditorWheel(event) {
+  if (!state.selectedMapDetail || state.mapEditor.mapPath !== state.selectedMapDetail.map?.path) return;
+  if (!event.ctrlKey && !event.metaKey && !event.altKey) return;
+  event.preventDefault();
+  const factor = Math.exp(-event.deltaY * 0.0015);
+  setMapEditorZoom((state.mapEditor.zoom || 1) * factor, {
+    anchor: mapEditorAnchorFromPoint(event.clientX, event.clientY),
+  });
 }
 
 function pointDistance(a, b) {
@@ -2071,6 +2183,7 @@ function drawMapPreview() {
     const naturalHeight = image?.naturalHeight || raster.height || 620;
     canvas.width = Math.max(320, naturalWidth);
     canvas.height = Math.max(240, naturalHeight);
+    applyMapCanvasDisplay(canvas, canvas.width, canvas.height);
     const ctx = canvas.getContext("2d");
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.fillStyle = "#0b0d10";
@@ -2465,11 +2578,14 @@ window.toggleMapLayer = toggleMapLayer;
 window.toggleHdMapEditor = toggleHdMapEditor;
 window.setMapEditorField = setMapEditorField;
 window.toggleEditorClosedLoop = toggleEditorClosedLoop;
+window.zoomMapEditor = zoomMapEditor;
+window.resetMapEditorZoom = resetMapEditorZoom;
 window.handleMapEditorPointerDown = handleMapEditorPointerDown;
 window.handleMapEditorPointerMove = handleMapEditorPointerMove;
 window.handleMapEditorPointerUp = handleMapEditorPointerUp;
 window.handleMapEditorDoubleClick = handleMapEditorDoubleClick;
 window.handleMapEditorContextMenu = handleMapEditorContextMenu;
+window.handleMapEditorWheel = handleMapEditorWheel;
 window.deleteSelectedEditorPoint = deleteSelectedEditorPoint;
 window.saveHdMapFromEditor = saveHdMapFromEditor;
 window.fillTransferLocal = fillTransferLocal;

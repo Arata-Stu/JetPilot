@@ -158,6 +158,7 @@ editor.
   - one primary lane
   - left/right bound point add, move, and delete
   - closed/open loop toggle
+  - fit/zoom controls with scroll-based pan
   - centerline generation from bounds
   - save `<map_name>_hd_map.yaml`
   - save `<map_name>_hd_map_centerline.csv`
@@ -344,6 +345,7 @@ Keep the HD map file format compatible with the current Python tools:
 The browser editor currently implements:
 
 - point add/move/delete
+- fit/zoom controls with scroll-based pan
 - left/right bound editing
 - centerline generation from bounds
 - save/load existing HD map YAML
@@ -352,7 +354,6 @@ The browser editor currently implements:
 
 Then add:
 
-- pan and zoom
 - lane selection
 - undo/redo
 - curve assist
