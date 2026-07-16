@@ -5,6 +5,7 @@ const state = {
   rosbags: [],
   maps: [],
   cameraTopicConfigs: [],
+  localIps: [],
   selectedMapPath: null,
   selectedMapDetail: null,
   mapLayers: {
@@ -18,6 +19,7 @@ const state = {
   },
   selectedTaskId: null,
   fpv: {
+    host: "",
     codec: "h264",
     width: 424,
     height: 240,
@@ -149,18 +151,21 @@ function sh(value) {
 }
 
 async function refreshAll() {
-  const [config, tasks, rosbags, maps, cameraTopicConfigs] = await Promise.all([
+  const [config, tasks, rosbags, maps, cameraTopicConfigs, localIps] = await Promise.all([
     api("/api/config"),
     api("/api/tasks"),
     api("/api/rosbags/local"),
     api("/api/maps/local"),
     api("/api/map-builder/camera-topic-configs"),
+    api("/api/network/local-ips").catch(() => ({ ips: [] })),
   ]);
   state.config = config;
   state.tasks = tasks.tasks || [];
   state.rosbags = rosbags.rosbags || [];
   state.maps = maps.maps || [];
   state.cameraTopicConfigs = cameraTopicConfigs.configs || [];
+  state.localIps = localIps.ips || [];
+  if (!state.fpv.host && state.localIps[0]) state.fpv.host = state.localIps[0];
   if (state.selectedMapPath && !state.maps.some((item) => item.path === state.selectedMapPath)) {
     state.selectedMapPath = null;
     state.selectedMapDetail = null;
@@ -255,6 +260,10 @@ function renderFpv() {
         <div class="panel-body">
           <div class="form-grid">
             <div class="field">
+              <label>Mac / notebook IP</label>
+              <input id="fpv-host" value="${esc(fpv.host)}" placeholder="10.42.0.161" oninput="updateFpvCommandPreview()" />
+            </div>
+            <div class="field">
               <label>Codec</label>
               <select id="fpv-codec" onchange="updateFpvCommandPreview()">
                 ${["h264", "h265", "mjpeg", "raw"].map((codec) => `<option value="${codec}" ${fpv.codec === codec ? "selected" : ""}>${codec}</option>`).join("")}
@@ -294,9 +303,17 @@ function renderFpv() {
               <label>Receiver command</label>
               <textarea id="fpv-command" readonly>${esc(buildFpvReceiverCommand(readFpvForm(false)))}</textarea>
             </div>
+            <div class="field full">
+              <label>Jetson bringup command</label>
+              <textarea id="fpv-jetson-command" readonly>${esc(buildFpvJetsonCommand(readFpvForm(false)))}</textarea>
+            </div>
+            <div class="actions full">
+              ${state.localIps.map((ip) => `<button class="ghost" onclick="setFpvHost(${js(ip)})">${esc(ip)}</button>`).join("")}
+            </div>
             <div class="actions full">
               <button class="primary" onclick="startFpvViewer()">Start Viewer</button>
               <button onclick="copyFpvReceiverCommand()">Copy Command</button>
+              <button onclick="copyFpvJetsonCommand()">Copy Jetson Command</button>
               ${running.length ? `<button class="danger" onclick="stopTask(${js(running[0].task_id)})">Stop Running Viewer</button>` : ""}
             </div>
           </div>
@@ -1265,6 +1282,7 @@ function readNumberInput(id, fallback) {
 
 function readFpvForm(updateState = true) {
   const next = {
+    host: $("fpv-host")?.value.trim() || state.fpv.host,
     codec: $("fpv-codec")?.value || state.fpv.codec,
     width: readNumberInput("fpv-width", state.fpv.width),
     height: readNumberInput("fpv-height", state.fpv.height),
@@ -1292,6 +1310,22 @@ function buildFpvReceiverCommand(fpv = state.fpv) {
   return `${env.join(" ")} ./tools/rtp_video_experiment/rtp_receiver.sh`;
 }
 
+function buildFpvJetsonCommand(fpv = state.fpv) {
+  return [
+    "ros2 launch jetpilot_system_launch bringup.launch.py",
+    "enable_sensor_kit:=true",
+    "sensor_kit_enable_rtp_stream:=true",
+    `sensor_kit_rtp_host:=${sh(fpv.host || "<mac-ip>")}`,
+    `sensor_kit_rtp_port:=${sh(fpv.port)}`,
+    `sensor_kit_rtp_codec:=${sh(fpv.codec)}`,
+    `sensor_kit_rtp_fps:=${sh(fpv.fps)}`,
+    `sensor_kit_rtp_bitrate:=${sh(4000000)}`,
+    `sensor_kit_rtp_gop:=${sh(fpv.fps)}`,
+    `sensor_kit_rtp_mtu:=${sh(1200)}`,
+    `sensor_kit_rtp_payload:=${sh(fpv.payload)}`,
+  ].join(" \\\n  ");
+}
+
 async function startFpvViewer() {
   const fpv = readFpvForm();
   const command = buildFpvReceiverCommand(fpv);
@@ -1317,10 +1351,27 @@ function copyFpvReceiverCommand() {
   copyText(command, "FPV receiver command copied");
 }
 
+function copyFpvJetsonCommand() {
+  const fpv = readFpvForm();
+  const command = buildFpvJetsonCommand(fpv);
+  const preview = $("fpv-jetson-command");
+  if (preview) preview.value = command;
+  copyText(command, "Jetson bringup command copied");
+}
+
+function setFpvHost(host) {
+  state.fpv.host = host;
+  const input = $("fpv-host");
+  if (input) input.value = host;
+  updateFpvCommandPreview();
+}
+
 function updateFpvCommandPreview() {
   const fpv = readFpvForm();
-  const preview = $("fpv-command");
-  if (preview) preview.value = buildFpvReceiverCommand(fpv);
+  const receiverPreview = $("fpv-command");
+  if (receiverPreview) receiverPreview.value = buildFpvReceiverCommand(fpv);
+  const jetsonPreview = $("fpv-jetson-command");
+  if (jetsonPreview) jetsonPreview.value = buildFpvJetsonCommand(fpv);
 }
 
 function fillMapDir() {
@@ -1772,6 +1823,8 @@ window.stopTask = stopTask;
 window.runCustomCommand = runCustomCommand;
 window.startFpvViewer = startFpvViewer;
 window.copyFpvReceiverCommand = copyFpvReceiverCommand;
+window.copyFpvJetsonCommand = copyFpvJetsonCommand;
+window.setFpvHost = setFpvHost;
 window.updateFpvCommandPreview = updateFpvCommandPreview;
 window.fillMapDir = fillMapDir;
 window.useRosbag = useRosbag;

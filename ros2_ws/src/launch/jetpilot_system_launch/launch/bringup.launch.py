@@ -94,6 +94,7 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('sensor_kit_rtp_gop', '60', cli=True)
     args.add_arg('sensor_kit_rtp_mtu', '1200', cli=True)
     args.add_arg('sensor_kit_rtp_payload', '96', cli=True)
+    args.add_arg('sensor_kit_rtp_encoder', 'auto', cli=True)
 
     args.add_arg('enable_localization', False, cli=True)
     args.add_arg('localization_camera_name', 'realsense', cli=True)
@@ -264,6 +265,7 @@ def generate_launch_description() -> lut.LaunchDescription:
                 'rtp_gop': args.sensor_kit_rtp_gop,
                 'rtp_mtu': args.sensor_kit_rtp_mtu,
                 'rtp_payload': args.sensor_kit_rtp_payload,
+                'rtp_encoder': args.sensor_kit_rtp_encoder,
                 'use_sim_time': args.use_sim_time,
             },
             condition=IfCondition(args.enable_sensor_kit),

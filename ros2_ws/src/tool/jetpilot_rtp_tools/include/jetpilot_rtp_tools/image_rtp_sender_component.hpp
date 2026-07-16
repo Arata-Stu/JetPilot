@@ -29,7 +29,9 @@ private:
   static ImageFormat image_format_from_encoding(const std::string & encoding);
 
   void image_callback(const sensor_msgs::msg::Image::ConstSharedPtr msg);
+  void status_callback();
   bool start_pipeline(const sensor_msgs::msg::Image & msg, const ImageFormat & format);
+  void poll_bus();
   std::string build_pipeline_description(
     const sensor_msgs::msg::Image & msg, const ImageFormat & format) const;
   std::string select_encoder(const std::string & codec) const;
@@ -41,11 +43,16 @@ private:
   void stop_pipeline();
 
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr image_sub_;
+  rclcpp::TimerBase::SharedPtr status_timer_;
   mutable std::mutex pipeline_mutex_;
   GstElement * pipeline_{nullptr};
   GstElement * appsrc_{nullptr};
   std::uint64_t frame_index_{0};
+  std::uint64_t pushed_frames_{0};
+  std::uint64_t dropped_frames_{0};
+  std::uint64_t last_reported_pushed_frames_{0};
   bool pipeline_started_{false};
+  GstFlowReturn last_flow_return_{GST_FLOW_OK};
 
   std::string image_topic_;
   std::string host_;

@@ -1,6 +1,8 @@
 #include "jetpilot_rtp_tools/image_rtp_sender_component.hpp"
 
 #include <algorithm>
+#include <chrono>
+#include <cinttypes>
 #include <cstring>
 #include <sstream>
 #include <stdexcept>
@@ -61,11 +63,14 @@ ImageRtpSenderComponent::ImageRtpSenderComponent(const rclcpp::NodeOptions & opt
   image_sub_ = create_subscription<sensor_msgs::msg::Image>(
     image_topic_, qos,
     std::bind(&ImageRtpSenderComponent::image_callback, this, std::placeholders::_1));
+  status_timer_ = create_wall_timer(
+    std::chrono::seconds(2),
+    std::bind(&ImageRtpSenderComponent::status_callback, this));
 
   RCLCPP_INFO(
     get_logger(),
-    "RTP sender waiting for %s, destination=%s:%d, codec=%s",
-    image_topic_.c_str(), host_.c_str(), port_, codec_.c_str());
+    "RTP sender waiting for %s, destination=%s:%d, codec=%s, encoder=%s",
+    image_topic_.c_str(), host_.c_str(), port_, codec_.c_str(), encoder_.c_str());
 }
 
 ImageRtpSenderComponent::~ImageRtpSenderComponent()
@@ -262,11 +267,94 @@ bool ImageRtpSenderComponent::start_pipeline(
   appsrc_ = appsrc;
   pipeline_started_ = true;
   frame_index_ = 0;
+  pushed_frames_ = 0;
+  dropped_frames_ = 0;
+  last_reported_pushed_frames_ = 0;
+  last_flow_return_ = GST_FLOW_OK;
 
   RCLCPP_INFO(
     get_logger(), "Started RTP pipeline: %s",
     pipeline_description.c_str());
   return true;
+}
+
+void ImageRtpSenderComponent::poll_bus()
+{
+  if (pipeline_ == nullptr) {
+    return;
+  }
+
+  GstBus * bus = gst_element_get_bus(pipeline_);
+  if (bus == nullptr) {
+    return;
+  }
+
+  while (GstMessage * message = gst_bus_pop(bus)) {
+    switch (GST_MESSAGE_TYPE(message)) {
+      case GST_MESSAGE_ERROR: {
+        GError * error = nullptr;
+        gchar * debug = nullptr;
+        gst_message_parse_error(message, &error, &debug);
+        RCLCPP_ERROR(
+          get_logger(), "GStreamer error from %s: %s%s%s",
+          GST_OBJECT_NAME(message->src),
+          error != nullptr ? error->message : "unknown",
+          debug != nullptr ? " / " : "",
+          debug != nullptr ? debug : "");
+        if (error != nullptr) {
+          g_error_free(error);
+        }
+        if (debug != nullptr) {
+          g_free(debug);
+        }
+        break;
+      }
+      case GST_MESSAGE_WARNING: {
+        GError * error = nullptr;
+        gchar * debug = nullptr;
+        gst_message_parse_warning(message, &error, &debug);
+        RCLCPP_WARN(
+          get_logger(), "GStreamer warning from %s: %s%s%s",
+          GST_OBJECT_NAME(message->src),
+          error != nullptr ? error->message : "unknown",
+          debug != nullptr ? " / " : "",
+          debug != nullptr ? debug : "");
+        if (error != nullptr) {
+          g_error_free(error);
+        }
+        if (debug != nullptr) {
+          g_free(debug);
+        }
+        break;
+      }
+      default:
+        break;
+    }
+    gst_message_unref(message);
+  }
+
+  gst_object_unref(bus);
+}
+
+void ImageRtpSenderComponent::status_callback()
+{
+  std::lock_guard<std::mutex> lock(pipeline_mutex_);
+  poll_bus();
+  if (!pipeline_started_) {
+    RCLCPP_INFO_THROTTLE(
+      get_logger(), *get_clock(), 10000,
+      "RTP sender still waiting for image topic %s", image_topic_.c_str());
+    return;
+  }
+
+  const auto delta = pushed_frames_ - last_reported_pushed_frames_;
+  last_reported_pushed_frames_ = pushed_frames_;
+  RCLCPP_INFO(
+    get_logger(),
+    "RTP sender status: pushed=%" PRIu64 " (+%" PRIu64 "/2s), dropped=%" PRIu64
+    ", last_flow=%s, destination=%s:%d",
+    pushed_frames_, delta, dropped_frames_, gst_flow_get_name(last_flow_return_),
+    host_.c_str(), port_);
 }
 
 bool ImageRtpSenderComponent::copy_image_to_buffer(
@@ -342,11 +430,16 @@ void ImageRtpSenderComponent::image_callback(const sensor_msgs::msg::Image::Cons
   ++frame_index_;
 
   const GstFlowReturn result = gst_app_src_push_buffer(GST_APP_SRC(appsrc_), buffer);
+  last_flow_return_ = result;
   if (result != GST_FLOW_OK) {
+    ++dropped_frames_;
     RCLCPP_WARN_THROTTLE(
       get_logger(), *get_clock(), 2000,
       "Failed to push RTP frame to GStreamer: %s", gst_flow_get_name(result));
+  } else {
+    ++pushed_frames_;
   }
+  poll_bus();
 }
 
 void ImageRtpSenderComponent::stop_pipeline()

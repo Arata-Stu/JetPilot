@@ -7,8 +7,10 @@ import glob
 import json
 import mimetypes
 import os
+import re
 import select
 import shlex
+import socket
 import struct
 import subprocess
 import time
@@ -37,6 +39,48 @@ JS_EVENT_INIT = 0x80
 JSIOCGAXES = 0x80016A11
 JSIOCGBUTTONS = 0x80016A12
 JSIOCGNAME = lambda length: 0x80006A13 + (length << 16)
+
+
+def local_ip_candidates() -> list[str]:
+    candidates: set[str] = set()
+
+    try:
+        hostname = socket.gethostname()
+        for family, _, _, _, sockaddr in socket.getaddrinfo(hostname, None, socket.AF_INET):
+            if family == socket.AF_INET:
+                address = sockaddr[0]
+                if not address.startswith("127."):
+                    candidates.add(address)
+    except OSError:
+        pass
+
+    for target in ("10.42.0.1", "192.168.55.1", "8.8.8.8"):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            sock.connect((target, 9))
+            address = sock.getsockname()[0]
+            if not address.startswith("127."):
+                candidates.add(address)
+        except OSError:
+            pass
+        finally:
+            sock.close()
+
+    try:
+        output = subprocess.run(
+            ["ifconfig"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=1.0,
+        ).stdout
+        for address in re.findall(r"\binet\s+(\d+\.\d+\.\d+\.\d+)\b", output):
+            if not address.startswith("127."):
+                candidates.add(address)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+    return sorted(candidates)
 
 
 def read_js_device_snapshot(path_text: str = "/dev/input/js0", duration_s: float = 0.03) -> dict[str, Any]:
@@ -125,6 +169,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/config":
             self._json(self.server.state.config.as_json())
+            return
+        if path == "/api/network/local-ips":
+            self._json({"ips": local_ip_candidates()})
             return
         if path == "/api/joy/js0":
             device_path = query.get("path", ["/dev/input/js0"])[0] or "/dev/input/js0"
