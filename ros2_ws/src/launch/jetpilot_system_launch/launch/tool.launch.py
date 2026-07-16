@@ -94,7 +94,7 @@ def add_nodes(args: lu.ArgumentContainer):
                 '--odom-topic', args.vslam_snapshot_odom_topic,
                 '--landmarks-topic', args.vslam_snapshot_landmarks_topic,
                 '--output', args.vslam_snapshot_output,
-                '--write-interval-sec', args.vslam_snapshot_write_interval_s,
+                '--write-interval-sec', str(args.vslam_snapshot_write_interval_s),
             ],
             parameters=[{'use_sim_time': use_sim_time}],
         ))

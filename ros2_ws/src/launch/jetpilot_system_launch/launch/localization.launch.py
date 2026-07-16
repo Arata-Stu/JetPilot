@@ -17,19 +17,17 @@
 
 import isaac_ros_launch_utils as lu
 import isaac_ros_launch_utils.all_types as lut
-from launch.conditions import IfCondition
 import os
 import yaml
 
 
-def localization_component_container(container_name: str, run_standalone: bool):
+def localization_component_container(container_name: str):
     return lut.Node(
         name=container_name,
         package='rclcpp_components',
         executable='component_container_mt',
         arguments=['--ros-args', '--log-level', 'info'],
         output='screen',
-        condition=IfCondition(lu.is_true(run_standalone)),
     )
 
 
@@ -66,11 +64,9 @@ def add_nodes(args: lu.ArgumentContainer):
     enable_section_localizer = lu.is_true(args.enable_section_localizer)
     vgl_started = False
 
-    actions = [
-        localization_component_container(
-            args.container_name,
-            args.run_standalone),
-    ]
+    actions = []
+    if lu.is_true(args.run_standalone):
+        actions.append(localization_component_container(args.container_name))
 
     camera_optical_frames = camera_optical_frames_from_topic_config(args.vgl_topic_config_file)
     base_frame = args.localization_base_frame
