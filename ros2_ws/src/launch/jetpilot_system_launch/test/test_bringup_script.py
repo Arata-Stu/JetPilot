@@ -61,6 +61,12 @@ def test_vehicle_presets_select_matching_driver_configuration() -> None:
     assert "vesc_interface.param.yaml" in vesc
 
 
+def test_empty_launch_arguments_are_not_emitted() -> None:
+    output = run_launcher("vehicle-vesc", "--dry-run").stdout
+
+    assert "rosbag:=" not in output
+
+
 def test_live_localization_publishes_description_without_actuator(tmp_path: Path) -> None:
     output = run_launcher(
         "localize-live", "--map", str(tmp_path), "--dry-run"

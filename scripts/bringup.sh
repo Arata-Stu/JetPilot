@@ -580,13 +580,16 @@ print_summary() {
   local command=(ros2 launch "$LAUNCH_PACKAGE" bringup.launch.py)
   local displayed_backend="$VEHICLE_BACKEND"
   local index
+  local value
 
   if ! is_true "$(get_arg enable_vehicle)"; then
     displayed_backend='none'
   fi
 
   for index in "${!ARG_NAMES[@]}"; do
-    command+=("${ARG_NAMES[$index]}:=${ARG_VALUES[$index]}")
+    value="${ARG_VALUES[$index]}"
+    [[ -n "$value" ]] || continue
+    command+=("${ARG_NAMES[$index]}:=${value}")
   done
 
   printf '\nJetPilot bringup\n'
