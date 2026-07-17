@@ -119,21 +119,26 @@ requested_map_dir={_q(map_dir)}
 offline_launch_pid=""
 offline_stop_launch() {{
   stop_signal="${{1:-INT}}"
+  timeout_s="${{2:-20}}"
+  waited_s=0
   stop_status=0
   if [ -n "$offline_launch_pid" ]; then
     if kill -0 "$offline_launch_pid" 2>/dev/null; then
       kill -s "$stop_signal" "$offline_launch_pid" 2>/dev/null || true
     fi
-    if wait "$offline_launch_pid" 2>/dev/null; then
-      stop_status=0
-    else
-      stop_status=$?
-    fi
+    while kill -0 "$offline_launch_pid" 2>/dev/null; do
+      if [ "$waited_s" -ge "$timeout_s" ]; then
+        return 124
+      fi
+      sleep 1
+      waited_s=$((waited_s + 1))
+    done
+    wait "$offline_launch_pid" 2>/dev/null || stop_status=$?
   fi
   offline_launch_pid=""
   return "$stop_status"
 }}
-trap 'offline_stop_launch TERM || true' EXIT
+trap 'offline_stop_launch TERM 5 || kill -KILL "$offline_launch_pid" 2>/dev/null || true' EXIT
 export FOUNDATIONSTEREO_MODEL_RES={_q(fs_model_res)}
 echo "[stage] create cuVGL map"
 ros2 run isaac_mapping_ros create_map_offline.py \\
@@ -227,7 +232,18 @@ while kill -0 "$offline_launch_pid" 2>/dev/null; do
 done
 echo "[stage] rosbag replay finished; draining offline eval output"
 sleep 5
-if offline_stop_launch INT; then offline_launch_status=0; else offline_launch_status=$?; fi
+if offline_stop_launch INT 20; then offline_launch_status=0; else offline_launch_status=$?; fi
+if [ "$offline_launch_status" -eq 124 ]; then
+  echo "[stage] offline eval did not stop after SIGINT; escalating to SIGTERM"
+  if offline_stop_launch TERM 10; then offline_launch_status=0; else offline_launch_status=$?; fi
+fi
+if [ "$offline_launch_status" -eq 124 ]; then
+  echo "[stage] offline eval did not stop after SIGTERM; escalating to SIGKILL"
+  kill -KILL "$offline_launch_pid" 2>/dev/null || true
+  wait "$offline_launch_pid" 2>/dev/null || true
+  offline_launch_pid=""
+  offline_launch_status=0
+fi
 if [ "$offline_launch_status" -ne 0 ] && [ "$offline_launch_status" -ne 130 ]; then
   echo "offline eval launch exited with status $offline_launch_status"
   exit "$offline_launch_status"

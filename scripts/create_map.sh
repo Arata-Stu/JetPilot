@@ -573,21 +573,26 @@ run_offline_eval() {
 
   offline_stop_launch() {
     local stop_signal="${1:-INT}"
+    local timeout_s="${2:-20}"
+    local waited_s=0
     local stop_status=0
     if [[ -n "$offline_launch_pid" ]]; then
       if kill -0 "$offline_launch_pid" 2>/dev/null; then
         kill -s "$stop_signal" "$offline_launch_pid" 2>/dev/null || true
       fi
-      if wait "$offline_launch_pid" 2>/dev/null; then
-        stop_status=0
-      else
-        stop_status=$?
-      fi
+      while kill -0 "$offline_launch_pid" 2>/dev/null; do
+        if (( waited_s >= timeout_s )); then
+          return 124
+        fi
+        sleep 1
+        waited_s=$((waited_s + 1))
+      done
+      wait "$offline_launch_pid" 2>/dev/null || stop_status=$?
     fi
     offline_launch_pid=""
     return "$stop_status"
   }
-  trap 'offline_stop_launch TERM || true' RETURN
+  trap 'offline_stop_launch TERM 5 || kill -KILL "$offline_launch_pid" 2>/dev/null || true' EXIT
 
   ros2 launch "$JETPILOT_LAUNCH_PACKAGE" bringup.launch.py \
     use_sim_time:=true \
@@ -661,15 +666,30 @@ run_offline_eval() {
 
   echo "[stage] rosbag replay finished; draining offline eval output"
   sleep 5
-  if offline_stop_launch INT; then
+  if offline_stop_launch INT 20; then
     offline_launch_status=0
   else
     offline_launch_status=$?
   fi
+  if (( offline_launch_status == 124 )); then
+    echo "[stage] offline eval did not stop after SIGINT; escalating to SIGTERM"
+    if offline_stop_launch TERM 10; then
+      offline_launch_status=0
+    else
+      offline_launch_status=$?
+    fi
+  fi
+  if (( offline_launch_status == 124 )); then
+    echo "[stage] offline eval did not stop after SIGTERM; escalating to SIGKILL"
+    kill -KILL "$offline_launch_pid" 2>/dev/null || true
+    wait "$offline_launch_pid" 2>/dev/null || true
+    offline_launch_pid=""
+    offline_launch_status=0
+  fi
   if (( offline_launch_status != 0 && offline_launch_status != 130 )); then
     die "offline eval launch exited with status $offline_launch_status"
   fi
-  trap - RETURN
+  trap - EXIT
 
   [[ -f "$snapshot_path" ]] || die "VSLAM snapshot was not created: $snapshot_path"
   [[ -d "$cuvslam_map_dir" ]] || die "cuVSLAM map was not created: $cuvslam_map_dir"
