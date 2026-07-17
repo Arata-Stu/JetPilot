@@ -21,6 +21,10 @@ Common presets:
 /workspaces/scripts/bringup.sh teleop-pca
 /workspaces/scripts/bringup.sh teleop-vesc
 
+# Live sensor plus joy/teleop/operation and vehicle interface
+/workspaces/scripts/bringup.sh drive-pca
+/workspaces/scripts/bringup.sh drive-vesc
+
 # Live camera + localization, without an actuator driver
 /workspaces/scripts/bringup.sh localization \
   --map /workspaces/map/course_a
@@ -50,8 +54,9 @@ launch argument can be overridden without creating duplicates:
   -- enable_rviz:=false enable_hd_map_publisher:=true
 ```
 
-The `custom` preset opens a multi-select UI when used interactively. Select every component that
-should be ON at once, then confirm the generated launch command. The same selection can be reused
+The first selector chooses one preset with arrow keys and Enter. Select `custom` only when you want
+to build your own component set. Inside `custom`, press Tab or Space on each component to turn it ON,
+then press Enter to confirm all selected components at once. The same selection can be reused
 non-interactively with `--components`; available names include `sensor`, `replay`, `localization`,
 `bag-manager`, `joy`, `teleop`, `operation`, `control`, `rviz`, `vehicle-pca`, and `vehicle-vesc`.
 

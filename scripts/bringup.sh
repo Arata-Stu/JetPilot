@@ -47,6 +47,8 @@ vehicle-pca          PCA9685 vehicle interface only
 vehicle-vesc         VESC vehicle interface only
 teleop-pca           Joy/teleop/operation + PCA9685 vehicle
 teleop-vesc          Joy/teleop/operation + VESC vehicle
+drive-pca            Live sensor + joy/teleop/operation + PCA9685 vehicle
+drive-vesc           Live sensor + joy/teleop/operation + VESC vehicle
 runtime-pca          Live sensor/localization/teleop + PCA9685 vehicle (map required)
 runtime-vesc         Live sensor/localization/teleop + VESC vehicle (map required)
 custom               Interactive component selection; all components start OFF
@@ -77,6 +79,7 @@ Options:
 
 Examples:
   $(basename "$0") --preset vehicle-pca
+  $(basename "$0") --preset drive-vesc
   $(basename "$0") --preset localization --map /workspaces/map/course_a
   $(basename "$0") replay-localization --bag /workspaces/record/run_01 \\
     --map /workspaces/map/course_a --rate 0.5
@@ -93,7 +96,7 @@ known_preset() {
   case "$1" in
     sensor|localization-only|localization|localize-live|replay-localization|\
       vehicle-pca|vehicle-vesc|teleop-pca|teleop-vesc|\
-      runtime-pca|runtime-vesc|custom) return 0 ;;
+      drive-pca|drive-vesc|runtime-pca|runtime-vesc|custom) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -235,6 +238,14 @@ enable_teleop_stack() {
   set_arg enable_operation true
 }
 
+enable_drive_stack() {
+  set_arg enable_tool true
+  set_arg enable_bag_manager false
+  set_arg enable_joy true
+  set_arg enable_teleop true
+  set_arg enable_operation true
+}
+
 enable_localization_stack() {
   set_arg enable_localization true
   set_arg enable_vslam true
@@ -282,6 +293,16 @@ apply_preset() {
       ;;
     teleop-vesc)
       enable_teleop_stack
+      apply_vehicle vesc
+      ;;
+    drive-pca)
+      set_arg enable_sensor_kit true
+      enable_drive_stack
+      apply_vehicle pca
+      ;;
+    drive-vesc)
+      set_arg enable_sensor_kit true
+      enable_drive_stack
       apply_vehicle vesc
       ;;
     runtime-pca)

@@ -40,6 +40,8 @@ def test_presets_are_listed() -> None:
         "localization",
         "localize-live",
         "replay-localization",
+        "drive-pca",
+        "drive-vesc",
         "runtime-pca",
         "runtime-vesc",
         "custom",
@@ -59,6 +61,20 @@ def test_vehicle_presets_select_matching_driver_configuration() -> None:
     assert "vehicle_interface_pkg:=jetpilot_vesc_interface" in vesc
     assert "vehicle_interface_launch:=launch/vesc_interface.launch.xml" in vesc
     assert "vesc_interface.param.yaml" in vesc
+
+
+def test_drive_presets_enable_live_sensor_teleop_and_vehicle() -> None:
+    output = run_launcher("drive-vesc", "--dry-run").stdout
+
+    assert "enable_sensor_kit:=true" in output
+    assert "enable_tool:=true" in output
+    assert "enable_bag_manager:=false" in output
+    assert "enable_joy:=true" in output
+    assert "enable_teleop:=true" in output
+    assert "enable_operation:=true" in output
+    assert "enable_vehicle:=true" in output
+    assert "vehicle_interface_pkg:=jetpilot_vesc_interface" in output
+    assert "enable_localization:=false" in output
 
 
 def test_empty_launch_arguments_are_not_emitted() -> None:
@@ -196,6 +212,8 @@ def test_every_noninteractive_preset_emits_unique_launch_arguments(tmp_path: Pat
         "vehicle-vesc",
         "teleop-pca",
         "teleop-vesc",
+        "drive-pca",
+        "drive-vesc",
         "runtime-pca",
         "runtime-vesc",
     )
