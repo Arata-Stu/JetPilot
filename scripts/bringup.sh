@@ -847,6 +847,9 @@ apply_preset "$PRESET"
 if [[ "$PRESET" == 'custom' ]]; then
   if [[ -n "$CUSTOM_COMPONENTS" ]]; then
     apply_custom_components "$CUSTOM_COMPONENTS"
+    if [[ -t 0 && -t 1 ]]; then
+      INTERACTIVE=true
+    fi
   else
     [[ -t 0 && -t 1 ]] || die 'custom preset requires an interactive terminal or --components'
     INTERACTIVE=true

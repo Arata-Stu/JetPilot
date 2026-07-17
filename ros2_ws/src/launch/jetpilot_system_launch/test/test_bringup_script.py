@@ -114,6 +114,33 @@ def test_custom_components_reject_conflicting_input_sources() -> None:
     assert "either sensor or replay" in result.stderr
 
 
+def test_custom_localization_requires_map_when_noninteractive() -> None:
+    result = run_launcher(
+        "custom",
+        "--components",
+        "sensor,localization,vehicle-vesc",
+        "--dry-run",
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "requires --map" in result.stderr
+
+
+def test_custom_localization_accepts_map_argument(tmp_path: Path) -> None:
+    output = run_launcher(
+        "custom",
+        "--components",
+        "sensor,localization,vehicle-vesc",
+        "--map",
+        str(tmp_path),
+        "--dry-run",
+    ).stdout
+
+    assert "enable_localization:=true" in output
+    assert f"map_dir:={tmp_path}" in output
+
+
 def test_live_localization_publishes_description_without_actuator(tmp_path: Path) -> None:
     output = run_launcher(
         "localize-live", "--map", str(tmp_path), "--dry-run"

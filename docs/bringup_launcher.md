@@ -59,6 +59,14 @@ to build your own component set. Inside `custom`, press Tab or Space on each com
 then press Enter to confirm all selected components at once. The same selection can be reused
 non-interactively with `--components`; available names include `sensor`, `replay`, `localization`,
 `bag-manager`, `joy`, `teleop`, `operation`, `control`, `rviz`, `vehicle-pca`, and `vehicle-vesc`.
+When `localization` is selected interactively, the launcher asks for a map next. In non-interactive
+commands, pass the map explicitly:
+
+```bash
+/workspaces/scripts/bringup.sh custom \
+  --components sensor,localization,vehicle-vesc \
+  --map /workspaces/map/course_a
+```
 
 ## Safety behavior
 
