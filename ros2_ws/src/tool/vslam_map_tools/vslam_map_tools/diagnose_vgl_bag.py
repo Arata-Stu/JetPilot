@@ -379,7 +379,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--sensor-bag", required=True, help="Sensor rosbag directory or storage file")
     parser.add_argument("--pose-bag", required=True, help="Pose rosbag directory or storage file")
     parser.add_argument("--camera-topic-config", required=True, help="VGL camera topic config YAML")
-    parser.add_argument("--pose-topic", default="/visual_slam/vis/slam_odometry")
+    parser.add_argument("--pose-topic", default="/visual_slam/tracking/odometry")
     parser.add_argument("--base-link-name", default="base_link")
     parser.add_argument("--min-stereo-baseline-m", type=float, default=0.01)
     parser.add_argument("--strict", action="store_true", help="Return non-zero when warnings are found")

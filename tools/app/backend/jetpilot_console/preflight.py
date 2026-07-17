@@ -5,6 +5,7 @@ import json
 import math
 import os
 import re
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
@@ -29,12 +30,18 @@ SUPPORTED_ACTIONS = frozenset(
         "prepare-hd-raster",
         "generate-raceline",
         "generate-preview",
+        "analyze-rosbag",
     }
 )
 
 _MAP_BUILD_TOKEN = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$")
 _PORTABLE_MAP_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 _BASE64_PAYLOAD = re.compile(r"^[A-Za-z0-9+/]*={0,2}$")
+_ROS_TOPIC = re.compile(r"^/[A-Za-z_][A-Za-z0-9_]*(?:/[A-Za-z_][A-Za-z0-9_]*)*$")
+
+DEFAULT_ANALYSIS_CONTROL_TOPIC = "/vehicle/control_cmd"
+DEFAULT_ANALYSIS_MODE_TOPIC = "/operation_mode/state"
+DEFAULT_ANALYSIS_POSE_TOPIC = "/visual_slam/tracking/odometry"
 
 
 @dataclass(frozen=True)
@@ -137,6 +144,8 @@ def evaluate_preflight(
 
     if normalized_action == "map-build":
         _map_build_preflight(config, values, report)
+    elif normalized_action == "analyze-rosbag":
+        _analyze_rosbag_preflight(config, values, report)
     else:
         map_dir = _required_map_dir(config, values.get("map_dir"), report)
         if map_dir is not None:
@@ -148,6 +157,12 @@ def evaluate_preflight(
                 _generate_preview_preflight(config, map_dir, report)
 
     return report.finish()
+
+
+def parse_rosbag_metadata(text: str) -> dict[str, Any]:
+    """Parse the rosbag2 metadata subset used by Console APIs and preflight."""
+
+    return _parse_rosbag_metadata(text)
 
 
 def _map_build_preflight(
@@ -162,6 +177,458 @@ def _map_build_preflight(
     _inspect_map_output(config, payload.get("map_dir"), report)
     _inspect_mapping_parameters(payload, report)
     _inspect_vgl_model(config, payload.get("output_model_dir"), report)
+
+
+def _analysis_topic(
+    topics: Mapping[str, Any],
+    report: _Report,
+    *,
+    check_id: str,
+    label: str,
+    raw_value: Any,
+    default: str = "",
+    required: bool,
+    expected_types: set[str] | None = None,
+) -> str:
+    explicit = raw_value is not None and bool(str(raw_value).strip())
+    topic = str(raw_value).strip() if explicit else default
+    if not topic:
+        report.add(
+            check_id,
+            label,
+            BLOCKED if required else WARNING,
+            f"No {label.lower()} was selected.",
+            remediation=(
+                f"Select a {label.lower()} contained in the rosbag."
+                if required
+                else f"Select a {label.lower()} to include this signal in the analysis."
+            ),
+        )
+        return ""
+    if not _ROS_TOPIC.fullmatch(topic):
+        report.add(
+            check_id,
+            label,
+            BLOCKED if required or explicit else WARNING,
+            f"{topic!r} is not a valid absolute ROS topic name.",
+            remediation="Choose an absolute topic name from the rosbag topic list.",
+            details={"topic": topic},
+        )
+        return ""
+
+    raw_topic = topics.get(topic)
+    if not isinstance(raw_topic, Mapping):
+        report.add(
+            check_id,
+            label,
+            BLOCKED if required else WARNING,
+            f"The rosbag does not contain {topic}.",
+            remediation=(
+                f"Select another {label.lower()} or record {topic}."
+                if required
+                else f"Record {topic} or leave this optional signal unavailable."
+            ),
+            details={"topic": topic, "available_topics": sorted(topics)},
+        )
+        return ""
+
+    message_count = raw_topic.get("message_count")
+    if not isinstance(message_count, int) or isinstance(message_count, bool) or message_count <= 0:
+        report.add(
+            check_id,
+            label,
+            BLOCKED if required else WARNING,
+            f"{topic} has no usable messages according to metadata.yaml.",
+            remediation="Repair/reindex the rosbag or select a populated topic.",
+            details={"topic": topic, "message_count": message_count},
+        )
+        return ""
+
+    actual_type = str(raw_topic.get("type") or "")
+    if expected_types and actual_type not in expected_types:
+        report.add(
+            check_id,
+            label,
+            BLOCKED if required else WARNING,
+            f"{topic} has unsupported type {actual_type or '(unknown)' }.",
+            remediation="Select a topic whose message type is supported by the analysis worker.",
+            details={
+                "topic": topic,
+                "actual_type": actual_type,
+                "expected_types": sorted(expected_types),
+            },
+        )
+        return ""
+
+    report.add(
+        check_id,
+        label,
+        PASS,
+        f"{topic} contains {message_count} message(s).",
+        details={"topic": topic, "type": actual_type, "message_count": message_count},
+    )
+    return topic
+
+
+def _analysis_map(
+    config: ConsoleConfig,
+    raw_value: Any,
+    report: _Report,
+    *,
+    required: bool,
+) -> Path | None:
+    if raw_value is None or not str(raw_value).strip():
+        report.add(
+            "analysis.map",
+            "Analysis map",
+            BLOCKED if required else WARNING,
+            "No map was selected for trajectory localization/overlay.",
+            remediation=(
+                "Select a map containing cuVGL and cuVSLAM artifacts."
+                if required
+                else "Select the map used for this run to enable the map overlay."
+            ),
+            details={"map_root": str(config.map_root)},
+        )
+        return None
+    try:
+        map_dir = resolve_under_root(
+            str(raw_value),
+            config.map_root,
+            label="analysis map",
+            require_exists=True,
+            require_directory=True,
+        )
+    except ValueError as exc:
+        report.add(
+            "analysis.map",
+            "Analysis map",
+            BLOCKED,
+            str(exc),
+            remediation="Select an existing map folder inside MAP_ROOT.",
+            details={"map_root": str(config.map_root)},
+        )
+        return None
+
+    report.resolved["map_dir"] = str(map_dir)
+    report.add(
+        "analysis.map",
+        "Analysis map",
+        PASS,
+        "The selected map is inside the configured map root.",
+        details={"path": str(map_dir)},
+    )
+    overlay_files = [
+        map_dir / f"{map_dir.name}_hd_map.yaml",
+        map_dir / "vslam_landmarks.yaml",
+    ]
+    if not any(path.is_file() and path.stat().st_size > 0 for path in overlay_files):
+        report.add(
+            "analysis.map_overlay",
+            "Map overlay",
+            WARNING,
+            "The selected map has no HD map or landmark raster metadata for the browser overlay.",
+            remediation="Prepare the HD raster/HD map to display the trajectory on a map image.",
+            details={"expected_any": [str(path) for path in overlay_files]},
+        )
+    else:
+        report.add(
+            "analysis.map_overlay",
+            "Map overlay",
+            PASS,
+            "Map overlay metadata is available.",
+        )
+    return map_dir
+
+
+def _offline_map_artifacts(map_dir: Path, report: _Report) -> bool:
+    missing = []
+    for name in ("cuvgl_map", "cuvslam_map"):
+        path = map_dir / name
+        try:
+            populated = path.is_dir() and any(path.iterdir())
+        except OSError:
+            populated = False
+        if not populated:
+            missing.append(str(path))
+    if missing:
+        report.add(
+            "analysis.localization_map",
+            "Offline localization map",
+            BLOCKED,
+            "Offline localization requires populated cuVGL and cuVSLAM map folders.",
+            remediation="Select the matching completed map or finish its VGL/VSLAM build first.",
+            details={"missing_or_empty": missing},
+        )
+        return False
+    report.add(
+        "analysis.localization_map",
+        "Offline localization map",
+        PASS,
+        "Populated cuVGL and cuVSLAM map folders are available.",
+    )
+    return True
+
+
+def _analysis_max_fps(payload: Mapping[str, Any], report: _Report) -> None:
+    raw_value = payload.get("max_fps", 15.0)
+    try:
+        value = float(raw_value)
+    except (TypeError, ValueError):
+        value = math.nan
+    if not math.isfinite(value) or value <= 0.0 or value > 240.0:
+        report.add(
+            "analysis.max_fps",
+            "Frame extraction rate",
+            BLOCKED,
+            "max_fps must be a finite value greater than 0 and at most 240.",
+            remediation="Choose a practical extraction rate such as 10, 15, or 30 fps.",
+            details={"value": raw_value},
+        )
+        return
+    report.resolved["max_fps"] = value
+    report.add(
+        "analysis.max_fps",
+        "Frame extraction rate",
+        PASS,
+        f"Images will be extracted at up to {value:g} fps.",
+        details={"max_fps": value},
+    )
+
+
+def _analyze_rosbag_preflight(
+    config: ConsoleConfig,
+    payload: Mapping[str, Any],
+    report: _Report,
+) -> None:
+    _analysis_runtime(config, report)
+    bag_info = _inspect_rosbag(config, payload.get("rosbag"), report)
+    _analysis_max_fps(payload, report)
+    if bag_info is None:
+        return
+    topics = bag_info.get("topics")
+    if not isinstance(topics, Mapping):
+        topics = {}
+
+    image_topic = _analysis_topic(
+        topics,
+        report,
+        check_id="analysis.image_topic",
+        label="Image topic",
+        raw_value=payload.get("image_topic"),
+        required=True,
+        expected_types={"sensor_msgs/msg/Image", "sensor_msgs/msg/CompressedImage"},
+    )
+    if image_topic:
+        report.resolved["image_topic"] = image_topic
+
+    control_topic = _analysis_topic(
+        topics,
+        report,
+        check_id="analysis.control_topic",
+        label="Control command topic",
+        raw_value=payload.get("control_topic"),
+        default=DEFAULT_ANALYSIS_CONTROL_TOPIC,
+        required=False,
+        expected_types={"jetpilot_msgs/msg/ControlCommand"},
+    )
+    mode_topic = _analysis_topic(
+        topics,
+        report,
+        check_id="analysis.mode_topic",
+        label="Operation mode topic",
+        raw_value=payload.get("mode_topic"),
+        default=DEFAULT_ANALYSIS_MODE_TOPIC,
+        required=False,
+        expected_types={"jetpilot_msgs/msg/OperationModeState"},
+    )
+    if control_topic:
+        report.resolved["control_topic"] = control_topic
+    if mode_topic:
+        report.resolved["mode_topic"] = mode_topic
+
+    speed_topic = ""
+    if payload.get("speed_topic") is not None and str(payload.get("speed_topic")).strip():
+        speed_topic = _analysis_topic(
+            topics,
+            report,
+            check_id="analysis.speed_topic",
+            label="Speed topic",
+            raw_value=payload.get("speed_topic"),
+            required=False,
+        )
+        if speed_topic:
+            report.resolved["speed_topic"] = speed_topic
+            speed_type = str((topics.get(speed_topic) or {}).get("type") or "")
+            supported_speed_type = bool(
+                re.search(
+                    r"/(?:Float32|Float64|Int8|Int16|Int32|Int64|UInt8|UInt16|UInt32|UInt64|Odometry|Twist|TwistStamped|TwistWithCovarianceStamped)$",
+                    speed_type,
+                )
+            )
+            if not supported_speed_type:
+                report.add(
+                    "analysis.speed_type",
+                    "Speed topic decoding",
+                    WARNING,
+                    f"The selected type {speed_type or '<unknown>'} has no guaranteed speed-field contract.",
+                    remediation=(
+                        "Use Odometry, Twist, a numeric std_msgs topic, or leave this empty to derive "
+                        "vehicle speed from the trajectory. Unknown samples are skipped, not converted to zero."
+                    ),
+                    details={"topic": speed_topic, "type": speed_type},
+                )
+            if speed_topic.startswith("/commands/"):
+                report.resolved["speed_kind"] = "commanded"
+                report.resolved["speed_label"] = "Commanded speed"
+                report.add(
+                    "analysis.speed_semantics",
+                    "Speed interpretation",
+                    WARNING,
+                    "The selected /commands topic is an actuator command, not a measured vehicle speed.",
+                    remediation=(
+                        "Display it as Commanded speed. Use recorded VSLAM odometry or an offline "
+                        "trajectory when actual vehicle speed is needed."
+                    ),
+                    details={"topic": speed_topic, "kind": "commanded"},
+                )
+            else:
+                report.resolved["speed_kind"] = "topic"
+                report.resolved["speed_label"] = "Speed topic"
+
+    raw_mode = str(payload.get("trajectory_mode") or "auto").strip().lower()
+    if raw_mode not in {"auto", "recorded", "offline", "none"}:
+        report.add(
+            "analysis.trajectory_mode",
+            "Trajectory source",
+            BLOCKED,
+            "trajectory_mode must be auto, recorded, offline, or none.",
+            remediation="Choose one of the trajectory source options shown in the UI.",
+            details={"value": raw_mode},
+        )
+        return
+
+    pose_topic_name = str(payload.get("pose_topic") or DEFAULT_ANALYSIS_POSE_TOPIC).strip()
+    pose_topic = ""
+    if raw_mode in {"auto", "recorded"}:
+        pose_topic = _analysis_topic(
+            topics,
+            report,
+            check_id="analysis.pose_topic",
+            label="Recorded pose topic",
+            raw_value=pose_topic_name,
+            required=raw_mode == "recorded",
+            expected_types={"nav_msgs/msg/Odometry"},
+        )
+
+    map_required = raw_mode == "offline"
+    map_dir = _analysis_map(config, payload.get("map_dir"), report, required=map_required)
+    if raw_mode == "recorded" and not pose_topic:
+        resolved_mode = "recorded"
+    elif raw_mode == "offline":
+        resolved_mode = "offline"
+    elif raw_mode == "none":
+        resolved_mode = "none"
+    elif pose_topic:
+        resolved_mode = "recorded"
+    elif map_dir is not None:
+        resolved_mode = "offline"
+    else:
+        resolved_mode = "none"
+
+    report.resolved["trajectory_mode"] = resolved_mode
+    if pose_topic and resolved_mode == "recorded":
+        report.resolved["pose_topic"] = pose_topic
+        report.add(
+            "analysis.trajectory_source",
+            "Trajectory source",
+            PASS,
+            "The recorded odometry topic will provide the trajectory.",
+            details={"mode": "recorded", "topic": pose_topic},
+        )
+    elif resolved_mode == "none":
+        report.add(
+            "analysis.trajectory_source",
+            "Trajectory source",
+            WARNING,
+            "No recorded pose is available and offline localization will not run.",
+            remediation="Select the matching map and Auto/Offline to generate a trajectory.",
+            details={"mode": "none"},
+        )
+
+    if resolved_mode == "offline":
+        if map_dir is None:
+            # _analysis_map already supplied the actionable blocked check for an
+            # explicit offline request. Auto without a map degrades to `none`.
+            if raw_mode == "offline":
+                return
+        else:
+            _offline_map_artifacts(map_dir, report)
+            cameras = _inspect_camera_config(config, payload.get("topic_config"), report)
+            if cameras is not None:
+                _check_mapping_topics(bag_info, cameras, report)
+            _inspect_vgl_model(config, payload.get("output_model_dir"), report)
+            report.add(
+                "analysis.trajectory_source",
+                "Trajectory source",
+                PASS,
+                "Offline VGL/VSLAM will generate the trajectory before extraction.",
+                details={"mode": "offline", "map_dir": str(map_dir)},
+            )
+
+    if not speed_topic and resolved_mode == "none":
+        report.add(
+            "analysis.speed_source",
+            "Speed source",
+            WARNING,
+            "No speed topic or trajectory is available, so speed cannot be plotted.",
+            remediation="Select a speed topic or enable recorded/offline trajectory generation.",
+        )
+    elif not speed_topic:
+        report.resolved["speed_kind"] = "vehicle"
+        report.resolved["speed_label"] = "Vehicle speed"
+        report.add(
+            "analysis.speed_source",
+            "Speed source",
+            PASS,
+            "Speed can be read or derived from the selected trajectory source.",
+        )
+
+
+def _analysis_runtime(config: ConsoleConfig, report: _Report) -> None:
+    setup = Path(config.ros2_ws) / "install" / "setup.bash"
+    python_value = str(getattr(config, "python_bin", "python3") or "python3")
+    python_path = Path(python_value).expanduser()
+    python_available = (
+        python_path.is_file()
+        if python_path.is_absolute()
+        else shutil.which(python_value) is not None
+    )
+    missing = []
+    if not setup.is_file():
+        missing.append(str(setup))
+    if not python_available:
+        missing.append(python_value)
+    if missing:
+        report.add(
+            "analysis.runtime",
+            "Linux/Docker analysis runtime",
+            BLOCKED,
+            "ROS workspace setup or the analysis Python interpreter is missing.",
+            remediation=(
+                "Run the Console in the built JetPilot Linux/Docker environment, source/build "
+                "ros2_ws, and set PYTHON_BIN when using a custom Python environment."
+            ),
+            details={"missing": missing, "workspace_setup": str(setup), "python": python_value},
+        )
+        return
+    report.add(
+        "analysis.runtime",
+        "Linux/Docker analysis runtime",
+        PASS,
+        "ROS workspace setup and the analysis Python interpreter are available.",
+        details={"workspace_setup": str(setup), "python": python_value},
+    )
 
 
 def _inspect_rosbag(

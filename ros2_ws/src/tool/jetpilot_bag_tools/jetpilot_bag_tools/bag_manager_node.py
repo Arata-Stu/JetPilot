@@ -38,6 +38,11 @@ DEFAULT_TOPICS = [
     "/tf_static",
     "/robot_description",
     "/joint_states",
+    # Localization output/state retained for online and offline drive analysis.
+    "/visual_slam/tracking/odometry",
+    "/localization/pose_hint_state",
+    "/localization/pose_hint_required",
+    "/diagnostics",
     # SilkyEvCam event camera.
     "/event_camera/camera_info",
     "/event_camera/events",

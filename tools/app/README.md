@@ -71,6 +71,14 @@ the loopback address.
 Implemented in this MVP:
 
 - Local rosbag scan from `RECORD_ROOT`.
+- Rosbag analysis preprocessing under `ANALYSIS_ROOT` (defaults to
+  `RECORD_ROOT/.jetpilot_analysis`).
+- Synchronized drive viewer for image frames, operation mode, applied control,
+  speed, and localized trajectory.
+- Optional offline VGL/VSLAM replay when a recorded localization trajectory is
+  unavailable, using an isolated configurable ROS domain.
+- Analysis preflight checks for required topics, selected Map artifacts, VGL
+  assets, and camera inputs, with visible job stage/progress and missing data.
 - Local map scan from `MAP_ROOT`.
 - Dashboard focused on status, recent assets, and running tasks.
 - Dedicated Map Builder tab for VGL/VSLAM build entry.
@@ -94,6 +102,11 @@ Implemented in this MVP:
   then repeats the same checks in the backend immediately before a task starts.
 - Console map-generation tasks take an exclusive lock per map folder, so double
   clicks and overlapping Console writes cannot target one bundle concurrently.
+- Offline localization analysis tasks take an exclusive lock on
+  `JETPILOT_ANALYSIS_ROS_DOMAIN_ID` (default `92`) so two replay graphs cannot
+  contaminate one another.
+- Analysis also locks the selected Map folder, preventing a Console Map build
+  or edit from changing the Map while the job is reading it.
 - The Map Builder UI is tuned for the current VSLAM/VGL workflow. Occupancy-map
   specific controls such as FoundationStereo model resolution are intentionally
   hidden from the main form.
@@ -110,6 +123,52 @@ Implemented in this MVP:
   raceline, and preview generation happen from the same workspace.
 - Preserve shell commands as transparent implementation details: the GUI should
   show exactly what it ran and make it easy to copy.
+
+## Rosbag drive analysis
+
+Open **Rosbags → Analyze** or the **Bag Analysis** tab. Select the image and
+telemetry topics, the Map used for the run, and a trajectory source:
+
+- **Auto** uses recorded `/visual_slam/tracking/odometry` when present and
+  otherwise runs offline VGL/VSLAM with the selected Map.
+- **Recorded** never runs localization and requires a recorded odometry topic.
+  When the bag contains `map→odom` on `/tf`, the preprocessor applies it and
+  excludes odometry recorded before the Map transform became available.
+- **Offline** always replays the bag through VGL/VSLAM. The selected Map must
+  contain populated `cuvgl_map/` and `cuvslam_map/` folders. Recorded `/tf` is
+  isolated from the new VSLAM graph. Replay starts paused, publishes `/clock`,
+  and resumes only after VGL, VSLAM, the localization manager, the snapshot
+  recorder, and the rosbag resume service are visible. The result is accepted
+  only after the localization manager reports confirmed
+  `localized` state. After replay ends, the graph gets a short drain interval
+  before graceful shutdown. Live `map→odom` is applied before the snapshot is
+  stored.
+- **None** produces image/command telemetry without a Map trajectory.
+
+The preprocessing task writes `manifest.json`, `status.json`, `timeline.json`,
+and a rate-limited JPEG sequence. The browser reads these normalized artifacts;
+it does not repeatedly seek or decode the rosbag itself. Source nanosecond
+timestamps are retained as decimal strings while playback uses relative
+seconds, avoiding JavaScript integer precision loss.
+
+The UI checks that the built Linux/Docker ROS workspace and analysis Python are
+available before enabling Start. Corrupt or unsupported individual image frames
+are skipped and reported. Long bags are automatically sampled to at most 50,000
+frames so a completed timeline remains browser-readable.
+
+The Map is pinned in the result with a fingerprint. Post-processing reports how
+much of a `map`-frame trajectory falls inside its raster bounds. This is a
+useful mismatch warning, not proof that the Map is correct. Results in another
+frame remain viewable as a standalone trajectory but are not silently overlaid
+on the Map.
+
+Environment overrides:
+
+```bash
+ANALYSIS_ROOT=/workspaces/record/.jetpilot_analysis \
+JETPILOT_ANALYSIS_ROS_DOMAIN_ID=92 \
+tools/app/scripts/start.sh --host 127.0.0.1 --port 8765
+```
 
 ## Non-Goals For MVP
 

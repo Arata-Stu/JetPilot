@@ -42,9 +42,12 @@ _REPLAY_ISOLATED_TOPICS = (
     '/visual_slam/trigger_hint',
     '/visual_localization/trigger_localization',
     '/visual_localization/pose',
+    '/visual_slam/tracking/odometry',
+    '/visual_slam/tracking/slam_path',
     '/diagnostics',
     '/localization/pose_hint_required',
     '/localization/pose_hint_state',
+    '/tf',
 )
 
 
@@ -315,6 +318,13 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('vslam_snapshot_path_topic', '/visual_slam/tracking/slam_path', cli=True)
     args.add_arg('vslam_snapshot_odom_topic', '/visual_slam/tracking/odometry', cli=True)
     args.add_arg('vslam_snapshot_landmarks_topic', '/visual_slam/vis/landmarks_cloud', cli=True)
+    args.add_arg(
+        'vslam_snapshot_localization_state_topic',
+        '/localization/pose_hint_state',
+        cli=True)
+    args.add_arg('vslam_snapshot_tf_topic', '/tf', cli=True)
+    args.add_arg('vslam_snapshot_map_frame', 'map', cli=True)
+    args.add_arg('vslam_snapshot_require_localized_map', False, cli=True)
     args.add_arg('vslam_snapshot_write_interval_s', '5.0', cli=True)
 
     args.add_arg('enable_rviz', False, cli=True)
@@ -409,6 +419,12 @@ def generate_launch_description() -> lut.LaunchDescription:
                 'vslam_snapshot_odom_topic': args.vslam_snapshot_odom_topic,
                 'vslam_snapshot_landmarks_topic':
                     args.vslam_snapshot_landmarks_topic,
+                'vslam_snapshot_localization_state_topic':
+                    args.vslam_snapshot_localization_state_topic,
+                'vslam_snapshot_tf_topic': args.vslam_snapshot_tf_topic,
+                'vslam_snapshot_map_frame': args.vslam_snapshot_map_frame,
+                'vslam_snapshot_require_localized_map':
+                    args.vslam_snapshot_require_localized_map,
                 'vslam_snapshot_write_interval_s':
                     args.vslam_snapshot_write_interval_s,
                 'use_sim_time': args.use_sim_time,

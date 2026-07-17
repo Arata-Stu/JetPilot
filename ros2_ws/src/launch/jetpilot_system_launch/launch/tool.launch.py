@@ -96,6 +96,12 @@ def add_nodes(args: lu.ArgumentContainer):
                 '--path-topic', args.vslam_snapshot_path_topic,
                 '--odom-topic', args.vslam_snapshot_odom_topic,
                 '--landmarks-topic', args.vslam_snapshot_landmarks_topic,
+                '--localization-state-topic',
+                args.vslam_snapshot_localization_state_topic,
+                '--tf-topic', args.vslam_snapshot_tf_topic,
+                '--map-frame', args.vslam_snapshot_map_frame,
+                '--require-localized-map',
+                str(args.vslam_snapshot_require_localized_map),
                 '--output', args.vslam_snapshot_output,
                 '--write-interval-sec', str(args.vslam_snapshot_write_interval_s),
             ],
@@ -162,6 +168,13 @@ def generate_launch_description() -> lut.LaunchDescription:
         'vslam_snapshot_landmarks_topic',
         '/visual_slam/vis/landmarks_cloud',
         cli=True)
+    args.add_arg(
+        'vslam_snapshot_localization_state_topic',
+        '/localization/pose_hint_state',
+        cli=True)
+    args.add_arg('vslam_snapshot_tf_topic', '/tf', cli=True)
+    args.add_arg('vslam_snapshot_map_frame', 'map', cli=True)
+    args.add_arg('vslam_snapshot_require_localized_map', False, cli=True)
     args.add_arg('vslam_snapshot_write_interval_s', '5.0', cli=True)
     args.add_arg('use_sim_time', False, cli=True)
 

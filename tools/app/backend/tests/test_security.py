@@ -201,6 +201,25 @@ class JoyProfileSaveTests(unittest.TestCase):
 
 
 class TaskResourceLockTests(unittest.TestCase):
+    def test_synchronous_guard_conflicts_with_active_task(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            manager = TaskManager(root / "state", root)
+            resource_key = f"map-dir:{root / 'map-a'}"
+            with patch.object(manager, "_run_task", return_value=None):
+                active = manager.start(
+                    kind="analyze-rosbag",
+                    title="Analyze with map",
+                    command=["true"],
+                    resource_key=resource_key,
+                )
+
+                with self.assertRaises(TaskResourceConflict) as raised:
+                    with manager.guard_resources([resource_key]):
+                        self.fail("guard must not be entered while the map is active")
+
+            self.assertEqual(raised.exception.active_task["task_id"], active.task_id)
+
     def test_active_resource_blocks_same_and_different_task_kinds(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)
@@ -233,6 +252,74 @@ class TaskResourceLockTests(unittest.TestCase):
                         self.assertEqual(len(manager.list_tasks()), task_count)
                         self.assertEqual(raised.exception.active_task["task_id"], active.task_id)
                         self.assertEqual(raised.exception.active_task["status"], status)
+
+    def test_multi_resource_task_blocks_each_claimed_resource(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            manager = TaskManager(root / "state", root)
+            bag_key = f"analysis-bag:{root / 'record/run-a'}"
+            map_key = f"map-dir:{root / 'map/course-a'}"
+
+            with patch.object(manager, "_run_task", return_value=None):
+                active = manager.start(
+                    kind="analyze-rosbag",
+                    title="Analyze run-a",
+                    command=["true"],
+                    resource_key=bag_key,
+                    resource_keys=[bag_key, map_key, map_key],
+                )
+
+                self.assertEqual(active.resource_key, bag_key)
+                self.assertEqual(active.resource_keys, [map_key])
+                self.assertEqual(active.claimed_resource_keys(), (bag_key, map_key))
+
+                for attempted_key in (bag_key, map_key):
+                    with self.subTest(attempted_key=attempted_key):
+                        with self.assertRaises(TaskResourceConflict) as raised:
+                            manager.start(
+                                kind="map-build",
+                                title="Conflicting task",
+                                command=["true"],
+                                resource_key=attempted_key,
+                            )
+                        self.assertEqual(raised.exception.resource_key, attempted_key)
+                        self.assertEqual(
+                            raised.exception.active_task["task_id"], active.task_id
+                        )
+
+                unrelated = manager.start(
+                    kind="map-build",
+                    title="Different map",
+                    command=["true"],
+                    resource_key=f"map-dir:{root / 'map/course-b'}",
+                )
+                self.assertNotEqual(unrelated.task_id, active.task_id)
+
+    def test_legacy_single_resource_state_keeps_string_shape(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            state_dir = root / "state"
+            manager = TaskManager(state_dir, root)
+            resource_key = f"map-dir:{root / 'map-a'}"
+
+            with patch.object(manager, "_run_task", return_value=None):
+                task = manager.start(
+                    kind="map-build",
+                    title="Build map",
+                    command=["true"],
+                    resource_key=resource_key,
+                )
+
+            persisted = json.loads((state_dir / "tasks.json").read_text(encoding="utf-8"))
+            self.assertEqual(persisted[0]["resource_key"], resource_key)
+            self.assertNotIn("resource_keys", persisted[0])
+
+            reloaded = TaskManager(state_dir, root).get_task(task.task_id)
+            self.assertIsNotNone(reloaded)
+            assert reloaded is not None
+            self.assertEqual(reloaded.resource_key, resource_key)
+            self.assertEqual(reloaded.claimed_resource_keys(), (resource_key,))
+            self.assertNotIn("resource_keys", reloaded.to_json())
 
     def test_resource_check_and_registration_are_atomic(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

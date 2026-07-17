@@ -8,10 +8,11 @@ import subprocess
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator, Sequence
 
 
 ACTIVE_TASK_STATUSES = frozenset({"queued", "running", "stopping"})
@@ -38,9 +39,29 @@ class Task:
     artifacts: list[dict[str, Any]] = field(default_factory=list)
     error: str = ""
     resource_key: str = ""
+    # Additional exclusive resources owned by this task.  ``resource_key`` is
+    # intentionally retained as the primary resource so task state written by
+    # older Console versions keeps loading unchanged.
+    resource_keys: list[str] = field(default_factory=list)
 
     def to_json(self) -> dict[str, Any]:
-        return asdict(self)
+        payload = asdict(self)
+        # Keep the persisted/API shape of legacy single-resource tasks stable.
+        # The extra field is only needed when a task actually owns more than
+        # one resource.
+        if not self.resource_keys:
+            payload.pop("resource_keys", None)
+        return payload
+
+    def claimed_resource_keys(self) -> tuple[str, ...]:
+        """Return all exclusive resources, including legacy task state."""
+
+        keys: list[str] = []
+        for value in (self.resource_key, *self.resource_keys):
+            normalized = str(value or "").strip()
+            if normalized and normalized not in keys:
+                keys.append(normalized)
+        return tuple(keys)
 
 
 class TaskResourceConflict(RuntimeError):
@@ -113,6 +134,36 @@ class TaskManager:
         with self.lock:
             return self.tasks.get(task_id)
 
+    def _resource_conflict_unlocked(
+        self, requested_resource_keys: Sequence[str]
+    ) -> tuple[str, Task] | None:
+        for existing in self.tasks.values():
+            if existing.status not in ACTIVE_TASK_STATUSES:
+                continue
+            claimed = set(existing.claimed_resource_keys())
+            conflicting_resource = next(
+                (key for key in requested_resource_keys if key in claimed),
+                None,
+            )
+            if conflicting_resource is not None:
+                return conflicting_resource, existing
+        return None
+
+    @contextmanager
+    def guard_resources(self, resource_keys: Sequence[str]) -> Iterator[None]:
+        """Prevent task start while a short synchronous mutation is in progress."""
+
+        requested = tuple(
+            dict.fromkeys(str(value or "").strip() for value in resource_keys)
+        )
+        requested = tuple(value for value in requested if value)
+        with self.lock:
+            conflict = self._resource_conflict_unlocked(requested)
+            if conflict is not None:
+                resource_key, active_task = conflict
+                raise TaskResourceConflict(resource_key, active_task)
+            yield
+
     def start(
         self,
         *,
@@ -122,22 +173,24 @@ class TaskManager:
         cwd: str | None = None,
         artifacts: list[dict[str, Any]] | None = None,
         resource_key: str | None = None,
+        resource_keys: list[str] | tuple[str, ...] | None = None,
     ) -> Task:
-        normalized_resource_key = str(resource_key or "").strip()
+        requested_resource_keys: list[str] = []
+        for value in (resource_key, *(resource_keys or ())):
+            normalized = str(value or "").strip()
+            if normalized and normalized not in requested_resource_keys:
+                requested_resource_keys.append(normalized)
+        normalized_resource_key = (
+            requested_resource_keys[0] if requested_resource_keys else ""
+        )
+        additional_resource_keys = requested_resource_keys[1:]
         task_id = f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{kind}-{uuid.uuid4().hex[:8]}"
         with self.lock:
-            if normalized_resource_key:
-                active_task = next(
-                    (
-                        existing
-                        for existing in self.tasks.values()
-                        if existing.resource_key == normalized_resource_key
-                        and existing.status in ACTIVE_TASK_STATUSES
-                    ),
-                    None,
-                )
-                if active_task is not None:
-                    raise TaskResourceConflict(normalized_resource_key, active_task)
+            if requested_resource_keys:
+                conflict = self._resource_conflict_unlocked(requested_resource_keys)
+                if conflict is not None:
+                    conflicting_resource, existing = conflict
+                    raise TaskResourceConflict(conflicting_resource, existing)
 
             task_path = self.task_dir / task_id
             task_path.mkdir(parents=True, exist_ok=True)
@@ -152,6 +205,7 @@ class TaskManager:
                 log_path=str(log_path),
                 artifacts=artifacts or [],
                 resource_key=normalized_resource_key,
+                resource_keys=additional_resource_keys,
             )
             self.tasks[task_id] = task
             self._save()

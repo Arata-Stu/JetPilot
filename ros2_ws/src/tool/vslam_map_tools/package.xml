@@ -14,8 +14,12 @@
   <depend>rclpy</depend>
   <depend>rosidl_runtime_py</depend>
   <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>tf2_msgs</depend>
   <depend>tf2_ros</depend>
   <depend>visualization_msgs</depend>
+
+  <test_depend>ament_cmake_pytest</test_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

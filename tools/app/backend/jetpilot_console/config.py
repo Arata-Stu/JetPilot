@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -38,6 +39,19 @@ def _default_mount_path(workspace_root: Path, name: str, fallback: str) -> Path:
     return Path(fallback)
 
 
+def _bounded_int_env(name: str, *, default: int, minimum: int, maximum: int) -> int:
+    raw_value = os.environ.get(name)
+    if raw_value is None or not raw_value.strip():
+        return default
+    try:
+        value = int(raw_value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer") from exc
+    if value < minimum or value > maximum:
+        raise ValueError(f"{name} must be between {minimum} and {maximum}")
+    return value
+
+
 @dataclass(frozen=True)
 class ConsoleConfig:
     repo_root: Path
@@ -47,10 +61,12 @@ class ConsoleConfig:
     task_dir: Path
     record_root: Path
     map_root: Path
+    analysis_root: Path
     ros2_ws: Path
     python_ws: Path
     python_bin: str
     launch_package: str
+    analysis_ros_domain_id: int
     jetson_user: str
     jetson_ips: list[str]
     jetson_map_root: str
@@ -76,6 +92,27 @@ class ConsoleConfig:
                 str(_default_mount_path(repo_root, "python_ws", str(ros2_ws.parent / "python_ws"))),
             )
         ).expanduser().resolve(strict=False)
+        record_root = Path(
+            os.environ.get(
+                "RECORD_ROOT",
+                str(_default_mount_path(repo_root, "record", "/workspaces/record")),
+            )
+        ).expanduser().resolve(strict=False)
+        map_root = Path(
+            os.environ.get(
+                "MAP_ROOT",
+                str(_default_mount_path(repo_root, "map", "/workspaces/map")),
+            )
+        ).expanduser().resolve(strict=False)
+        analysis_root = Path(
+            os.environ.get(
+                "ANALYSIS_ROOT",
+                os.environ.get(
+                    "JETPILOT_ANALYSIS_ROOT",
+                    str(record_root / ".jetpilot_analysis"),
+                ),
+            )
+        ).expanduser().resolve(strict=False)
         jetson_ips = os.environ.get(
             "JETSON_REMOTE_IPS", "10.42.0.1 192.168.55.1 192.168.11.190"
         ).split()
@@ -86,22 +123,24 @@ class ConsoleConfig:
             frontend_root=app_root / "frontend",
             state_dir=state_dir,
             task_dir=state_dir / "tasks",
-            record_root=Path(
-                os.environ.get(
-                    "RECORD_ROOT",
-                    str(_default_mount_path(repo_root, "record", "/workspaces/record")),
-                )
-            ).expanduser().resolve(strict=False),
-            map_root=Path(
-                os.environ.get(
-                    "MAP_ROOT",
-                    str(_default_mount_path(repo_root, "map", "/workspaces/map")),
-                )
-            ).expanduser().resolve(strict=False),
+            record_root=record_root,
+            map_root=map_root,
+            analysis_root=analysis_root,
             ros2_ws=ros2_ws,
             python_ws=python_ws,
-            python_bin=os.environ.get("PYTHON_BIN", "/opt/env/bin/python"),
+            python_bin=os.environ.get(
+                "PYTHON_BIN",
+                "/opt/env/bin/python"
+                if Path("/opt/env/bin/python").is_file()
+                else sys.executable,
+            ),
             launch_package=os.environ.get("JETPILOT_LAUNCH_PACKAGE", "jetpilot_system_launch"),
+            analysis_ros_domain_id=_bounded_int_env(
+                "JETPILOT_ANALYSIS_ROS_DOMAIN_ID",
+                default=92,
+                minimum=0,
+                maximum=232,
+            ),
             jetson_user=os.environ.get("JETSON_REMOTE_USER", "tamiya"),
             jetson_ips=jetson_ips,
             jetson_map_root=os.environ.get(
@@ -123,10 +162,12 @@ class ConsoleConfig:
             "state_dir": str(self.state_dir),
             "record_root": str(self.record_root),
             "map_root": str(self.map_root),
+            "analysis_root": str(self.analysis_root),
             "ros2_ws": str(self.ros2_ws),
             "python_ws": str(self.python_ws),
             "python_bin": self.python_bin,
             "launch_package": self.launch_package,
+            "analysis_ros_domain_id": self.analysis_ros_domain_id,
             "jetson_user": self.jetson_user,
             "jetson_ips": self.jetson_ips,
             "jetson_map_root": self.jetson_map_root,

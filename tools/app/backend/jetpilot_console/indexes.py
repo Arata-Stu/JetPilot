@@ -31,6 +31,12 @@ def scan_rosbags(record_root: Path) -> list[dict[str, object]]:
 
     bags: list[dict[str, object]] = []
     for metadata in sorted(record_root.rglob("metadata.yaml")):
+        try:
+            relative_parts = metadata.relative_to(record_root).parts
+        except ValueError:
+            continue
+        if any(part.startswith(".") for part in relative_parts):
+            continue
         bag_dir = metadata.parent
         topic_count = 0
         try:

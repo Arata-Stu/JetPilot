@@ -20,9 +20,16 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
+from .bag_analysis import AnalysisRepository, build_analysis_script, rosbag_detail
 from .config import ConsoleConfig
 from .indexes import scan_maps, scan_rosbags
-from .map_detail import build_map_detail, resolve_allowed_path, save_hd_map, save_section_gates
+from .map_detail import (
+    build_map_detail,
+    directory_fingerprint,
+    resolve_allowed_path,
+    save_hd_map,
+    save_section_gates,
+)
 from .map_pipeline import (
     DEFAULT_RACELINE_SAFETY_MARGIN_M,
     DEFAULT_RACELINE_VEHICLE_WIDTH_M,
@@ -168,6 +175,7 @@ class ConsoleState:
         self.joy_only = joy_only
         self.loopback_only = loopback_only
         self.tasks = None if joy_only else TaskManager(config.state_dir, config.repo_root)
+        self.analyses = None if joy_only else AnalysisRepository(config.analysis_root)
 
 
 class ConsoleHTTPServer(ThreadingHTTPServer):
@@ -232,6 +240,15 @@ class Handler(BaseHTTPRequestHandler):
                 return
         if path == "/api/rosbags/local":
             self._json({"rosbags": scan_rosbags(self.server.state.config.record_root)})
+            return
+        if path == "/api/rosbags/detail":
+            self._rosbag_detail(query)
+            return
+        if path == "/api/analyses":
+            self._json({"analyses": self.server.state.analyses.list()})
+            return
+        if path.startswith("/api/analyses/"):
+            self._analysis_get(path)
             return
         if path == "/api/maps/local":
             self._json({"maps": scan_maps(self.server.state.config.map_root)})
@@ -328,6 +345,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/jetson/inspect":
             self._json(self._inspect_jetson(body))
+            return
+        if path in {"/api/analyses", "/api/analyses/start"}:
+            self._start_analysis(body)
             return
         if path == "/api/maps/build-vgl-vslam":
             self._start_map_build(body)
@@ -429,6 +449,54 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
 
+    def _rosbag_detail(self, query: dict[str, list[str]]) -> None:
+        path = query.get("path", [""])[0]
+        if not path:
+            self._json({"error": "path is required"}, HTTPStatus.BAD_REQUEST)
+            return
+        try:
+            self._json({"rosbag": rosbag_detail(self.server.state.config, path)})
+        except FileNotFoundError as exc:
+            self._json({"error": str(exc)}, HTTPStatus.NOT_FOUND)
+        except (OSError, ValueError) as exc:
+            self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+
+    def _analysis_get(self, path: str) -> None:
+        parts = path.strip("/").split("/")
+        if len(parts) < 3 or parts[:2] != ["api", "analyses"]:
+            self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
+            return
+        analysis_id = unquote(parts[2])
+        try:
+            if len(parts) == 3:
+                self._json({"analysis": self.server.state.analyses.detail(analysis_id)})
+                return
+            if len(parts) == 4 and parts[3] == "timeline":
+                self._json(self.server.state.analyses.timeline(analysis_id))
+                return
+            if len(parts) >= 5 and parts[3] == "frames":
+                relative_path = unquote("/".join(parts[4:]))
+                self._analysis_frame(analysis_id, relative_path)
+                return
+            self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
+        except FileNotFoundError as exc:
+            self._json({"error": str(exc)}, HTTPStatus.NOT_FOUND)
+        except (OSError, ValueError) as exc:
+            self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+
+    def _analysis_frame(self, analysis_id: str, relative_path: str) -> None:
+        frame_path, content_type = self.server.state.analyses.frame(
+            analysis_id,
+            relative_path,
+        )
+        payload = frame_path.read_bytes()
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Cache-Control", "private, max-age=31536000, immutable")
+        self.end_headers()
+        self.wfile.write(payload)
+
     def _map_detail(self, query: dict[str, list[str]]) -> None:
         map_dir = query.get("path", [""])[0]
         if not map_dir:
@@ -445,7 +513,20 @@ class Handler(BaseHTTPRequestHandler):
 
     def _save_hd_map(self, body: dict[str, Any]) -> None:
         try:
-            self._json(save_hd_map(self.server.state.config, body))
+            map_dir = resolve_allowed_path(
+                self.server.state.config, str(body.get("map_dir") or "")
+            )
+            with self.server.state.tasks.guard_resources([f"map-dir:{map_dir}"]):
+                result = save_hd_map(self.server.state.config, body)
+            self._json(result)
+        except TaskResourceConflict as exc:
+            self._json(
+                {
+                    "error": "The Map is in use by an analysis or Map task. Stop it or wait for it to finish.",
+                    "active_task": exc.active_task,
+                },
+                HTTPStatus.CONFLICT,
+            )
         except FileNotFoundError as exc:
             self._json({"error": str(exc)}, HTTPStatus.NOT_FOUND)
         except ValueError as exc:
@@ -455,7 +536,20 @@ class Handler(BaseHTTPRequestHandler):
 
     def _save_section_gates(self, body: dict[str, Any]) -> None:
         try:
-            self._json(save_section_gates(self.server.state.config, body))
+            map_dir = resolve_allowed_path(
+                self.server.state.config, str(body.get("map_dir") or "")
+            )
+            with self.server.state.tasks.guard_resources([f"map-dir:{map_dir}"]):
+                result = save_section_gates(self.server.state.config, body)
+            self._json(result)
+        except TaskResourceConflict as exc:
+            self._json(
+                {
+                    "error": "The Map is in use by an analysis or Map task. Stop it or wait for it to finish.",
+                    "active_task": exc.active_task,
+                },
+                HTTPStatus.CONFLICT,
+            )
         except FileNotFoundError as exc:
             self._json({"error": str(exc)}, HTTPStatus.NOT_FOUND)
         except ValueError as exc:
@@ -715,6 +809,194 @@ find {shlex.quote(record_root)} -name metadata.yaml -printf '%TY-%Tm-%Td %TH:%TM
         )
         self._json({"task": config_task.to_json()}, HTTPStatus.CREATED)
 
+    def _start_analysis(self, body: dict[str, Any]) -> None:
+        config = self.server.state.config
+        try:
+            preflight = evaluate_preflight(config, "analyze-rosbag", body)
+        except (TypeError, ValueError) as exc:
+            self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            return
+        if not preflight.get("ready"):
+            self._json(
+                {
+                    "error": "required preflight checks did not pass",
+                    "preflight": preflight,
+                },
+                HTTPStatus.CONFLICT,
+            )
+            return
+
+        resolved = preflight.get("resolved")
+        if not isinstance(resolved, dict):
+            self._json({"error": "preflight did not resolve analysis inputs"}, HTTPStatus.CONFLICT)
+            return
+        try:
+            rosbag = Path(str(resolved["rosbag"]))
+            image_topic = str(resolved["image_topic"])
+            trajectory_mode = str(resolved["trajectory_mode"])
+            max_fps = float(resolved["max_fps"])
+            map_dir = Path(str(resolved["map_dir"])) if resolved.get("map_dir") else None
+            expected_map_fingerprint = directory_fingerprint(map_dir) if map_dir else ""
+            topic_config = (
+                Path(str(resolved["topic_config"])) if resolved.get("topic_config") else None
+            )
+            model_dir = (
+                Path(str(resolved["output_model_dir"]))
+                if resolved.get("output_model_dir")
+                else None
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            self._json({"error": f"preflight result is incomplete: {exc}"}, HTTPStatus.CONFLICT)
+            return
+
+        label = str(body.get("label") or rosbag.name).strip()[:120] or rosbag.name
+        accepted_fields = (
+            "rosbag",
+            "map_dir",
+            "image_topic",
+            "control_topic",
+            "mode_topic",
+            "pose_topic",
+            "speed_topic",
+            "trajectory_mode",
+            "max_fps",
+            "topic_config",
+        )
+        stored_request = {key: body.get(key) for key in accepted_fields if key in body}
+        stored_request["label"] = label
+        initial_phase = (
+            "offline-localization" if trajectory_mode == "offline" else "extracting"
+        )
+
+        analysis_id = ""
+        try:
+            analysis = self.server.state.analyses.create(
+                label=label,
+                request=stored_request,
+                preflight=preflight,
+                initial_phase=initial_phase,
+            )
+            analysis_id = str(analysis["analysis_id"])
+            analysis_dir = Path(str(analysis["path"]))
+            script = build_analysis_script(
+                config,
+                analysis_dir=analysis_dir,
+                rosbag=rosbag,
+                image_topic=image_topic,
+                control_topic=str(resolved.get("control_topic") or ""),
+                mode_topic=str(resolved.get("mode_topic") or ""),
+                pose_topic=str(resolved.get("pose_topic") or ""),
+                speed_topic=str(resolved.get("speed_topic") or ""),
+                map_dir=map_dir,
+                trajectory_mode=trajectory_mode,
+                max_fps=max_fps,
+                expected_map_fingerprint=expected_map_fingerprint,
+                topic_config=topic_config,
+                model_dir=model_dir,
+            )
+        except (OSError, TypeError, ValueError) as exc:
+            if analysis_id:
+                try:
+                    self.server.state.analyses.update_status(
+                        analysis_id,
+                        status="failed",
+                        phase="failed",
+                        progress=0.0,
+                        message=f"Could not prepare analysis: {exc}",
+                    )
+                except (OSError, ValueError):
+                    pass
+            self._json({"error": f"could not prepare analysis: {exc}"}, HTTPStatus.BAD_REQUEST)
+            return
+
+        artifacts = [
+            {"name": "manifest", "path": str(analysis_dir / "manifest.json")},
+            {"name": "status", "path": str(analysis_dir / "status.json")},
+            {"name": "timeline", "path": str(analysis_dir / "timeline.json")},
+            {"name": "frames", "path": str(analysis_dir / "frames")},
+        ]
+        resource_key = (
+            f"analysis-ros-domain:{config.analysis_ros_domain_id}"
+            if trajectory_mode == "offline"
+            else f"analysis-bag:{rosbag}"
+        )
+        resource_keys = [resource_key]
+        if map_dir is not None:
+            resource_keys.append(f"map-dir:{map_dir}")
+        try:
+            task = self.server.state.tasks.start(
+                kind="analyze-rosbag",
+                title=f"Analyze rosbag: {label}",
+                command=["bash", "-lc", script],
+                cwd=str(config.repo_root),
+                artifacts=artifacts,
+                resource_key=resource_key,
+                resource_keys=resource_keys,
+            )
+        except TaskResourceConflict as exc:
+            active = exc.active_task
+            if exc.resource_key.startswith("map-dir:"):
+                conflict_message = (
+                    "The selected map folder is already in use: "
+                    f"{active.get('title') or active.get('kind')} "
+                    f"({active.get('task_id')}). Stop it or wait for it to finish."
+                )
+            elif trajectory_mode == "offline":
+                conflict_message = (
+                    "Another offline localization analysis is using the isolated ROS domain: "
+                    f"{active.get('title') or active.get('kind')} "
+                    f"({active.get('task_id')}). Stop it or wait for it to finish."
+                )
+            else:
+                conflict_message = (
+                    "This rosbag is already being analyzed: "
+                    f"{active.get('title') or active.get('kind')} "
+                    f"({active.get('task_id')}). Stop it or wait for it to finish."
+                )
+            try:
+                analysis = self.server.state.analyses.update_status(
+                    analysis_id,
+                    status="failed",
+                    phase="blocked",
+                    progress=0.0,
+                    message=conflict_message,
+                )
+            except (OSError, ValueError):
+                pass
+            self._json(
+                {
+                    "error": conflict_message,
+                    "active_task": active,
+                    "analysis": analysis,
+                    "preflight": preflight,
+                },
+                HTTPStatus.CONFLICT,
+            )
+            return
+        except Exception as exc:  # noqa: BLE001 - convert task startup failures into API state.
+            message = f"Could not start analysis task: {exc}"
+            try:
+                analysis = self.server.state.analyses.update_status(
+                    analysis_id,
+                    status="failed",
+                    phase="failed",
+                    progress=0.0,
+                    message=message,
+                )
+            except (OSError, ValueError):
+                pass
+            self._json(
+                {"error": message, "analysis": analysis, "preflight": preflight},
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+            )
+            return
+
+        analysis = self.server.state.analyses.attach_task(analysis_id, task.to_json())
+        self._json(
+            {"analysis": analysis, "task": task.to_json(), "preflight": preflight},
+            HTTPStatus.CREATED,
+        )
+
     def _start_map_build(self, body: dict[str, Any]) -> None:
         config = self.server.state.config
         rosbag = str(body.get("rosbag") or "")
@@ -892,7 +1174,7 @@ find {shlex.quote(record_root)} -name metadata.yaml -printf '%TY-%Tm-%Td %TH:%TM
         self._json(
             {
                 "error": (
-                    "Another map task is already writing to this map folder: "
+                    "Another task is already writing to or using this map folder: "
                     f"{active.get('title') or active.get('kind')} "
                     f"({active.get('task_id')}). Stop it or wait for it to finish."
                 ),

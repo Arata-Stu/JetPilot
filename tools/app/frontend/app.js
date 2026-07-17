@@ -69,11 +69,39 @@ const state = {
     pendingExecutions: {},
     revisions: {},
   },
+  analysis: {
+    selectedBagPath: "",
+    selectedMapPath: "",
+    topicConfigPath: "",
+    bagDetail: null,
+    bagDetailLoading: false,
+    imageTopic: "",
+    controlTopic: "",
+    modeTopic: "",
+    poseTopic: "",
+    speedTopic: "",
+    trajectoryMode: "auto",
+    maxFps: 15,
+    analyses: [],
+    selectedId: "",
+    detail: null,
+    timeline: null,
+    mapDetail: null,
+    loadingResult: false,
+    playing: false,
+    currentTime: 0,
+    playbackRate: 1,
+    rafId: 0,
+    lastTickMs: 0,
+    renderedFrameIndex: -1,
+    lastVisualUpdateMs: 0,
+  },
 };
 
 const tabs = [
   ["dashboard", "Dashboard"],
   ["rosbags", "Rosbags"],
+  ["bag-analysis", "Bag Analysis"],
   ["map-builder", "Map Builder"],
   ["joy-profile", "Joy Profile"],
   ["fpv", "FPV"],
@@ -87,6 +115,7 @@ const preflightRequests = new Map();
 let selectedMapRefreshInFlight = false;
 let mapBuildPreflightTimer = null;
 let racelinePreflightTimer = null;
+let analysisPreflightTimer = null;
 let forceVisiblePreflightOnce = false;
 
 const $ = (id) => document.getElementById(id);
@@ -242,10 +271,15 @@ function preflightExecutionMapDir(payload = {}) {
   return trimTrailingSlash(payload.map_dir || "");
 }
 
+function preflightExecutionResource(action, payload = {}) {
+  if (action === "analyze-rosbag") return trimTrailingSlash(payload.rosbag || "");
+  return preflightExecutionMapDir(payload);
+}
+
 function preflightExecutionToken(action, payload = {}) {
   return preflightToken("execution", {
     action,
-    map_dir: preflightExecutionMapDir(payload),
+    resource: preflightExecutionResource(action, payload),
   });
 }
 
@@ -262,6 +296,15 @@ function commandContainsMapDir(command, mapDir) {
 }
 
 function runningPreflightTask(action, payload = {}) {
+  if (action === "analyze-rosbag") {
+    const rosbag = trimTrailingSlash(payload.rosbag || "");
+    if (!rosbag) return null;
+    return state.tasks.find((task) => {
+      if (!isActiveTask(task) || task.kind !== action) return false;
+      if (trimTrailingSlash(task._preflightRosbag || "") === rosbag) return true;
+      return commandContainsMapDir(task.command, rosbag);
+    }) || null;
+  }
   const mapDir = preflightExecutionMapDir(payload);
   if (!mapDir) return null;
   return state.tasks.find((task) => {
@@ -275,9 +318,10 @@ function runningPreflightTask(action, payload = {}) {
 
 function preflightExecutionState(action, payload = {}) {
   const token = preflightExecutionToken(action, payload);
+  const resource = preflightExecutionResource(action, payload);
   const mapDir = preflightExecutionMapDir(payload);
   const pending = state.preflight.pendingExecutions[token]
-    || Object.values(state.preflight.pendingExecutions).find((item) => item.mapDir && item.mapDir === mapDir);
+    || Object.values(state.preflight.pendingExecutions).find((item) => item.resource && item.resource === resource);
   if (pending) {
     return {
       locked: true,
@@ -288,7 +332,7 @@ function preflightExecutionState(action, payload = {}) {
   if (task) {
     return {
       locked: true,
-      reason: `${task.title || action} is already ${task.status} for this map.`,
+      reason: `${task.title || action} is already ${task.status} for this ${action === "analyze-rosbag" ? "rosbag" : "map"}.`,
     };
   }
   return { locked: false, reason: "" };
@@ -553,6 +597,7 @@ function acquirePreflightExecution(action, payload = {}) {
   state.preflight.pendingExecutions[token] = {
     action,
     mapDir: preflightExecutionMapDir(payload),
+    resource: preflightExecutionResource(action, payload),
     startedAt: Date.now(),
   };
   updatePreflightDom(action, payload);
@@ -570,6 +615,7 @@ function rememberStartedTask(task, action, payload = {}) {
     ...task,
     _preflightAction: action,
     _preflightMapDir: preflightExecutionMapDir(payload),
+    _preflightRosbag: action === "analyze-rosbag" ? trimTrailingSlash(payload.rosbag || "") : "",
   };
   const index = state.tasks.findIndex((item) => item.task_id === task.task_id);
   if (index >= 0) state.tasks[index] = remembered;
@@ -687,13 +733,14 @@ function sh(value) {
 }
 
 async function refreshAll() {
-  const [config, tasks, rosbags, maps, cameraTopicConfigs, localIps] = await Promise.all([
+  const [config, tasks, rosbags, maps, cameraTopicConfigs, localIps, analyses] = await Promise.all([
     api("/api/config"),
     api("/api/tasks"),
     api("/api/rosbags/local"),
     api("/api/maps/local"),
     api("/api/map-builder/camera-topic-configs"),
     api("/api/network/local-ips").catch(() => ({ ips: [] })),
+    api("/api/analyses").catch(() => ({ analyses: [] })),
   ]);
   state.config = config;
   state.tasks = tasks.tasks || [];
@@ -701,6 +748,7 @@ async function refreshAll() {
   state.maps = maps.maps || [];
   state.cameraTopicConfigs = cameraTopicConfigs.configs || [];
   state.localIps = localIps.ips || [];
+  state.analysis.analyses = normalizeAnalysisList(analyses);
   if (!state.fpv.host && state.localIps[0]) state.fpv.host = state.localIps[0];
   let selectedMapReloadPath = null;
   if (state.selectedMapPath && !state.maps.some((item) => item.path === state.selectedMapPath)) {
@@ -723,11 +771,13 @@ async function refreshAll() {
 }
 
 function setTab(tab) {
+  if (state.tab === "bag-analysis" && tab !== "bag-analysis") pauseAnalysisPlayback();
   state.tab = tab;
   render();
 }
 
 function render() {
+  stopAnalysisAnimationFrame();
   const app = $("app");
   app.innerHTML = `
     <div class="app">
@@ -757,6 +807,7 @@ function render() {
   forceVisiblePreflightOnce = false;
   requestAnimationFrame(() => {
     drawMapPreview();
+    if (state.tab === "bag-analysis") mountAnalysisViewer();
     scheduleVisiblePreflights({ force: forcePreflight });
   });
 }
@@ -774,6 +825,7 @@ function updateLogOnly(chunk = "", append = false) {
 
 function renderPage() {
   if (state.tab === "rosbags") return renderRosbags();
+  if (state.tab === "bag-analysis") return renderBagAnalysis();
   if (state.tab === "map-builder") return renderMapBuilder();
   if (state.tab === "joy-profile") return renderJoyProfile();
   if (state.tab === "fpv") return renderFpv();
@@ -1140,6 +1192,10 @@ function scheduleRacelinePreflight(mapDir, options = {}) {
 
 function scheduleVisiblePreflights(options = {}) {
   if ($("build-rosbag")) scheduleMapBuildPreflight({ immediate: true, force: Boolean(options.force) });
+  if (state.tab === "bag-analysis") {
+    scheduleAnalysisPreflight({ immediate: true, force: Boolean(options.force) });
+    return;
+  }
   if (state.tab === "dashboard") {
     const map = pipelineMap();
     if (!map?.path) return;
@@ -1351,7 +1407,7 @@ function renderCompactList(items, kind) {
               <div class="actions">
                 ${kind === "map" ? `<span class="status ${ready ? "success" : "failed"}">${ready ? "ready" : "incomplete"}</span>` : ""}
                 <button onclick="copyText(${js(item.path)})">Copy</button>
-                ${kind === "rosbag" ? `<button onclick="useRosbag(${js(item.path)})">Build</button>` : `<button onclick="fillTransferLocal(${js(item.path)})">Transfer</button>`}
+                ${kind === "rosbag" ? `<button onclick="openBagAnalysis(${js(item.path)})">Analyze</button><button onclick="useRosbag(${js(item.path)})">Build</button>` : `<button onclick="fillTransferLocal(${js(item.path)})">Transfer</button>`}
               </div>
             </div>`;
         })
@@ -1489,6 +1545,7 @@ function rosbagTable() {
                 <td>${fmtTime(bag.modified_at)}</td>
                 <td class="actions">
                   <button onclick="copyText(${js(bag.path)})">Copy</button>
+                  <button class="primary" onclick="openBagAnalysis(${js(bag.path)})">Analyze</button>
                   <button onclick="useRosbag(${js(bag.path)})">Use</button>
                 </td>
               </tr>`,
@@ -1497,6 +1554,1369 @@ function rosbagTable() {
       </tbody>
     </table>
   `;
+}
+
+function normalizeAnalysisList(payload) {
+  const raw = Array.isArray(payload) ? payload : payload?.analyses || payload?.jobs || payload?.items || [];
+  return raw
+    .filter((item) => item && typeof item === "object")
+    .map(normalizeAnalysisRecord)
+    .sort((a, b) => String(b.updated_at || b.created_at || b.started_at || "").localeCompare(String(a.updated_at || a.created_at || a.started_at || "")));
+}
+
+function normalizeAnalysisRecord(item) {
+  const manifest = item?.manifest && typeof item.manifest === "object" ? item.manifest : {};
+  const statusRecord = item?.status && typeof item.status === "object" ? item.status : {};
+  const request = manifest.request && typeof manifest.request === "object" ? manifest.request : {};
+  const resolved = manifest.resolved && typeof manifest.resolved === "object" ? manifest.resolved : {};
+  const manifestBag = manifest.rosbag && typeof manifest.rosbag === "object" ? manifest.rosbag.path : manifest.rosbag;
+  const manifestMap = manifest.map && typeof manifest.map === "object" ? manifest.map : {};
+  const resolvedMap = resolved.map_dir || resolved.map_path || "";
+  const mapPath = manifestMap.path || manifest.map_path || manifest.map_dir || resolvedMap || request.map_dir || item.map_path || item.map_dir || "";
+  const rosbag = manifestBag || manifest.bag_path || resolved.rosbag || request.rosbag || item.rosbag || item.bag_path || "";
+  return {
+    ...manifest,
+    ...item,
+    analysis_id: item.analysis_id || item.id || manifest.analysis_id || manifest.id || "",
+    status: statusRecord.status || statusRecord.state || (typeof item.status === "string" ? item.status : "") || manifest.status || "pending",
+    progress: statusRecord.progress ?? item.progress ?? manifest.progress ?? 0,
+    stage: statusRecord.stage || statusRecord.phase || item.stage || item.phase || manifest.stage || manifest.phase || "",
+    phase: statusRecord.phase || item.phase || manifest.phase || "",
+    message: statusRecord.message || item.message || manifest.message || "",
+    updated_at: statusRecord.updated_at || item.updated_at || manifest.updated_at || manifest.created_at || "",
+    task_id: statusRecord.task_id || item.task_id || manifest.task_id || "",
+    rosbag,
+    bag_path: rosbag,
+    map: { ...manifestMap, path: mapPath || manifestMap.path || "" },
+    map_path: mapPath,
+    map_dir: mapPath,
+    missing: [
+      ...(Array.isArray(manifest.missing) ? manifest.missing : []),
+      ...(Array.isArray(manifest.missing_data) ? manifest.missing_data : []),
+      ...(Array.isArray(manifest.warnings) ? manifest.warnings : []),
+      ...(Array.isArray(statusRecord.warnings) ? statusRecord.warnings : []),
+    ],
+  };
+}
+
+function analysisRecordId(item) {
+  return String(item?.id || item?.analysis_id || item?.job_id || "");
+}
+
+function analysisRecordStatus(item) {
+  const value = String(item?.status || item?.state || item?.task?.status || "pending").toLowerCase();
+  if (["complete", "completed", "success", "ready"].includes(value)) return "success";
+  if (["failed", "error", "lost"].includes(value)) return "failed";
+  if (["stopped", "cancelled", "canceled"].includes(value)) return "stopped";
+  if (["queued", "pending"].includes(value)) return "queued";
+  return "running";
+}
+
+function analysisRecordProgress(item) {
+  const raw = item?.progress;
+  if (typeof raw === "number") return Math.max(0, Math.min(100, raw <= 1 ? raw * 100 : raw));
+  if (raw && typeof raw === "object") {
+    const value = Number(raw.percent ?? raw.value ?? 0);
+    if (Number.isFinite(value)) return Math.max(0, Math.min(100, value <= 1 && value > 0 ? value * 100 : value));
+    const completed = Number(raw.completed || 0);
+    const total = Number(raw.total || 0);
+    if (total > 0) return Math.max(0, Math.min(100, completed * 100 / total));
+  }
+  return analysisRecordStatus(item) === "success" ? 100 : 0;
+}
+
+function analysisRecordStage(item) {
+  const progress = item?.progress;
+  return String(
+    item?.stage
+      || item?.phase
+      || (progress && typeof progress === "object" ? progress.stage || progress.message : "")
+      || item?.message
+      || analysisRecordStatus(item),
+  );
+}
+
+function analysisRecordMissing(item) {
+  const raw = item?.missing || item?.missing_data || item?.warnings || item?.issues || [];
+  return (Array.isArray(raw) ? raw : [raw])
+    .map((entry) => preflightText(entry))
+    .filter(Boolean);
+}
+
+function analysisTopicRecords() {
+  const raw = state.analysis.bagDetail?.topics || [];
+  return raw
+    .map((topic) => ({
+      name: String(topic?.name || topic?.topic || topic?.topic_metadata?.name || ""),
+      type: String(topic?.type || topic?.topic_type || topic?.topic_metadata?.type || ""),
+      count: Number(topic?.count ?? topic?.message_count ?? topic?.message_count_hint ?? 0),
+    }))
+    .filter((topic) => topic.name);
+}
+
+function analysisTopics(kind) {
+  const topics = analysisTopicRecords();
+  const matches = {
+    image: (topic) => /sensor_msgs\/(msg\/)?(Image|CompressedImage)$/.test(topic.type) || /(^|\/)(image|image_raw|event_image)(\/|$)/i.test(topic.name),
+    control: (topic) => /ControlCommand$/.test(topic.type) || /control_cmd$/i.test(topic.name),
+    mode: (topic) => /OperationModeState$/.test(topic.type) || /operation_mode\/state$/i.test(topic.name),
+    pose: (topic) => /nav_msgs\/(msg\/)?Odometry$/.test(topic.type) || /(^|\/)(odometry|odom)$/i.test(topic.name),
+    speed: (topic) => /(Float32|Float64|Odometry)$/.test(topic.type) && /(speed|velocity|odometry)/i.test(topic.name),
+  }[kind];
+  return matches ? topics.filter(matches) : topics;
+}
+
+function preferredAnalysisTopic(kind, topics) {
+  const preferences = {
+    image: ["/realsense/color/image_raw/compressed", "/realsense/color/image_raw", "/event_camera/event_image", "/realsense/infra1/image_rect_raw"],
+    control: ["/vehicle/control_cmd", "/auto/control_cmd", "/teleop/control_cmd", "/propo/control_cmd"],
+    mode: ["/operation_mode/state"],
+    pose: ["/visual_slam/tracking/odometry", "/localization/odometry", "/odom"],
+    speed: ["/visual_slam/tracking/odometry", "/commands/motor/speed"],
+  }[kind] || [];
+  return preferences.map((name) => topics.find((topic) => topic.name === name)).find(Boolean)?.name || topics[0]?.name || "";
+}
+
+function analysisTopicOptions(kind, selected, optional = true) {
+  const topics = analysisTopics(kind);
+  const emptyLabel = optional ? "Auto / unavailable" : `Select ${kind} topic`;
+  return `<option value="">${esc(emptyLabel)}</option>${topics.map((topic) => {
+    const detail = [topic.type, topic.count ? `${topic.count} msgs` : ""].filter(Boolean).join(" / ");
+    return `<option value="${esc(topic.name)}" ${topic.name === selected ? "selected" : ""}>${esc(topic.name)}${detail ? ` - ${esc(detail)}` : ""}</option>`;
+  }).join("")}`;
+}
+
+function analysisPreflightPayload() {
+  return {
+    rosbag: state.analysis.selectedBagPath,
+    map_dir: state.analysis.selectedMapPath,
+    topic_config: state.analysis.topicConfigPath,
+    image_topic: state.analysis.imageTopic,
+    control_topic: state.analysis.controlTopic,
+    mode_topic: state.analysis.modeTopic,
+    pose_topic: state.analysis.poseTopic,
+    speed_topic: state.analysis.speedTopic,
+    trajectory_mode: state.analysis.trajectoryMode,
+    max_fps: state.analysis.maxFps,
+  };
+}
+
+function renderBagAnalysis() {
+  return `
+    <div class="page analysis-page">
+      <div class="analysis-create-layout">
+        <section class="panel analysis-create-panel">
+          <div class="panel-header">
+            <h2>New Bag Analysis</h2>
+            <span class="spacer"></span>
+            <button onclick="refreshAnalysisData()">Refresh</button>
+          </div>
+          <div class="panel-body">${renderAnalysisForm()}</div>
+        </section>
+        <section class="panel analysis-list-panel">
+          <div class="panel-header"><h2>Analysis Jobs</h2><span class="spacer"></span><span class="inline-status">${esc(state.analysis.analyses.length)} results</span></div>
+          <div class="panel-body" id="analysis-job-list">${renderAnalysisList()}</div>
+        </section>
+      </div>
+      <section class="panel analysis-viewer-panel">
+        <div class="panel-header">
+          <h2>Drive Viewer</h2>
+          <span class="spacer"></span>
+          ${state.analysis.selectedId ? `<button onclick="reloadAnalysisResult()">Reload Result</button>` : ""}
+        </div>
+        <div class="panel-body" id="analysis-viewer-body">${renderAnalysisViewer()}</div>
+      </section>
+    </div>
+  `;
+}
+
+function renderAnalysisForm() {
+  const analysis = state.analysis;
+  const payload = analysisPreflightPayload();
+  const bag = state.rosbags.find((item) => item.path === analysis.selectedBagPath);
+  const detail = analysis.bagDetail;
+  const duration = Number(detail?.duration_s ?? detail?.duration_seconds ?? 0);
+  const topicConfigs = state.cameraTopicConfigs || [];
+  return `
+    <div class="form-grid analysis-form">
+      <div class="field full">
+        <label for="analysis-bag">Rosbag</label>
+        <select id="analysis-bag" onchange="selectAnalysisBag(this.value)">
+          <option value="">Select rosbag</option>
+          ${state.rosbags.map((item) => `<option value="${esc(item.path)}" ${item.path === analysis.selectedBagPath ? "selected" : ""}>${esc(item.name)} - ${esc(item.path)}</option>`).join("")}
+        </select>
+        <div class="field-hint">${analysis.bagDetailLoading ? "Inspecting topics..." : bag ? `${esc(bag.path)}${duration > 0 ? ` / ${formatAnalysisClock(duration)}` : ""}` : "Choose a local rosbag to inspect its topics."}</div>
+      </div>
+      <div class="field full">
+        <label for="analysis-map">Map used for trajectory alignment</label>
+        <select id="analysis-map" onchange="updateAnalysisOption('selectedMapPath', this.value)">
+          <option value="">No map / telemetry only</option>
+          ${state.maps.map((map) => `<option value="${esc(map.path)}" ${map.path === analysis.selectedMapPath ? "selected" : ""}>${esc(mapOptionLabel(map))}</option>`).join("")}
+        </select>
+      </div>
+      <div class="field full">
+        <label for="analysis-topic-config">Offline localization camera configuration</label>
+        <select id="analysis-topic-config" onchange="updateAnalysisOption('topicConfigPath', this.value)">
+          <option value="">Use backend default</option>
+          ${topicConfigs.map((config) => `<option value="${esc(config.path)}" ${config.path === analysis.topicConfigPath ? "selected" : ""}>${esc(config.name)}${config.recommended ? " - recommended" : ` - score ${esc(config.score)}`}</option>`).join("")}
+        </select>
+        <div class="field-hint">Used only when Auto falls back to Offline or Offline is selected.</div>
+      </div>
+      <div class="field">
+        <label for="analysis-image-topic">Image topic</label>
+        <select id="analysis-image-topic" onchange="updateAnalysisOption('imageTopic', this.value)">${analysisTopicOptions("image", analysis.imageTopic, false)}</select>
+      </div>
+      <div class="field">
+        <label for="analysis-control-topic">Applied control topic</label>
+        <select id="analysis-control-topic" onchange="updateAnalysisOption('controlTopic', this.value)">${analysisTopicOptions("control", analysis.controlTopic)}</select>
+      </div>
+      <div class="field">
+        <label for="analysis-mode-topic">Operation mode topic</label>
+        <select id="analysis-mode-topic" onchange="updateAnalysisOption('modeTopic', this.value)">${analysisTopicOptions("mode", analysis.modeTopic)}</select>
+      </div>
+      <div class="field">
+        <label for="analysis-speed-topic">Speed topic (optional)</label>
+        <select id="analysis-speed-topic" onchange="updateAnalysisOption('speedTopic', this.value)">${analysisTopicOptions("speed", analysis.speedTopic)}</select>
+      </div>
+      <div class="field">
+        <label for="analysis-pose-topic">Recorded pose topic (optional)</label>
+        <select id="analysis-pose-topic" onchange="updateAnalysisOption('poseTopic', this.value)">${analysisTopicOptions("pose", analysis.poseTopic)}</select>
+      </div>
+      <div class="field">
+        <label for="analysis-trajectory-mode">Trajectory source</label>
+        <select id="analysis-trajectory-mode" onchange="updateAnalysisOption('trajectoryMode', this.value)">
+          ${[
+            ["auto", "Auto: recorded pose, then offline VGL/VSLAM"],
+            ["recorded", "Recorded pose only"],
+            ["offline", "Run offline VGL/VSLAM"],
+            ["none", "Do not create trajectory"],
+          ].map(([value, label]) => `<option value="${value}" ${analysis.trajectoryMode === value ? "selected" : ""}>${label}</option>`).join("")}
+        </select>
+      </div>
+      <div class="field">
+        <label for="analysis-max-fps">Image playback max FPS</label>
+        <input id="analysis-max-fps" type="number" min="1" max="60" step="1" value="${esc(analysis.maxFps)}" onchange="updateAnalysisOption('maxFps', this.value)" />
+      </div>
+      ${detail ? renderAnalysisTopicCoverage() : `<div class="notice full">Select a rosbag first. Topic availability and missing inputs will appear here.</div>`}
+      <div class="full" id="analysis-preflight">${renderReadinessPanel("analyze-rosbag", payload, { title: "Rosbag analysis readiness" })}</div>
+      <div class="actions full">
+        <button id="analysis-start" class="primary" onclick="startBagAnalysis()" ${preflightButtonAttrs("analyze-rosbag", payload)}>Start Analysis</button>
+        <button onclick="scheduleAnalysisPreflight({ immediate: true, force: true })">Recheck</button>
+      </div>
+      <div class="full" id="analysis-preflight-reason">${renderPreflightButtonReason("analyze-rosbag", payload)}</div>
+    </div>
+  `;
+}
+
+function renderAnalysisTopicCoverage() {
+  const topics = analysisTopicRecords();
+  const groups = [
+    ["Images", analysisTopics("image").length],
+    ["Controls", analysisTopics("control").length],
+    ["Modes", analysisTopics("mode").length],
+    ["Poses", analysisTopics("pose").length],
+    ["Speeds", analysisTopics("speed").length],
+  ];
+  return `
+    <div class="analysis-topic-coverage full">
+      <div><strong>${esc(topics.length)}</strong><span>topics</span></div>
+      ${groups.map(([label, count]) => `<div class="${count ? "ok" : "missing"}"><strong>${esc(count)}</strong><span>${esc(label)}</span></div>`).join("")}
+    </div>
+  `;
+}
+
+function renderAnalysisList() {
+  if (!state.analysis.analyses.length) return `<div class="empty">No analysis jobs yet. Select a bag and run the preprocessor.</div>`;
+  return `<div class="analysis-list">${state.analysis.analyses.map((item) => {
+    const id = analysisRecordId(item);
+    const status = analysisRecordStatus(item);
+    const progress = analysisRecordProgress(item);
+    const missing = analysisRecordMissing(item);
+    const selected = id && id === state.analysis.selectedId;
+    const canOpen = Boolean(item.timeline_available || status === "success");
+    const taskId = String(item.task_id || item.task?.task_id || "");
+    const bagPath = String(item.rosbag || item.bag_path || item.source?.rosbag || "");
+    const mapPath = String(item.map_dir || item.map_path || item.map?.path || "");
+    return `
+      <article class="analysis-job ${selected ? "selected" : ""}">
+        <div class="analysis-job-heading">
+          <div><strong>${esc(item.name || item.label || item.title || shortName(bagPath) || id || "Analysis")}</strong><span>${esc(id)}</span></div>
+          <span class="status ${esc(status)}">${esc(status)}</span>
+        </div>
+        <div class="analysis-progress"><span style="width:${progress.toFixed(1)}%"></span></div>
+        <div class="analysis-progress-label"><span>${esc(analysisRecordStage(item))}</span><strong>${progress.toFixed(0)}%</strong></div>
+        ${bagPath ? `<div class="path" title="${esc(bagPath)}">Bag: ${esc(bagPath)}</div>` : ""}
+        ${mapPath ? `<div class="path" title="${esc(mapPath)}">Map: ${esc(mapPath)}</div>` : ""}
+        ${missing.length ? `<div class="analysis-missing"><strong>Missing / degraded data</strong>${missing.slice(0, 4).map((message) => `<span>${esc(message)}</span>`).join("")}</div>` : ""}
+        <div class="actions">
+          <button class="${status === "success" ? "primary" : ""}" onclick="openAnalysisResult(${js(id)})" ${id && canOpen ? "" : "disabled"}>${selected && state.analysis.timeline ? "Viewing" : canOpen ? "Open" : "Processing"}</button>
+          ${taskId ? `<button onclick="openTaskLog(${js(taskId)})">Log</button><button class="danger" onclick="stopTask(${js(taskId)})" ${["running", "queued"].includes(status) ? "" : "disabled"}>Stop</button>` : ""}
+        </div>
+      </article>`;
+  }).join("")}</div>`;
+}
+
+function renderAnalysisViewer() {
+  const analysis = state.analysis;
+  if (analysis.loadingResult) return `<div class="empty">Loading normalized timeline, frames, and map...</div>`;
+  if (!analysis.selectedId || !analysis.timeline) {
+    const selected = analysis.analyses.find((item) => analysisRecordId(item) === analysis.selectedId);
+    const waiting = Boolean(analysis.selectedId && selected && analysisRecordStatus(selected) !== "success");
+    return `<div class="analysis-viewer-empty"><strong>${waiting ? "Analysis is processing" : "Select a completed analysis"}</strong><span>${waiting ? esc(analysisRecordStage(selected)) : "The synchronized image, commands, mode, speed, and trajectory will appear here."}</span></div>`;
+  }
+  const timeline = analysis.timeline;
+  const duration = analysisDuration(timeline);
+  const frames = analysisFrames(timeline);
+  const trajectory = analysisTrajectory(timeline);
+  const consistency = analysisMapConsistency();
+  const issues = analysisTimelineIssues();
+  return `
+    <div class="analysis-viewer">
+      <div class="analysis-viewer-title">
+        <div><strong>${esc(analysis.detail?.name || analysis.detail?.label || analysis.detail?.title || analysis.selectedId)}</strong><span>${esc(analysis.detail?.rosbag || analysis.detail?.bag_path || timeline.rosbag || "")}</span></div>
+        <div class="chips">
+          <span class="chip ${frames.length ? "ok" : "missing"}">${esc(frames.length)} frames</span>
+          <span class="chip ${trajectory.samples.length ? "ok" : "missing"}">${esc(trajectory.samples.length)} poses</span>
+          <span class="chip ${consistency.className}">${esc(consistency.label)}</span>
+        </div>
+      </div>
+      ${consistency.message ? `<div class="analysis-consistency ${consistency.className}"><strong>Map consistency</strong><span>${esc(consistency.message)}</span></div>` : ""}
+      ${renderAnalysisSources()}
+      <div class="analysis-media-grid">
+        <div class="analysis-image-panel">
+          <div class="analysis-image-stage">
+            <img id="analysis-frame-image" alt="Selected rosbag image frame" />
+            <div id="analysis-frame-empty" class="analysis-frame-empty">${frames.length ? "Loading frame..." : "No image frames were extracted."}</div>
+            <span id="analysis-frame-time" class="analysis-frame-time">${formatAnalysisClock(analysis.currentTime)}</span>
+          </div>
+          <div class="analysis-playback-controls">
+            <button onclick="stepAnalysisFrame(-1)" title="Previous frame">|&lt;</button>
+            <button id="analysis-play-button" class="primary" onclick="toggleAnalysisPlayback()">${analysis.playing ? "Pause" : "Play"}</button>
+            <button onclick="stepAnalysisFrame(1)" title="Next frame">&gt;|</button>
+            <button onclick="seekAnalysisRelative(-5)">-5s</button>
+            <button onclick="seekAnalysisRelative(5)">+5s</button>
+            <input id="analysis-seek" type="range" min="0" max="${esc(duration)}" step="0.01" value="${esc(Math.min(duration, analysis.currentTime))}" oninput="seekAnalysisTime(this.value)" aria-label="Analysis time" />
+            <span id="analysis-clock-label" class="mono">${formatAnalysisClock(analysis.currentTime)} / ${formatAnalysisClock(duration)}</span>
+            <select id="analysis-rate" onchange="setAnalysisPlaybackRate(this.value)" aria-label="Playback rate">
+              ${[0.25, 0.5, 1, 1.5, 2, 4].map((rate) => `<option value="${rate}" ${analysis.playbackRate === rate ? "selected" : ""}>${rate}x</option>`).join("")}
+            </select>
+          </div>
+        </div>
+        <div class="analysis-map-panel">
+          <canvas id="analysis-map-canvas" class="analysis-map-canvas"></canvas>
+          <div id="analysis-map-empty" class="analysis-map-empty">${trajectory.samples.length ? (analysis.mapDetail ? "" : "Map background unavailable; showing trajectory extent.") : "No synchronized trajectory is available."}</div>
+          <div class="analysis-speed-legend"><span>slow</span><i></i><span>fast</span></div>
+        </div>
+      </div>
+      <div class="analysis-signal-cards">
+        ${analysisSignalCard("Mode", "analysis-value-mode", "-")}
+        ${analysisSignalCard("Steering", "analysis-value-steering", "-")}
+        ${analysisSignalCard("Throttle", "analysis-value-throttle", "-")}
+        ${analysisSignalCard("Brake", "analysis-value-brake", "-")}
+        ${analysisSignalCard("Vehicle speed", "analysis-value-speed", "-", "analysis-label-speed")}
+      </div>
+      <div class="analysis-chart-shell">
+        <canvas id="analysis-timeline-canvas" class="analysis-timeline-canvas" onclick="seekAnalysisFromTimeline(event)"></canvas>
+      </div>
+      ${issues.length ? `<div class="analysis-data-issues"><strong>Missing or degraded data</strong>${issues.map((issue) => `<span>${esc(issue)}</span>`).join("")}</div>` : ""}
+    </div>
+  `;
+}
+
+function analysisSignalCard(label, id, value, labelId = "") {
+  return `<div class="analysis-signal-card"><span ${labelId ? `id="${esc(labelId)}"` : ""}>${esc(label)}</span><strong id="${esc(id)}">${esc(value)}</strong></div>`;
+}
+
+function renderAnalysisSources() {
+  const topics = state.analysis.detail?.topics || {};
+  const trajectory = analysisTrajectory();
+  const speed = analysisSpeedSeries()[0];
+  const rows = [
+    ["Image", topics.image || state.analysis.detail?.image_topic],
+    ["Control", topics.control || state.analysis.detail?.control_topic],
+    ["Mode", topics.mode || state.analysis.detail?.mode_topic],
+    [analysisSpeedSourceLabel(speed), speed?.source || topics.speed || trajectory.source],
+    ["Trajectory", [trajectory.source, trajectory.frameId ? `frame ${trajectory.frameId}` : ""].filter(Boolean).join(" / ")],
+  ].filter(([, value]) => value);
+  if (!rows.length) return "";
+  return `<div class="analysis-source-row">${rows.map(([label, value]) => `<span><strong>${esc(label)}</strong>${esc(value)}</span>`).join("")}</div>`;
+}
+
+async function openBagAnalysis(path = "") {
+  state.tab = "bag-analysis";
+  if (!state.analysis.selectedMapPath) state.analysis.selectedMapPath = pipelineMap()?.path || "";
+  if (!state.analysis.topicConfigPath) {
+    const configs = state.cameraTopicConfigs || [];
+    state.analysis.topicConfigPath = (configs.find((config) => config.recommended) || configs[0])?.path || "";
+  }
+  render();
+  if (path) await selectAnalysisBag(path);
+}
+
+async function selectAnalysisBag(path) {
+  const selectedPath = String(path || "");
+  const changed = selectedPath !== state.analysis.selectedBagPath;
+  const previousTopics = {
+    image: state.analysis.imageTopic,
+    control: state.analysis.controlTopic,
+    mode: state.analysis.modeTopic,
+    pose: state.analysis.poseTopic,
+    speed: state.analysis.speedTopic,
+  };
+  state.analysis.selectedBagPath = selectedPath;
+  state.analysis.bagDetail = null;
+  state.analysis.bagDetailLoading = Boolean(selectedPath);
+  if (changed) {
+    state.analysis.imageTopic = "";
+    state.analysis.controlTopic = "";
+    state.analysis.modeTopic = "";
+    state.analysis.poseTopic = "";
+    state.analysis.speedTopic = "";
+  }
+  if (state.tab === "bag-analysis") render();
+  if (!selectedPath) {
+    scheduleAnalysisPreflight({ immediate: true, force: true });
+    return;
+  }
+  try {
+    const detail = await api(apiPath("/api/rosbags/detail", { path: selectedPath }));
+    if (state.analysis.selectedBagPath !== selectedPath) return;
+    state.analysis.bagDetail = detail.rosbag || detail;
+    for (const kind of ["image", "control", "mode", "pose", "speed"]) {
+      const key = `${kind}Topic`;
+      state.analysis[key] = changed ? preferredAnalysisTopic(kind, analysisTopics(kind)) : previousTopics[kind];
+    }
+  } catch (error) {
+    if (state.analysis.selectedBagPath === selectedPath) {
+      state.analysis.bagDetail = { topics: [], error: error.message };
+      toast(`Rosbag inspection failed: ${error.message}`, "error");
+    }
+  } finally {
+    if (state.analysis.selectedBagPath === selectedPath) {
+      state.analysis.bagDetailLoading = false;
+      if (state.tab === "bag-analysis") render();
+      scheduleAnalysisPreflight({ immediate: true, force: true });
+    }
+  }
+}
+
+function updateAnalysisOption(key, value) {
+  if (!(key in state.analysis)) return;
+  if (key === "maxFps") {
+    const number = Number(value);
+    state.analysis.maxFps = Number.isFinite(number) ? Math.max(1, Math.min(60, Math.round(number))) : 15;
+  } else {
+    state.analysis[key] = String(value ?? "");
+  }
+  const payload = analysisPreflightPayload();
+  bindAnalysisPreflight(payload);
+  scheduleAnalysisPreflight();
+  if (key === "selectedMapPath" && state.analysis.timeline) updateAnalysisConsistencyDom();
+}
+
+function bindAnalysisPreflight(payload) {
+  const token = preflightToken("analyze-rosbag", payload);
+  const executionToken = preflightExecutionToken("analyze-rosbag", payload);
+  const mapResourceToken = preflightMapResourceToken(payload);
+  ["analysis-preflight", "analysis-start", "analysis-preflight-reason"].forEach((id) => {
+    const element = $(id);
+    if (!element) return;
+    const targets = element.dataset.preflightRole ? [element] : [...element.querySelectorAll("[data-preflight-role]")];
+    targets.forEach((target) => {
+      target.dataset.preflightToken = token;
+      target.dataset.preflightExecutionToken = executionToken;
+      target.dataset.preflightMapResourceToken = mapResourceToken;
+    });
+  });
+  updatePreflightDom("analyze-rosbag", payload);
+}
+
+function scheduleAnalysisPreflight(options = {}) {
+  if (state.tab !== "bag-analysis") return;
+  clearTimeout(analysisPreflightTimer);
+  const check = () => {
+    const payload = analysisPreflightPayload();
+    bindAnalysisPreflight(payload);
+    requestPreflight("analyze-rosbag", payload, { force: Boolean(options.force) });
+  };
+  if (options.immediate) check();
+  else analysisPreflightTimer = setTimeout(check, 250);
+}
+
+async function refreshAnalysisList() {
+  const payload = await api("/api/analyses");
+  state.analysis.analyses = normalizeAnalysisList(payload);
+  return state.analysis.analyses;
+}
+
+async function refreshAnalysisData() {
+  try {
+    await Promise.all([
+      refreshAnalysisList(),
+      state.analysis.selectedBagPath ? selectAnalysisBag(state.analysis.selectedBagPath) : Promise.resolve(),
+    ]);
+    if (state.tab === "bag-analysis") render();
+  } catch (error) {
+    toast(`Analysis refresh failed: ${error.message}`, "error");
+  }
+}
+
+function updateAnalysisListDom() {
+  const target = $("analysis-job-list");
+  if (target) target.innerHTML = renderAnalysisList();
+}
+
+async function startBagAnalysis() {
+  const payload = analysisPreflightPayload();
+  if (!acquirePreflightExecution("analyze-rosbag", payload)) return;
+  try {
+    if (!(await confirmPreflight("analyze-rosbag", payload))) return;
+    const result = await api("/api/analyses", { method: "POST", body: JSON.stringify(payload) });
+    if (result.preflight) cachePreflightResult("analyze-rosbag", payload, result.preflight);
+    if (result.task) {
+      rememberStartedTask(result.task, "analyze-rosbag", payload);
+      state.selectedTaskId = result.task.task_id;
+    }
+    const record = normalizeAnalysisRecord(result.analysis || result.job || result);
+    const id = analysisRecordId(record);
+    if (id) {
+      pauseAnalysisPlayback();
+      state.analysis.analyses = [record, ...state.analysis.analyses.filter((item) => analysisRecordId(item) !== id)];
+      state.analysis.selectedId = id;
+      state.analysis.detail = null;
+      state.analysis.timeline = null;
+      state.analysis.mapDetail = null;
+      state.analysis.currentTime = 0;
+      state.analysis.renderedFrameIndex = -1;
+    }
+    updateAnalysisListDom();
+    const viewer = $("analysis-viewer-body");
+    if (viewer) viewer.innerHTML = renderAnalysisViewer();
+    updateTaskChrome();
+    toast("Rosbag analysis started");
+  } catch (error) {
+    if (error?.payload?.active_task?.task_id) {
+      rememberStartedTask(error.payload.active_task, "analyze-rosbag", payload);
+      refreshVisiblePreflightDom();
+      toast(error.payload.error || "Another offline analysis is already running.", "error");
+      return;
+    }
+    if (capturePreflightError("analyze-rosbag", payload, error)) {
+      toast(preflightBlockingReason(preflightEntry("analyze-rosbag", payload)), "error");
+      return;
+    }
+    toast(`Analysis start failed: ${error.message}`, "error");
+  } finally {
+    releasePreflightExecution("analyze-rosbag", payload);
+  }
+}
+
+async function openAnalysisResult(id) {
+  const selectedId = String(id || "");
+  if (!selectedId) return;
+  pauseAnalysisPlayback();
+  state.analysis.selectedId = selectedId;
+  state.analysis.loadingResult = true;
+  state.analysis.detail = null;
+  state.analysis.timeline = null;
+  state.analysis.mapDetail = null;
+  state.analysis.currentTime = 0;
+  state.analysis.renderedFrameIndex = -1;
+  if (state.tab !== "bag-analysis") state.tab = "bag-analysis";
+  render();
+  try {
+    const [detail, timeline] = await Promise.all([
+      api(`/api/analyses/${encodeURIComponent(selectedId)}`),
+      api(`/api/analyses/${encodeURIComponent(selectedId)}/timeline`),
+    ]);
+    if (state.analysis.selectedId !== selectedId) return;
+    state.analysis.detail = normalizeAnalysisRecord(detail.analysis || detail);
+    state.analysis.timeline = normalizeAnalysisTimeline(timeline.timeline || timeline);
+    const mapPath = analysisResultMapPath();
+    if (mapPath) {
+      if (!state.analysis.selectedMapPath) state.analysis.selectedMapPath = mapPath;
+      try {
+        state.analysis.mapDetail = await api(apiPath("/api/maps/detail", { path: mapPath }));
+      } catch (error) {
+        state.analysis.mapDetail = null;
+        state.analysis.timeline.map_load_error = error.message;
+      }
+    }
+  } catch (error) {
+    if (state.analysis.selectedId === selectedId) {
+      toast(`Analysis result is not ready: ${error.message}`, "error");
+    }
+  } finally {
+    if (state.analysis.selectedId === selectedId) {
+      state.analysis.loadingResult = false;
+      if (state.tab === "bag-analysis") render();
+    }
+  }
+}
+
+function reloadAnalysisResult() {
+  return openAnalysisResult(state.analysis.selectedId);
+}
+
+function normalizeAnalysisTimeline(raw) {
+  const timeline = raw && typeof raw === "object" ? { ...raw } : {};
+  timeline.frames = analysisFrames(timeline);
+  timeline.controls = normalizeTimedRecords(timeline.controls);
+  timeline.modes = normalizeTimedRecords(timeline.modes);
+  timeline.speeds = normalizeTimedRecords(timeline.speeds);
+  const trajectory = timeline.trajectory && typeof timeline.trajectory === "object" ? timeline.trajectory : {};
+  const trajectorySamples = normalizeTimedRecords(trajectory.samples || timeline.trajectory_samples);
+  timeline.trajectory = {
+    ...trajectory,
+    frame_id: String(trajectory.frame_id || timeline.trajectory_frame_id || ""),
+    source: String(trajectory.source || ""),
+    samples: trajectorySamples,
+    valid_samples: trajectorySamples.filter(
+      (sample) => Number.isFinite(Number(sample.x)) && Number.isFinite(Number(sample.y)),
+    ),
+  };
+  const series = [timeline.frames, timeline.controls, timeline.modes, timeline.speeds, trajectorySamples];
+  const lastTimes = series
+    .map((records) => Number(records[records.length - 1]?.t))
+    .filter(Number.isFinite);
+  timeline._duration_s = Math.max(
+    0,
+    Number(timeline.duration_s) || 0,
+    lastTimes.reduce((maximum, value) => Math.max(maximum, value), 0),
+  );
+  const speedValues = (timeline.speeds.length ? timeline.speeds : trajectorySamples)
+    .map((item) => Number(item.value ?? item.speed_mps))
+    .filter((value) => Number.isFinite(value) && value >= 0);
+  timeline._speed_max = Math.max(
+    1,
+    speedValues.reduce((maximum, value) => Math.max(maximum, value), 0) * 1.08,
+  );
+  timeline._trajectory_speed_max = Math.max(
+    1,
+    trajectorySamples.reduce((maximum, sample) => {
+      const value = Number(sample.speed_mps);
+      return Number.isFinite(value) && value >= 0 ? Math.max(maximum, value) : maximum;
+    }, 0),
+  );
+  timeline._trajectory_bounds = timeline.trajectory.valid_samples.reduce(
+    (bounds, sample) => ({
+      minX: Math.min(bounds.minX, Number(sample.x)),
+      maxX: Math.max(bounds.maxX, Number(sample.x)),
+      minY: Math.min(bounds.minY, Number(sample.y)),
+      maxY: Math.max(bounds.maxY, Number(sample.y)),
+    }),
+    { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity },
+  );
+  timeline._normalized = true;
+  return timeline;
+}
+
+function normalizeTimedRecords(raw) {
+  const values = Array.isArray(raw) ? raw : [];
+  return values
+    .map((item) => {
+      if (Array.isArray(item)) return { t: Number(item[0]), value: item[1] };
+      return item && typeof item === "object" ? { ...item, t: Number(item.t ?? item.time ?? item.time_s) } : null;
+    })
+    .filter((item) => item && Number.isFinite(item.t))
+    .sort((a, b) => a.t - b.t);
+}
+
+function analysisFrames(timeline = state.analysis.timeline || {}) {
+  if (timeline._normalized && Array.isArray(timeline.frames)) return timeline.frames;
+  const raw = timeline.frames || timeline.image_frames || timeline.media?.frames || [];
+  return normalizeTimedRecords(raw)
+    .map((frame) => ({ ...frame, path: String(frame.path || frame.asset || frame.file || "") }))
+    .filter((frame) => frame.path);
+}
+
+function analysisTrajectory(timeline = state.analysis.timeline || {}) {
+  const trajectory = timeline.trajectory && typeof timeline.trajectory === "object" ? timeline.trajectory : {};
+  return {
+    frameId: String(trajectory.frame_id || ""),
+    source: String(trajectory.source || ""),
+    samples: timeline._normalized && Array.isArray(trajectory.samples)
+      ? trajectory.samples
+      : normalizeTimedRecords(trajectory.samples),
+    validSamples: timeline._normalized && Array.isArray(trajectory.valid_samples)
+      ? trajectory.valid_samples
+      : normalizeTimedRecords(trajectory.samples).filter(
+        (sample) => Number.isFinite(Number(sample.x)) && Number.isFinite(Number(sample.y)),
+      ),
+  };
+}
+
+function analysisDuration(timeline = state.analysis.timeline || {}) {
+  if (timeline._normalized && Number.isFinite(Number(timeline._duration_s))) {
+    return Number(timeline._duration_s);
+  }
+  const explicit = Number(timeline.duration_s || state.analysis.detail?.duration_s || 0);
+  const series = [
+    analysisFrames(timeline),
+    timeline.controls || [],
+    timeline.modes || [],
+    timeline.speeds || [],
+    analysisTrajectory(timeline).samples,
+  ];
+  const lastValues = series
+    .map((records) => Number(records[records.length - 1]?.t))
+    .filter(Number.isFinite);
+  return Math.max(0, explicit, lastValues.reduce((maximum, value) => Math.max(maximum, value), 0));
+}
+
+function analysisResultMapPath() {
+  const timeline = state.analysis.timeline || {};
+  const detail = state.analysis.detail || {};
+  return String(timeline.map?.path || timeline.map_path || detail.map?.path || detail.map_path || detail.map_dir || "");
+}
+
+function analysisMapConsistency() {
+  const timeline = state.analysis.timeline || {};
+  const consistency = timeline.map?.consistency || timeline.map_consistency || {};
+  const resultPath = analysisResultMapPath();
+  const selectedPath = state.analysis.selectedMapPath;
+  const mismatch = Boolean(
+    (resultPath || selectedPath)
+    && trimTrailingSlash(resultPath) !== trimTrailingSlash(selectedPath),
+  );
+  if (mismatch) {
+    return {
+      className: "missing",
+      label: "map mismatch",
+      message: `This result was generated with ${resultPath}. Re-run analysis to use ${selectedPath}; the viewer will not silently re-align it.`,
+    };
+  }
+  if (!analysisMapFingerprintMatches()) {
+    return {
+      className: "missing",
+      label: "map changed",
+      message: "The selected Map contents changed after this analysis completed. Re-run analysis before overlaying the trajectory.",
+    };
+  }
+  const rawStatus = String(consistency.status || consistency.state || "").toLowerCase();
+  const inside = Number(consistency.inside_fraction ?? timeline.map?.inside_fraction);
+  const label = Number.isFinite(inside) ? `${(inside * 100).toFixed(1)}% in map` : rawStatus || (resultPath ? "map pinned" : "no map");
+  const className = ["failed", "mismatch", "invalid", "blocked"].includes(rawStatus) || (Number.isFinite(inside) && inside < 0.5)
+    ? "missing"
+    : ["warning", "partial", "unknown"].includes(rawStatus) || (Number.isFinite(inside) && inside < 0.9) ? "warning" : resultPath ? "ok" : "missing";
+  return {
+    className,
+    label,
+    message: String(consistency.message || (Number.isFinite(inside) ? `${(inside * 100).toFixed(1)}% of localized samples fall inside the selected map raster or lane extent.` : resultPath ? `Result is pinned to ${resultPath}.` : "No map was associated with this analysis.")),
+  };
+}
+
+function updateAnalysisConsistencyDom() {
+  const body = $("analysis-viewer-body");
+  if (!body || !state.analysis.timeline) return;
+  body.innerHTML = renderAnalysisViewer();
+  mountAnalysisViewer();
+}
+
+function analysisTimelineIssues() {
+  const timeline = state.analysis.timeline || {};
+  const issues = [
+    ...(Array.isArray(timeline.missing) ? timeline.missing : []),
+    ...(Array.isArray(timeline.missing_data) ? timeline.missing_data : []),
+    ...(Array.isArray(timeline.warnings) ? timeline.warnings : []),
+    ...analysisRecordMissing(state.analysis.detail || {}),
+  ].map(preflightText).filter(Boolean);
+  if (!analysisFrames(timeline).length) issues.push("No supported image frames were extracted; telemetry playback remains available.");
+  if (!(timeline.controls || []).length) issues.push("No control command samples were found.");
+  if (!(timeline.modes || []).length) issues.push("No operation mode samples were found.");
+  if (!(timeline.speeds || []).length && !analysisTrajectory(timeline).samples.some((sample) => Number.isFinite(Number(sample.speed_mps)))) issues.push("No measured or commanded speed samples were found.");
+  if (!analysisTrajectory(timeline).samples.length && state.analysis.detail?.trajectory_mode !== "none") issues.push("No synchronized trajectory was produced. Check recorded poses or the offline localization log.");
+  if (state.analysis.mapDetail && !analysisMapFingerprintMatches()) issues.push("The Map fingerprint no longer matches this result; the map overlay is suppressed.");
+  else if (state.analysis.mapDetail && !analysisTrajectoryCanUseMap()) issues.push(`Trajectory frame '${analysisTrajectory(timeline).frameId}' has no verified transform to map; the map overlay is suppressed.`);
+  if (timeline.map_load_error) issues.push(`Map background could not be loaded: ${timeline.map_load_error}`);
+  return [...new Set(issues)];
+}
+
+function formatAnalysisClock(seconds) {
+  const value = Math.max(0, Number(seconds) || 0);
+  const hours = Math.floor(value / 3600);
+  const minutes = Math.floor((value % 3600) / 60);
+  const secs = value % 60;
+  return `${hours ? `${String(hours).padStart(2, "0")}:` : ""}${String(minutes).padStart(2, "0")}:${secs.toFixed(2).padStart(5, "0")}`;
+}
+
+function stopAnalysisAnimationFrame() {
+  if (state.analysis.rafId) cancelAnimationFrame(state.analysis.rafId);
+  state.analysis.rafId = 0;
+  state.analysis.lastTickMs = 0;
+}
+
+function mountAnalysisViewer() {
+  if (!state.analysis.timeline || !$("analysis-viewer-body")) return;
+  state.analysis.renderedFrameIndex = -1;
+  updateAnalysisPlaybackDom(true);
+  if (state.analysis.playing) startAnalysisAnimationFrame();
+}
+
+function startAnalysisAnimationFrame() {
+  stopAnalysisAnimationFrame();
+  if (!state.analysis.playing || state.tab !== "bag-analysis") return;
+  state.analysis.rafId = requestAnimationFrame(analysisPlaybackTick);
+}
+
+function analysisPlaybackTick(now) {
+  if (!state.analysis.playing || state.tab !== "bag-analysis") {
+    stopAnalysisAnimationFrame();
+    return;
+  }
+  if (!state.analysis.lastTickMs) state.analysis.lastTickMs = now;
+  const elapsed = Math.max(0, Math.min(0.25, (now - state.analysis.lastTickMs) / 1000));
+  state.analysis.lastTickMs = now;
+  const duration = analysisDuration();
+  state.analysis.currentTime = Math.min(duration, state.analysis.currentTime + elapsed * state.analysis.playbackRate);
+  if (state.analysis.currentTime >= duration) state.analysis.playing = false;
+  updateAnalysisPlaybackDom();
+  if (state.analysis.playing) state.analysis.rafId = requestAnimationFrame(analysisPlaybackTick);
+  else stopAnalysisAnimationFrame();
+}
+
+function toggleAnalysisPlayback() {
+  if (!state.analysis.timeline) return;
+  if (state.analysis.playing) {
+    pauseAnalysisPlayback();
+    return;
+  }
+  const duration = analysisDuration();
+  if (state.analysis.currentTime >= duration) state.analysis.currentTime = 0;
+  state.analysis.playing = true;
+  state.analysis.lastTickMs = 0;
+  updateAnalysisPlaybackDom(true);
+  startAnalysisAnimationFrame();
+}
+
+function pauseAnalysisPlayback() {
+  state.analysis.playing = false;
+  stopAnalysisAnimationFrame();
+  updateAnalysisPlaybackDom(true);
+}
+
+function seekAnalysisTime(value) {
+  const duration = analysisDuration();
+  state.analysis.currentTime = Math.max(0, Math.min(duration, Number(value) || 0));
+  state.analysis.lastTickMs = 0;
+  updateAnalysisPlaybackDom(true);
+}
+
+function seekAnalysisRelative(delta) {
+  seekAnalysisTime(state.analysis.currentTime + Number(delta || 0));
+}
+
+function setAnalysisPlaybackRate(value) {
+  const rate = Number(value);
+  state.analysis.playbackRate = Number.isFinite(rate) ? Math.max(0.1, Math.min(8, rate)) : 1;
+}
+
+function timedRecordIndex(records, time) {
+  let low = 0;
+  let high = records.length - 1;
+  let found = -1;
+  while (low <= high) {
+    const middle = (low + high) >> 1;
+    if (Number(records[middle].t) <= time + 1.0e-9) {
+      found = middle;
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
+  }
+  return found;
+}
+
+function timedRecordAt(records, time) {
+  const index = timedRecordIndex(records || [], time);
+  return index >= 0 ? records[index] : null;
+}
+
+function stepAnalysisFrame(direction) {
+  const frames = analysisFrames();
+  if (!frames.length) {
+    seekAnalysisRelative(Number(direction) / Math.max(1, state.analysis.maxFps));
+    return;
+  }
+  const current = timedRecordIndex(frames, state.analysis.currentTime);
+  const index = Math.max(0, Math.min(frames.length - 1, current + (Number(direction) >= 0 ? 1 : -1)));
+  pauseAnalysisPlayback();
+  seekAnalysisTime(frames[index].t);
+}
+
+function analysisAssetUrl(frame) {
+  const path = String(frame?.path || "");
+  if (!path) return "";
+  const relative = path.replace(/^\/+/, "").replace(/^frames\//, "");
+  return `/api/analyses/${encodeURIComponent(state.analysis.selectedId)}/frames/${relative.split("/").map(encodeURIComponent).join("/")}`;
+}
+
+function updateAnalysisFrame(time) {
+  const frames = analysisFrames();
+  const image = $("analysis-frame-image");
+  const empty = $("analysis-frame-empty");
+  if (!image || !empty) return;
+  const index = timedRecordIndex(frames, time);
+  if (index < 0) {
+    image.removeAttribute("src");
+    image.classList.remove("visible");
+    empty.textContent = frames.length ? "Waiting for the first image frame..." : "No image frames were extracted.";
+    empty.classList.add("visible");
+    state.analysis.renderedFrameIndex = -1;
+    return;
+  }
+  if (index !== state.analysis.renderedFrameIndex) {
+    const url = analysisAssetUrl(frames[index]);
+    image.onload = () => {
+      image.classList.add("visible");
+      empty.classList.remove("visible");
+    };
+    image.onerror = () => {
+      image.classList.remove("visible");
+      empty.textContent = "This frame could not be loaded.";
+      empty.classList.add("visible");
+    };
+    image.src = url;
+    state.analysis.renderedFrameIndex = index;
+    const next = frames[index + 1];
+    if (next) {
+      const preload = new Image();
+      preload.src = analysisAssetUrl(next);
+    }
+  }
+  const frameTime = $("analysis-frame-time");
+  if (frameTime) frameTime.textContent = `${formatAnalysisClock(time)} / frame ${index + 1} of ${frames.length}`;
+}
+
+function analysisModeLabel(record) {
+  if (!record) return "-";
+  if (record.label) return String(record.label).toUpperCase();
+  const value = Number(record.mode ?? record.value);
+  return { 1: "AUTO", 2: "MANUAL", 3: "STOP", 4: "PROPO" }[value] || String(record.mode ?? record.value ?? "-");
+}
+
+function formatAnalysisValue(value, suffix = "") {
+  const number = Number(value);
+  return Number.isFinite(number) ? `${number.toFixed(3)}${suffix}` : "-";
+}
+
+function updateAnalysisPlaybackDom(force = false) {
+  if (!state.analysis.timeline || state.tab !== "bag-analysis") return;
+  const time = state.analysis.currentTime;
+  const duration = analysisDuration();
+  const seek = $("analysis-seek");
+  if (seek) {
+    seek.max = String(duration);
+    seek.value = String(Math.min(duration, time));
+  }
+  const clock = $("analysis-clock-label");
+  if (clock) clock.textContent = `${formatAnalysisClock(time)} / ${formatAnalysisClock(duration)}`;
+  const playButton = $("analysis-play-button");
+  if (playButton) playButton.textContent = state.analysis.playing ? "Pause" : "Play";
+  updateAnalysisFrame(time);
+
+  const timeline = state.analysis.timeline;
+  const control = timedRecordAt(timeline.controls || [], time);
+  const mode = timedRecordAt(timeline.modes || [], time);
+  const trajectory = timedRecordAt(analysisTrajectory(timeline).samples, time);
+  const speed = timedRecordAt(timeline.speeds || [], time);
+  const speedLabel = $("analysis-label-speed");
+  if (speedLabel) speedLabel.textContent = analysisSpeedSourceLabel(speed);
+  const values = {
+    "analysis-value-mode": analysisModeLabel(mode),
+    "analysis-value-steering": formatAnalysisValue(control?.steering),
+    "analysis-value-throttle": formatAnalysisValue(control?.throttle),
+    "analysis-value-brake": formatAnalysisValue(control?.brake),
+    "analysis-value-speed": formatAnalysisValue(
+      speed?.value ?? speed?.speed_mps ?? trajectory?.speed_mps,
+      analysisSpeedIsCommanded(speed) ? "" : " m/s",
+    ),
+  };
+  Object.entries(values).forEach(([id, value]) => {
+    const element = $(id);
+    if (element) element.textContent = value;
+  });
+
+  const now = performance.now();
+  if (force || now - state.analysis.lastVisualUpdateMs >= 32) {
+    drawAnalysisTimeline();
+    drawAnalysisMap();
+    state.analysis.lastVisualUpdateMs = now;
+  }
+}
+
+function seekAnalysisFromTimeline(event) {
+  const canvas = event.currentTarget || $("analysis-timeline-canvas");
+  if (!canvas) return;
+  const rect = canvas.getBoundingClientRect();
+  const fraction = Math.max(0, Math.min(1, (event.clientX - rect.left) / Math.max(1, rect.width)));
+  seekAnalysisTime(fraction * analysisDuration());
+}
+
+function analysisCanvasContext(canvas, fallbackHeight) {
+  if (!canvas) return null;
+  const rect = canvas.getBoundingClientRect();
+  const width = Math.max(320, Math.round(rect.width || canvas.parentElement?.clientWidth || 800));
+  const height = Math.max(180, Math.round(rect.height || fallbackHeight));
+  const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+  const pixelWidth = Math.round(width * dpr);
+  const pixelHeight = Math.round(height * dpr);
+  if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
+    canvas.width = pixelWidth;
+    canvas.height = pixelHeight;
+  }
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return { ctx, width, height };
+}
+
+function drawAnalysisTimeline() {
+  const canvas = $("analysis-timeline-canvas");
+  const prepared = analysisCanvasContext(canvas, 310);
+  if (!prepared || !state.analysis.timeline) return;
+  const { ctx, width, height } = prepared;
+  const timeline = state.analysis.timeline;
+  const duration = Math.max(0.001, analysisDuration(timeline));
+  const left = 70;
+  const right = 14;
+  const top = 14;
+  const modeHeight = 28;
+  const chartTop = top + modeHeight + 12;
+  const chartHeight = Math.max(48, (height - chartTop - 20) / 3);
+  const plotWidth = Math.max(1, width - left - right);
+  const toX = (time) => left + Math.max(0, Math.min(1, Number(time) / duration)) * plotWidth;
+
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = "#0a0d10";
+  ctx.fillRect(0, 0, width, height);
+  ctx.font = "11px ui-sans-serif, system-ui";
+  ctx.textBaseline = "middle";
+
+  const gridCount = Math.max(4, Math.min(12, Math.floor(plotWidth / 120)));
+  for (let index = 0; index <= gridCount; index += 1) {
+    const fraction = index / gridCount;
+    const x = left + fraction * plotWidth;
+    ctx.strokeStyle = "rgba(255,255,255,0.07)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x, top);
+    ctx.lineTo(x, height - 18);
+    ctx.stroke();
+    ctx.fillStyle = "#78838e";
+    ctx.textAlign = index === 0 ? "left" : index === gridCount ? "right" : "center";
+    ctx.fillText(formatAnalysisClock(fraction * duration), x, height - 8);
+  }
+
+  ctx.fillStyle = "#11171c";
+  ctx.fillRect(left, top, plotWidth, modeHeight);
+  ctx.fillStyle = "#98a2ad";
+  ctx.textAlign = "right";
+  ctx.fillText("MODE", left - 8, top + modeHeight / 2);
+  const modes = timeline.modes || [];
+  const modeColors = { AUTO: "#2f8f61", MANUAL: "#386fa4", STOP: "#8b3c43", PROPO: "#7a5c9b" };
+  modes.forEach((record, index) => {
+    const next = modes[index + 1];
+    const x = toX(record.t);
+    const endX = toX(next ? next.t : duration);
+    const label = analysisModeLabel(record);
+    ctx.fillStyle = modeColors[label] || "#555f69";
+    ctx.fillRect(x, top, Math.max(1, endX - x), modeHeight);
+    if (endX - x > 45) {
+      ctx.fillStyle = "rgba(255,255,255,0.85)";
+      ctx.textAlign = "left";
+      ctx.fillText(label, x + 5, top + modeHeight / 2);
+    }
+  });
+
+  const tracks = [
+    {
+      label: "STEER",
+      min: -1,
+      max: 1,
+      lines: [{ records: timeline.controls || [], value: (item) => item.steering, color: "#5aa8ff" }],
+    },
+    {
+      label: "PEDALS",
+      min: 0,
+      max: 1,
+      lines: [
+        { records: timeline.controls || [], value: (item) => item.throttle, color: "#45c478" },
+        { records: timeline.controls || [], value: (item) => item.brake, color: "#f26d6d" },
+      ],
+    },
+    {
+      label: analysisSpeedSourceLabel(analysisSpeedSeries()[0], true),
+      min: 0,
+      max: analysisSpeedMaximum(),
+      lines: [{ records: analysisSpeedSeries(), value: (item) => item.value ?? item.speed_mps, color: "#e7b84b" }],
+    },
+  ];
+  tracks.forEach((track, trackIndex) => {
+    const y = chartTop + trackIndex * chartHeight;
+    const innerTop = y + 6;
+    const innerHeight = chartHeight - 12;
+    ctx.fillStyle = trackIndex % 2 ? "#0d1115" : "#0f1418";
+    ctx.fillRect(left, y, plotWidth, chartHeight - 2);
+    ctx.strokeStyle = "rgba(255,255,255,0.08)";
+    ctx.beginPath();
+    ctx.moveTo(left, y + chartHeight / 2);
+    ctx.lineTo(width - right, y + chartHeight / 2);
+    ctx.stroke();
+    ctx.fillStyle = "#98a2ad";
+    ctx.textAlign = "right";
+    ctx.fillText(track.label, left - 8, y + chartHeight / 2);
+    track.lines.forEach((line) => drawAnalysisSeries(ctx, line.records, line.value, line.color, toX, innerTop, innerHeight, track.min, track.max, plotWidth));
+  });
+
+  const cursorX = toX(state.analysis.currentTime);
+  ctx.strokeStyle = "rgba(255,255,255,0.92)";
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(cursorX, top - 3);
+  ctx.lineTo(cursorX, height - 18);
+  ctx.stroke();
+  ctx.fillStyle = "#ffffff";
+  ctx.beginPath();
+  ctx.moveTo(cursorX - 5, top - 4);
+  ctx.lineTo(cursorX + 5, top - 4);
+  ctx.lineTo(cursorX, top + 3);
+  ctx.closePath();
+  ctx.fill();
+}
+
+function drawAnalysisSeries(ctx, records, valueOf, color, toX, top, height, min, max, plotWidth) {
+  if (!records?.length || max <= min) return;
+  const maxPoints = Math.max(200, Math.floor(plotWidth * 2));
+  const step = Math.max(1, Math.ceil(records.length / maxPoints));
+  let started = false;
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.7;
+  ctx.lineJoin = "round";
+  ctx.beginPath();
+  for (let index = 0; index < records.length; index += step) {
+    const record = records[index];
+    const value = Number(valueOf(record));
+    if (!Number.isFinite(value)) {
+      started = false;
+      continue;
+    }
+    const x = toX(record.t);
+    const y = top + (1 - Math.max(0, Math.min(1, (value - min) / (max - min)))) * height;
+    if (!started) {
+      ctx.moveTo(x, y);
+      started = true;
+    } else {
+      ctx.lineTo(x, y);
+    }
+  }
+  const last = records[records.length - 1];
+  const lastValue = Number(valueOf(last));
+  if (Number.isFinite(lastValue)) {
+    const x = toX(last.t);
+    const y = top + (1 - Math.max(0, Math.min(1, (lastValue - min) / (max - min)))) * height;
+    if (!started) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+
+function analysisSpeedSeries() {
+  const direct = state.analysis.timeline?.speeds || [];
+  return direct.length ? direct : analysisTrajectory().samples;
+}
+
+function analysisSpeedSourceLabel(record, compact = false) {
+  const commanded = analysisSpeedIsCommanded(record);
+  if (compact) return commanded ? "CMD RAW" : "SPEED";
+  return commanded ? "Commanded speed (raw)" : "Vehicle speed";
+}
+
+function analysisSpeedIsCommanded(record) {
+  const source = String(record?.source || state.analysis.timeline?.trajectory?.source || "");
+  return source.startsWith("/commands/") || /motor\/speed/i.test(source) || /commanded/i.test(source);
+}
+
+function analysisSpeedMaximum() {
+  const cached = Number(state.analysis.timeline?._speed_max);
+  if (Number.isFinite(cached) && cached > 0) return cached;
+  const values = analysisSpeedSeries().map((item) => Number(item.value ?? item.speed_mps)).filter((value) => Number.isFinite(value) && value >= 0);
+  if (!values.length) return 1;
+  return Math.max(1, values.reduce((maximum, value) => Math.max(maximum, value), 0) * 1.08);
+}
+
+function analysisTrajectoryCanUseMap() {
+  if (!state.analysis.mapDetail) return true;
+  if (!analysisMapFingerprintMatches()) return false;
+  const timeline = state.analysis.timeline || {};
+  const trajectory = analysisTrajectory(timeline);
+  const consistency = timeline.map?.consistency || timeline.map_consistency || {};
+  return !trajectory.frameId
+    || trajectory.frameId === "map"
+    || consistency.aligned === true
+    || consistency.transform_applied === true
+    || consistency.overlay_ready === true;
+}
+
+function analysisMapFingerprintMatches() {
+  const expected = String(
+    state.analysis.timeline?.map?.fingerprint
+      || state.analysis.detail?.map?.fingerprint
+      || "",
+  );
+  const current = String(state.analysis.mapDetail?.map?.fingerprint || "");
+  return !expected || !current || expected === current;
+}
+
+function analysisMapProjector(detail, samples, width, height) {
+  if (detail && (detail.raster?.resolution_m_per_px || collectMapPoints(detail).length)) {
+    return mapPointProjector(detail, width, height);
+  }
+  if (!samples.length) return () => [width / 2, height / 2];
+  const cached = state.analysis.timeline?._trajectory_bounds;
+  const bounds = cached && [cached.minX, cached.maxX, cached.minY, cached.maxY].every(Number.isFinite)
+    ? cached
+    : samples.reduce(
+      (result, sample) => ({
+        minX: Math.min(result.minX, Number(sample.x)),
+        maxX: Math.max(result.maxX, Number(sample.x)),
+        minY: Math.min(result.minY, Number(sample.y)),
+        maxY: Math.max(result.maxY, Number(sample.y)),
+      }),
+      { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity },
+    );
+  const { minX, maxX, minY, maxY } = bounds;
+  const pad = 28;
+  const scale = Math.min(
+    (width - pad * 2) / Math.max(1.0e-6, maxX - minX),
+    (height - pad * 2) / Math.max(1.0e-6, maxY - minY),
+  );
+  return (point) => [pad + (Number(point[0]) - minX) * scale, height - pad - (Number(point[1]) - minY) * scale];
+}
+
+function analysisSpeedColor(speed, maxSpeed) {
+  const fraction = Math.max(0, Math.min(1, Number(speed || 0) / Math.max(0.001, maxSpeed)));
+  const hue = 210 - fraction * 210;
+  return `hsl(${hue.toFixed(0)} 82% 60%)`;
+}
+
+function drawAnalysisMap(backgroundImage = undefined) {
+  const canvas = $("analysis-map-canvas");
+  const prepared = analysisCanvasContext(canvas, 390);
+  if (!prepared || !state.analysis.timeline) return;
+  const { ctx, width, height } = prepared;
+  const detail = state.analysis.mapDetail;
+  const trajectory = analysisTrajectory();
+  const samples = trajectory.validSamples;
+  const imageUrl = detail?.raster?.image_url || detail?.preview_image_url || "";
+
+  let image = backgroundImage;
+  if (image === undefined && imageUrl) {
+    const cached = mapPreviewImages.get(imageUrl);
+    if (cached?.complete) image = cached.naturalWidth ? cached : null;
+    else {
+      const loading = cached || new Image();
+      loading.onload = () => drawAnalysisMap(loading);
+      loading.onerror = () => drawAnalysisMap(null);
+      if (!cached) {
+        mapPreviewImages.set(imageUrl, loading);
+        loading.src = imageUrl;
+      }
+      image = null;
+    }
+  }
+
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = "#080a0d";
+  ctx.fillRect(0, 0, width, height);
+  if (image?.naturalWidth) {
+    ctx.drawImage(image, 0, 0, width, height);
+    ctx.fillStyle = "rgba(4, 7, 10, 0.18)";
+    ctx.fillRect(0, 0, width, height);
+  } else {
+    drawGrid(ctx, width, height);
+  }
+
+  const toPixel = analysisMapProjector(detail, samples, width, height);
+  if (detail) drawAnalysisMapReference(ctx, detail, toPixel);
+  const canOverlay = analysisTrajectoryCanUseMap();
+  if (canOverlay && samples.length >= 2) {
+    const maxSpeed = Number(state.analysis.timeline?._trajectory_speed_max) || 1;
+    const maxSegments = Math.max(500, Math.floor(width * 4));
+    const step = Math.max(1, Math.ceil(samples.length / maxSegments));
+    ctx.save();
+    ctx.lineWidth = 3;
+    ctx.lineCap = "round";
+    for (let index = step; index < samples.length; index += step) {
+      const previous = samples[Math.max(0, index - step)];
+      const current = samples[index];
+      const a = toPixel([previous.x, previous.y]);
+      const b = toPixel([current.x, current.y]);
+      if (![...a, ...b].every(Number.isFinite)) continue;
+      ctx.strokeStyle = analysisSpeedColor((Number(previous.speed_mps) + Number(current.speed_mps)) * 0.5, maxSpeed);
+      ctx.beginPath();
+      ctx.moveTo(a[0], a[1]);
+      ctx.lineTo(b[0], b[1]);
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    const current = timedRecordAt(samples, state.analysis.currentTime);
+    if (current) {
+      const [x, y] = toPixel([current.x, current.y]);
+      const yaw = Number(current.yaw || 0);
+      if (Number.isFinite(x) && Number.isFinite(y)) {
+        const rasterYaw = detail?.raster?.resolution_m_per_px
+          ? Number(detail.raster.origin_xy_yaw?.[2] || 0)
+          : 0;
+        ctx.save();
+        ctx.translate(x, y);
+        ctx.rotate(rasterYaw - yaw);
+        ctx.fillStyle = "#ffffff";
+        ctx.strokeStyle = "#081018";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(12, 0);
+        ctx.lineTo(-7, -6);
+        ctx.lineTo(-4, 0);
+        ctx.lineTo(-7, 6);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+  }
+
+  const empty = $("analysis-map-empty");
+  if (empty) {
+    if (!samples.length) {
+      empty.textContent = "No synchronized trajectory is available.";
+      empty.classList.add("visible");
+    } else if (!canOverlay) {
+      empty.textContent = !analysisMapFingerprintMatches()
+        ? "Map contents changed after analysis; re-run before overlaying the trajectory."
+        : `Trajectory frame '${trajectory.frameId}' cannot be aligned to map without an explicit transform.`;
+      empty.classList.add("visible");
+    } else if (!detail) {
+      empty.textContent = "Map background unavailable; trajectory is fitted to its own extent.";
+      empty.classList.add("visible");
+    } else {
+      empty.classList.remove("visible");
+    }
+  }
+}
+
+function drawAnalysisMapReference(ctx, detail, toPixel) {
+  const lanes = detail.hd_map?.lanes || [];
+  lanes.forEach((lane) => {
+    drawPolyline(ctx, (lane.left_bound || []).map(toPixel), "rgba(69,196,120,0.72)", 2, lane.closed_loop);
+    drawPolyline(ctx, (lane.right_bound || []).map(toPixel), "rgba(216,120,216,0.72)", 2, lane.closed_loop);
+    drawPolyline(ctx, (lane.centerline || []).map(toPixel), "rgba(231,200,75,0.7)", lane.primary ? 2.5 : 1.5, lane.closed_loop);
+  });
+  if (!lanes.length) drawPolyline(ctx, (detail.centerline_csv?.points || []).map(toPixel), "rgba(90,168,255,0.72)", 2, false);
+  drawPolyline(ctx, (detail.raceline_csv?.points || []).map(toPixel), "rgba(255,109,109,0.7)", 2, false);
 }
 
 function renderMaps() {
@@ -3864,6 +5284,20 @@ window.setFpvHost = setFpvHost;
 window.updateFpvCommandPreview = updateFpvCommandPreview;
 window.fillMapDir = fillMapDir;
 window.useRosbag = useRosbag;
+window.openBagAnalysis = openBagAnalysis;
+window.selectAnalysisBag = selectAnalysisBag;
+window.updateAnalysisOption = updateAnalysisOption;
+window.scheduleAnalysisPreflight = scheduleAnalysisPreflight;
+window.refreshAnalysisData = refreshAnalysisData;
+window.startBagAnalysis = startBagAnalysis;
+window.openAnalysisResult = openAnalysisResult;
+window.reloadAnalysisResult = reloadAnalysisResult;
+window.toggleAnalysisPlayback = toggleAnalysisPlayback;
+window.seekAnalysisTime = seekAnalysisTime;
+window.seekAnalysisRelative = seekAnalysisRelative;
+window.setAnalysisPlaybackRate = setAnalysisPlaybackRate;
+window.stepAnalysisFrame = stepAnalysisFrame;
+window.seekAnalysisFromTimeline = seekAnalysisFromTimeline;
 window.selectedCameraTopicConfig = selectedCameraTopicConfig;
 window.applyCameraTopicConfig = applyCameraTopicConfig;
 window.copySelectedCameraTopicConfig = copySelectedCameraTopicConfig;
@@ -3916,6 +5350,24 @@ setInterval(() => {
   api("/api/tasks")
     .then(async (data) => {
       const nextTasks = data.tasks || [];
+      if (state.tab === "bag-analysis") {
+        state.tasks = nextTasks;
+        const previousSelected = state.analysis.analyses.find((item) => analysisRecordId(item) === state.analysis.selectedId);
+        await refreshAnalysisList().catch(() => state.analysis.analyses);
+        updateAnalysisListDom();
+        updateTaskChrome();
+        refreshVisiblePreflightDom();
+        const selected = state.analysis.analyses.find((item) => analysisRecordId(item) === state.analysis.selectedId);
+        if (
+          selected
+          && analysisRecordStatus(selected) === "success"
+          && analysisRecordStatus(previousSelected) !== "success"
+          && !state.analysis.timeline
+        ) {
+          await openAnalysisResult(state.analysis.selectedId);
+        }
+        return;
+      }
       const finishedMapTasks = nextTasks.filter((task) =>
         mapTaskFinishedSince(state.tasks.find((item) => item.task_id === task.task_id), task),
       );

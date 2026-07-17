@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import math
 import struct
@@ -725,6 +726,19 @@ def _display_name(map_root: Path, map_dir: Path) -> str:
     return parts[0] if len(parts) > 1 else map_dir.name
 
 
+def directory_fingerprint(path: Path) -> str:
+    """Match the stat-based fingerprint stored by the analysis worker."""
+
+    digest = hashlib.sha256()
+    for child in sorted(item for item in path.rglob("*") if item.is_file()):
+        relative = child.relative_to(path).as_posix()
+        stat = child.stat()
+        digest.update(relative.encode("utf-8"))
+        digest.update(str(stat.st_size).encode("ascii"))
+        digest.update(str(stat.st_mtime_ns).encode("ascii"))
+    return digest.hexdigest()
+
+
 def _map_record(map_dir: Path, map_root: Path | None = None) -> dict[str, Any]:
     name = map_dir.name
     artifacts = {
@@ -748,6 +762,7 @@ def _map_record(map_dir: Path, map_root: Path | None = None) -> dict[str, Any]:
         "path": str(map_dir),
         "size_bytes": _dir_size(map_dir),
         "modified_at": _iso_mtime(map_dir),
+        "fingerprint": directory_fingerprint(map_dir),
         "artifacts": artifacts,
         "complete_runtime_bundle": complete_runtime,
     }

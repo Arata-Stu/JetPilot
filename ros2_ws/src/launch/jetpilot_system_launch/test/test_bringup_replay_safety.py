@@ -46,6 +46,7 @@ class ReplaySafetyTest(unittest.TestCase):
             "/diagnostics",
             "/localization/pose_hint_required",
             "/localization/pose_hint_state",
+            "/tf",
         }
 
         self.assertTrue(
