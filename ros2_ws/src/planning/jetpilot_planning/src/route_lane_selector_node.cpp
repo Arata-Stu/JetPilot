@@ -352,7 +352,7 @@ private:
   void publish_outputs()
   {
     auto snapshot = snapshot_selection();
-    const auto stamp = now().to_msg();
+    const auto stamp = now();
 
     nav_msgs::msg::Path output_path;
     if (snapshot.decision.ready() && snapshot.path) {

@@ -62,7 +62,7 @@ private:
   {
     nav_msgs::msg::Path path;
     path.header.frame_id = frame_id;
-    path.header.stamp = now().to_msg();
+    path.header.stamp = now();
     path.poses.reserve(raceline_.points.size());
     for (const auto & point : raceline_.points) {
       geometry_msgs::msg::PoseStamped pose;
