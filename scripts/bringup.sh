@@ -444,6 +444,17 @@ prompt_path() {
   fi
 }
 
+append_unique_option() {
+  local candidate="$1"
+  local option
+
+  [[ -n "$candidate" ]] || return
+  for option in "${options[@]}"; do
+    [[ "$option" == "$candidate" ]] && return
+  done
+  options+=("$candidate")
+}
+
 apply_custom_component_token() {
   local token="$1"
 
@@ -562,14 +573,26 @@ discover_map() {
   local selected
   local options=()
 
-  [[ -n "$MAP_DIR" && -d "$MAP_DIR" ]] && options+=("$MAP_DIR")
-  [[ -d "${MAP_ROOT%/}/latest" ]] && options+=("${MAP_ROOT%/}/latest")
+  [[ -n "$MAP_DIR" && -d "$MAP_DIR" ]] && append_unique_option "$MAP_DIR"
+  [[ -d "${MAP_ROOT%/}/latest" ]] && append_unique_option "${MAP_ROOT%/}/latest"
   if [[ -d "$MAP_ROOT" ]]; then
+    if [[ -d "${MAP_ROOT%/}/cuvgl_map" || -d "${MAP_ROOT%/}/cuvslam_map" ]]; then
+      append_unique_option "${MAP_ROOT%/}"
+    fi
     while IFS= read -r path; do
-      options+=("$path")
-    done < <(find "$MAP_ROOT" -mindepth 1 -maxdepth 2 -type d \
+      append_unique_option "$path"
+    done < <(find "$MAP_ROOT" -mindepth 1 -maxdepth 1 -type d \
+      | sort -r | head -50)
+    while IFS= read -r path; do
+      append_unique_option "$path"
+    done < <(find "$MAP_ROOT" -mindepth 1 -maxdepth 3 -type d \
       \( -name cuvgl_map -o -name cuvslam_map \) -exec dirname {} \; \
       | sort -ru | head -50)
+  fi
+  if ((${#options[@]} == 1)); then
+    MAP_DIR="${options[0]}"
+    printf 'Selected map : %s\n' "$MAP_DIR" >&2
+    return
   fi
   options+=('パスを手入力...')
   selected="$(choose_one 'Map directory' "${options[@]}")" || exit $?

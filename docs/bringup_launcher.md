@@ -68,6 +68,11 @@ commands, pass the map explicitly:
   --map /workspaces/map/course_a
 ```
 
+The interactive map selector searches `MAP_ROOT` (`/workspaces/map` by default). It offers
+`/workspaces/map/latest`, direct child directories such as `/workspaces/map/course_a`, and parents
+of discovered `cuvgl_map` or `cuvslam_map` directories. If there is exactly one candidate, it is
+selected automatically.
+
 ## Safety behavior
 
 Every preset starts from explicit all-OFF module settings instead of inheriting the relatively broad
