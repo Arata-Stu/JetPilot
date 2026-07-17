@@ -50,7 +50,10 @@ def add_nodes(args: lu.ArgumentContainer):
             output='screen',
             parameters=[
                 args.teleop_button_mapping_param,
-                {'use_sim_time': use_sim_time},
+                {
+                    'localization_trigger_topic': args.localization_trigger_topic,
+                    'use_sim_time': use_sim_time,
+                },
             ],
         ))
         actions.append(lu.Node(
@@ -137,6 +140,7 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('control_authority', 'hardware_mux', cli=True)
     args.add_arg('rc_channels_topic', '/rc/channels', cli=True)
     args.add_arg('propo_control_topic', '/propo/control_cmd', cli=True)
+    args.add_arg('localization_trigger_topic', '/localization/trigger', cli=True)
     args.add_arg('joy_autorepeat_rate', '50.0', cli=True)
     args.add_arg('joy_deadzone', '0.05', cli=True)
     args.add_arg('joy_device_path', '', cli=True)

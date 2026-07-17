@@ -13,6 +13,10 @@ if(BUILD_TESTING)
     test_localization_manager_launch
     test/test_localization_manager_launch.py
   )
+  ament_add_pytest_test(
+    test_bringup_script
+    test/test_bringup_script.py
+  )
 endif()
 
 ament_auto_package(INSTALL_TO_SHARE

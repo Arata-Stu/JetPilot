@@ -80,6 +80,10 @@ def add_visual_global_localization(args: lu.ArgumentContainer) -> list[lut.Actio
     actions.append(
         lu.log_info(["Visual global localization using remapping:'", remapping_string, "'"]))
     num_cameras = int(len(remappings) / 2)
+    remappings.extend([
+        ('visual_localization/trigger_localization', args.vgl_trigger_service),
+        ('visual_localization/pose', args.vgl_pose_topic),
+    ])
 
     stereo_localizer_cam_ids = ','.join([str(i) for i in range(num_cameras)])
 
@@ -155,6 +159,9 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('topic_config_file', lu.get_path('jetpilot_system_launch', 'config/localization/vgl_camera_topics.yaml'))
     args.add_arg('vgl_camera_optical_frames', '')
     args.add_arg('vgl_base_frame', 'base_link')
+    args.add_arg(
+        'vgl_trigger_service', '/visual_localization/trigger_localization')
+    args.add_arg('vgl_pose_topic', '/visual_localization/pose')
     args.add_arg('use_sim_time', False)
 
     args.add_opaque_function(add_visual_global_localization)

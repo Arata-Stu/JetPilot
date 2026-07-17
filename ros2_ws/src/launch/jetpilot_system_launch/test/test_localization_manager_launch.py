@@ -6,6 +6,10 @@ from pathlib import Path
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 LOCALIZATION_LAUNCH_PATH = PACKAGE_ROOT / "launch" / "localization.launch.py"
+VGL_LAUNCH_PATH = PACKAGE_ROOT / "launch" / "localization" / "vgl.launch.py"
+VSLAM_LAUNCH_PATH = PACKAGE_ROOT / "launch" / "localization" / "vslam.launch.py"
+TOOL_LAUNCH_PATH = PACKAGE_ROOT / "launch" / "tool.launch.py"
+VEHICLE_LAUNCH_PATH = PACKAGE_ROOT / "launch" / "vehicle.launch.py"
 BRINGUP_LAUNCH_PATH = PACKAGE_ROOT / "launch" / "bringup.launch.py"
 JOY_BUTTON_CONFIG_PATH = (
     PACKAGE_ROOT / "config" / "tool" / "joy_button_mapping.param.yaml"
@@ -70,7 +74,36 @@ def test_localization_manager_launch_contract_is_wired_statically() -> None:
     assert "'localization_manager_param': args.localization_manager_param" in bringup_source
 
 
+def test_configurable_localization_endpoints_are_wired_to_producers() -> None:
+    bringup_source = BRINGUP_LAUNCH_PATH.read_text(encoding="utf-8")
+    localization_source = LOCALIZATION_LAUNCH_PATH.read_text(encoding="utf-8")
+    vgl_source = VGL_LAUNCH_PATH.read_text(encoding="utf-8")
+    vslam_source = VSLAM_LAUNCH_PATH.read_text(encoding="utf-8")
+    tool_source = TOOL_LAUNCH_PATH.read_text(encoding="utf-8")
+
+    assert "'localization_trigger_topic': args.localization_trigger_topic" in bringup_source
+    assert "'localization_trigger_topic': args.localization_trigger_topic" in tool_source
+    assert "'vgl_trigger_service': args.vgl_trigger_service" in localization_source
+    assert "'vgl_pose_topic': args.vgl_pose_topic" in localization_source
+    assert "('visual_localization/trigger_localization', args.vgl_trigger_service)" in vgl_source
+    assert "('visual_localization/pose', args.vgl_pose_topic)" in vgl_source
+    assert "'vslam_diagnostics_topic': args.localization_diagnostics_topic" in localization_source
+    assert "('/diagnostics', args.vslam_diagnostics_topic)" in vslam_source
+
+
 def test_fallback_joy_profile_exposes_localization_trigger() -> None:
     joy_config = JOY_BUTTON_CONFIG_PATH.read_text(encoding="utf-8")
 
     assert "localization_trigger_button: 7" in joy_config
+
+
+def test_vehicle_description_can_start_without_hardware_interface() -> None:
+    bringup_source = BRINGUP_LAUNCH_PATH.read_text(encoding="utf-8")
+    vehicle_source = VEHICLE_LAUNCH_PATH.read_text(encoding="utf-8")
+
+    assert "vehicle_interface_enabled = lut.AndSubstitution" in bringup_source
+    assert "vehicle_launch_enabled = OrSubstitution" in bringup_source
+    assert "'enable_vehicle_interface': vehicle_interface_enabled" in bringup_source
+    assert "condition=IfCondition(vehicle_launch_enabled)" in bringup_source
+    assert "args.add_arg('enable_vehicle_interface', True, cli=True)" in vehicle_source
+    assert "condition=IfCondition(args.enable_vehicle_interface)" in vehicle_source

@@ -416,6 +416,18 @@ private:
       wait_for_manual("vslam_requested_hint_vgl_disabled");
       return;
     }
+
+    if (state_ == State::kIdle || state_ == State::kLocalized ||
+      state_ == State::kLocalizedUnconfirmed)
+    {
+      begin_localization("vslam");
+      return;
+    }
+    if (state_ == State::kWaitingForManual) {
+      reason_ = "vslam_requested_hint_while_waiting_for_manual";
+      publish_status();
+      return;
+    }
     schedule_retry("vslam_requested_another_hint");
   }
 

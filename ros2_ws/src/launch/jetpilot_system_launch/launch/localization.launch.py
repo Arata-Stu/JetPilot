@@ -102,6 +102,8 @@ def add_nodes(args: lu.ArgumentContainer):
                         'vgl_base_frame': base_frame,
                         'topic_config_file': args.vgl_topic_config_file,
                         'vgl_model_dir': args.vgl_model_dir,
+                        'vgl_trigger_service': args.vgl_trigger_service,
+                        'vgl_pose_topic': args.vgl_pose_topic,
                         'use_sim_time': use_sim_time,
                         'vgl_config_dir': lu.get_path(
                             'isaac_ros_visual_mapping',
@@ -134,6 +136,7 @@ def add_nodes(args: lu.ArgumentContainer):
             'vslam_use_rectified_images': True,
             'vslam_initial_pose_topic': args.vslam_pose_hint_topic,
             'vslam_trigger_hint_topic': args.vslam_hint_request_topic,
+            'vslam_diagnostics_topic': args.localization_diagnostics_topic,
             'use_sim_time': use_sim_time,
         }
         if args.vslam_save_map_folder_path:

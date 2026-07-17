@@ -7,7 +7,7 @@ import isaac_ros_launch_utils as lu
 import isaac_ros_launch_utils.all_types as lut
 from launch.actions import OpaqueFunction
 from launch.conditions import IfCondition
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, OrSubstitution
 
 
 _TRUE_VALUES = {'1', 'true', 'yes', 'on'}
@@ -335,6 +335,10 @@ def generate_launch_description() -> lut.LaunchDescription:
         lut.NotSubstitution(_LaunchBoolean(args.allow_unsafe_replay_control_topics)),
     )
     actuation_nodes_allowed = lut.NotSubstitution(safe_replay_enabled)
+    vehicle_interface_enabled = lut.AndSubstitution(
+        lu.is_true(args.enable_vehicle), actuation_nodes_allowed)
+    vehicle_launch_enabled = OrSubstitution(
+        vehicle_interface_enabled, lu.is_true(args.publish_vehicle_description))
     actions.append(
         lu.play_rosbag(
             args.rosbag,
@@ -394,6 +398,7 @@ def generate_launch_description() -> lut.LaunchDescription:
                 'control_authority': args.control_authority,
                 'rc_channels_topic': args.rc_channels_topic,
                 'propo_control_topic': args.propo_control_topic,
+                'localization_trigger_topic': args.localization_trigger_topic,
                 'joy_autorepeat_rate': args.joy_autorepeat_rate,
                 'joy_deadzone': args.joy_deadzone,
                 'joy_device_path': args.joy_device_path,
@@ -517,6 +522,7 @@ def generate_launch_description() -> lut.LaunchDescription:
             launch_arguments={
                 'vehicle_interface_pkg': args.vehicle_interface_pkg,
                 'vehicle_interface_launch': args.vehicle_interface_launch,
+                'enable_vehicle_interface': vehicle_interface_enabled,
                 'vehicle_control_topic': args.vehicle_control_topic,
                 'vehicle_driver_param': args.vehicle_driver_param,
                 'publish_vehicle_description': args.publish_vehicle_description,
@@ -533,7 +539,7 @@ def generate_launch_description() -> lut.LaunchDescription:
                 'vehicle_description_camera_yaw': args.vehicle_description_camera_yaw,
                 'use_sim_time': args.use_sim_time,
             },
-            condition=IfCondition(args.enable_vehicle),
+            condition=IfCondition(vehicle_launch_enabled),
         ))
 
     actions.append(

@@ -68,6 +68,7 @@ def add_vslam(args: lu.ArgumentContainer) -> list[lut.Action]:
         ('visual_slam/imu', '/front_stereo_imu/imu'),
         ('visual_slam/initial_pose', args.vslam_initial_pose_topic),
         ('visual_slam/trigger_hint', args.vslam_trigger_hint_topic),
+        ('/diagnostics', args.vslam_diagnostics_topic),
     ]
     if args.vslam_topic_config_file:
         camera_remappings, num_cameras = remap_from_config(
@@ -173,6 +174,7 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('vslam_enable_request_hint', True)
     args.add_arg('vslam_initial_pose_topic', '/localization/pose_hint')
     args.add_arg('vslam_trigger_hint_topic', '/visual_slam/trigger_hint')
+    args.add_arg('vslam_diagnostics_topic', '/diagnostics')
     args.add_arg('vslam_use_rectified_images', False)
     args.add_arg('vslam_enable_ground_constraint_in_odometry', False)
     args.add_arg('vslam_enable_ground_constraint_in_slam', False)

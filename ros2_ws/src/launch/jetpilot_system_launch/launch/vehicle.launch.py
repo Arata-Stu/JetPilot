@@ -52,6 +52,7 @@ def add_vehicle(args: lu.ArgumentContainer):
                 'description_camera_yaw': args.vehicle_description_camera_yaw,
                 'use_sim_time': args.use_sim_time,
             },
+            condition=IfCondition(args.enable_vehicle_interface),
         ),
         lu.log_info([
             'Vehicle interface: ',
@@ -60,7 +61,7 @@ def add_vehicle(args: lu.ArgumentContainer):
             args.vehicle_interface_launch,
             ', input: ',
             args.vehicle_control_topic,
-        ]),
+        ], condition=IfCondition(args.enable_vehicle_interface)),
         lu.log_info([
             'Vehicle camera TF: ',
             args.vehicle_description_base_frame,
@@ -75,6 +76,7 @@ def generate_launch_description() -> lut.LaunchDescription:
 
     args.add_arg('vehicle_interface_pkg', 'pca9685_rc_driver', cli=True)
     args.add_arg('vehicle_interface_launch', 'launch/pca9685_rc_interface.launch.xml', cli=True)
+    args.add_arg('enable_vehicle_interface', True, cli=True)
     args.add_arg('vehicle_control_topic', '/vehicle/control_cmd', cli=True)
     args.add_arg(
         'vehicle_driver_param',
