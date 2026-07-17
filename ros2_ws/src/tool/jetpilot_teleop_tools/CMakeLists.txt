@@ -12,7 +12,15 @@ ament_auto_add_executable(teleop_cmd_node src/teleop_cmd_node.cpp)
 target_compile_features(teleop_cmd_node PUBLIC cxx_std_17)
 
 ament_auto_add_executable(teleop_button_manager_node src/teleop_button_manager_node.cpp)
+target_include_directories(teleop_button_manager_node PRIVATE include)
 target_compile_features(teleop_button_manager_node PUBLIC cxx_std_17)
+
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(test_button_rising_edge test/test_button_rising_edge.cpp)
+  target_include_directories(test_button_rising_edge PRIVATE include)
+  target_compile_features(test_button_rising_edge PUBLIC cxx_std_17)
+endif()
 
 install(DIRECTORY config launch
   DESTINATION share/${PROJECT_NAME}

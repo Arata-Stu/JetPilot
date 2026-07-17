@@ -101,9 +101,24 @@ while not touching the stick to record the center values and estimate a
 deadzone from the observed idle noise.
 
 Use `Button Functions` to choose which physical button should perform each
-runtime action, such as auto/manual/stop mode changes or bag start/stop. The
+runtime action, such as auto/manual/stop mode changes, bag start/stop, or a
+global-localization request. The
 `joy_button_mapping.param.yaml` output resolves those choices to numeric
 button indices for `teleop_button_manager_node`.
+
+`localization_trigger_button` publishes one
+`std_msgs/msg/Bool(data=true)` message on `localization_trigger_topic` (default
+`/localization/trigger`) for each button press. Holding the button does not
+repeatedly trigger localization. The generated profile maps this action to
+`options`; set the numeric value to `-1` to disable it. If it is assigned to the
+same non-negative index as another publishing action, the node reports the
+conflict and disables only the localization trigger. Sharing the modifier-only
+`back_button` remains supported.
+
+Profiles generated before this setting was introduced leave localization
+disabled instead of guessing a controller-specific button index. Regenerate
+`joy_button_mapping.param.yaml`, or add `localization_trigger_button` with the
+calibrated Options index, to enable it safely.
 
 Use the `RC / ESC` tab to tune the Propo receiver path and hardware output path.
 It writes `serial_reader_node.param.yaml` for `rc_serial_reader` and

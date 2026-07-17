@@ -36,6 +36,15 @@ _REPLAY_ISOLATED_TOPICS = (
     '/steer_offset_dec',
     '/speed_offset_inc',
     '/speed_offset_dec',
+    '/localization/trigger',
+    '/localization/pose_hint',
+    '/initialpose',
+    '/visual_slam/trigger_hint',
+    '/visual_localization/trigger_localization',
+    '/visual_localization/pose',
+    '/diagnostics',
+    '/localization/pose_hint_required',
+    '/localization/pose_hint_state',
 )
 
 
@@ -245,8 +254,23 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('vslam_hint_request_topic', '/visual_slam/trigger_hint', cli=True)
     args.add_arg('vslam_pose_hint_topic', '/localization/pose_hint', cli=True)
     args.add_arg('vslam_save_map_folder_path', '', cli=True)
-    args.add_arg('enable_localization_manager', False, cli=True)
-    args.add_arg('localization_manager_param', '', cli=True)
+    args.add_arg('manual_pose_topic', '/initialpose', cli=True)
+    args.add_arg(
+        'vgl_trigger_service', '/visual_localization/trigger_localization', cli=True)
+    args.add_arg('vgl_pose_topic', '/visual_localization/pose', cli=True)
+    args.add_arg('localization_trigger_topic', '/localization/trigger', cli=True)
+    args.add_arg('localization_trigger_service', '/localization/relocalize', cli=True)
+    args.add_arg('localization_diagnostics_topic', '/diagnostics', cli=True)
+    args.add_arg(
+        'pose_hint_required_topic', '/localization/pose_hint_required', cli=True)
+    args.add_arg('pose_hint_state_topic', '/localization/pose_hint_state', cli=True)
+    args.add_arg('enable_localization_manager', True, cli=True)
+    args.add_arg(
+        'localization_manager_param',
+        lu.get_path(
+            'jetpilot_localization_manager',
+            'config/localization_manager.param.yaml'),
+        cli=True)
     args.add_arg('enable_vgl', True, cli=True)
     args.add_arg(
         'vgl_topic_config_file',
@@ -323,6 +347,14 @@ def generate_launch_description() -> lut.LaunchDescription:
                     args.vehicle_control_topic,
                     args.rc_channels_topic,
                     args.propo_control_topic,
+                    args.vslam_hint_request_topic,
+                    args.vslam_pose_hint_topic,
+                    args.manual_pose_topic,
+                    args.vgl_pose_topic,
+                    args.localization_trigger_topic,
+                    args.localization_diagnostics_topic,
+                    args.pose_hint_required_topic,
+                    args.pose_hint_state_topic,
                 ),
             ),
             shutdown_on_exit=args.rosbag_shutdown_on_exit,
@@ -451,6 +483,14 @@ def generate_launch_description() -> lut.LaunchDescription:
                 'vslam_hint_request_topic': args.vslam_hint_request_topic,
                 'vslam_pose_hint_topic': args.vslam_pose_hint_topic,
                 'vslam_save_map_folder_path': args.vslam_save_map_folder_path,
+                'manual_pose_topic': args.manual_pose_topic,
+                'vgl_trigger_service': args.vgl_trigger_service,
+                'vgl_pose_topic': args.vgl_pose_topic,
+                'localization_trigger_topic': args.localization_trigger_topic,
+                'localization_trigger_service': args.localization_trigger_service,
+                'localization_diagnostics_topic': args.localization_diagnostics_topic,
+                'pose_hint_required_topic': args.pose_hint_required_topic,
+                'pose_hint_state_topic': args.pose_hint_state_topic,
                 'enable_localization_manager': args.enable_localization_manager,
                 'localization_manager_param': args.localization_manager_param,
                 'enable_vgl': args.enable_vgl,

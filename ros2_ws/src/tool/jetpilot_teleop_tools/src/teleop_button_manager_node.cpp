@@ -2,6 +2,7 @@
 #include <string>
 #include <vector>
 
+#include "jetpilot_teleop_tools/button_rising_edge.hpp"
 #include "jetpilot_msgs/msg/bag_request.hpp"
 #include "jetpilot_msgs/msg/operation_mode_request.hpp"
 #include "rcl_interfaces/msg/parameter_descriptor.hpp"
@@ -23,13 +24,49 @@ public:
     bag_stop_button_ = declare_parameter<int>("bag_stop_button", 4);
     steer_offset_inc_button_ = declare_parameter<int>("steer_offset_inc_button", 15);
     steer_offset_dec_button_ = declare_parameter<int>("steer_offset_dec_button", 14);
+    const int localization_trigger_button =
+      declare_parameter<int>("localization_trigger_button", -1);
+    localization_trigger_topic_ = declare_parameter<std::string>(
+      "localization_trigger_topic", "/localization/trigger");
+    if (localization_trigger_topic_.empty()) {
+      RCLCPP_WARN(
+        get_logger(),
+        "localization_trigger_topic is empty; using /localization/trigger");
+      localization_trigger_topic_ = "/localization/trigger";
+    }
     hold_time_s_ = declare_numeric_parameter("hold_time_s", 0.1);
+
+    jetpilot_teleop_tools::ButtonManagerAssignments button_assignments;
+    button_assignments.auto_button = auto_button_;
+    button_assignments.manual_button = manual_button_;
+    button_assignments.stop_button = stop_button_;
+    button_assignments.back_button = back_button_;
+    button_assignments.bag_start_button = bag_start_button_;
+    button_assignments.bag_stop_button = bag_stop_button_;
+    button_assignments.steer_offset_inc_button = steer_offset_inc_button_;
+    button_assignments.steer_offset_dec_button = steer_offset_dec_button_;
+    const auto localization_conflict =
+      jetpilot_teleop_tools::find_localization_button_conflict(
+        localization_trigger_button, button_assignments);
+    localization_trigger_button_.configure(
+      localization_trigger_button, !localization_conflict.has_value());
+    if (localization_trigger_button < 0) {
+      RCLCPP_INFO(get_logger(), "Localization trigger button is disabled");
+    } else if (localization_conflict) {
+      const std::string conflicting_parameter(*localization_conflict);
+      RCLCPP_ERROR(
+        get_logger(),
+        "localization_trigger_button=%d conflicts with %s; localization trigger is disabled",
+        localization_trigger_button, conflicting_parameter.c_str());
+    }
 
     mode_pub_ = create_publisher<jetpilot_msgs::msg::OperationModeRequest>(
       "/operation_mode/request", 10);
     bag_pub_ = create_publisher<jetpilot_msgs::msg::BagRequest>("/bag/request", 10);
     steer_offset_inc_pub_ = create_publisher<std_msgs::msg::Bool>("/steer_offset_inc", 10);
     steer_offset_dec_pub_ = create_publisher<std_msgs::msg::Bool>("/steer_offset_dec", 10);
+    localization_trigger_pub_ =
+      create_publisher<std_msgs::msg::Bool>(localization_trigger_topic_, 10);
     joy_sub_ = create_subscription<sensor_msgs::msg::Joy>(
       "/joy", 10, [this](const sensor_msgs::msg::Joy::SharedPtr msg) { handle_joy(*msg); });
   }
@@ -170,6 +207,9 @@ private:
     if (pressed_once(states_, 6, button_pressed(joy, steer_offset_dec_button_))) {
       publish_bool(steer_offset_dec_pub_);
     }
+    if (localization_trigger_button_.update(joy.buttons)) {
+      publish_bool(localization_trigger_pub_);
+    }
   }
 
   int auto_button_;
@@ -180,12 +220,15 @@ private:
   int bag_stop_button_;
   int steer_offset_inc_button_;
   int steer_offset_dec_button_;
+  std::string localization_trigger_topic_;
   double hold_time_s_;
   std::vector<HoldState> states_;
+  jetpilot_teleop_tools::ButtonRisingEdge localization_trigger_button_;
   rclcpp::Publisher<jetpilot_msgs::msg::OperationModeRequest>::SharedPtr mode_pub_;
   rclcpp::Publisher<jetpilot_msgs::msg::BagRequest>::SharedPtr bag_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr steer_offset_inc_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr steer_offset_dec_pub_;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr localization_trigger_pub_;
   rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr joy_sub_;
 };
 

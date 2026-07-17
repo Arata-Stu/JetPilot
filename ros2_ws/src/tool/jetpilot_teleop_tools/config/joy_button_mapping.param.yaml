@@ -8,4 +8,6 @@ teleop_button_manager_node:
     bag_stop_button: 4
     steer_offset_inc_button: 15
     steer_offset_dec_button: 14
+    localization_trigger_button: 7  # Options in the default profile; -1 disables it.
+    localization_trigger_topic: "/localization/trigger"
     hold_time_s: 0.1

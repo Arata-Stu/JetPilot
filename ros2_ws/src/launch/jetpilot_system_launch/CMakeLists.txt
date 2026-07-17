@@ -9,6 +9,10 @@ if(BUILD_TESTING)
     test_bringup_replay_safety
     test/test_bringup_replay_safety.py
   )
+  ament_add_pytest_test(
+    test_localization_manager_launch
+    test/test_localization_manager_launch.py
+  )
 endif()
 
 ament_auto_package(INSTALL_TO_SHARE

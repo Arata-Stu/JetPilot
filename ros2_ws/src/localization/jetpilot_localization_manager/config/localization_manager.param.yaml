@@ -1,0 +1,41 @@
+/**:
+  ros__parameters:
+    # localization.launch.py should set use_vgl/autostart from actual map availability.
+    use_vgl: false
+    autostart: false
+
+    # A request waits for the VGL service, a VSLAM pose-hint subscriber, and the
+    # first VSLAM localization diagnostic before forwarding a pose.
+    wait_for_vslam_subscriber: true
+    wait_for_vslam_diagnostics: true
+    dependency_wait_timeout_sec: 30.0
+    vgl_response_timeout_sec: 30.0
+    vslam_confirmation_timeout_sec: 60.0
+    retry_backoff_sec: 1.0
+    max_attempts: 3
+    poll_period_sec: 0.1
+    status_publish_period_sec: 0.5
+
+    # Incoming VGL/manual poses must be finite, have non-negative covariance
+    # diagonals, and use this frame. Set expected_pose_frame to "" to disable
+    # frame checking. max_pose_age_sec <= 0 disables timestamp age checking.
+    expected_pose_frame: "map"
+    quaternion_norm_tolerance: 0.1
+    max_pose_age_sec: 0.0
+
+    vslam_hint_request_topic: "/visual_slam/trigger_hint"
+    vslam_pose_hint_topic: "/localization/pose_hint"
+    manual_pose_topic: "/initialpose"
+
+    vgl_trigger_service: "/visual_localization/trigger_localization"
+    vgl_pose_topic: "/visual_localization/pose"
+    localization_trigger_topic: "/localization/trigger"
+    localization_trigger_service: "/localization/relocalize"
+
+    diagnostics_topic: "/diagnostics"
+    vslam_diagnostics_hardware_id: "visual_slam"
+    vslam_localized_key: "localized_in_exist_map"
+
+    # UI-facing, reliable transient-local topics.
+    pose_hint_required_topic: "/localization/pose_hint_required"
+    pose_hint_state_topic: "/localization/pose_hint_state"

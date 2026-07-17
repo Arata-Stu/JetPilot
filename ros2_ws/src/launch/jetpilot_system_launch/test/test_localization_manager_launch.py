@@ -1,0 +1,76 @@
+from __future__ import annotations
+
+import importlib.util
+from pathlib import Path
+
+
+PACKAGE_ROOT = Path(__file__).resolve().parents[1]
+LOCALIZATION_LAUNCH_PATH = PACKAGE_ROOT / "launch" / "localization.launch.py"
+BRINGUP_LAUNCH_PATH = PACKAGE_ROOT / "launch" / "bringup.launch.py"
+JOY_BUTTON_CONFIG_PATH = (
+    PACKAGE_ROOT / "config" / "tool" / "joy_button_mapping.param.yaml"
+)
+
+SPEC = importlib.util.spec_from_file_location(
+    "jetpilot_localization_launch", LOCALIZATION_LAUNCH_PATH
+)
+assert SPEC is not None and SPEC.loader is not None
+LOCALIZATION = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(LOCALIZATION)
+
+
+def test_saved_map_availability_requires_both_directories(tmp_path: Path) -> None:
+    assert LOCALIZATION.saved_localization_map_availability("") == (False, False)
+    assert LOCALIZATION.saved_localization_map_availability(str(tmp_path)) == (
+        False,
+        False,
+    )
+
+    (tmp_path / "cuvgl_map").mkdir()
+    assert LOCALIZATION.saved_localization_map_availability(str(tmp_path)) == (
+        True,
+        False,
+    )
+
+    (tmp_path / "cuvslam_map").mkdir()
+    assert LOCALIZATION.saved_localization_map_availability(str(tmp_path)) == (
+        True,
+        True,
+    )
+
+
+def test_localization_manager_launch_contract_is_wired_statically() -> None:
+    localization_source = LOCALIZATION_LAUNCH_PATH.read_text(encoding="utf-8")
+    bringup_source = BRINGUP_LAUNCH_PATH.read_text(encoding="utf-8")
+
+    assert "package='jetpilot_localization_manager'" in localization_source
+    assert "executable='jetpilot_localization_manager_node'" in localization_source
+    assert "mapping_mode = bool(args.vslam_save_map_folder_path)" in localization_source
+    assert "if cuvslam_map_available and not mapping_mode" in localization_source
+    assert "if enable_localization_manager and not mapping_mode" in localization_source
+    assert "'autostart': cuvslam_map_available and not mapping_mode" in localization_source
+    for parameter in (
+        "'use_vgl': vgl_started",
+        "'vslam_hint_request_topic': args.vslam_hint_request_topic",
+        "'vslam_pose_hint_topic': args.vslam_pose_hint_topic",
+        "'manual_pose_topic': args.manual_pose_topic",
+        "'vgl_pose_topic': args.vgl_pose_topic",
+        "'localization_trigger_topic': args.localization_trigger_topic",
+        "'diagnostics_topic': args.localization_diagnostics_topic",
+        "'use_sim_time': use_sim_time",
+    ):
+        assert parameter in localization_source
+
+    for source in (localization_source, bringup_source):
+        assert "args.add_arg('enable_localization_manager', True, cli=True)" in source
+        assert "'jetpilot_localization_manager'" in source
+        assert "'config/localization_manager.param.yaml'" in source
+
+    assert "'enable_localization_manager': args.enable_localization_manager" in bringup_source
+    assert "'localization_manager_param': args.localization_manager_param" in bringup_source
+
+
+def test_fallback_joy_profile_exposes_localization_trigger() -> None:
+    joy_config = JOY_BUTTON_CONFIG_PATH.read_text(encoding="utf-8")
+
+    assert "localization_trigger_button: 7" in joy_config

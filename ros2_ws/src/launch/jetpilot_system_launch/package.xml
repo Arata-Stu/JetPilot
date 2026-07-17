@@ -15,11 +15,13 @@
   <exec_depend>jetpilot_bag_tools</exec_depend>
   <exec_depend>jetpilot_control</exec_depend>
   <exec_depend>jetpilot_hdmap_publisher</exec_depend>
+  <exec_depend>jetpilot_localization_manager</exec_depend>
   <exec_depend>jetpilot_operation</exec_depend>
   <exec_depend>jetpilot_teleop_tools</exec_depend>
   <exec_depend>jetpilot_rtp_tools</exec_depend>
   <exec_depend>openeb_ros2</exec_depend>
   <exec_depend>pca9685_rc_driver</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
   <exec_depend>rc_serial_reader</exec_depend>
   <exec_depend>jetpilot_vesc_interface</exec_depend>
   <exec_depend>isaac_ros_launch_utils</exec_depend>

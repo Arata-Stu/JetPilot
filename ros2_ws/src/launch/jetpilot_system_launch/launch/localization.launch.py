@@ -50,6 +50,16 @@ def camera_optical_frames_from_topic_config(topic_config_file: str) -> str:
     return ','.join(frames) if frames else 'realsense_infra1_optical_frame,realsense_infra2_optical_frame'
 
 
+def saved_localization_map_availability(map_dir: str) -> tuple[bool, bool]:
+    """Return whether the saved cuVGL and cuVSLAM map directories are available."""
+    if not map_dir:
+        return False, False
+
+    cuvgl_map_dir = os.path.join(map_dir, 'cuvgl_map')
+    cuvslam_map_dir = os.path.join(map_dir, 'cuvslam_map')
+    return os.path.isdir(cuvgl_map_dir), os.path.isdir(cuvslam_map_dir)
+
+
 def add_nodes(args: lu.ArgumentContainer):
     use_sim_time = lu.is_true(args.use_sim_time)
     enable_vgl = lu.is_true(args.enable_vgl)
@@ -62,6 +72,9 @@ def add_nodes(args: lu.ArgumentContainer):
         lu.is_true(args.enable_omap_frame) or enable_occupancy_map_server)
     enable_hd_map_publisher = lu.is_true(args.enable_hd_map_publisher)
     enable_section_localizer = lu.is_true(args.enable_section_localizer)
+    cuvgl_map_available, cuvslam_map_available = saved_localization_map_availability(
+        args.map_dir)
+    mapping_mode = bool(args.vslam_save_map_folder_path)
     vgl_started = False
 
     actions = []
@@ -72,7 +85,7 @@ def add_nodes(args: lu.ArgumentContainer):
     base_frame = args.localization_base_frame
     if enable_vgl:
         cuvgl_map_dir = os.path.join(args.map_dir, 'cuvgl_map') if args.map_dir else ''
-        if cuvgl_map_dir and os.path.isdir(cuvgl_map_dir):
+        if cuvgl_map_available:
             vgl_started = True
             actions.append(
                 lu.include(
@@ -127,8 +140,13 @@ def add_nodes(args: lu.ArgumentContainer):
             params['vslam_save_map_folder_path'] = args.vslam_save_map_folder_path
 
         cuvslam_map_dir = os.path.join(args.map_dir, 'cuvslam_map') if args.map_dir else ''
-        if cuvslam_map_dir and os.path.isdir(cuvslam_map_dir):
+        if cuvslam_map_available and not mapping_mode:
             params['vslam_load_map_folder_path'] = cuvslam_map_dir
+        elif cuvslam_map_available and mapping_mode:
+            actions.append(
+                lu.log_info(
+                    'VSLAM map output is configured; starting mapping without '
+                    'loading or localizing against the existing saved map.'))
         elif args.map_dir:
             actions.append(
                 lu.log_info(
@@ -142,23 +160,36 @@ def add_nodes(args: lu.ArgumentContainer):
                 launch_arguments=params,
             ))
 
-        if enable_localization_manager:
+        if enable_localization_manager and not mapping_mode:
             localization_manager_params = [{
                 'use_vgl': vgl_started,
+                'autostart': cuvslam_map_available and not mapping_mode,
                 'use_sim_time': use_sim_time,
                 'vslam_hint_request_topic': args.vslam_hint_request_topic,
                 'vslam_pose_hint_topic': args.vslam_pose_hint_topic,
+                'manual_pose_topic': args.manual_pose_topic,
+                'vgl_trigger_service': args.vgl_trigger_service,
+                'vgl_pose_topic': args.vgl_pose_topic,
+                'localization_trigger_topic': args.localization_trigger_topic,
+                'localization_trigger_service': args.localization_trigger_service,
+                'diagnostics_topic': args.localization_diagnostics_topic,
+                'pose_hint_required_topic': args.pose_hint_required_topic,
+                'pose_hint_state_topic': args.pose_hint_state_topic,
             }]
             if args.localization_manager_param:
                 localization_manager_params.insert(0, args.localization_manager_param)
 
             actions.append(lu.Node(
-                package='localization_manager',
-                executable='localization_manager_node.py',
+                package='jetpilot_localization_manager',
+                executable='jetpilot_localization_manager_node',
                 name='localization_manager',
                 output='screen',
                 parameters=localization_manager_params,
             ))
+        elif enable_localization_manager and mapping_mode:
+            actions.append(
+                lu.log_info(
+                    'Localization manager is disabled for this VSLAM mapping run.'))
 
     occupancy_map_yaml_path = args.occupancy_map_yaml_path
     if not occupancy_map_yaml_path and args.map_dir:
@@ -308,8 +339,23 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('vslam_hint_request_topic', '/visual_slam/trigger_hint', cli=True)
     args.add_arg('vslam_pose_hint_topic', '/localization/pose_hint', cli=True)
     args.add_arg('vslam_save_map_folder_path', '', cli=True)
-    args.add_arg('enable_localization_manager', False, cli=True)
-    args.add_arg('localization_manager_param', '', cli=True)
+    args.add_arg('manual_pose_topic', '/initialpose', cli=True)
+    args.add_arg(
+        'vgl_trigger_service', '/visual_localization/trigger_localization', cli=True)
+    args.add_arg('vgl_pose_topic', '/visual_localization/pose', cli=True)
+    args.add_arg('localization_trigger_topic', '/localization/trigger', cli=True)
+    args.add_arg('localization_trigger_service', '/localization/relocalize', cli=True)
+    args.add_arg('localization_diagnostics_topic', '/diagnostics', cli=True)
+    args.add_arg(
+        'pose_hint_required_topic', '/localization/pose_hint_required', cli=True)
+    args.add_arg('pose_hint_state_topic', '/localization/pose_hint_state', cli=True)
+    args.add_arg('enable_localization_manager', True, cli=True)
+    args.add_arg(
+        'localization_manager_param',
+        lu.get_path(
+            'jetpilot_localization_manager',
+            'config/localization_manager.param.yaml'),
+        cli=True)
 
     args.add_arg('enable_vgl', True, cli=True)
     args.add_arg(

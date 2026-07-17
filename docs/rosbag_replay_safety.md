@@ -13,7 +13,11 @@ interface と bag replay を同時に起動すると、過去の指令が実車�
 command、driverのcalibration commandが含まれます。launch引数で変更したvehicle、RC、
 propoの入力topicも追加で隔離します。同時にlive Joy、teleop、RC serial、operation mux、
 autonomous control nodeも起動しません。sensor、TF、localization、map toolは通常どおり
-使用できます。録画済みの `/bag/status` もlive状態と混ざらないよう隔離します。
+使用できます。録画済みの `/bag/status` に加え、`/initialpose`、localization trigger、
+VGL pose、VSLAM pose hint、`/diagnostics`、localization statusもlive localizationへ
+混入しないよう隔離します。これらを変更する場合は、managerのparameter fileだけでなく
+対応する`bringup.launch.py`のlaunch引数も変更すると、replay隔離にも同じtopic名が反映
+されます。
 
 safe replay中は、この隔離を上書きできないよう `replay_additional_args` の
 `--remap` / `-m` を拒否します。

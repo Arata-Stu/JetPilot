@@ -35,6 +35,23 @@ class ReplaySafetyTest(unittest.TestCase):
         self.assertTrue(
             expected_driver_inputs.issubset(set(BRINGUP._REPLAY_ISOLATED_TOPICS)))
 
+    def test_safe_replay_covers_localization_manager_inputs(self) -> None:
+        expected_localization_inputs = {
+            "/localization/trigger",
+            "/localization/pose_hint",
+            "/initialpose",
+            "/visual_slam/trigger_hint",
+            "/visual_localization/trigger_localization",
+            "/visual_localization/pose",
+            "/diagnostics",
+            "/localization/pose_hint_required",
+            "/localization/pose_hint_state",
+        }
+
+        self.assertTrue(
+            expected_localization_inputs.issubset(
+                set(BRINGUP._REPLAY_ISOLATED_TOPICS)))
+
     def test_safe_replay_remaps_every_isolated_and_configured_topic(self) -> None:
         arguments = BRINGUP._compose_replay_arguments("--clock", False)
 

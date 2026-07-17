@@ -850,6 +850,7 @@ def teleop_cmd_yaml(profile: dict[str, Any]) -> dict[str, Any]:
 
 def button_mapping_yaml(profile: dict[str, Any]) -> dict[str, Any]:
     buttons = profile["buttons"]
+    mapping = profile.get("button_mapping", {})
     return {
         "teleop_button_manager_node": {
             "ros__parameters": {
@@ -861,6 +862,10 @@ def button_mapping_yaml(profile: dict[str, Any]) -> dict[str, Any]:
                 "bag_stop_button": buttons.get("l1", -1),
                 "steer_offset_inc_button": profile.get("dpad", {}).get("right", -1),
                 "steer_offset_dec_button": profile.get("dpad", {}).get("left", -1),
+                "localization_trigger_button": buttons.get("options", -1),
+                "localization_trigger_topic": mapping.get(
+                    "localization_trigger_topic", "/localization/trigger"
+                ),
                 "hold_time_s": 0.1,
             }
         }
