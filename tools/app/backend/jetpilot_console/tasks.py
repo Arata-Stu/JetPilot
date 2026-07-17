@@ -14,6 +14,9 @@ from pathlib import Path
 from typing import Any
 
 
+ACTIVE_TASK_STATUSES = frozenset({"queued", "running", "stopping"})
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
 
@@ -34,9 +37,21 @@ class Task:
     log_path: str = ""
     artifacts: list[dict[str, Any]] = field(default_factory=list)
     error: str = ""
+    resource_key: str = ""
 
     def to_json(self) -> dict[str, Any]:
         return asdict(self)
+
+
+class TaskResourceConflict(RuntimeError):
+    """Raised when an active task already owns an exclusive resource."""
+
+    def __init__(self, resource_key: str, active_task: Task):
+        self.resource_key = resource_key
+        self.active_task = active_task.to_json()
+        super().__init__(
+            f"resource is already in use by task {active_task.task_id} ({active_task.title})"
+        )
 
 
 class TaskManager:
@@ -75,7 +90,7 @@ class TaskManager:
         changed = False
         with self.lock:
             for task in self.tasks.values():
-                if task.status in {"queued", "running", "stopping"}:
+                if task.status in ACTIVE_TASK_STATUSES:
                     task.status = "lost"
                     task.ended_at = _now()
                     task.error = "Console restarted while task state was active."
@@ -106,27 +121,51 @@ class TaskManager:
         command: list[str],
         cwd: str | None = None,
         artifacts: list[dict[str, Any]] | None = None,
+        resource_key: str | None = None,
     ) -> Task:
+        normalized_resource_key = str(resource_key or "").strip()
         task_id = f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{kind}-{uuid.uuid4().hex[:8]}"
-        task_path = self.task_dir / task_id
-        task_path.mkdir(parents=True, exist_ok=True)
-        log_path = task_path / "output.log"
-        task = Task(
-            task_id=task_id,
-            kind=kind,
-            title=title,
-            command=command,
-            cwd=str(Path(cwd).expanduser() if cwd else self.default_cwd),
-            status="queued",
-            log_path=str(log_path),
-            artifacts=artifacts or [],
-        )
         with self.lock:
+            if normalized_resource_key:
+                active_task = next(
+                    (
+                        existing
+                        for existing in self.tasks.values()
+                        if existing.resource_key == normalized_resource_key
+                        and existing.status in ACTIVE_TASK_STATUSES
+                    ),
+                    None,
+                )
+                if active_task is not None:
+                    raise TaskResourceConflict(normalized_resource_key, active_task)
+
+            task_path = self.task_dir / task_id
+            task_path.mkdir(parents=True, exist_ok=True)
+            log_path = task_path / "output.log"
+            task = Task(
+                task_id=task_id,
+                kind=kind,
+                title=title,
+                command=command,
+                cwd=str(Path(cwd).expanduser() if cwd else self.default_cwd),
+                status="queued",
+                log_path=str(log_path),
+                artifacts=artifacts or [],
+                resource_key=normalized_resource_key,
+            )
             self.tasks[task_id] = task
             self._save()
 
         thread = threading.Thread(target=self._run_task, args=(task,), daemon=True)
-        thread.start()
+        try:
+            thread.start()
+        except Exception as exc:
+            with self.lock:
+                task.status = "failed"
+                task.error = f"Could not start task worker: {exc}"
+                task.ended_at = _now()
+                self._save()
+            raise
         return task
 
     def _run_task(self, task: Task) -> None:
@@ -178,7 +217,7 @@ class TaskManager:
     def stop(self, task_id: str) -> bool:
         with self.lock:
             task = self.tasks.get(task_id)
-            if task is None or task.status not in {"queued", "running", "stopping"}:
+            if task is None or task.status not in ACTIVE_TASK_STATUSES:
                 return False
             task.status = "stopping"
             self._save()

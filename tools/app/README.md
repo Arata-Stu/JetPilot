@@ -89,6 +89,11 @@ Implemented in this MVP:
   - browser HD map editing and save
   - raceline generation
   - preview generation
+- Shared task preflight checks for the executable map stages. The Console shows
+  required inputs, warnings, and concrete remediation before enabling an action,
+  then repeats the same checks in the backend immediately before a task starts.
+- Console map-generation tasks take an exclusive lock per map folder, so double
+  clicks and overlapping Console writes cannot target one bundle concurrently.
 - The Map Builder UI is tuned for the current VSLAM/VGL workflow. Occupancy-map
   specific controls such as FoundationStereo model resolution are intentionally
   hidden from the main form.
@@ -311,6 +316,7 @@ POST /api/jetson/inspect
 GET  /api/maps/local
 GET  /api/maps/detail?path=/workspaces/map/course_a
 GET  /api/map-builder/camera-topic-configs
+POST /api/preflight
 POST /api/maps/build-vgl-vslam
 POST /api/maps/prepare-hd-raster
 POST /api/maps/save-hd-map
@@ -318,6 +324,19 @@ POST /api/maps/generate-raceline
 POST /api/maps/generate-preview
 POST /api/transfers/local-to-jetson
 ```
+
+`POST /api/preflight` accepts the same task fields plus an `action` selected
+from `map-build`, `prepare-hd-raster`, `generate-raceline`, or
+`generate-preview`. A valid inspection always returns `200`, including when the
+result is blocked. The response includes an overall `ready` value and individual
+`pass`, `warning`, or `blocked` checks with an operator-facing remediation.
+
+The execution endpoints do not trust the browser result. They inspect the
+current files again and return `409` with the fresh preflight report when a
+required input has disappeared or changed. Warnings remain executable; blocked
+checks never start a task. Unsafe symlinked map inputs/outputs are blocked, and
+an overlapping writer for the same map folder also returns `409` with the
+active task details.
 
 `POST /api/maps/generate-raceline` accepts the following JSON body. Both width
 values are metres and must be finite and non-negative:

@@ -34,6 +34,7 @@ from .map_pipeline import (
     prepare_hd_raster_script,
     scan_camera_topic_configs,
 )
+from .preflight import evaluate_preflight
 from .security import (
     RequestRejected,
     decode_json_object,
@@ -45,7 +46,7 @@ from .security import (
     validate_ssh_target,
     validate_json_request_headers,
 )
-from .tasks import TaskManager
+from .tasks import TaskManager, TaskResourceConflict
 
 
 JS_EVENT_BUTTON = 0x01
@@ -266,6 +267,19 @@ class Handler(BaseHTTPRequestHandler):
 
         if self.server.state.joy_only:
             self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
+            return
+
+        if path == "/api/preflight":
+            action = body.get("action")
+            if not isinstance(action, str) or not action.strip():
+                self._json({"error": "action must be a non-empty string"}, HTTPStatus.BAD_REQUEST)
+                return
+            try:
+                preflight = evaluate_preflight(self.server.state.config, action, body)
+            except (TypeError, ValueError) as exc:
+                self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                return
+            self._json(preflight)
             return
 
         if path == "/api/tasks/run":
@@ -757,6 +771,20 @@ find {shlex.quote(record_root)} -name metadata.yaml -printf '%TY-%Tm-%Td %TH:%TM
         except ValueError as exc:
             self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
             return
+        try:
+            preflight = evaluate_preflight(config, "map-build", body)
+        except (TypeError, ValueError) as exc:
+            self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            return
+        if not preflight.get("ready"):
+            self._json(
+                {
+                    "error": "required preflight checks did not pass",
+                    "preflight": preflight,
+                },
+                HTTPStatus.CONFLICT,
+            )
+            return
         script = build_vgl_vslam_script(
             config=config,
             rosbag=rosbag,
@@ -767,13 +795,18 @@ find {shlex.quote(record_root)} -name metadata.yaml -printf '%TY-%Tm-%Td %TH:%TM
             output_model_dir=str(output_model_dir),
             enable_rviz=bool(body.get("enable_rviz", False)),
         )
-        task = self.server.state.tasks.start(
-            kind="map-build",
-            title="Build VGL/VSLAM map",
-            command=["bash", "-lc", script],
-            cwd=str(config.repo_root),
-        )
-        self._json({"task": task.to_json()}, HTTPStatus.CREATED)
+        try:
+            task = self.server.state.tasks.start(
+                kind="map-build",
+                title="Build VGL/VSLAM map",
+                command=["bash", "-lc", script],
+                cwd=str(config.repo_root),
+                resource_key=f"map-dir:{map_dir}",
+            )
+        except TaskResourceConflict as exc:
+            self._map_task_conflict(exc)
+            return
+        self._json({"task": task.to_json(), "preflight": preflight}, HTTPStatus.CREATED)
 
     def _start_map_stage(self, body: dict[str, Any], stage: str) -> None:
         config = self.server.state.config
@@ -827,13 +860,46 @@ find {shlex.quote(record_root)} -name metadata.yaml -printf '%TY-%Tm-%Td %TH:%TM
         else:
             self._json({"error": "unknown stage"}, HTTPStatus.BAD_REQUEST)
             return
-        task = self.server.state.tasks.start(
-            kind=stage,
-            title=title,
-            command=["bash", "-lc", script],
-            cwd=str(config.repo_root),
+        try:
+            preflight = evaluate_preflight(config, stage, body)
+        except (TypeError, ValueError) as exc:
+            self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            return
+        if not preflight.get("ready"):
+            self._json(
+                {
+                    "error": "required preflight checks did not pass",
+                    "preflight": preflight,
+                },
+                HTTPStatus.CONFLICT,
+            )
+            return
+        try:
+            task = self.server.state.tasks.start(
+                kind=stage,
+                title=title,
+                command=["bash", "-lc", script],
+                cwd=str(config.repo_root),
+                resource_key=f"map-dir:{map_dir}",
+            )
+        except TaskResourceConflict as exc:
+            self._map_task_conflict(exc)
+            return
+        self._json({"task": task.to_json(), "preflight": preflight}, HTTPStatus.CREATED)
+
+    def _map_task_conflict(self, conflict: TaskResourceConflict) -> None:
+        active = conflict.active_task
+        self._json(
+            {
+                "error": (
+                    "Another map task is already writing to this map folder: "
+                    f"{active.get('title') or active.get('kind')} "
+                    f"({active.get('task_id')}). Stop it or wait for it to finish."
+                ),
+                "active_task": active,
+            },
+            HTTPStatus.CONFLICT,
         )
-        self._json({"task": task.to_json()}, HTTPStatus.CREATED)
 
 
 def main() -> int:

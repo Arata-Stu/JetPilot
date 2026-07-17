@@ -4,6 +4,7 @@ import io
 import json
 import os
 import tempfile
+import threading
 import unittest
 from dataclasses import replace
 from email.message import Message
@@ -27,6 +28,7 @@ from jetpilot_console.security import (
     validate_request_host,
     validate_ssh_target,
 )
+from jetpilot_console.tasks import TaskManager, TaskResourceConflict
 
 
 class HeaderValidationTests(unittest.TestCase):
@@ -198,6 +200,79 @@ class JoyProfileSaveTests(unittest.TestCase):
                 save_joy_profile_files(linked_root, {"teleop_cmd.param.yaml": "unsafe\n"})
 
 
+class TaskResourceLockTests(unittest.TestCase):
+    def test_active_resource_blocks_same_and_different_task_kinds(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            manager = TaskManager(root / "state", root)
+            resource_key = f"map-dir:{root / 'map-a'}"
+            with patch.object(manager, "_run_task", return_value=None):
+                active = manager.start(
+                    kind="generate-raceline",
+                    title="Generate raceline",
+                    command=["true"],
+                    resource_key=resource_key,
+                )
+
+                for status, attempted_kind in (
+                    ("queued", "generate-raceline"),
+                    ("running", "prepare-hd-raster"),
+                    ("stopping", "generate-preview"),
+                ):
+                    with self.subTest(status=status, attempted_kind=attempted_kind):
+                        with manager.lock:
+                            active.status = status
+                        task_count = len(manager.list_tasks())
+                        with self.assertRaises(TaskResourceConflict) as raised:
+                            manager.start(
+                                kind=attempted_kind,
+                                title="Conflicting map task",
+                                command=["true"],
+                                resource_key=resource_key,
+                            )
+                        self.assertEqual(len(manager.list_tasks()), task_count)
+                        self.assertEqual(raised.exception.active_task["task_id"], active.task_id)
+                        self.assertEqual(raised.exception.active_task["status"], status)
+
+    def test_resource_check_and_registration_are_atomic(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            manager = TaskManager(root / "state", root)
+            resource_key = f"map-dir:{root / 'map-a'}"
+            barrier = threading.Barrier(2)
+            outcomes: list[str] = []
+            outcomes_lock = threading.Lock()
+
+            def attempt(kind: str) -> None:
+                barrier.wait()
+                try:
+                    manager.start(
+                        kind=kind,
+                        title=kind,
+                        command=["true"],
+                        resource_key=resource_key,
+                    )
+                except TaskResourceConflict:
+                    outcome = "conflict"
+                else:
+                    outcome = "started"
+                with outcomes_lock:
+                    outcomes.append(outcome)
+
+            with patch.object(manager, "_run_task", return_value=None):
+                threads = [
+                    threading.Thread(target=attempt, args=("map-build",)),
+                    threading.Thread(target=attempt, args=("generate-raceline",)),
+                ]
+                for thread in threads:
+                    thread.start()
+                for thread in threads:
+                    thread.join(timeout=2.0)
+
+            self.assertEqual(sorted(outcomes), ["conflict", "started"])
+            self.assertEqual(len(manager.list_tasks()), 1)
+
+
 class ConsoleEndpointTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary_directory = tempfile.TemporaryDirectory()
@@ -222,6 +297,15 @@ class ConsoleEndpointTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.environment.stop()
         self.temporary_directory.cleanup()
+
+    def write_valid_centerline(self, map_dir: Path) -> Path:
+        map_dir.mkdir(parents=True, exist_ok=True)
+        centerline = map_dir / f"{map_dir.name}_hd_map_centerline.csv"
+        centerline.write_text(
+            "".join(f"{index * 0.1},0.0,0.5,0.5\n" for index in range(8)),
+            encoding="utf-8",
+        )
+        return centerline
 
     def post(
         self,
@@ -373,6 +457,83 @@ class ConsoleEndpointTests(unittest.TestCase):
         self.assertFalse(payload.get("ok"))
         self.assertIn("SSH user", str(payload.get("error")))
 
+    def test_preflight_endpoint_returns_blocked_report_and_rejects_invalid_actions(self) -> None:
+        status, payload = self.post(
+            "/api/preflight",
+            {"action": "generate-preview"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(payload.get("action"), "generate-preview")
+        self.assertFalse(payload.get("ready"))
+        self.assertEqual(payload.get("status"), "blocked")
+        self.assertTrue(payload.get("checks"))
+
+        for action in ("unknown-action", 42, None):
+            with self.subTest(action=action):
+                status, payload = self.post("/api/preflight", {"action": action})
+                self.assertEqual(status, 400)
+                self.assertIn("action", str(payload.get("error")))
+
+    def test_preflight_endpoint_reports_ready_raceline_inputs(self) -> None:
+        map_dir = self.config.map_root / "course_a"
+        self.write_valid_centerline(map_dir)
+
+        status, payload = self.post(
+            "/api/preflight",
+            {
+                "action": "generate-raceline",
+                "map_dir": str(map_dir),
+                "vehicle_width_m": 0.187,
+                "safety_margin_m": 0.02,
+            },
+        )
+
+        self.assertEqual(status, 200)
+        self.assertTrue(payload.get("ready"))
+        self.assertIn(payload.get("status"), {"pass", "warning"})
+        self.assertEqual(payload["summary"]["blocked"], 0)
+
+    def test_blocked_preflight_does_not_start_map_task(self) -> None:
+        map_dir = self.config.map_root / "missing-centerline"
+        map_dir.mkdir(parents=True)
+
+        status, payload = self.post(
+            "/api/maps/generate-raceline",
+            {"map_dir": str(map_dir)},
+        )
+
+        self.assertEqual(status, 409)
+        self.assertIn("preflight", payload)
+        self.assertFalse(payload["preflight"]["ready"])
+        self.assertIn("preflight", str(payload.get("error")))
+
+    def test_map_task_conflict_returns_active_task_without_adding_a_task(self) -> None:
+        map_dir = self.config.map_root / "course_a"
+        self.write_valid_centerline(map_dir)
+        manager = TaskManager(self.config.state_dir, self.config.repo_root)
+
+        with patch.object(manager, "_run_task", return_value=None):
+            first_status, first_payload = self.post(
+                "/api/maps/generate-raceline",
+                {"map_dir": str(map_dir)},
+                tasks=manager,
+            )
+            self.assertEqual(first_status, 201)
+            active_task_id = first_payload["task"]["task_id"]
+            task_count = len(manager.list_tasks())
+
+            status, payload = self.post(
+                "/api/maps/generate-raceline",
+                {"map_dir": str(map_dir)},
+                tasks=manager,
+            )
+
+        self.assertEqual(status, 409)
+        self.assertEqual(len(manager.list_tasks()), task_count)
+        self.assertEqual(payload["active_task"]["task_id"], active_task_id)
+        self.assertEqual(payload["active_task"]["status"], "queued")
+        self.assertIn("already writing", str(payload.get("error")))
+
     def test_task_local_paths_cannot_escape_configured_roots(self) -> None:
         outside = str(Path(self.temporary_directory.name).parent)
         requests = [
@@ -446,7 +607,7 @@ class ConsoleEndpointTests(unittest.TestCase):
 
     def test_raceline_stage_passes_validated_vehicle_clearance(self) -> None:
         map_dir = self.config.map_root / "course_a"
-        map_dir.mkdir(parents=True)
+        self.write_valid_centerline(map_dir)
 
         class RecordingTasks:
             def __init__(self) -> None:
@@ -469,6 +630,7 @@ class ConsoleEndpointTests(unittest.TestCase):
 
         self.assertEqual(status, 201)
         self.assertEqual(payload["task"]["task_id"], "raceline-test")
+        self.assertTrue(payload["preflight"]["ready"])
         self.assertEqual(len(tasks.calls), 1)
         command = tasks.calls[0]["command"]
         self.assertIn("--vehicle-width-m 0.187", command[2])
