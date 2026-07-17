@@ -53,6 +53,22 @@ class ReplaySafetyTest(unittest.TestCase):
             expected_localization_inputs.issubset(
                 set(BRINGUP._REPLAY_ISOLATED_TOPICS)))
 
+    def test_safe_replay_covers_planning_and_controller_topics(self) -> None:
+        expected_autonomy_topics = {
+            "/planning/requested_lane",
+            "/planning/raceline_path",
+            "/planning/trajectory",
+            "/planning/target_speed",
+            "/planning/selected_lane",
+            "/planning/ready",
+            "/controller/ready",
+            "/controller/lookahead_point",
+            "/localization/current_section",
+        }
+
+        self.assertTrue(
+            expected_autonomy_topics.issubset(set(BRINGUP._REPLAY_ISOLATED_TOPICS)))
+
     def test_safe_replay_remaps_every_isolated_and_configured_topic(self) -> None:
         arguments = BRINGUP._compose_replay_arguments("--clock", False)
 

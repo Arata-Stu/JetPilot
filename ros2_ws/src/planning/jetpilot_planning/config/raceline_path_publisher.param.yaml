@@ -1,0 +1,12 @@
+/**:
+  ros__parameters:
+    # The node is only started explicitly by enable_raceline_publisher=true.
+    # raceline_csv is required. Set raceline_root to the selected map directory
+    # and use the generated <map>_raceline.csv filename for containment checks.
+    raceline_root: ""
+    raceline_csv: ""
+    output_topic: /planning/raceline_path
+    frame_id: map
+    max_file_bytes: 16777216
+    max_points: 200000
+    use_sim_time: false

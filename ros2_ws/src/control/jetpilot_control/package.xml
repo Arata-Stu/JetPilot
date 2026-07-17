@@ -2,7 +2,7 @@
 <package format="3">
   <name>jetpilot_control</name>
   <version>0.1.0</version>
-  <description>JetPilot autonomous control nodes.</description>
+  <description>Legacy fixed-command bench publisher; autonomous driving uses jetpilot_controller.</description>
   <maintainer email="user@example.com">user</maintainer>
   <license>Apache-2.0</license>
 

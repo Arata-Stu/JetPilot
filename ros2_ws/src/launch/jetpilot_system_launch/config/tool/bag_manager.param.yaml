@@ -16,6 +16,16 @@ bag_manager_node:
       - /bag/request
       - /bag/status
 
+      ## Planning/controller decisions for replay and drive analysis.
+      - /planning/requested_lane
+      - /planning/raceline_path
+      - /planning/trajectory
+      - /planning/target_speed
+      - /planning/selected_lane
+      - /planning/ready
+      - /controller/ready
+      - /controller/lookahead_point
+
       ## Vehicle interface feedback.
       - /commands/motor/speed
       - /commands/motor/brake
@@ -35,6 +45,7 @@ bag_manager_node:
       - /visual_slam/tracking/odometry
       - /localization/pose_hint_state
       - /localization/pose_hint_required
+      - /localization/current_section
       - /diagnostics
 
       ## SilkyEvCam event camera.

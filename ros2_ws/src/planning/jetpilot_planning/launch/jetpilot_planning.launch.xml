@@ -1,0 +1,25 @@
+<launch>
+  <arg name="config_file" default="$(find-pkg-share jetpilot_planning)/config/route_lane_selector.param.yaml"/>
+  <arg name="raceline_config_file" default="$(find-pkg-share jetpilot_planning)/config/raceline_path_publisher.param.yaml"/>
+  <arg name="use_sim_time" default="false"/>
+  <arg name="enable_raceline_publisher" default="false"/>
+  <arg name="raceline_root" default=""/>
+  <arg name="raceline_csv" default=""/>
+  <arg name="raceline_path_topic" default="/planning/raceline_path"/>
+
+  <node pkg="jetpilot_planning" exec="raceline_path_publisher_node"
+        name="raceline_path_publisher" output="screen"
+        if="$(var enable_raceline_publisher)">
+    <param from="$(var raceline_config_file)"/>
+    <param name="raceline_root" value="$(var raceline_root)"/>
+    <param name="raceline_csv" value="$(var raceline_csv)"/>
+    <param name="output_topic" value="$(var raceline_path_topic)"/>
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+  </node>
+
+  <node pkg="jetpilot_planning" exec="route_lane_selector_node"
+        name="route_lane_selector" output="screen">
+    <param from="$(var config_file)"/>
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+  </node>
+</launch>

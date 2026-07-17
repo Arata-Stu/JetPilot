@@ -14,5 +14,8 @@ target_compile_features(autonomous_control_node PUBLIC cxx_std_17)
 install(DIRECTORY config launch
   DESTINATION share/${PROJECT_NAME}
 )
+install(FILES README.md
+  DESTINATION share/${PROJECT_NAME}
+)
 
 ament_auto_package()

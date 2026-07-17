@@ -101,6 +101,58 @@ def test_custom_components_can_be_selected_in_one_argument() -> None:
     assert "enable_localization:=false" in output
 
 
+def test_custom_control_enables_planning_and_pure_pursuit() -> None:
+    output = run_launcher(
+        "custom",
+        "--components",
+        "control",
+        "--dry-run",
+    ).stdout
+
+    assert "enable_planning:=true" in output
+    assert "enable_control:=true" in output
+    assert "enable_operation:=true" in output
+
+
+def test_custom_planning_can_run_without_controller() -> None:
+    output = run_launcher(
+        "custom",
+        "--components",
+        "planning",
+        "--dry-run",
+    ).stdout
+
+    assert "enable_planning:=true" in output
+    assert "enable_control:=false" in output
+
+
+def test_raceline_option_enables_loader_and_matching_selector(tmp_path: Path) -> None:
+    raceline = tmp_path / "course raceline.csv"
+    raceline.write_text("0;0;0;0;0;1;0\n1;1;0;0;0;1;0\n")
+    output = run_launcher(
+        "custom",
+        "--components",
+        "control",
+        "--raceline",
+        str(raceline),
+        "--dry-run",
+    ).stdout
+
+    assert "enable_raceline_publisher:=true" in output
+    assert "route_lane_selector.raceline.param.yaml" in output
+    assert f"raceline_root:={tmp_path}" in output
+    assert "raceline_csv:=course\\ raceline.csv" in output
+
+
+def test_raceline_component_requires_csv() -> None:
+    result = run_launcher(
+        "custom", "--components", "raceline", "--dry-run", check=False
+    )
+
+    assert result.returncode != 0
+    assert "requires --raceline" in result.stderr
+
+
 def test_custom_components_reject_conflicting_input_sources() -> None:
     result = run_launcher(
         "custom",

@@ -24,6 +24,14 @@ _REPLAY_ISOLATED_TOPICS = (
     '/ackermann_cmd',
     '/operation_mode/request',
     '/operation_mode/state',
+    '/planning/requested_lane',
+    '/planning/raceline_path',
+    '/planning/trajectory',
+    '/planning/target_speed',
+    '/planning/selected_lane',
+    '/planning/ready',
+    '/controller/ready',
+    '/controller/lookahead_point',
     '/bag/request',
     '/bag/status',
     '/commands/motor/duty_cycle',
@@ -47,6 +55,7 @@ _REPLAY_ISOLATED_TOPICS = (
     '/diagnostics',
     '/localization/pose_hint_required',
     '/localization/pose_hint_state',
+    '/localization/current_section',
     '/tf',
 )
 
@@ -221,8 +230,22 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('enable_control', False, cli=True)
     args.add_arg(
         'control_param',
-        lu.get_path('jetpilot_system_launch', 'config/control/autonomous_control.param.yaml'),
+        lu.get_path('jetpilot_controller', 'config/controller.param.yaml'),
         cli=True)
+
+    args.add_arg('enable_planning', False, cli=True)
+    args.add_arg(
+        'planning_param',
+        lu.get_path('jetpilot_planning', 'config/route_lane_selector.param.yaml'),
+        cli=True)
+    args.add_arg('enable_raceline_publisher', False, cli=True)
+    args.add_arg(
+        'raceline_config_file',
+        lu.get_path('jetpilot_planning', 'config/raceline_path_publisher.param.yaml'),
+        cli=True)
+    args.add_arg('raceline_root', '', cli=True)
+    args.add_arg('raceline_csv', '', cli=True)
+    args.add_arg('raceline_path_topic', '/planning/raceline_path', cli=True)
 
     args.add_arg('enable_sensor_kit', False, cli=True)
     args.add_arg('sensor_kit_interface_pkg', 'jetpilot_system_launch', cli=True)
@@ -387,6 +410,22 @@ def generate_launch_description() -> lut.LaunchDescription:
                 lut.NotSubstitution(_LaunchBoolean(args.enable_rosbag_replay)),
                 lu.is_valid(args.rosbag),
             )),
+        ))
+
+    actions.append(
+        lu.include(
+            'jetpilot_planning',
+            'launch/jetpilot_planning.launch.xml',
+            launch_arguments={
+                'config_file': args.planning_param,
+                'enable_raceline_publisher': args.enable_raceline_publisher,
+                'raceline_config_file': args.raceline_config_file,
+                'raceline_root': args.raceline_root,
+                'raceline_csv': args.raceline_csv,
+                'raceline_path_topic': args.raceline_path_topic,
+                'use_sim_time': args.use_sim_time,
+            },
+            condition=IfCondition(args.enable_planning),
         ))
 
     actions.append(

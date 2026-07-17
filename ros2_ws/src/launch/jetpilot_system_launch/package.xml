@@ -13,10 +13,11 @@
 
   <exec_depend>custom_joy_node</exec_depend>
   <exec_depend>jetpilot_bag_tools</exec_depend>
-  <exec_depend>jetpilot_control</exec_depend>
+  <exec_depend>jetpilot_controller</exec_depend>
   <exec_depend>jetpilot_hdmap_publisher</exec_depend>
   <exec_depend>jetpilot_localization_manager</exec_depend>
   <exec_depend>jetpilot_operation</exec_depend>
+  <exec_depend>jetpilot_planning</exec_depend>
   <exec_depend>jetpilot_teleop_tools</exec_depend>
   <exec_depend>jetpilot_rtp_tools</exec_depend>
   <exec_depend>openeb_ros2</exec_depend>

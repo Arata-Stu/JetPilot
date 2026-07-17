@@ -834,6 +834,9 @@ find {shlex.quote(record_root)} -name metadata.yaml -printf '%TY-%Tm-%Td %TH:%TM
             rosbag = Path(str(resolved["rosbag"]))
             image_topic = str(resolved["image_topic"])
             trajectory_mode = str(resolved["trajectory_mode"])
+            offline_localization_mode = str(
+                resolved.get("offline_localization_mode") or "auto"
+            )
             max_fps = float(resolved["max_fps"])
             map_dir = Path(str(resolved["map_dir"])) if resolved.get("map_dir") else None
             expected_map_fingerprint = directory_fingerprint(map_dir) if map_dir else ""
@@ -859,6 +862,7 @@ find {shlex.quote(record_root)} -name metadata.yaml -printf '%TY-%Tm-%Td %TH:%TM
             "pose_topic",
             "speed_topic",
             "trajectory_mode",
+            "offline_localization_mode",
             "max_fps",
             "topic_config",
         )
@@ -889,6 +893,7 @@ find {shlex.quote(record_root)} -name metadata.yaml -printf '%TY-%Tm-%Td %TH:%TM
                 speed_topic=str(resolved.get("speed_topic") or ""),
                 map_dir=map_dir,
                 trajectory_mode=trajectory_mode,
+                offline_localization_mode=offline_localization_mode,
                 max_fps=max_fps,
                 expected_map_fingerprint=expected_map_fingerprint,
                 topic_config=topic_config,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import subprocess
 import tempfile
 import unittest
@@ -309,6 +310,66 @@ class AnalysisPreflightTests(unittest.TestCase):
         self.assertFalse(no_map["ready"])
         self.assertEqual(self.check(no_map, "analysis.map")["status"], BLOCKED)
 
+        vslam_only_map = self.map_root / "course-vslam-only"
+        (vslam_only_map / "cuvslam_map").mkdir(parents=True)
+        (vslam_only_map / "cuvslam_map/index").write_bytes(b"map")
+        vslam_only = evaluate_preflight(
+            self.config,
+            "analyze-rosbag",
+            {
+                "rosbag": str(bag),
+                "image_topic": "/camera",
+                "map_dir": str(vslam_only_map),
+                "trajectory_mode": "offline",
+                "offline_localization_mode": "vslam",
+            },
+        )
+        self.assertTrue(vslam_only["ready"])
+        self.assertEqual(
+            vslam_only["resolved"]["offline_localization_mode"], "vslam"
+        )
+        self.assertEqual(
+            self.check(vslam_only, "analysis.localization_map")["status"], PASS
+        )
+        self.assertNotIn("output_model_dir", vslam_only["resolved"])
+
+        auto_without_vgl = evaluate_preflight(
+            self.config,
+            "analyze-rosbag",
+            {
+                "rosbag": str(bag),
+                "image_topic": "/camera",
+                "map_dir": str(vslam_only_map),
+                "trajectory_mode": "offline",
+                "offline_localization_mode": "auto",
+            },
+        )
+        self.assertTrue(auto_without_vgl["ready"])
+        self.assertEqual(
+            auto_without_vgl["resolved"]["offline_localization_mode"], "vslam"
+        )
+        self.assertEqual(
+            self.check(auto_without_vgl, "analysis.localization_map")["status"],
+            WARNING,
+        )
+
+        vgl_without_vgl_map = evaluate_preflight(
+            self.config,
+            "analyze-rosbag",
+            {
+                "rosbag": str(bag),
+                "image_topic": "/camera",
+                "map_dir": str(vslam_only_map),
+                "trajectory_mode": "offline",
+                "offline_localization_mode": "vgl",
+            },
+        )
+        self.assertFalse(vgl_without_vgl_map["ready"])
+        self.assertEqual(
+            self.check(vgl_without_vgl_map, "analysis.localization_map")["status"],
+            BLOCKED,
+        )
+
     def test_command_speed_remains_runnable_but_is_not_vehicle_speed(self) -> None:
         bag = write_bag(
             self.record_root / "run-command-speed",
@@ -386,7 +447,7 @@ class AnalysisScriptTests(unittest.TestCase):
             self.assertIn("publish_vehicle_description:=false", offline)
             self.assertIn("replay_additional_args:='--clock --start-paused'", offline)
             self.assertIn("/rosbag2_player/resume", offline)
-            self.assertIn("offline localization readiness timed out", offline)
+            self.assertIn("localization readiness timed out", offline)
             self.assertIn("rosbag_shutdown_on_exit:=false", offline)
             self.assertIn("--stage offline_drain", offline)
             self.assertIn("vslam_snapshot_require_localized_map:=true", offline)
@@ -394,6 +455,10 @@ class AnalysisScriptTests(unittest.TestCase):
             self.assertIn("vslam_snapshot_write_interval_s:=0.0", offline)
             self.assertIn("--set-status running --stage offline_localization", offline)
             self.assertIn("--trajectory-snapshot", offline)
+            self.assertIn("run_offline_localization_attempt vgl 0.15 0.40", offline)
+            self.assertIn("--stage offline_fallback", offline)
+            self.assertIn("run_offline_localization_attempt vslam 0.41 0.415", offline)
+            self.assertIn("ros2 topic pub --once /initialpose", offline)
             syntax = subprocess.run(
                 ["bash", "-n"],
                 input=offline,
@@ -402,6 +467,161 @@ class AnalysisScriptTests(unittest.TestCase):
                 check=False,
             )
             self.assertEqual(syntax.returncode, 0, syntax.stderr)
+
+            vslam_only = build_analysis_script(
+                config,
+                analysis_dir=root / "analysis-vslam",
+                rosbag=root / "record/run",
+                image_topic="/camera",
+                control_topic="",
+                mode_topic="",
+                pose_topic="",
+                speed_topic="",
+                map_dir=root / "map/course",
+                trajectory_mode="offline",
+                offline_localization_mode="vslam",
+                max_fps=10.0,
+                topic_config=root / "topics.yaml",
+                model_dir=None,
+            )
+            self.assertIn("run_offline_localization_attempt vslam 0.15 0.40", vslam_only)
+            self.assertIn("vslam_identity", vslam_only)
+            self.assertNotIn("--stage offline_fallback", vslam_only)
+            vslam_syntax = subprocess.run(
+                ["bash", "-n"],
+                input=vslam_only,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(vslam_syntax.returncode, 0, vslam_syntax.stderr)
+
+    def test_auto_offline_runtime_restarts_with_identity_hint_after_vgl_exit(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            ros2_ws = root / "ros2_ws"
+            (ros2_ws / "install").mkdir(parents=True)
+            (ros2_ws / "install/setup.bash").write_text("", encoding="utf-8")
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            state_file = root / "fake-ros-active"
+            service_counter = root / "fake-service-counter"
+            fake_ros_log = root / "fake-ros.log"
+
+            fake_ros2 = fake_bin / "ros2"
+            fake_ros2.write_text(
+                """#!/bin/bash
+set -u
+printf '%s\n' "$*" >> "$FAKE_ROS_LOG"
+command_name="${1:-}"
+subcommand="${2:-}"
+if [ "$command_name" = "launch" ]; then
+  enable_vgl=true
+  snapshot=""
+  for argument in "$@"; do
+    case "$argument" in
+      enable_vgl:=*) enable_vgl="${argument#enable_vgl:=}" ;;
+      vslam_snapshot_output:=*) snapshot="${argument#vslam_snapshot_output:=}" ;;
+    esac
+  done
+  if [ "$enable_vgl" = "true" ]; then
+    exit 42
+  fi
+  printf '%s\n' active > "$FAKE_ROS_STATE"
+  rm -f "$FAKE_ROS_SERVICE_COUNTER"
+  cleanup() {
+    printf '%s\n' '{"localization":{"confirmed":true}}' > "$snapshot"
+    rm -f "$FAKE_ROS_STATE"
+    exit 0
+  }
+  trap cleanup INT TERM
+  while true; do
+    if [ -f "$FAKE_ROS_SERVICE_COUNTER" ]; then
+      count="$(<"$FAKE_ROS_SERVICE_COUNTER")"
+      if [ "$count" -ge 4 ]; then cleanup; fi
+    fi
+    /bin/sleep 0.1
+  done
+fi
+if [ "$command_name" = "node" ] && [ "$subcommand" = "list" ]; then
+  if [ -f "$FAKE_ROS_STATE" ]; then
+    printf '%s\n' /visual_slam_node /localization_manager /vslam_reference_snapshot_recorder
+  fi
+  exit 0
+fi
+if [ "$command_name" = "service" ] && [ "$subcommand" = "type" ]; then
+  if [ -f "$FAKE_ROS_STATE" ]; then
+    count=0
+    if [ -f "$FAKE_ROS_SERVICE_COUNTER" ]; then count="$(<"$FAKE_ROS_SERVICE_COUNTER")"; fi
+    count=$((count + 1))
+    printf '%s\n' "$count" > "$FAKE_ROS_SERVICE_COUNTER"
+    if [ "$count" -le 3 ]; then
+      printf '%s\n' rosbag2_interfaces/srv/Resume
+    fi
+  fi
+  exit 0
+fi
+if [ "$command_name" = "service" ] && [ "$subcommand" = "call" ]; then exit 0; fi
+if [ "$command_name" = "topic" ] && [ "$subcommand" = "pub" ]; then exit 0; fi
+exit 1
+""",
+                encoding="utf-8",
+            )
+            fake_ros2.chmod(0o755)
+            fake_sleep = fake_bin / "sleep"
+            fake_sleep.write_text("#!/bin/bash\n/bin/sleep 0.01\n", encoding="utf-8")
+            fake_sleep.chmod(0o755)
+
+            analysis_dir = root / "analysis"
+            script = build_analysis_script(
+                SimpleNamespace(
+                    ros2_ws=ros2_ws,
+                    python_bin="/usr/bin/true",
+                    launch_package="jetpilot_system_launch",
+                    analysis_ros_domain_id=92,
+                ),
+                analysis_dir=analysis_dir,
+                rosbag=root / "record/run",
+                image_topic="/camera",
+                control_topic="",
+                mode_topic="",
+                pose_topic="",
+                speed_topic="",
+                map_dir=root / "map/course",
+                trajectory_mode="offline",
+                offline_localization_mode="auto",
+                max_fps=10.0,
+                topic_config=root / "topics.yaml",
+                model_dir=root / "models",
+            )
+            completed = subprocess.run(
+                ["bash"],
+                input=script,
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=10,
+                env={
+                    **os.environ,
+                    "PATH": f"{fake_bin}:{os.environ.get('PATH', '')}",
+                    "FAKE_ROS_STATE": str(state_file),
+                    "FAKE_ROS_SERVICE_COUNTER": str(service_counter),
+                    "FAKE_ROS_LOG": str(fake_ros_log),
+                },
+            )
+
+            fake_log = fake_ros_log.read_text(encoding="utf-8") if fake_ros_log.is_file() else ""
+            self.assertEqual(
+                completed.returncode,
+                0,
+                completed.stderr + completed.stdout + "\nFAKE ROS LOG:\n" + fake_log,
+            )
+            self.assertIn("VGL offline localization failed", completed.stdout)
+            self.assertEqual(
+                (analysis_dir / "localization/method.txt").read_text(encoding="utf-8").strip(),
+                "vslam_identity_fallback",
+            )
+            self.assertTrue((analysis_dir / "localization/vslam_snapshot.json").is_file())
 
 
 class _StartedTask:

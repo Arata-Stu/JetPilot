@@ -1,0 +1,37 @@
+/**:
+  ros__parameters:
+    # These three lane arrays are parallel and must have equal lengths.
+    lane_ids: [primary]
+    lane_path_topics: [/hd_map/primary_centerline_path]
+    lane_target_speeds_mps: [1.0]
+    default_lane_id: primary
+
+    # Optional entries use "section_id=lane_id". Example:
+    # section_lane_rules: [shortcut_entry=shortcut]
+    section_lane_rules: []
+    # Fail closed: if a requested shortcut/avoidance lane disappears, publish
+    # ready=false instead of silently driving back onto the primary lane.
+    fallback_to_default_lane: false
+
+    requested_lane_topic: /planning/requested_lane
+    current_section_topic: /localization/current_section
+    output_trajectory_topic: /planning/trajectory
+    target_speed_topic: /planning/target_speed
+    selected_lane_topic: /planning/selected_lane
+    ready_topic: /planning/ready
+    diagnostics_topic: /diagnostics
+
+    publish_rate_hz: 10.0
+    # Static HD-map paths do not expire by default. Set a positive timeout for
+    # dynamically generated avoidance paths.
+    path_timeout_sec: 0.0
+    # Dynamic lane requests are leases. A non-empty request that is not refreshed
+    # stops planning instead of remaining selected indefinitely. Set heartbeat
+    # true when an obstacle/signal selector is a required safety dependency.
+    requested_lane_timeout_sec: 1.0
+    require_requested_lane_heartbeat: false
+    # Automatically required whenever section_lane_rules is non-empty.
+    current_section_timeout_sec: 1.0
+    min_path_poses: 2
+    min_path_length_m: 0.10
+    use_sim_time: false

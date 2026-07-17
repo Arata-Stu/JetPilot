@@ -9,15 +9,15 @@ def generate_launch_description() -> lut.LaunchDescription:
 
     args.add_arg(
         'control_param',
-        lu.get_path('jetpilot_system_launch', 'config/control/autonomous_control.param.yaml'),
+        lu.get_path('jetpilot_controller', 'config/controller.param.yaml'),
         cli=True)
     args.add_arg('use_sim_time', False, cli=True)
 
     actions = args.get_launch_actions()
     actions.append(
         lu.include(
-            'jetpilot_control',
-            'launch/jetpilot_control.launch.xml',
+            'jetpilot_controller',
+            'launch/jetpilot_controller.launch.xml',
             launch_arguments={
                 'config_file': args.control_param,
                 'use_sim_time': args.use_sim_time,

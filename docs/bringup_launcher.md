@@ -37,6 +37,12 @@ Common presets:
 /workspaces/scripts/bringup.sh custom \
   --components sensor,joy,teleop,operation,vehicle-vesc
 
+# Map localization + HD map + lane planning + Pure Pursuit
+/workspaces/scripts/bringup.sh custom \
+  --components sensor,localization,hd-map,control,vehicle-vesc \
+  --map /workspaces/map/course_a \
+  --raceline /workspaces/map/course_a/course_a_raceline.csv
+
 # Safe offline localization replay
 /workspaces/scripts/bringup.sh replay-localization \
   --bag /workspaces/record/run_01 \
@@ -58,7 +64,11 @@ The first selector chooses one preset with arrow keys and Enter. Select `custom`
 to build your own component set. Inside `custom`, press Tab or Space on each component to turn it ON,
 then press Enter to confirm all selected components at once. The same selection can be reused
 non-interactively with `--components`; available names include `sensor`, `replay`, `localization`,
-`bag-manager`, `joy`, `teleop`, `operation`, `control`, `rviz`, `vehicle-pca`, and `vehicle-vesc`.
+`bag-manager`, `joy`, `teleop`, `operation`, `planning`, `control`, `rviz`, `vehicle-pca`, and
+`vehicle-vesc`. Selecting `control` also enables `planning` and the operation command mux;
+selecting `planning` alone is useful for validating the selected trajectory without publishing
+autonomous commands. Passing `--raceline` enables the C++ CSV publisher and automatically selects
+the matching two-lane planner configuration; the CSV path must be absolute inside Docker.
 When `localization` is selected interactively, the launcher asks for a map next. In non-interactive
 commands, pass the map explicitly:
 

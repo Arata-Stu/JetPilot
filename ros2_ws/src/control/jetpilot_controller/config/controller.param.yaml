@@ -1,0 +1,54 @@
+path_tracking_controller_node:
+  ros__parameters:
+    algorithm: pure_pursuit
+
+    # ROS interfaces. planning publishes latched trajectory, speed and readiness.
+    base_frame: base_link
+    trajectory_topic: /planning/trajectory
+    target_speed_topic: /planning/target_speed
+    planning_ready_topic: /planning/ready
+    localization_state_topic: /localization/pose_hint_state
+    odometry_topic: /visual_slam/tracking/odometry
+    command_topic: /auto/control_cmd
+
+    # Every required input has a steady-clock watchdog. A timeout produces a stop.
+    control_rate_hz: 30.0
+    trajectory_timeout_s: 0.5
+    odometry_timeout_s: 0.3
+    target_speed_timeout_s: 0.5
+    transform_timeout_s: 0.05
+    transform_max_age_s: 0.5
+    require_planning_ready: true
+    require_localization_state: true
+    localization_state_timeout_s: 1.5
+    require_target_speed: true
+    fallback_target_speed_mps: 0.5
+    max_target_speed_mps: 3.0
+    stop_at_path_end: true
+    goal_tolerance_m: 0.25
+
+    # Neutral is the portable default across PCA9685 and VESC. Increase only after
+    # confirming the vehicle-specific brake direction/current on a stand.
+    safety_brake_command: 0.0
+
+    # Pure Pursuit lateral controller.
+    wheelbase_m: 0.26
+    min_lookahead_m: 0.5
+    max_lookahead_m: 2.0
+    lookahead_speed_gain_s: 0.4
+    max_steering_angle_rad: 0.45
+    max_steering_command: 1.0
+    max_steering_rate_per_s: 4.0
+    # auto: endpoints within tolerance; closed/open: explicit behavior.
+    path_closure_mode: auto
+    closed_path_tolerance_m: 0.3
+
+    # Simple bounded longitudinal controller. A lateral-acceleration limit reduces
+    # target speed in tight curves before throttle/brake are calculated.
+    throttle_kp: 0.5
+    throttle_feedforward: 0.05
+    brake_kp: 0.5
+    speed_deadband_mps: 0.05
+    max_throttle_command: 0.35
+    max_brake_command: 0.3
+    max_lateral_accel_mps2: 2.0

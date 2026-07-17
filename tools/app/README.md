@@ -134,15 +134,20 @@ telemetry topics, the Map used for the run, and a trajectory source:
 - **Recorded** never runs localization and requires a recorded odometry topic.
   When the bag contains `map→odom` on `/tf`, the preprocessor applies it and
   excludes odometry recorded before the Map transform became available.
-- **Offline** always replays the bag through VGL/VSLAM. The selected Map must
-  contain populated `cuvgl_map/` and `cuvslam_map/` folders. Recorded `/tf` is
-  isolated from the new VSLAM graph. Replay starts paused, publishes `/clock`,
-  and resumes only after VGL, VSLAM, the localization manager, the snapshot
-  recorder, and the rosbag resume service are visible. The result is accepted
-  only after the localization manager reports confirmed
-  `localized` state. After replay ends, the graph gets a short drain interval
-  before graceful shutdown. Live `map→odom` is applied before the snapshot is
-  stored.
+- **Offline** replays the bag through the selected localization method. **Auto**
+  first tries VGL + VSLAM and, if startup or confirmed localization fails,
+  restarts the bag from the beginning with VGL disabled. **VGL + VSLAM** disables
+  that fallback. **VSLAM only** loads `cuvslam_map/` and sends an identity
+  `map` pose through the localization manager; the bag therefore needs to start
+  near the saved Map origin. Auto also selects this path immediately when VGL
+  map/model assets are unavailable. Recorded `/tf` is isolated from the new
+  VSLAM graph. Replay starts paused, publishes `/clock`, and resumes only after
+  the required nodes, snapshot recorder, and rosbag resume service are visible.
+  Every method keeps the strict contract: the result is accepted only after the
+  localization manager reports confirmed `localized` state. After replay ends,
+  the graph gets a short drain interval before graceful shutdown. Live
+  `map→odom` is applied before the snapshot is stored. The chosen/fallback method
+  is retained in `localization/method.txt`, the timeline, manifest, and warnings.
 - **None** produces image/command telemetry without a Map trajectory.
 
 The preprocessing task writes `manifest.json`, `status.json`, `timeline.json`,

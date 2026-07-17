@@ -1,8 +1,8 @@
 # Planning / Control architecture
 
-この文書は今後実装する planning と control の契約です。現時点の
-`autonomous_control_node` は動作確認用の固定値 publisher であり、ここに記載した
-自律走行機能はまだ実装済みではありません。
+この文書は planning と controller の契約です。初期実装としてlane selectorと
+Pure Pursuit controllerが入り、従来の固定値`autonomous_control_node`はsystem bringup
+から外れました。分岐条件module、障害物回避とMPCはこの契約上へ追加します。
 
 ## Package boundaries
 
@@ -13,19 +13,21 @@
 | `jetpilot_msgs` | lane graph、trajectory、planning/controller status の共通 interface |
 | `jetpilot_hdmap_publisher` | HD map の静的情報を読み、可視化と共有用 map data を publish |
 | `jetpilot_planning` | centerline/raceline/section を使った route 選択、lane 分岐、局所軌道生成 |
-| `jetpilot_control` | 選択済み trajectory を追従し `/auto/control_cmd` を生成 |
+| `jetpilot_controller` | 選択済み trajectory を追従し `/auto/control_cmd` を生成 |
 
 ファイル形式の解釈を複数 node にコピーしません。HD map の正規化処理は共有 library
 または一つの loader に集約し、planning node は型付き message を受け取ります。
-`nav_msgs/Path` は RViz 表示には使えますが、目標速度、lane ID、曲率、停止条件を
-保持できないため、controller の正式入力には専用 trajectory message を使います。
+初期実装は`nav_msgs/Path`と別topicのlane目標速度を使います。点ごとの目標速度、lane ID、
+曲率、停止条件が必要になった段階で専用trajectory messageへ移行します。
 
 ## Data flow
 
 ```mermaid
 flowchart LR
-  MAP["HD map / centerline / raceline / sections"] --> LOADER["jetpilot_hdmap_publisher"]
-  LOADER --> GRAPH["Lane graph"]
+  MAP["HD map / centerline / sections"] --> LOADER["jetpilot_hdmap_publisher"]
+  RACE["Generated raceline CSV"] --> RACELOADER["jetpilot_planning raceline loader"]
+  LOADER --> GRAPH["Lane candidates"]
+  RACELOADER --> GRAPH
   GRAPH --> ROUTE["Route selector"]
   SIGNAL["Traffic signal state"] --> ROUTE
   POLICY["Shortcut / race policy"] --> ROUTE
@@ -65,11 +67,12 @@ route policy、通常 lane cost の順にします。候補がなくなった場
 
 分岐直前に route が頻繁に切り替わらないよう、決定地点、hysteresis、最低保持時間を
 connection ごとに持たせます。
+動的なlane要求とsection状態はlease/watchdog付きとし、送信moduleが停止した場合は
+最後の分岐を無期限に保持せずplanningをfail-closedにします。
 
 ## Message contract
 
-最初に `jetpilot_msgs` へ次の型を追加する想定です。詳細 field は実装前に ID、時刻、
-frame の契約を確定します。
+将来 `jetpilot_msgs` へ次の型を追加します。詳細fieldはID、時刻、frameの契約を確定します。
 
 - `LaneGraph`, `LaneSegment`, `LaneConnection`
 - `Trajectory`, `TrajectoryPoint`（pose、速度、曲率、加速度、lane/section ID）
@@ -83,19 +86,21 @@ controller は古い trajectory、frame 不一致、localization 不良、NaN/In
 ## Controller sequence
 
 最初の controller は Pure Pursuit とします。設定対象は wheelbase、最小/最大 lookahead、
-速度に対する lookahead gain、最大 steering、trajectory timeout です。速度指令は
-trajectory point の目標速度を使用し、横偏差が大きい場合は減速します。
+速度に対する lookahead gain、最大 steering、trajectory timeout です。初期版の速度指令は
+`/planning/target_speed`を使い、曲率と横加速度上限から安全側へ制限します。点ごとの速度profile
+や横偏差に応じた減速は専用trajectory messageへ移行する段階で追加します。
 
 同じ入力・出力契約で MPC を後から追加します。controller 選択は launch parameter で
 行い、実行中の無条件 hot swap は行いません。既存の固定値
-`autonomous_control_node` は Pure Pursuit 実装と安全 watchdog が入った時点で置換します。
+`autonomous_control_node` はsystem launchでは使用せず、`jetpilot_controller`の
+Pure Pursuitと入力watchdogを使用します。
 
 ## Raceline and vehicle footprint
 
 raceline 最適化では点ではなく車体 footprint を扱います。
 
 ```text
-effective optimization width = vehicle width + 2 * safety margin per side
+effective optimization width = vehicle width + 2 × per-side safety margin
 ```
 
 `vehicle_width_m` は車体の最大幅、`safety_margin_m` は左右それぞれに追加する境界余裕です。
@@ -106,9 +111,8 @@ raceline を誤用しないようにします。実走行時の localization 誤
 
 ## Implementation order
 
-1. message 契約、lane graph schema、記録/replay可能な fixture を確定する。
-2. `jetpilot_planning` の loader と単一路線 trajectory、`jetpilot_control` の Pure Pursuit、
-   timeout 時の停止を実装する。
+1. **実装済み:** `nav_msgs/Path`による初期契約、lane selector、raceline CSV loaderを用意する。
+2. **実装済み:** `jetpilot_controller`のPure Pursuit、localization/TF/input timeout時の停止を実装する。
 3. successor graph と shortcut / signal 条件を追加し、分岐 unit test を作る。
 4. obstacle input と local avoidance、走行不能時の停止を追加する。
 5. 同一 trajectory fixture で Pure Pursuit と MPC を比較できる形で MPC を追加する。
@@ -116,4 +120,3 @@ raceline を誤用しないようにします。実走行時の localization 誤
 各段階で、狭い lane、分岐条件欠落、全候補閉鎖、古い localization、古い trajectory、
 逆向き経路、loop course を自動テストします。Linux Docker 上では `colcon test` に加え、
 vehicle interface を無効にした rosbag replay の integration test を実行します。
-

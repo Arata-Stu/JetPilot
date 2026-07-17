@@ -13,12 +13,14 @@ PRESET=''
 VEHICLE_BACKEND='none'
 MAP_DIR="${BRINGUP_MAP_DIR:-}"
 ROSBAG="${BRINGUP_ROSBAG:-}"
+RACELINE_CSV="${BRINGUP_RACELINE_CSV:-}"
 REPLAY_RATE='1.0'
 DRY_RUN=false
 ASSUME_YES=false
 INTERACTIVE=false
 REQUIRES_MAP=false
 REQUIRES_ROSBAG=false
+REQUIRES_RACELINE=false
 ARG_NAMES=()
 ARG_VALUES=()
 EXTRA_LAUNCH_ARGS=()
@@ -67,6 +69,7 @@ Options:
       --list-presets   List available presets
       --map PATH       Set map_dir (or BRINGUP_MAP_DIR)
       --bag PATH       Set rosbag directory/metadata.yaml (or BRINGUP_ROSBAG)
+      --raceline PATH  Enable the C++ raceline loader with this generated CSV
       --rate RATE      Rosbag replay rate (default: 1.0)
       --vehicle TYPE   Override vehicle backend: none, pca, vesc
       --components LIST
@@ -84,6 +87,8 @@ Examples:
   $(basename "$0") replay-localization --bag /workspaces/record/run_01 \\
     --map /workspaces/map/course_a --rate 0.5
   $(basename "$0") runtime-vesc --map /workspaces/map/course_a --dry-run
+  $(basename "$0") custom --components sensor,localization,hd-map,control,vehicle-vesc \\
+    --map /workspaces/map/course_a --raceline /workspaces/map/course_a/course_raceline.csv
   $(basename "$0") custom --components sensor,joy,teleop,operation,vehicle-vesc
 
 The launcher starts from explicit all-OFF module settings. Vehicle hardware is
@@ -158,6 +163,8 @@ set_base_args() {
   set_arg enable_rc_serial false
   set_arg enable_vslam_snapshot false
   set_arg enable_operation false
+  set_arg enable_planning false
+  set_arg enable_raceline_publisher false
   set_arg enable_control false
   set_arg enable_sensor_kit false
   set_arg enable_localization false
@@ -203,6 +210,29 @@ vesc_driver_param() {
     "${ROS2_WS}/src/vehicle/vesc_interface/jetpilot_vesc_interface/config/vesc_interface.param.yaml" \
     "${PROJECT_ROOT}/ros2_ws/src/vehicle/vesc_interface/jetpilot_vesc_interface/config/vesc_interface.param.yaml" \
     "${ROS2_WS}/install/jetpilot_vesc_interface/share/jetpilot_vesc_interface/config/vesc_interface.param.yaml"
+}
+
+raceline_selector_param() {
+  first_existing_path \
+    "${ROS2_WS}/src/planning/jetpilot_planning/config/route_lane_selector.raceline.param.yaml" \
+    "${ROS2_WS}/src/planning/jetpilot_planning/config/route_lane_selector.raceline.param.yaml" \
+    "${PROJECT_ROOT}/ros2_ws/src/planning/jetpilot_planning/config/route_lane_selector.raceline.param.yaml" \
+    "${ROS2_WS}/install/jetpilot_planning/share/jetpilot_planning/config/route_lane_selector.raceline.param.yaml"
+}
+
+configure_raceline() {
+  [[ "$RACELINE_CSV" == /* ]] \
+    || die '--raceline must be an absolute CSV path inside the Docker workspace'
+  if [[ "$DRY_RUN" != 'true' ]]; then
+    [[ -f "$RACELINE_CSV" ]] || die "raceline CSV does not exist: $RACELINE_CSV"
+    [[ ! -L "$RACELINE_CSV" ]] || die "raceline CSV must not be a symbolic link: $RACELINE_CSV"
+  fi
+
+  set_arg enable_planning true
+  set_arg enable_raceline_publisher true
+  set_arg planning_param "$(raceline_selector_param)"
+  set_arg raceline_root "$(dirname -- "$RACELINE_CSV")"
+  set_arg raceline_csv "$(basename -- "$RACELINE_CSV")"
 }
 
 apply_vehicle() {
@@ -510,8 +540,18 @@ apply_custom_component_token() {
     operation)
       set_arg enable_operation true
       ;;
+    planning)
+      set_arg enable_planning true
+      ;;
+    raceline)
+      set_arg enable_planning true
+      set_arg enable_raceline_publisher true
+      REQUIRES_RACELINE=true
+      ;;
     control|autonomous-control)
+      set_arg enable_planning true
       set_arg enable_control true
+      set_arg enable_operation true
       ;;
     rviz)
       set_arg enable_rviz true
@@ -625,6 +665,26 @@ discover_rosbag() {
   fi
 }
 
+discover_raceline() {
+  local search_root="${MAP_DIR:-$MAP_ROOT}"
+  local path
+  local selected
+  local options=()
+
+  if [[ -d "$search_root" ]]; then
+    while IFS= read -r path; do
+      options+=("$path")
+    done < <(find "$search_root" -maxdepth 4 -type f -name '*raceline*.csv' | sort -r | head -50)
+  fi
+  options+=('パスを手入力...')
+  selected="$(choose_one 'Raceline CSV' "${options[@]}")" || exit $?
+  if [[ "$selected" == 'パスを手入力...' ]]; then
+    RACELINE_CSV="$(prompt_path 'Raceline CSV' "$RACELINE_CSV")"
+  else
+    RACELINE_CSV="$selected"
+  fi
+}
+
 interactive_custom() {
   local selection
   local options=(
@@ -640,7 +700,9 @@ interactive_custom() {
     'teleop             Teleop node'
     'rc-serial          RC serial reader'
     'operation          Operation manager'
-    'control            Autonomous control'
+    'planning           Route/lane planning only'
+    'raceline           Planning with generated raceline CSV'
+    'control            Planning + Pure Pursuit control'
     'rviz               RViz'
     'vehicle-pca        PCA9685 vehicle interface'
     'vehicle-vesc       VESC vehicle interface'
@@ -704,6 +766,10 @@ validate_configuration() {
     && [[ -z "$ROSBAG" ]]; then
     die "preset '$PRESET' requires --bag PATH"
   fi
+  if is_true "$(get_arg enable_raceline_publisher)" \
+    && [[ -z "$(get_arg raceline_csv 2>/dev/null || true)" ]]; then
+    die "preset '$PRESET' requires --raceline PATH"
+  fi
   if [[ -n "$MAP_DIR" ]]; then
     [[ "$DRY_RUN" == 'true' || -d "$MAP_DIR" ]] \
       || die "map directory does not exist: $MAP_DIR"
@@ -752,6 +818,12 @@ ensure_ros_environment() {
   if is_true "$(get_arg enable_localization)"; then
     packages+=(jetpilot_localization_manager)
   fi
+  if is_true "$(get_arg enable_planning)"; then
+    packages+=(jetpilot_planning)
+  fi
+  if is_true "$(get_arg enable_control)"; then
+    packages+=(jetpilot_controller)
+  fi
   for package in "${packages[@]}"; do
     ros2 pkg prefix "$package" >/dev/null 2>&1 \
       || die "$package is unavailable; build the workspace first"
@@ -782,6 +854,8 @@ print_summary() {
   printf '  tool/teleop  : %s / %s\n' \
     "$(get_arg enable_tool)" "$(get_arg enable_teleop)"
   printf '  operation    : %s\n' "$(get_arg enable_operation)"
+  printf '  planning     : %s\n' "$(get_arg enable_planning)"
+  printf '  raceline     : %s\n' "${RACELINE_CSV:-none}"
   printf '  control      : %s\n' "$(get_arg enable_control)"
   printf '  map          : %s\n' "${MAP_DIR:-none}"
   printf '  rosbag       : %s\n' "${ROSBAG:-none}"
@@ -813,6 +887,12 @@ while (($# > 0)); do
       shift 2
       ;;
     --bag=*) ROSBAG="${1#*=}"; shift ;;
+    --raceline)
+      (($# >= 2)) || die '--raceline requires a path'
+      RACELINE_CSV="$2"
+      shift 2
+      ;;
+    --raceline=*) RACELINE_CSV="${1#*=}"; shift ;;
     --rate)
       (($# >= 2)) || die '--rate requires a value'
       REPLAY_RATE="$2"
@@ -888,6 +968,13 @@ if [[ "$REQUIRES_MAP" == 'true' && -z "$MAP_DIR" && "$INTERACTIVE" == 'true' ]];
 fi
 if [[ "$REQUIRES_ROSBAG" == 'true' && -z "$ROSBAG" && "$INTERACTIVE" == 'true' ]]; then
   discover_rosbag
+fi
+if [[ "$REQUIRES_RACELINE" == 'true' && -z "$RACELINE_CSV" && "$INTERACTIVE" == 'true' ]]; then
+  discover_raceline
+fi
+
+if [[ -n "$RACELINE_CSV" ]]; then
+  configure_raceline
 fi
 
 if ((${#EXTRA_LAUNCH_ARGS[@]} > 0)); then

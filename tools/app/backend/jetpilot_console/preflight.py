@@ -341,33 +341,77 @@ def _analysis_map(
     return map_dir
 
 
-def _offline_map_artifacts(map_dir: Path, report: _Report) -> bool:
-    missing = []
+def _offline_map_artifacts(
+    map_dir: Path,
+    report: _Report,
+    *,
+    localization_mode: str,
+) -> tuple[bool, bool]:
+    """Check saved localization maps without making VGL a VSLAM-only dependency."""
+
+    availability: dict[str, bool] = {}
     for name in ("cuvgl_map", "cuvslam_map"):
         path = map_dir / name
         try:
-            populated = path.is_dir() and any(path.iterdir())
+            availability[name] = path.is_dir() and any(path.iterdir())
         except OSError:
-            populated = False
-        if not populated:
-            missing.append(str(path))
-    if missing:
+            availability[name] = False
+
+    vgl_available = availability["cuvgl_map"]
+    vslam_available = availability["cuvslam_map"]
+    missing = [
+        str(map_dir / name)
+        for name, available in availability.items()
+        if not available
+    ]
+    if not vslam_available or (localization_mode == "vgl" and not vgl_available):
+        required_names = ["cuvslam_map"]
+        if localization_mode == "vgl":
+            required_names.insert(0, "cuvgl_map")
         report.add(
             "analysis.localization_map",
             "Offline localization map",
             BLOCKED,
-            "Offline localization requires populated cuVGL and cuVSLAM map folders.",
-            remediation="Select the matching completed map or finish its VGL/VSLAM build first.",
-            details={"missing_or_empty": missing},
+            "The selected offline localization mode is missing a required saved map.",
+            remediation="Select the matching completed map or finish its localization map build first.",
+            details={
+                "mode": localization_mode,
+                "required": required_names,
+                "missing_or_empty": missing,
+            },
         )
-        return False
+        return vgl_available, vslam_available
+
+    if localization_mode == "auto" and not vgl_available:
+        report.add(
+            "analysis.localization_map",
+            "Offline localization map",
+            WARNING,
+            "cuVGL map data is unavailable; Auto will use the saved cuVSLAM map with an identity pose hint.",
+            remediation=(
+                "Add the matching cuvgl_map to try global localization, or confirm that the bag starts "
+                "near the saved cuVSLAM map origin."
+            ),
+            details={
+                "mode": localization_mode,
+                "fallback": "vslam",
+                "missing_or_empty": missing,
+            },
+        )
+        return vgl_available, vslam_available
+
     report.add(
         "analysis.localization_map",
         "Offline localization map",
         PASS,
-        "Populated cuVGL and cuVSLAM map folders are available.",
+        (
+            "The saved cuVSLAM map is available for VSLAM-only localization."
+            if localization_mode == "vslam"
+            else "Populated cuVGL and cuVSLAM map folders are available."
+        ),
+        details={"mode": localization_mode},
     )
-    return True
+    return vgl_available, vslam_available
 
 
 def _analysis_max_fps(payload: Mapping[str, Any], report: _Report) -> None:
@@ -563,17 +607,72 @@ def _analyze_rosbag_preflight(
             if raw_mode == "offline":
                 return
         else:
-            _offline_map_artifacts(map_dir, report)
+            offline_mode = str(
+                payload.get("offline_localization_mode") or "auto"
+            ).strip().lower()
+            if offline_mode not in {"auto", "vgl", "vslam"}:
+                report.add(
+                    "analysis.offline_localization_mode",
+                    "Offline localization method",
+                    BLOCKED,
+                    "offline_localization_mode must be auto, vgl, or vslam.",
+                    remediation="Select Auto, VGL + VSLAM, or VSLAM only.",
+                    details={"value": offline_mode},
+                )
+                return
+            report.resolved["offline_localization_mode_requested"] = offline_mode
+            vgl_map_available, vslam_map_available = _offline_map_artifacts(
+                map_dir,
+                report,
+                localization_mode=offline_mode,
+            )
             cameras = _inspect_camera_config(config, payload.get("topic_config"), report)
             if cameras is not None:
                 _check_mapping_topics(bag_info, cameras, report)
-            _inspect_vgl_model(config, payload.get("output_model_dir"), report)
+            vgl_model = None
+            if offline_mode in {"auto", "vgl"} and vgl_map_available:
+                vgl_model = _inspect_vgl_model(
+                    config,
+                    payload.get("output_model_dir"),
+                    report,
+                    required=offline_mode == "vgl",
+                )
+            resolved_offline_mode = offline_mode
+            if offline_mode == "auto" and (not vgl_map_available or vgl_model is None):
+                resolved_offline_mode = "vslam"
+            report.resolved["offline_localization_mode"] = resolved_offline_mode
+            if resolved_offline_mode == "auto":
+                method_message = (
+                    "Auto will try VGL first and restart from the beginning with a VSLAM "
+                    "identity hint if needed."
+                )
+            elif resolved_offline_mode == "vgl":
+                method_message = "VGL + VSLAM is required; runtime VGL failure will stop the job."
+            else:
+                method_message = (
+                    "Offline localization will load the saved cuVSLAM map and use an identity pose hint."
+                )
+            report.add(
+                "analysis.offline_localization_mode",
+                "Offline localization method",
+                PASS if vslam_map_available else BLOCKED,
+                method_message,
+                details={
+                    "requested": offline_mode,
+                    "resolved": resolved_offline_mode,
+                    "runtime_fallback": resolved_offline_mode == "auto",
+                },
+            )
             report.add(
                 "analysis.trajectory_source",
                 "Trajectory source",
                 PASS,
-                "Offline VGL/VSLAM will generate the trajectory before extraction.",
-                details={"mode": "offline", "map_dir": str(map_dir)},
+                "Offline localization will generate the trajectory before extraction.",
+                details={
+                    "mode": "offline",
+                    "localization_mode": resolved_offline_mode,
+                    "map_dir": str(map_dir),
+                },
             )
 
     if not speed_topic and resolved_mode == "none":
@@ -1198,7 +1297,13 @@ def _inspect_mapping_parameters(payload: Mapping[str, Any], report: _Report) -> 
     )
 
 
-def _inspect_vgl_model(config: ConsoleConfig, raw_value: Any, report: _Report) -> None:
+def _inspect_vgl_model(
+    config: ConsoleConfig,
+    raw_value: Any,
+    report: _Report,
+    *,
+    required: bool = True,
+) -> Path | None:
     model_root = Path(config.ros2_ws) / "isaac_ros_assets" / "models"
     selected = raw_value or model_root / "visual_global_localization"
     try:
@@ -1213,24 +1318,30 @@ def _inspect_vgl_model(config: ConsoleConfig, raw_value: Any, report: _Report) -
         report.add(
             "mapping.vgl_model",
             "VGL model assets",
-            BLOCKED,
+            BLOCKED if required else WARNING,
             str(exc),
-            remediation="Install/export the VGL model assets inside the ROS workspace model folder.",
-            details={"model_root": str(model_root)},
+            remediation=(
+                "Install/export the VGL model assets inside the ROS workspace model folder. "
+                "Auto can otherwise continue with its VSLAM-only identity-hint fallback."
+            ),
+            details={"model_root": str(model_root), "fallback": not required},
         )
-        return
+        return None
 
     report.resolved["output_model_dir"] = str(model_dir)
     if not any(model_dir.iterdir()):
         report.add(
             "mapping.vgl_model",
             "VGL model assets",
-            BLOCKED,
+            BLOCKED if required else WARNING,
             "The selected VGL model directory is empty.",
-            remediation="Export the required TensorRT/model files before the localization stage.",
-            details={"path": str(model_dir)},
+            remediation=(
+                "Export the required TensorRT/model files before the localization stage. "
+                "Auto can otherwise continue with its VSLAM-only identity-hint fallback."
+            ),
+            details={"path": str(model_dir), "fallback": not required},
         )
-        return
+        return None
     report.add(
         "mapping.vgl_model",
         "VGL model assets",
@@ -1238,6 +1349,7 @@ def _inspect_vgl_model(config: ConsoleConfig, raw_value: Any, report: _Report) -
         "The selected VGL model directory exists and is not empty.",
         details={"path": str(model_dir)},
     )
+    return model_dir
 
 
 def _required_map_dir(

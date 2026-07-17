@@ -81,6 +81,7 @@ const state = {
     poseTopic: "",
     speedTopic: "",
     trajectoryMode: "auto",
+    offlineLocalizationMode: "auto",
     maxFps: 15,
     analyses: [],
     selectedId: "",
@@ -1697,6 +1698,7 @@ function analysisPreflightPayload() {
     pose_topic: state.analysis.poseTopic,
     speed_topic: state.analysis.speedTopic,
     trajectory_mode: state.analysis.trajectoryMode,
+    offline_localization_mode: state.analysis.offlineLocalizationMode,
     max_fps: state.analysis.maxFps,
   };
 }
@@ -1786,9 +1788,9 @@ function renderAnalysisForm() {
         <label for="analysis-trajectory-mode">Trajectory source</label>
         <select id="analysis-trajectory-mode" onchange="updateAnalysisOption('trajectoryMode', this.value)">
           ${[
-            ["auto", "Auto: recorded pose, then offline VGL/VSLAM"],
+            ["auto", "Auto: recorded pose, then offline localization"],
             ["recorded", "Recorded pose only"],
-            ["offline", "Run offline VGL/VSLAM"],
+            ["offline", "Run offline localization"],
             ["none", "Do not create trajectory"],
           ].map(([value, label]) => `<option value="${value}" ${analysis.trajectoryMode === value ? "selected" : ""}>${label}</option>`).join("")}
         </select>
@@ -1796,6 +1798,17 @@ function renderAnalysisForm() {
       <div class="field">
         <label for="analysis-max-fps">Image playback max FPS</label>
         <input id="analysis-max-fps" type="number" min="1" max="60" step="1" value="${esc(analysis.maxFps)}" onchange="updateAnalysisOption('maxFps', this.value)" />
+      </div>
+      <div class="field full">
+        <label for="analysis-offline-localization-mode">Offline localization method</label>
+        <select id="analysis-offline-localization-mode" onchange="updateAnalysisOption('offlineLocalizationMode', this.value)">
+          ${[
+            ["auto", "Auto: try VGL, then VSLAM saved-map origin fallback"],
+            ["vgl", "VGL required: stop if VGL cannot localize"],
+            ["vslam", "VSLAM saved map only: use map origin as initial pose"],
+          ].map(([value, label]) => `<option value="${value}" ${analysis.offlineLocalizationMode === value ? "selected" : ""}>${label}</option>`).join("")}
+        </select>
+        <div class="field-hint">The VSLAM-only fallback is valid when the bag starts near the selected Map origin. A confirmed localized state is still required before accepting its trajectory.</div>
       </div>
       ${detail ? renderAnalysisTopicCoverage() : `<div class="notice full">Select a rosbag first. Topic availability and missing inputs will appear here.</div>`}
       <div class="full" id="analysis-preflight">${renderReadinessPanel("analyze-rosbag", payload, { title: "Rosbag analysis readiness" })}</div>
@@ -1885,7 +1898,7 @@ function renderAnalysisViewer() {
       <div class="analysis-media-grid">
         <div class="analysis-image-panel">
           <div class="analysis-image-stage">
-            <img id="analysis-frame-image" alt="Selected rosbag image frame" />
+            <img id="analysis-frame-image" alt="Selected rosbag image frame" decoding="async" />
             <div id="analysis-frame-empty" class="analysis-frame-empty">${frames.length ? "Loading frame..." : "No image frames were extracted."}</div>
             <span id="analysis-frame-time" class="analysis-frame-time">${formatAnalysisClock(analysis.currentTime)}</span>
           </div>
@@ -1936,10 +1949,22 @@ function renderAnalysisSources() {
     ["Control", topics.control || state.analysis.detail?.control_topic],
     ["Mode", topics.mode || state.analysis.detail?.mode_topic],
     [analysisSpeedSourceLabel(speed), speed?.source || topics.speed || trajectory.source],
-    ["Trajectory", [trajectory.source, trajectory.frameId ? `frame ${trajectory.frameId}` : ""].filter(Boolean).join(" / ")],
+    ["Trajectory", [
+      trajectory.source,
+      analysisLocalizationMethodLabel(trajectory.localizationMethod),
+      trajectory.frameId ? `frame ${trajectory.frameId}` : "",
+    ].filter(Boolean).join(" / ")],
   ].filter(([, value]) => value);
   if (!rows.length) return "";
   return `<div class="analysis-source-row">${rows.map(([label, value]) => `<span><strong>${esc(label)}</strong>${esc(value)}</span>`).join("")}</div>`;
+}
+
+function analysisLocalizationMethodLabel(value) {
+  return {
+    vgl: "VGL + VSLAM",
+    vslam_identity: "VSLAM map origin",
+    vslam_identity_fallback: "VSLAM map-origin fallback",
+  }[String(value || "")] || "";
 }
 
 async function openBagAnalysis(path = "") {
@@ -2235,6 +2260,9 @@ function analysisTrajectory(timeline = state.analysis.timeline || {}) {
   return {
     frameId: String(trajectory.frame_id || ""),
     source: String(trajectory.source || ""),
+    localizationMethod: String(
+      trajectory.localization_method || timeline.offline_localization?.method || "",
+    ),
     samples: timeline._normalized && Array.isArray(trajectory.samples)
       ? trajectory.samples
       : normalizeTimedRecords(trajectory.samples),
@@ -2468,6 +2496,14 @@ function updateAnalysisFrame(time) {
   if (index !== state.analysis.renderedFrameIndex) {
     const url = analysisAssetUrl(frames[index]);
     image.onload = () => {
+      const stage = image.closest(".analysis-image-stage");
+      if (stage) {
+        stage.dataset.frameSize = `${image.naturalWidth}×${image.naturalHeight}`;
+        stage.setAttribute(
+          "aria-label",
+          `Camera frame ${image.naturalWidth} by ${image.naturalHeight} pixels, fitted to the viewer`,
+        );
+      }
       image.classList.add("visible");
       empty.classList.remove("visible");
     };

@@ -880,11 +880,22 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
 
     progress.update("inspect", task_progress(0.02), "rosbagのtopic構成を確認しています。")
 
-    offline_snapshot_samples = (
-        _snapshot_samples(options.trajectory_snapshot.expanduser().resolve())
-        if options.trajectory_snapshot
-        else None
-    )
+    offline_localization_method = ""
+    if options.trajectory_snapshot:
+        trajectory_snapshot = options.trajectory_snapshot.expanduser().resolve()
+        method_path = trajectory_snapshot.parent / "method.txt"
+        if method_path.is_file():
+            try:
+                candidate_method = method_path.read_text(
+                    encoding="utf-8", errors="replace"
+                ).strip()
+            except OSError:
+                candidate_method = ""
+            if candidate_method in {"vgl", "vslam_identity", "vslam_identity_fallback"}:
+                offline_localization_method = candidate_method
+        offline_snapshot_samples = _snapshot_samples(trajectory_snapshot)
+    else:
+        offline_snapshot_samples = None
 
     reader, topic_types = _open_reader(options.rosbag)
     if options.image_topic not in topic_types:
@@ -1109,6 +1120,11 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
         )
     if consistency.get("status") in {"warning", "mismatch", "unknown"}:
         warnings.append(str(consistency.get("message") or "Map整合性を確認してください。"))
+    if offline_localization_method in {"vslam_identity", "vslam_identity_fallback"}:
+        warnings.append(
+            "VGLを使わず、保存cuVSLAM Mapの原点をidentity初期姿勢として自己位置を生成しました。"
+            "bag開始位置がMap原点付近であることを確認してください。"
+        )
 
     progress.update(
         "package",
@@ -1128,6 +1144,7 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
         "speeds": speeds,
         "trajectory": {
             "source": trajectory_source,
+            "localization_method": offline_localization_method,
             "frame_id": frame_id,
             "map_transformed_samples": recorded_transformed_count,
             "prelocalization_samples_dropped": recorded_dropped_count,
@@ -1160,6 +1177,11 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
                 "speed": options.speed_topic,
             },
             "map": map_payload,
+            "offline_localization": (
+                {"method": offline_localization_method}
+                if offline_snapshot_samples is not None
+                else None
+            ),
             "duration_s": round(duration_s, 6),
             "counts": {
                 "frames": len(frames),
