@@ -100,11 +100,11 @@ TEST(PurePursuit, RejectsUnsafeInputs)
   EXPECT_FALSE(
     controller.compute({{{0.0, 0.0}, {std::numeric_limits<double>::quiet_NaN(), 0.0}}, 0.0})
     .valid);
-  EXPECT_THROW(PurePursuit(PurePursuitParams{0.0}), std::invalid_argument);
+  EXPECT_THROW((void)PurePursuit{PurePursuitParams{0.0}}, std::invalid_argument);
 
   PurePursuitParams invalid_params;
   invalid_params.max_lookahead_m = std::numeric_limits<double>::quiet_NaN();
-  EXPECT_THROW(PurePursuit(invalid_params), std::invalid_argument);
+  EXPECT_THROW((void)PurePursuit{invalid_params}, std::invalid_argument);
 }
 
 TEST(LongitudinalController, AcceleratesAndRespectsThrottleLimit)
@@ -141,7 +141,7 @@ TEST(LongitudinalController, RejectsNonFiniteParameters)
 {
   LongitudinalParams params;
   params.brake_kp = std::numeric_limits<double>::quiet_NaN();
-  EXPECT_THROW(LongitudinalController(params), std::invalid_argument);
+  EXPECT_THROW((void)LongitudinalController{params}, std::invalid_argument);
 }
 
 }  // namespace
