@@ -29,6 +29,10 @@ Common presets:
 /workspaces/scripts/bringup.sh runtime-pca \
   --map /workspaces/map/course_a
 
+# Custom one-shot component selection
+/workspaces/scripts/bringup.sh custom \
+  --components sensor,joy,teleop,operation,vehicle-vesc
+
 # Safe offline localization replay
 /workspaces/scripts/bringup.sh replay-localization \
   --bag /workspaces/record/run_01 \
@@ -45,6 +49,11 @@ launch argument can be overridden without creating duplicates:
   --dry-run \
   -- enable_rviz:=false enable_hd_map_publisher:=true
 ```
+
+The `custom` preset opens a multi-select UI when used interactively. Select every component that
+should be ON at once, then confirm the generated launch command. The same selection can be reused
+non-interactively with `--components`; available names include `sensor`, `replay`, `localization`,
+`bag-manager`, `joy`, `teleop`, `operation`, `control`, `rviz`, `vehicle-pca`, and `vehicle-vesc`.
 
 ## Safety behavior
 

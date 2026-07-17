@@ -22,6 +22,7 @@ REQUIRES_ROSBAG=false
 ARG_NAMES=()
 ARG_VALUES=()
 EXTRA_LAUNCH_ARGS=()
+CUSTOM_COMPONENTS=''
 
 die() {
   printf 'error: %s\n' "$*" >&2
@@ -66,6 +67,8 @@ Options:
       --bag PATH       Set rosbag directory/metadata.yaml (or BRINGUP_ROSBAG)
       --rate RATE      Rosbag replay rate (default: 1.0)
       --vehicle TYPE   Override vehicle backend: none, pca, vesc
+      --components LIST
+                        Custom component list, e.g. sensor,joy,teleop,vehicle-vesc
       --set ARG:=VALUE Override one bringup launch argument
       --dry-run        Print the exact command without running ROS
   -y, --yes            Skip the hardware launch confirmation
@@ -78,6 +81,7 @@ Examples:
   $(basename "$0") replay-localization --bag /workspaces/record/run_01 \\
     --map /workspaces/map/course_a --rate 0.5
   $(basename "$0") runtime-vesc --map /workspaces/map/course_a --dry-run
+  $(basename "$0") custom --components sensor,joy,teleop,operation,vehicle-vesc
 
 The launcher starts from explicit all-OFF module settings. Vehicle hardware is
 never enabled by a localization/replay preset, and replay + vehicle overrides
@@ -334,6 +338,56 @@ choose_one() {
   done
 }
 
+choose_many() {
+  local prompt="$1"
+  local selected
+  local choice
+  local token
+  local index
+  local line
+  local output=''
+  shift
+  local options=("$@")
+
+  if command -v fzf >/dev/null 2>&1; then
+    selected="$(printf '%s\n' "${options[@]}" | fzf \
+      --multi --prompt="${prompt} > " --height=80% --border --reverse \
+      --header='Tab/SpaceでON/OFF、Enterで決定' || true)"
+    printf '%s' "$selected"
+    return
+  fi
+
+  printf '%s\n' "$prompt" >&2
+  for index in "${!options[@]}"; do
+    printf '  %2d) %s\n' "$((index + 1))" "${options[$index]}" >&2
+  done
+  while true; do
+    read -r -p 'ONにする番号を複数入力 (例: 1 3 5, 空: none, q: cancel): ' choice
+    case "$choice" in
+      q|Q) return 130 ;;
+      '') printf ''; return ;;
+    esac
+
+    output=''
+    choice="${choice//,/ }"
+    for token in $choice; do
+      if [[ "$token" =~ ^[0-9]+$ ]] \
+        && ((token >= 1 && token <= ${#options[@]})); then
+        line="${options[$((token - 1))]}"
+        output+="${line}"$'\n'
+      else
+        output=''
+        break
+      fi
+    done
+    if [[ -n "$output" ]]; then
+      printf '%s' "$output"
+      return
+    fi
+    printf '一覧にある番号を空白区切りで入力してください。\n' >&2
+  done
+}
+
 prompt_yes_no() {
   local prompt="$1"
   local default="${2:-no}"
@@ -366,6 +420,119 @@ prompt_path() {
   else
     read -r -e -p "${prompt}: " value
     printf '%s' "$value"
+  fi
+}
+
+apply_custom_component_token() {
+  local token="$1"
+
+  case "$token" in
+    sensor|live-sensor)
+      set_arg enable_sensor_kit true
+      set_arg publish_vehicle_description true
+      ;;
+    replay|rosbag-replay)
+      set_arg enable_rosbag_replay true
+      set_arg use_sim_time true
+      REQUIRES_ROSBAG=true
+      ;;
+    localization)
+      enable_localization_stack
+      REQUIRES_MAP=true
+      ;;
+    occupancy-map)
+      enable_localization_stack
+      set_arg enable_occupancy_map_server true
+      set_arg enable_occupancy_map_lifecycle_manager true
+      REQUIRES_MAP=true
+      ;;
+    hd-map)
+      enable_localization_stack
+      set_arg enable_hd_map_publisher true
+      REQUIRES_MAP=true
+      ;;
+    section-localizer)
+      enable_localization_stack
+      set_arg enable_section_localizer true
+      REQUIRES_MAP=true
+      ;;
+    tool)
+      set_arg enable_tool true
+      ;;
+    bag-manager)
+      set_arg enable_tool true
+      set_arg enable_bag_manager true
+      ;;
+    joy)
+      set_arg enable_tool true
+      set_arg enable_joy true
+      ;;
+    teleop)
+      set_arg enable_tool true
+      set_arg enable_teleop true
+      ;;
+    rc-serial)
+      set_arg enable_tool true
+      set_arg enable_rc_serial true
+      ;;
+    operation)
+      set_arg enable_operation true
+      ;;
+    control|autonomous-control)
+      set_arg enable_control true
+      ;;
+    rviz)
+      set_arg enable_rviz true
+      ;;
+    vehicle-pca)
+      apply_vehicle pca
+      ;;
+    vehicle-vesc)
+      apply_vehicle vesc
+      ;;
+    none|'')
+      ;;
+    *) die "unknown custom component: $token" ;;
+  esac
+}
+
+apply_custom_components() {
+  local selection="$1"
+  local token
+  local line
+  local normalized
+  local saw_live=false
+  local saw_replay=false
+  local vehicle_count=0
+
+  if [[ -n "$selection" && "$selection" != *$'\n'* ]]; then
+    normalized="${selection//,/ }"
+    for token in $normalized; do
+      case "$token" in
+        sensor|live-sensor) saw_live=true ;;
+        replay|rosbag-replay) saw_replay=true ;;
+        vehicle-pca|vehicle-vesc) vehicle_count=$((vehicle_count + 1)) ;;
+      esac
+      apply_custom_component_token "$token"
+    done
+  else
+    while IFS= read -r line; do
+      [[ -n "$line" ]] || continue
+      token="${line%%[[:space:]]*}"
+      case "$token" in
+        sensor|live-sensor) saw_live=true ;;
+        replay|rosbag-replay) saw_replay=true ;;
+        vehicle-pca|vehicle-vesc) vehicle_count=$((vehicle_count + 1)) ;;
+      esac
+      apply_custom_component_token "$token"
+    done <<< "$selection"
+  fi
+
+  if [[ "$saw_live" == 'true' && "$saw_replay" == 'true' ]]; then
+    die 'custom components must choose either sensor or replay, not both'
+  fi
+  if ((vehicle_count > 1)); then
+    die 'custom components must choose only one vehicle backend'
   fi
 }
 
@@ -415,57 +582,28 @@ discover_rosbag() {
 }
 
 interactive_custom() {
-  local source_mode
-  local backend
+  local selection
+  local options=(
+    'sensor             Live sensor kit + camera TF'
+    'replay             Rosbag replay input'
+    'localization       Localization stack'
+    'occupancy-map      Occupancy map server'
+    'hd-map             HD map publisher'
+    'section-localizer  Section localizer'
+    'tool               Tool container only'
+    'bag-manager        Bag manager'
+    'joy                Joy node'
+    'teleop             Teleop node'
+    'rc-serial          RC serial reader'
+    'operation          Operation manager'
+    'control            Autonomous control'
+    'rviz               RViz'
+    'vehicle-pca        PCA9685 vehicle interface'
+    'vehicle-vesc       VESC vehicle interface'
+  )
 
-  source_mode="$(choose_one 'Camera/input source' live replay none)" || exit $?
-  case "$source_mode" in
-    live)
-      set_arg enable_sensor_kit true
-      set_arg publish_vehicle_description true
-      ;;
-    replay)
-      set_arg enable_rosbag_replay true
-      set_arg use_sim_time true
-      REQUIRES_ROSBAG=true
-      discover_rosbag
-      ;;
-  esac
-
-  if prompt_yes_no 'Localizationを起動しますか？' yes; then
-    enable_localization_stack
-    REQUIRES_MAP=true
-    prompt_yes_no 'Occupancy map serverを起動しますか？' no \
-      && set_arg enable_occupancy_map_server true \
-      && set_arg enable_occupancy_map_lifecycle_manager true
-    prompt_yes_no 'HD map publisherを起動しますか？' no \
-      && set_arg enable_hd_map_publisher true
-    prompt_yes_no 'Section localizerを起動しますか？' no \
-      && set_arg enable_section_localizer true
-  fi
-
-  if [[ "$source_mode" != 'replay' ]]; then
-    backend="$(choose_one 'Vehicle hardware' none pca vesc)" || exit $?
-    apply_vehicle "$backend"
-  fi
-
-  if prompt_yes_no 'Joy/teleop toolを起動しますか？' no; then
-    set_arg enable_tool true
-    prompt_yes_no 'Bag managerを起動しますか？' yes \
-      && set_arg enable_bag_manager true
-    prompt_yes_no 'Joy nodeを起動しますか？' yes \
-      && set_arg enable_joy true
-    prompt_yes_no 'Teleop nodeを起動しますか？' yes \
-      && set_arg enable_teleop true
-    prompt_yes_no 'RC serial readerを起動しますか？' no \
-      && set_arg enable_rc_serial true
-  fi
-  prompt_yes_no 'Operation managerを起動しますか？' no \
-    && set_arg enable_operation true
-  prompt_yes_no 'Autonomous controlを起動しますか？' no \
-    && set_arg enable_control true
-  prompt_yes_no 'RVizを起動しますか？' no \
-    && set_arg enable_rviz true
+  selection="$(choose_many 'Custom components' "${options[@]}")" || exit $?
+  apply_custom_components "$selection"
 }
 
 choose_preset_interactively() {
@@ -643,6 +781,12 @@ while (($# > 0)); do
       shift 2
       ;;
     --vehicle=*) CLI_VEHICLE="${1#*=}"; shift ;;
+    --components)
+      (($# >= 2)) || die '--components requires a comma-separated list'
+      CUSTOM_COMPONENTS="$2"
+      shift 2
+      ;;
+    --components=*) CUSTOM_COMPONENTS="${1#*=}"; shift ;;
     --set)
       (($# >= 2)) || die '--set requires NAME:=VALUE'
       EXTRA_LAUNCH_ARGS+=("$2")
@@ -680,9 +824,13 @@ known_preset "$PRESET" || die "unknown preset: $PRESET (use --list-presets)"
 apply_preset "$PRESET"
 
 if [[ "$PRESET" == 'custom' ]]; then
-  [[ -t 0 && -t 1 ]] || die 'custom preset requires an interactive terminal'
-  INTERACTIVE=true
-  interactive_custom
+  if [[ -n "$CUSTOM_COMPONENTS" ]]; then
+    apply_custom_components "$CUSTOM_COMPONENTS"
+  else
+    [[ -t 0 && -t 1 ]] || die 'custom preset requires an interactive terminal or --components'
+    INTERACTIVE=true
+    interactive_custom
+  fi
 fi
 if [[ -n "${CLI_VEHICLE:-}" ]]; then
   apply_vehicle "$CLI_VEHICLE"

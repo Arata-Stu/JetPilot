@@ -67,6 +67,37 @@ def test_empty_launch_arguments_are_not_emitted() -> None:
     assert "rosbag:=" not in output
 
 
+def test_custom_components_can_be_selected_in_one_argument() -> None:
+    output = run_launcher(
+        "custom",
+        "--components",
+        "sensor,joy,teleop,operation,vehicle-vesc",
+        "--dry-run",
+    ).stdout
+
+    assert "enable_sensor_kit:=true" in output
+    assert "enable_tool:=true" in output
+    assert "enable_joy:=true" in output
+    assert "enable_teleop:=true" in output
+    assert "enable_operation:=true" in output
+    assert "enable_vehicle:=true" in output
+    assert "vehicle_interface_pkg:=jetpilot_vesc_interface" in output
+    assert "enable_localization:=false" in output
+
+
+def test_custom_components_reject_conflicting_input_sources() -> None:
+    result = run_launcher(
+        "custom",
+        "--components",
+        "sensor,replay",
+        "--dry-run",
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "either sensor or replay" in result.stderr
+
+
 def test_live_localization_publishes_description_without_actuator(tmp_path: Path) -> None:
     output = run_launcher(
         "localize-live", "--map", str(tmp_path), "--dry-run"
