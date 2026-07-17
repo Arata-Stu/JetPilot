@@ -14,7 +14,7 @@ CREATE_MAP_OFFLINE_STEPS="${CREATE_MAP_OFFLINE_STEPS:-edex compute_poses cuvgl}"
 ALLOW_OCCUPANCY_MAP_STEP="${ALLOW_OCCUPANCY_MAP_STEP:-false}"
 ROSBAG_START_DELAY_S="${ROSBAG_START_DELAY_S:-5.0}"
 ROSBAG_PLAY_ADDITIONAL_ARGS="${ROSBAG_PLAY_ADDITIONAL_ARGS:---clock}"
-ENABLE_OFFLINE_RVIZ="${ENABLE_OFFLINE_RVIZ:-true}"
+ENABLE_OFFLINE_RVIZ="${ENABLE_OFFLINE_RVIZ:-false}"
 ENABLE_HD_MAP_WORKFLOW="${ENABLE_HD_MAP_WORKFLOW:-ask}"
 CAMERA_TOPIC_CONFIG_FILE="${CAMERA_TOPIC_CONFIG_FILE:-}"
 VSLAM_LANDMARKS_TOPIC="${VSLAM_LANDMARKS_TOPIC:-/visual_slam/vis/landmarks_cloud}"
@@ -552,29 +552,62 @@ run_offline_eval() {
   local topic_config_file
   local snapshot_path
   local cuvslam_map_dir
+  local offline_launch_pid=""
+  local offline_ready=0
+  local offline_attempt
+  local offline_nodes
+  local offline_resume_type
+  local offline_player_missing=0
+  local offline_launch_status=0
+  local replay_additional_args
 
   topic_config_file="$(resolve_camera_topic_config_file)"
   snapshot_path="${map_dir}/vslam_reference_snapshot.json"
   cuvslam_map_dir="${map_dir}/cuvslam_map"
+  replay_additional_args="$ROSBAG_PLAY_ADDITIONAL_ARGS"
+  if [[ " $replay_additional_args " != *" --start-paused "* ]]; then
+    replay_additional_args="--start-paused $replay_additional_args"
+  fi
 
   [[ -d "${map_dir}/cuvgl_map" ]] || die "cuVGL map was not found: ${map_dir}/cuvgl_map"
+
+  offline_stop_launch() {
+    local stop_signal="${1:-INT}"
+    local stop_status=0
+    if [[ -n "$offline_launch_pid" ]]; then
+      if kill -0 "$offline_launch_pid" 2>/dev/null; then
+        kill -s "$stop_signal" "$offline_launch_pid" 2>/dev/null || true
+      fi
+      if wait "$offline_launch_pid" 2>/dev/null; then
+        stop_status=0
+      else
+        stop_status=$?
+      fi
+    fi
+    offline_launch_pid=""
+    return "$stop_status"
+  }
+  trap 'offline_stop_launch TERM || true' RETURN
 
   ros2 launch "$JETPILOT_LAUNCH_PACKAGE" bringup.launch.py \
     use_sim_time:=true \
     enable_rosbag_replay:=true \
-    rosbag_start_delay_s:="$ROSBAG_START_DELAY_S" \
-    replay_additional_args:="$ROSBAG_PLAY_ADDITIONAL_ARGS" \
+    replay_additional_args:="$replay_additional_args" \
+    rosbag_start_delay_s:=0.0 \
+    rosbag_shutdown_on_exit:=false \
     enable_operation:=false \
     enable_control:=false \
     enable_vehicle:=false \
+    publish_vehicle_description:=false \
+    enable_sensor_kit:=false \
     enable_localization:=true \
     vslam_enable_slam:=true \
     vslam_enable_visualization:=true \
     vslam_save_map_folder_path:="$cuvslam_map_dir" \
-    enable_vgl:=true \
+    enable_vgl:=false \
     vgl_topic_config_file:="$topic_config_file" \
     vgl_model_dir:="$OUTPUT_MODEL_DIR" \
-    enable_rviz:="$ENABLE_OFFLINE_RVIZ" \
+    enable_rviz:=false \
     enable_tool:=true \
     enable_bag_manager:=false \
     enable_joy:=false \
@@ -585,7 +618,58 @@ run_offline_eval() {
     vslam_snapshot_landmarks_topic:="$VSLAM_LANDMARKS_TOPIC" \
     vslam_snapshot_write_interval_s:="$VSLAM_SNAPSHOT_WRITE_INTERVAL_S" \
     rosbag:="$bag_dir" \
-    map_dir:="$map_dir"
+    map_dir:="$map_dir" &
+  offline_launch_pid=$!
+
+  for offline_attempt in $(seq 1 180); do
+    if ! kill -0 "$offline_launch_pid" 2>/dev/null; then
+      offline_stop_launch TERM || true
+      die "offline eval launch exited before replay became ready"
+    fi
+    offline_nodes="$(ros2 node list 2>/dev/null || true)"
+    offline_resume_type="$(ros2 service type /rosbag2_player/resume 2>/dev/null || true)"
+    if [[ "$offline_nodes" == *visual_slam_node* ]] \
+      && [[ "$offline_nodes" == *vslam_reference_snapshot_recorder* ]] \
+      && [[ "$offline_resume_type" == *rosbag2_interfaces/srv/Resume* ]]; then
+      offline_ready=1
+      break
+    fi
+    sleep 1
+  done
+
+  if [[ "$offline_ready" != "1" ]]; then
+    offline_stop_launch TERM || true
+    die "offline eval readiness timed out after 180 seconds"
+  fi
+
+  echo "[stage] offline eval graph ready; starting paused rosbag replay"
+  sleep 5
+  ros2 service call /rosbag2_player/resume rosbag2_interfaces/srv/Resume '{}'
+
+  while kill -0 "$offline_launch_pid" 2>/dev/null; do
+    offline_resume_type="$(ros2 service type /rosbag2_player/resume 2>/dev/null || true)"
+    if [[ "$offline_resume_type" != *rosbag2_interfaces/srv/Resume* ]]; then
+      offline_player_missing=$((offline_player_missing + 1))
+    else
+      offline_player_missing=0
+    fi
+    if (( offline_player_missing >= 5 )); then
+      break
+    fi
+    sleep 1
+  done
+
+  echo "[stage] rosbag replay finished; draining offline eval output"
+  sleep 5
+  if offline_stop_launch INT; then
+    offline_launch_status=0
+  else
+    offline_launch_status=$?
+  fi
+  if (( offline_launch_status != 0 && offline_launch_status != 130 )); then
+    die "offline eval launch exited with status $offline_launch_status"
+  fi
+  trap - RETURN
 
   [[ -f "$snapshot_path" ]] || die "VSLAM snapshot was not created: $snapshot_path"
   [[ -d "$cuvslam_map_dir" ]] || die "cuVSLAM map was not created: $cuvslam_map_dir"
