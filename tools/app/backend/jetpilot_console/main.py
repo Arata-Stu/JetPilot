@@ -24,11 +24,26 @@ from .config import ConsoleConfig
 from .indexes import scan_maps, scan_rosbags
 from .map_detail import build_map_detail, resolve_allowed_path, save_hd_map, save_section_gates
 from .map_pipeline import (
+    DEFAULT_RACELINE_SAFETY_MARGIN_M,
+    DEFAULT_RACELINE_VEHICLE_WIDTH_M,
     build_vgl_vslam_script,
+    default_topic_config,
     generate_preview_script,
     generate_raceline_script,
+    localization_config_dir,
     prepare_hd_raster_script,
     scan_camera_topic_configs,
+)
+from .security import (
+    RequestRejected,
+    decode_json_object,
+    is_loopback_bind,
+    resolve_under_root,
+    save_joy_profile_files,
+    validate_remote_absolute_path,
+    validate_request_host,
+    validate_ssh_target,
+    validate_json_request_headers,
 )
 from .tasks import TaskManager
 
@@ -39,6 +54,7 @@ JS_EVENT_INIT = 0x80
 JSIOCGAXES = 0x80016A11
 JSIOCGBUTTONS = 0x80016A12
 JSIOCGNAME = lambda length: 0x80006A13 + (length << 16)
+_MAP_BUILD_TOKEN = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$")
 
 
 def local_ip_candidates() -> list[str]:
@@ -140,9 +156,17 @@ def read_js_device_snapshot(path_text: str = "/dev/input/js0", duration_s: float
 
 
 class ConsoleState:
-    def __init__(self, config: ConsoleConfig):
+    def __init__(
+        self,
+        config: ConsoleConfig,
+        *,
+        joy_only: bool = False,
+        loopback_only: bool = True,
+    ):
         self.config = config
-        self.tasks = TaskManager(config.state_dir, config.repo_root)
+        self.joy_only = joy_only
+        self.loopback_only = loopback_only
+        self.tasks = None if joy_only else TaskManager(config.state_dir, config.repo_root)
 
 
 class ConsoleHTTPServer(ThreadingHTTPServer):
@@ -160,12 +184,26 @@ class Handler(BaseHTTPRequestHandler):
         print(f"[{self.log_date_time_string()}] {format % args}")
 
     def do_GET(self) -> None:
+        if not self._request_host_allowed():
+            return
         parsed = urlparse(self.path)
         path = parsed.path
         query = parse_qs(parsed.query)
 
         if path == "/api/health":
-            self._json({"ok": True})
+            self._json({"ok": True, "mode": "joy-only" if self.server.state.joy_only else "console"})
+            return
+        if path == "/api/joy/js0":
+            device_path = query.get("path", ["/dev/input/js0"])[0] or "/dev/input/js0"
+            self._json(read_js_device_snapshot(device_path))
+            return
+        if path in {"/joy-profile-editor", "/joy-profile-editor.html"} or (
+            self.server.state.joy_only and path == "/"
+        ):
+            self._joy_profile_editor()
+            return
+        if self.server.state.joy_only:
+            self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
             return
         if path == "/api/config":
             self._json(self.server.state.config.as_json())
@@ -173,15 +211,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/network/local-ips":
             self._json({"ips": local_ip_candidates()})
             return
-        if path == "/api/joy/js0":
-            device_path = query.get("path", ["/dev/input/js0"])[0] or "/dev/input/js0"
-            self._json(read_js_device_snapshot(device_path))
-            return
-        if path in {"/joy-profile-editor", "/joy-profile-editor.html"}:
-            self._joy_profile_editor()
-            return
         if path == "/api/tasks":
-            self._json({"tasks": self.server.state.tasks.list_tasks()})
+            self._json({"tasks": self.server.state.tasks.list_tasks()})  # type: ignore[union-attr]
             return
         if path.startswith("/api/tasks/"):
             parts = path.strip("/").split("/")
@@ -213,18 +244,45 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/map-builder/camera-topic-configs":
             self._json({"configs": scan_camera_topic_configs(self.server.state.config)})
             return
-        if path == "/api/jetson/inspect":
-            self._json(self._inspect_jetson(query))
+        if path.startswith("/api/"):
+            self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
             return
-
         self._static(path)
 
     def do_POST(self) -> None:
+        if not self._request_host_allowed():
+            return
         parsed = urlparse(self.path)
         path = parsed.path
-        body = self._read_json()
+        try:
+            body = self._read_json()
+        except RequestRejected as exc:
+            self._json({"error": exc.message}, HTTPStatus(exc.status))
+            return
+
+        if path == "/api/joy-profile/save":
+            self._save_joy_profile_files(body)
+            return
+
+        if self.server.state.joy_only:
+            self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
+            return
 
         if path == "/api/tasks/run":
+            if (
+                not self.server.state.config.enable_custom_commands
+                or not self.server.state.loopback_only
+            ):
+                self._json(
+                    {
+                        "error": (
+                            "custom command execution is disabled; set "
+                            "JETPILOT_CONSOLE_ENABLE_CUSTOM_COMMANDS=true only in a trusted local environment"
+                        )
+                    },
+                    HTTPStatus.FORBIDDEN,
+                )
+                return
             command = body.get("command", "")
             if isinstance(command, str):
                 command_list = ["bash", "-lc", command]
@@ -248,15 +306,14 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"ok": ok}, HTTPStatus.OK if ok else HTTPStatus.NOT_FOUND)
             return
 
-        if path == "/api/joy-profile/save":
-            self._save_joy_profile_files(body)
-            return
-
         if path == "/api/transfers/jetson-to-local":
             self._start_transfer(body, direction="jetson-to-local")
             return
         if path == "/api/transfers/local-to-jetson":
             self._start_transfer(body, direction="local-to-jetson")
+            return
+        if path == "/api/jetson/inspect":
+            self._json(self._inspect_jetson(body))
             return
         if path == "/api/maps/build-vgl-vslam":
             self._start_map_build(body)
@@ -280,15 +337,28 @@ class Handler(BaseHTTPRequestHandler):
         self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
 
     def _read_json(self) -> dict[str, Any]:
-        length = int(self.headers.get("Content-Length", "0") or 0)
-        if length <= 0:
-            return {}
+        length = validate_json_request_headers(
+            content_type=self.headers.get("Content-Type"),
+            content_length=self.headers.get("Content-Length"),
+            transfer_encoding=self.headers.get("Transfer-Encoding"),
+            host=self.headers.get("Host"),
+            origin=self.headers.get("Origin"),
+        )
         data = self.rfile.read(length)
+        if len(data) != length:
+            raise RequestRejected(400, "request body ended before Content-Length bytes were received")
+        return decode_json_object(data)
+
+    def _request_host_allowed(self) -> bool:
         try:
-            value = json.loads(data.decode("utf-8"))
-            return value if isinstance(value, dict) else {}
-        except json.JSONDecodeError:
-            return {}
+            validate_request_host(
+                self.headers.get("Host"),
+                loopback_only=self.server.state.loopback_only,
+            )
+            return True
+        except RequestRejected as exc:
+            self._json({"error": exc.message}, HTTPStatus(exc.status))
+            return False
 
     def _json(self, data: dict[str, Any], status: HTTPStatus = HTTPStatus.OK) -> None:
         payload = json.dumps(data, ensure_ascii=True).encode("utf-8")
@@ -297,6 +367,13 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
         self.wfile.write(payload)
+
+    def end_headers(self) -> None:
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "SAMEORIGIN")
+        self.send_header("Content-Security-Policy", "frame-ancestors 'self'")
+        self.send_header("Referrer-Policy", "no-referrer")
+        super().end_headers()
 
     def _text(self, text: str, status: HTTPStatus = HTTPStatus.OK) -> None:
         payload = text.encode("utf-8", errors="replace")
@@ -310,13 +387,22 @@ class Handler(BaseHTTPRequestHandler):
         config = self.server.state.config
         if path == "/":
             path = "/index.html"
-        relative = Path(unquote(path.lstrip("/")))
-        if ".." in relative.parts:
+        decoded = unquote(path)
+        relative = Path(decoded[1:] if decoded.startswith("/") else decoded)
+        if "\0" in decoded or relative.is_absolute() or ".." in relative.parts:
             self._json({"error": "invalid path"}, HTTPStatus.BAD_REQUEST)
             return
-        file_path = config.frontend_root / relative
+        try:
+            file_path = resolve_under_root(relative, config.frontend_root, label="static path")
+        except ValueError:
+            self._json({"error": "invalid path"}, HTTPStatus.BAD_REQUEST)
+            return
         if not file_path.exists() or not file_path.is_file():
-            file_path = config.frontend_root / "index.html"
+            try:
+                file_path = resolve_under_root("index.html", config.frontend_root, label="static path")
+            except ValueError:
+                self._json({"error": "static file unavailable"}, HTTPStatus.NOT_FOUND)
+                return
         try:
             payload = file_path.read_bytes()
         except OSError:
@@ -389,22 +475,12 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
     def _save_joy_profile_files(self, body: dict[str, Any]) -> None:
-        files = body.get("files")
-        if not isinstance(files, dict):
-            self._json({"error": "files must be an object"}, HTTPStatus.BAD_REQUEST)
-            return
         output_root = self.server.state.config.ros2_ws / "joy_profiles"
-        saved = []
-        for name, content in files.items():
-            if not isinstance(name, str) or not isinstance(content, str):
-                self._json({"error": "file names and contents must be strings"}, HTTPStatus.BAD_REQUEST)
-                return
-            path = Path(name).expanduser()
-            if not path.is_absolute():
-                path = output_root / path
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(content, encoding="utf-8")
-            saved.append(str(path))
+        try:
+            saved = save_joy_profile_files(output_root, body.get("files"))
+        except (OSError, ValueError) as exc:
+            self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            return
         self._json({"ok": True, "saved": saved})
 
     def _joy_profile_editor(self) -> None:
@@ -473,16 +549,21 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             raise SystemExit
 
-    def _inspect_jetson(self, query: dict[str, list[str]]) -> dict[str, Any]:
+    def _inspect_jetson(self, body: dict[str, Any]) -> dict[str, Any]:
         config = self.server.state.config
-        host = query.get("host", [config.jetson_ips[0] if config.jetson_ips else ""])[0]
-        user = query.get("user", [config.jetson_user])[0]
-        map_root = query.get("map_root", [config.jetson_map_root])[0]
-        record_root = query.get("record_root", [config.jetson_record_root])[0]
+        host = str(body.get("host") or (config.jetson_ips[0] if config.jetson_ips else ""))
+        user = str(body.get("user") or config.jetson_user)
+        map_root = str(body.get("map_root") or config.jetson_map_root)
+        record_root = str(body.get("record_root") or config.jetson_record_root)
         if not host:
             return {"ok": False, "error": "host is required"}
 
-        remote = f"{user}@{host}"
+        try:
+            remote = validate_ssh_target(user, host)
+            map_root = validate_remote_absolute_path(map_root, label="remote map root")
+            record_root = validate_remote_absolute_path(record_root, label="remote rosbag root")
+        except ValueError as exc:
+            return {"ok": False, "host": host, "user": user, "error": str(exc)}
         script = f"""
 set -e
 echo "[host]"
@@ -547,7 +628,11 @@ find {shlex.quote(record_root)} -name metadata.yaml -printf '%TY-%Tm-%Td %TH:%TM
         if not host:
             self._json({"error": "host is required"}, HTTPStatus.BAD_REQUEST)
             return
-        remote = f"{user}@{host}"
+        try:
+            remote = validate_ssh_target(user, host)
+        except ValueError as exc:
+            self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            return
 
         if direction == "jetson-to-local":
             remote_path = str(body.get("remote_path") or "")
@@ -555,9 +640,25 @@ find {shlex.quote(record_root)} -name metadata.yaml -printf '%TY-%Tm-%Td %TH:%TM
             if not remote_path:
                 self._json({"error": "remote_path is required"}, HTTPStatus.BAD_REQUEST)
                 return
+            try:
+                remote_path = validate_remote_absolute_path(
+                    remote_path,
+                    label="remote rosbag source",
+                )
+                local_path = str(
+                    resolve_under_root(
+                        local_path,
+                        config.record_root,
+                        label="local rosbag destination",
+                        require_directory=True,
+                    )
+                )
+            except ValueError as exc:
+                self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                return
             script = (
                 f"set -euo pipefail\nmkdir -p {shlex.quote(local_path)}\n"
-                f"rsync -avhP {shlex.quote(remote + ':' + remote_path)} "
+                f"rsync -avhP --protect-args {shlex.quote(remote + ':' + remote_path)} "
                 f"{shlex.quote(local_path.rstrip('/') + '/')}\n"
             )
             title = "Transfer Jetson to notebook"
@@ -567,10 +668,27 @@ find {shlex.quote(record_root)} -name metadata.yaml -printf '%TY-%Tm-%Td %TH:%TM
             if not local_path:
                 self._json({"error": "local_path is required"}, HTTPStatus.BAD_REQUEST)
                 return
+            try:
+                remote_path = validate_remote_absolute_path(
+                    remote_path,
+                    label="remote map destination",
+                )
+                local_path = str(
+                    resolve_under_root(
+                        local_path,
+                        config.map_root,
+                        label="local map source",
+                        require_exists=True,
+                        require_directory=True,
+                    )
+                )
+            except ValueError as exc:
+                self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                return
             script = (
                 f"set -euo pipefail\nssh {shlex.quote(remote)} "
                 f"{shlex.quote('mkdir -p ' + shlex.quote(remote_path))}\n"
-                f"rsync -avhP {shlex.quote(local_path.rstrip('/') + '/')} "
+                f"rsync -avhP --protect-args {shlex.quote(local_path.rstrip('/') + '/')} "
                 f"{shlex.quote(remote + ':' + remote_path.rstrip('/') + '/')}\n"
             )
             title = "Transfer notebook to Jetson"
@@ -590,17 +708,63 @@ find {shlex.quote(record_root)} -name metadata.yaml -printf '%TY-%Tm-%Td %TH:%TM
         if not rosbag or not map_dir:
             self._json({"error": "rosbag and map_dir are required"}, HTTPStatus.BAD_REQUEST)
             return
+        try:
+            steps = str(body.get("steps") or "edex compute_poses cuvgl").split()
+            if not steps or len(steps) > 16 or any(
+                not _MAP_BUILD_TOKEN.fullmatch(step) for step in steps
+            ):
+                raise ValueError("mapping steps contain unsupported values")
+            fs_model_res = str(body.get("fs_model_res") or "low_res").strip()
+            if not _MAP_BUILD_TOKEN.fullmatch(fs_model_res):
+                raise ValueError("fs_model_res contains unsupported characters")
+
+            rosbag = str(
+                resolve_under_root(
+                    rosbag,
+                    config.record_root,
+                    label="rosbag",
+                    require_exists=True,
+                    require_directory=True,
+                )
+            )
+            map_dir = str(
+                resolve_under_root(
+                    map_dir,
+                    config.map_root,
+                    label="map output directory",
+                    require_directory=True,
+                )
+            )
+            topic_config = resolve_under_root(
+                str(body.get("topic_config") or default_topic_config(config)),
+                localization_config_dir(config),
+                label="camera topic config",
+                require_exists=True,
+            )
+            if not topic_config.is_file():
+                raise ValueError("camera topic config must be a file")
+            model_root = config.ros2_ws / "isaac_ros_assets" / "models"
+            output_model_dir = resolve_under_root(
+                str(
+                    body.get("output_model_dir")
+                    or model_root / "visual_global_localization"
+                ),
+                model_root,
+                label="VGL model directory",
+                require_exists=True,
+                require_directory=True,
+            )
+        except ValueError as exc:
+            self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            return
         script = build_vgl_vslam_script(
             config=config,
             rosbag=rosbag,
             map_dir=map_dir,
-            topic_config=str(body.get("topic_config") or "") or None,
-            steps=str(body.get("steps") or "edex compute_poses cuvgl"),
-            fs_model_res=str(body.get("fs_model_res") or "low_res"),
-            output_model_dir=str(
-                body.get("output_model_dir")
-                or config.ros2_ws / "isaac_ros_assets/models/visual_global_localization"
-            ),
+            topic_config=str(topic_config),
+            steps=" ".join(steps),
+            fs_model_res=fs_model_res,
+            output_model_dir=str(output_model_dir),
             enable_rviz=bool(body.get("enable_rviz", False)),
         )
         task = self.server.state.tasks.start(
@@ -617,11 +781,45 @@ find {shlex.quote(record_root)} -name metadata.yaml -printf '%TY-%Tm-%Td %TH:%TM
         if not map_dir:
             self._json({"error": "map_dir is required"}, HTTPStatus.BAD_REQUEST)
             return
+        try:
+            map_dir = str(
+                resolve_under_root(
+                    map_dir,
+                    config.map_root,
+                    label="map directory",
+                    require_exists=True,
+                    require_directory=True,
+                )
+            )
+        except ValueError as exc:
+            self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            return
         if stage == "prepare-hd-raster":
             script = prepare_hd_raster_script(config, map_dir)
             title = "Prepare HD map raster"
         elif stage == "generate-raceline":
-            script = generate_raceline_script(config, map_dir)
+            vehicle_width_m = body.get(
+                "vehicle_width_m",
+                DEFAULT_RACELINE_VEHICLE_WIDTH_M,
+            )
+            safety_margin_m = body.get(
+                "safety_margin_m",
+                DEFAULT_RACELINE_SAFETY_MARGIN_M,
+            )
+            if vehicle_width_m is None:
+                vehicle_width_m = DEFAULT_RACELINE_VEHICLE_WIDTH_M
+            if safety_margin_m is None:
+                safety_margin_m = DEFAULT_RACELINE_SAFETY_MARGIN_M
+            try:
+                script = generate_raceline_script(
+                    config,
+                    map_dir,
+                    vehicle_width_m=vehicle_width_m,
+                    safety_margin_m=safety_margin_m,
+                )
+            except (TypeError, ValueError) as exc:
+                self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                return
             title = "Generate raceline"
         elif stage == "generate-preview":
             script = generate_preview_script(config, map_dir)
@@ -642,14 +840,46 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run the local JetPilot Console.")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument(
+        "--allow-remote",
+        action="store_true",
+        help="allow a non-loopback bind (the Console has no user authentication)",
+    )
+    parser.add_argument(
+        "--joy-only",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
     args = parser.parse_args()
 
+    if not is_loopback_bind(args.host) and not args.allow_remote:
+        parser.error(
+            "non-loopback --host requires --allow-remote; use 127.0.0.1 with Docker host networking"
+        )
+
     config = ConsoleConfig.from_env()
+    if (
+        config.enable_custom_commands
+        and not is_loopback_bind(args.host)
+        and not args.joy_only
+    ):
+        parser.error(
+            "custom command execution cannot be combined with a non-loopback bind"
+        )
     config.state_dir.mkdir(parents=True, exist_ok=True)
-    state = ConsoleState(config)
+    state = ConsoleState(
+        config,
+        joy_only=args.joy_only,
+        loopback_only=is_loopback_bind(args.host),
+    )
     server = ConsoleHTTPServer((args.host, args.port), Handler, state)
-    print(f"JetPilot Console: http://{args.host}:{args.port}")
-    print(f"State directory : {config.state_dir}")
+    if args.joy_only:
+        print(f"Joy Profile Editor: http://{args.host}:{args.port}/joy-profile-editor")
+    else:
+        print(f"JetPilot Console: http://{args.host}:{args.port}")
+        print(f"State directory : {config.state_dir}")
+    if args.allow_remote and not is_loopback_bind(args.host):
+        print("WARNING: remote access is enabled and this server has no user authentication")
     server.serve_forever()
     return 0
 

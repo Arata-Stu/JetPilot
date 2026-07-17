@@ -1,10 +1,143 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+import re
 
 import isaac_ros_launch_utils as lu
 import isaac_ros_launch_utils.all_types as lut
+from launch.actions import OpaqueFunction
 from launch.conditions import IfCondition
+from launch.substitutions import LaunchConfiguration
+
+
+_TRUE_VALUES = {'1', 'true', 'yes', 'on'}
+_ABSOLUTE_TOPIC_PATTERN = re.compile(
+    r'^/[A-Za-z_][A-Za-z0-9_]*(?:/[A-Za-z_][A-Za-z0-9_]*)*$')
+_REPLAY_ISOLATED_TOPICS = (
+    '/joy',
+    '/rc/channels',
+    '/teleop/control_cmd',
+    '/propo/control_cmd',
+    '/auto/control_cmd',
+    '/vehicle/control_cmd',
+    '/control_cmd',
+    '/ackermann_cmd',
+    '/operation_mode/request',
+    '/operation_mode/state',
+    '/bag/request',
+    '/bag/status',
+    '/commands/motor/duty_cycle',
+    '/commands/motor/current',
+    '/commands/motor/speed',
+    '/commands/motor/brake',
+    '/commands/motor/position',
+    '/commands/servo/position',
+    '/steer_offset_inc',
+    '/steer_offset_dec',
+    '/speed_offset_inc',
+    '/speed_offset_dec',
+)
+
+
+def _as_bool(value) -> bool:
+    return str(value).strip().lower() in _TRUE_VALUES
+
+
+def _normalized_isolated_topics(extra_topics=()) -> tuple[str, ...]:
+    topics = []
+    for value in (*_REPLAY_ISOLATED_TOPICS, *extra_topics):
+        topic = str(value or '').strip()
+        if not _ABSOLUTE_TOPIC_PATTERN.fullmatch(topic):
+            raise RuntimeError(
+                f'Cannot safely isolate invalid or relative replay topic: {topic!r}')
+        if topic not in topics:
+            topics.append(topic)
+    return tuple(topics)
+
+
+def _compose_replay_arguments(
+        additional_args, allow_unsafe_control_topics: bool, extra_topics=()) -> str:
+    additional = str(additional_args or '').strip()
+    if allow_unsafe_control_topics:
+        return additional
+
+    tokens = additional.split()
+    if any(
+            token == '-m' or token.startswith('-m=') or token.startswith('-m/')
+            or token.startswith('--remap')
+            for token in tokens):
+        raise RuntimeError(
+            'replay_additional_args cannot contain --remap/-m during safe replay. '
+            'JetPilot reserves remapping to isolate recorded control topics. Set '
+            'allow_unsafe_replay_control_topics:=true only in an isolated test domain.'
+        )
+
+    remap_arguments = '--remap ' + ' '.join(
+        f'{topic}:=/replay{topic}'
+        for topic in _normalized_isolated_topics(extra_topics)
+    )
+    return ' '.join(part for part in (additional, remap_arguments) if part)
+
+
+class _LaunchBoolean(lut.Substitution):
+    """Use one boolean vocabulary in guards, node conditions, and replay args."""
+
+    def __init__(self, value):
+        super().__init__()
+        self._value = value
+
+    def perform(self, context) -> str:
+        value = lu.perform_context(context, self._value)
+        return 'true' if _as_bool(value) else 'false'
+
+    def describe(self) -> str:
+        return 'normalized JetPilot launch boolean'
+
+
+class _ReplayArguments(lut.Substitution):
+    def __init__(self, additional_args, allow_unsafe_control_topics, extra_topics=()):
+        super().__init__()
+        self._additional_args = additional_args
+        self._allow_unsafe_control_topics = allow_unsafe_control_topics
+        self._extra_topics = tuple(extra_topics)
+
+    def perform(self, context) -> str:
+        additional = lu.perform_context(context, self._additional_args)
+        unsafe = _as_bool(lu.perform_context(context, self._allow_unsafe_control_topics))
+        extra_topics = tuple(
+            lu.perform_context(context, topic) for topic in self._extra_topics)
+        return _compose_replay_arguments(additional, unsafe, extra_topics)
+
+    def describe(self) -> str:
+        return 'JetPilot safe rosbag replay arguments'
+
+
+def _launch_bool(context, name: str) -> bool:
+    value = LaunchConfiguration(name).perform(context)
+    return _as_bool(value)
+
+
+def _validate_replay_vehicle_safety(context):
+    replay_enabled = _launch_bool(context, 'enable_rosbag_replay')
+    rosbag = LaunchConfiguration('rosbag').perform(context).strip()
+    vehicle_enabled = _launch_bool(context, 'enable_vehicle')
+    override_enabled = _launch_bool(context, 'allow_unsafe_replay_with_vehicle')
+    unsafe_controls = _launch_bool(context, 'allow_unsafe_replay_control_topics')
+
+    if replay_enabled and rosbag:
+        additional_args = LaunchConfiguration('replay_additional_args').perform(context)
+        _compose_replay_arguments(additional_args, unsafe_controls)
+
+    if replay_enabled and rosbag and vehicle_enabled and not override_enabled:
+        raise RuntimeError(
+            'Unsafe launch configuration rejected: rosbag replay and the vehicle '
+            'interface cannot be enabled together. Set enable_vehicle:=false for '
+            'offline replay. For an intentional hardware-in-the-loop test, isolate '
+            'the ROS domain and explicitly set '
+            'allow_unsafe_replay_with_vehicle:=true.'
+        )
+
+    return []
 
 
 def workspace_param_path(filename: str, fallback_package: str, fallback_package_path: str) -> str:
@@ -26,6 +159,8 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('replay_additional_args', '', cli=True)
     args.add_arg('rosbag_start_delay_s', '0.0', cli=True)
     args.add_arg('rosbag_shutdown_on_exit', True, cli=True)
+    args.add_arg('allow_unsafe_replay_control_topics', False, cli=True)
+    args.add_arg('allow_unsafe_replay_with_vehicle', False, cli=True)
 
     args.add_arg('enable_tool', True, cli=True)
     args.add_arg('enable_bag_manager', True, cli=True)
@@ -165,25 +300,45 @@ def generate_launch_description() -> lut.LaunchDescription:
         cli=True)
 
     actions = args.get_launch_actions()
+    actions.append(OpaqueFunction(function=_validate_replay_vehicle_safety))
 
     rosbag_replay_enabled = lut.AndSubstitution(
-        lu.is_true(args.enable_rosbag_replay),
+        _LaunchBoolean(args.enable_rosbag_replay),
         lu.is_valid(args.rosbag),
     )
+    safe_replay_enabled = lut.AndSubstitution(
+        rosbag_replay_enabled,
+        lut.NotSubstitution(_LaunchBoolean(args.allow_unsafe_replay_control_topics)),
+    )
+    actuation_nodes_allowed = lut.NotSubstitution(safe_replay_enabled)
     actions.append(
         lu.play_rosbag(
             args.rosbag,
             rate=args.replay_rate,
             delay=args.rosbag_start_delay_s,
-            additional_bag_play_args=args.replay_additional_args,
+            additional_bag_play_args=_ReplayArguments(
+                args.replay_additional_args,
+                args.allow_unsafe_replay_control_topics,
+                (
+                    args.vehicle_control_topic,
+                    args.rc_channels_topic,
+                    args.propo_control_topic,
+                ),
+            ),
             shutdown_on_exit=args.rosbag_shutdown_on_exit,
             condition=IfCondition(rosbag_replay_enabled),
         ))
     actions.append(
         lu.log_info(
+            'Safe replay: recorded control/mode topics are isolated under /replay and '
+            'live joy, teleop, RC, operation, and autonomous control nodes are disabled.',
+            condition=IfCondition(safe_replay_enabled),
+        ))
+    actions.append(
+        lu.log_info(
             'A rosbag path was provided, but enable_rosbag_replay is false; replay is disabled.',
             condition=IfCondition(lut.AndSubstitution(
-                lut.NotSubstitution(lu.is_true(args.enable_rosbag_replay)),
+                lut.NotSubstitution(_LaunchBoolean(args.enable_rosbag_replay)),
                 lu.is_valid(args.rosbag),
             )),
         ))
@@ -198,9 +353,12 @@ def generate_launch_description() -> lut.LaunchDescription:
                 'teleop_button_mapping_param': args.teleop_button_mapping_param,
                 'serial_reader_param': args.serial_reader_param,
                 'enable_bag_manager': args.enable_bag_manager,
-                'enable_joy': args.enable_joy,
-                'enable_teleop': args.enable_teleop,
-                'enable_rc_serial': args.enable_rc_serial,
+                'enable_joy': lut.AndSubstitution(
+                    lu.is_true(args.enable_joy), actuation_nodes_allowed),
+                'enable_teleop': lut.AndSubstitution(
+                    lu.is_true(args.enable_teleop), actuation_nodes_allowed),
+                'enable_rc_serial': lut.AndSubstitution(
+                    lu.is_true(args.enable_rc_serial), actuation_nodes_allowed),
                 'control_authority': args.control_authority,
                 'rc_channels_topic': args.rc_channels_topic,
                 'propo_control_topic': args.propo_control_topic,
@@ -230,7 +388,8 @@ def generate_launch_description() -> lut.LaunchDescription:
                 'control_authority': args.control_authority,
                 'use_sim_time': args.use_sim_time,
             },
-            condition=IfCondition(args.enable_operation),
+            condition=IfCondition(lut.AndSubstitution(
+                lu.is_true(args.enable_operation), actuation_nodes_allowed)),
         ))
 
     actions.append(
@@ -241,7 +400,8 @@ def generate_launch_description() -> lut.LaunchDescription:
                 'control_param': args.control_param,
                 'use_sim_time': args.use_sim_time,
             },
-            condition=IfCondition(args.enable_control),
+            condition=IfCondition(lut.AndSubstitution(
+                lu.is_true(args.enable_control), actuation_nodes_allowed)),
         ))
 
     actions.append(

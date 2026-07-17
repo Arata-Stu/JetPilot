@@ -1,5 +1,5 @@
 <launch>
-  <arg name="param_file" default="$(find-pkg-share hd_map_publisher)/config/hd_map_publisher.param.yaml"/>
+  <arg name="param_file" default="$(find-pkg-share jetpilot_hdmap_publisher)/config/hd_map_publisher.param.yaml"/>
   <arg name="hd_map_yaml_path" default=""/>
   <arg name="use_sim_time" default="false"/>
   <arg name="run_section_localizer" default="false"/>
@@ -10,7 +10,7 @@
   <arg name="current_section_topic" default="/localization/current_section"/>
   <arg name="current_section_marker_topic" default="/localization/current_section_marker"/>
 
-  <node pkg="hd_map_publisher" exec="hd_map_publisher_node.py"
+  <node pkg="jetpilot_hdmap_publisher" exec="hd_map_publisher_node.py"
         name="hd_map_publisher" output="screen">
     <param from="$(var param_file)"/>
     <param name="hd_map_yaml_path" value="$(var hd_map_yaml_path)"/>
@@ -20,7 +20,7 @@
     <remap from="primary_centerline_path" to="$(var primary_centerline_path_topic)"/>
   </node>
 
-  <node pkg="hd_map_publisher" exec="hd_map_section_localizer_node.py"
+  <node pkg="jetpilot_hdmap_publisher" exec="hd_map_section_localizer_node.py"
         name="hd_map_section_localizer" output="screen"
         if="$(var run_section_localizer)">
     <param name="hd_map_yaml_path" value="$(var hd_map_yaml_path)"/>

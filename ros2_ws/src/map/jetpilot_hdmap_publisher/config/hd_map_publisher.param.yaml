@@ -1,3 +1,4 @@
+# Default parameters for jetpilot_hdmap_publisher.
 /**:
   ros__parameters:
     hd_map_yaml_path: ""

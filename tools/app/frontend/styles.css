@@ -311,6 +311,10 @@ textarea {
   white-space: nowrap;
 }
 
+.raceline-envelope-hint {
+  white-space: normal;
+}
+
 .actions {
   display: flex;
   flex-wrap: wrap;

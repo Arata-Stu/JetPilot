@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import argparse
 import inspect
+import json
+import math
 import os
 import sys
 import time
@@ -21,6 +23,81 @@ from scipy import interpolate, spatial
 
 VALID_DIRECTIONS = ("forward", "reverse", "both")
 VALID_PRESETS = ("default", "race-stacks")
+DEFAULT_VEHICLE_WIDTH_M = 0.25
+DEFAULT_SAFETY_MARGIN_M = 0.05
+
+
+def nonnegative_finite_float(value: str) -> float:
+    parsed = float(value)
+    if not math.isfinite(parsed) or parsed < 0.0:
+        raise argparse.ArgumentTypeError("must be a finite value greater than or equal to 0")
+    return parsed
+
+
+def effective_vehicle_envelope_width(vehicle_width: float, safety_margin: float) -> float:
+    """Return the width reserved by the optimizer.
+
+    ``safety_margin`` is the desired boundary clearance on each side of the
+    vehicle, so the optimizer footprint is the physical width plus two margins.
+    The centerline track widths are intentionally left unchanged; the upstream
+    optimizer already applies ``w_veh / 2`` to both track boundaries.
+    """
+
+    values = {
+        "vehicle width": vehicle_width,
+        "safety margin": safety_margin,
+    }
+    for label, value in values.items():
+        if not math.isfinite(value) or value < 0.0:
+            raise RuntimeError(f"{label} must be a finite value greater than or equal to 0 m.")
+
+    return vehicle_width + 2.0 * safety_margin
+
+
+def validate_track_clearance(
+    widths: np.ndarray,
+    vehicle_width: float,
+    safety_margin: float,
+    *,
+    source: str,
+) -> float:
+    """Validate that the centerline widths can contain the requested envelope."""
+
+    if widths.ndim != 2 or widths.shape[1] != 2:
+        raise RuntimeError(f"{source} widths must have right and left columns.")
+    if not np.all(np.isfinite(widths)):
+        index = int(np.argwhere(~np.isfinite(widths))[0][0])
+        raise RuntimeError(f"{source} contains a non-finite track width at point {index}.")
+    if np.any(widths < 0.0):
+        index = int(np.argwhere(widths < 0.0)[0][0])
+        right, left = widths[index]
+        raise RuntimeError(
+            f"{source} contains a negative track width at point {index} "
+            f"(right={right:.4g} m, left={left:.4g} m)."
+        )
+
+    required_width = effective_vehicle_envelope_width(vehicle_width, safety_margin)
+    total_width = widths[:, 0] + widths[:, 1]
+    if np.any(total_width <= 0.0):
+        index = int(np.argwhere(total_width <= 0.0)[0][0])
+        raise RuntimeError(f"{source} has no usable track width at point {index}.")
+
+    # A tiny tolerance avoids rejecting values that only differ after floating
+    # point interpolation. No boundary is moved or inflated automatically.
+    too_narrow = total_width + 1e-9 < required_width
+    if np.any(too_narrow):
+        narrow_indices = np.flatnonzero(too_narrow)
+        index = int(narrow_indices[np.argmin(total_width[narrow_indices])])
+        available = float(total_width[index])
+        raise RuntimeError(
+            f"{source} is too narrow for the requested vehicle envelope at point {index}: "
+            f"available={available:.4g} m, required={required_width:.4g} m "
+            f"(vehicle={vehicle_width:.4g} m + 2 x margin={safety_margin:.4g} m). "
+            "Reduce --vehicle-width-m/--safety-margin-m or correct the HD map bounds; "
+            "track widths are not expanded automatically."
+        )
+
+    return required_width
 
 
 def remove_duplicate_points(points: np.ndarray, *extra_columns: np.ndarray) -> Tuple[np.ndarray, ...]:
@@ -57,6 +134,9 @@ def load_centerline(path: str) -> Tuple[np.ndarray, np.ndarray]:
 
     if len(points) < 8:
         raise RuntimeError("Centerline needs at least 8 points to create a raceline.")
+    if not np.all(np.isfinite(points)):
+        index = int(np.argwhere(~np.isfinite(points))[0][0])
+        raise RuntimeError(f"Centerline contains a non-finite coordinate at point {index}.")
 
     return points, widths
 
@@ -71,6 +151,56 @@ def output_path_for_direction(base_output_path: str, direction: str) -> str:
 
     root, ext = os.path.splitext(base_output_path)
     return f"{root}_{direction}{ext}"
+
+
+def metadata_path_for_output(output_path: str) -> str:
+    root, _ = os.path.splitext(output_path)
+    return f"{root}.meta.json"
+
+
+def write_raceline_metadata(
+    *,
+    output_path: str,
+    centerline_path: str,
+    direction: str,
+    backend: str,
+    preset: str,
+    opt_type: str,
+    vehicle_width: float,
+    safety_margin: float,
+    widths: np.ndarray,
+    point_count: int,
+    track_length: float,
+) -> str:
+    metadata_path = metadata_path_for_output(output_path)
+    metadata = {
+        "format": "jetpilot_raceline_metadata_v1",
+        "raceline_csv": os.path.abspath(output_path),
+        "source_centerline_csv": os.path.abspath(centerline_path),
+        "direction": direction,
+        "backend": backend,
+        "preset": preset,
+        "opt_type": opt_type,
+        "vehicle_clearance": {
+            "vehicle_width_m": float(vehicle_width),
+            "safety_margin_m_per_side": float(safety_margin),
+            "effective_envelope_width_m": float(
+                effective_vehicle_envelope_width(vehicle_width, safety_margin)
+            ),
+            "min_available_track_width_m": float(np.min(np.sum(widths, axis=1))),
+        },
+        "result": {
+            "point_count": int(point_count),
+            "closed_track_length_m": float(track_length),
+        },
+    }
+
+    temporary_path = f"{metadata_path}.tmp"
+    with open(temporary_path, "w", encoding="utf-8") as handle:
+        json.dump(metadata, handle, ensure_ascii=True, indent=2, sort_keys=True)
+        handle.write("\n")
+    os.replace(temporary_path, metadata_path)
+    return metadata_path
 
 
 def default_optimizer_root() -> str:
@@ -333,6 +463,13 @@ def generate_global_opt_raceline(
     if opt_type not in {"shortest_path", "mincurv", "mincurv_iqp"}:
         raise RuntimeError("global-opt backend supports shortest_path, mincurv, and mincurv_iqp.")
 
+    width_opt = validate_track_clearance(
+        widths,
+        vehicle_width,
+        safety_margin,
+        source="Centerline",
+    )
+
     optimizer_root_abs = os.path.abspath(optimizer_root)
 
     if not os.path.isdir(optimizer_root_abs):
@@ -364,15 +501,6 @@ def generate_global_opt_raceline(
     reftrack = np.column_stack([centerline, widths]).astype(np.float64)
     reftrack, = remove_duplicate_points(reftrack)
 
-    min_width = vehicle_width + 2.0 * safety_margin
-    total_width = reftrack[:, 2] + reftrack[:, 3]
-
-    too_narrow = total_width < min_width
-    if np.any(too_narrow):
-        inflate = 0.5 * (min_width - total_width[too_narrow])
-        reftrack[too_narrow, 2] += inflate
-        reftrack[too_narrow, 3] += inflate
-
     if progress is not None:
         progress.step(1, 5, "Smoothing reference track")
 
@@ -385,6 +513,13 @@ def generate_global_opt_raceline(
         debug=debug,
     )
 
+    validate_track_clearance(
+        reftrack_interp[:, 2:4],
+        vehicle_width,
+        safety_margin,
+        source="Interpolated centerline",
+    )
+
     if debug and smoothing_used != spline_smoothing:
         print(
             "Adjusted global-opt spline smoothing from "
@@ -392,8 +527,6 @@ def generate_global_opt_raceline(
             file=sys.stderr,
             flush=True,
         )
-
-    width_opt = vehicle_width + 2.0 * safety_margin
 
     if opt_type == "shortest_path":
         if progress is not None:
@@ -566,6 +699,11 @@ def run(args: argparse.Namespace) -> None:
         )
 
     print(f"Input centerline: {args.centerline}")
+    print(
+        "Vehicle envelope: "
+        f"{effective_vehicle_envelope_width(args.vehicle_width, args.safety_margin):.3f} m "
+        f"(vehicle {args.vehicle_width:.3f} m + {args.safety_margin:.3f} m margin per side)"
+    )
 
     for direction, centerline, widths, direction_out_path in direction_plan:
         raceline, backend_used = generate_with_selected_backend(args, centerline, widths)
@@ -583,8 +721,22 @@ def run(args: argparse.Namespace) -> None:
         print(f"Output points: {len(raceline)}")
 
         closed_length = raceline[-1, 0] + float(np.linalg.norm(raceline[0, 1:3] - raceline[-1, 1:3]))
+        metadata_path = write_raceline_metadata(
+            output_path=direction_out_path,
+            centerline_path=args.centerline,
+            direction=direction,
+            backend=backend_used,
+            preset=args.preset,
+            opt_type=args.opt_type,
+            vehicle_width=args.vehicle_width,
+            safety_margin=args.safety_margin,
+            widths=widths,
+            point_count=len(raceline),
+            track_length=closed_length,
+        )
         print(f"Track length: {closed_length:.3f} m")
         print(f"Wrote raceline CSV: {direction_out_path}")
+        print(f"Wrote raceline metadata: {metadata_path}")
 
 
 def build_arg_parser(preset: str = "race-stacks") -> argparse.ArgumentParser:
@@ -622,8 +774,29 @@ def build_arg_parser(preset: str = "race-stacks") -> argparse.ArgumentParser:
         default=defaults["opt_type"],
     )
 
-    p.add_argument("--vehicle-width", type=float, default=0.25)
-    p.add_argument("--safety-margin", type=float, default=0.05)
+    p.add_argument(
+        "--vehicle-width-m",
+        "--vehicle-width",
+        dest="vehicle_width",
+        type=nonnegative_finite_float,
+        default=DEFAULT_VEHICLE_WIDTH_M,
+        help=(
+            "Physical vehicle width in metres. The legacy --vehicle-width name remains supported "
+            f"(default: {DEFAULT_VEHICLE_WIDTH_M:g})."
+        ),
+    )
+    p.add_argument(
+        "--safety-margin-m",
+        "--safety-margin",
+        dest="safety_margin",
+        type=nonnegative_finite_float,
+        default=DEFAULT_SAFETY_MARGIN_M,
+        help=(
+            "Extra clearance in metres between the vehicle body and each track boundary. "
+            "The optimizer reserves vehicle_width + 2 * safety_margin; the legacy "
+            f"--safety-margin name remains supported (default: {DEFAULT_SAFETY_MARGIN_M:g})."
+        ),
+    )
     p.add_argument("--curvature-limit", type=float, default=defaults["curvature_limit"])
 
     p.add_argument("--global-opt-stepsize-prep", type=float, default=defaults["global_opt_stepsize_prep"])

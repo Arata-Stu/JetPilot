@@ -17,7 +17,7 @@ from rclpy.time import Time
 from std_msgs.msg import String
 from visualization_msgs.msg import Marker
 
-from hd_map_publisher.hd_map_publisher_node import (
+from jetpilot_hdmap_publisher.hd_map_publisher_node import (
     HdMap,
     Lane,
     Section,

@@ -77,6 +77,38 @@ After raceline generation, `scripts/create_map.sh` runs
 `visualize_race_lines.py` and writes `<map_name>_line_preview.png` with the HD
 lane bounds, centerline, and raceline overlaid on the landmark raster.
 
+## Raceline vehicle clearance
+
+`generate_raceline.py` reserves the physical vehicle width plus an additional
+safety margin on each side. For example, a `0.25 m` vehicle with a `0.05 m`
+margin uses a `0.35 m` optimizer envelope:
+
+```bash
+python3 python_ws/map_tools/generate_raceline.py \
+  --centerline /path/to/course_hd_map_centerline.csv \
+  --output /path/to/course_raceline.csv \
+  --vehicle-width-m 0.25 \
+  --safety-margin-m 0.05
+```
+
+The defaults remain `0.25 m` and `0.05 m` for compatibility. The older
+`--vehicle-width` and `--safety-margin` names are still accepted.
+
+The centerline CSV widths already describe the distance from the reference line
+to the right and left boundaries. Those widths are passed to
+`global_racetrajectory_optimization` unchanged; its `w_veh` constraint applies
+half of the effective envelope to each boundary. This avoids subtracting the
+vehicle width twice. If any part of the track is narrower than the requested
+envelope, generation stops with the point index and measured width instead of
+silently expanding the map bounds.
+
+The CSV stays in the existing seven-column format. Generation also writes a
+non-breaking JSON sidecar next to it (for example,
+`course_raceline.meta.json`). The sidecar records the source centerline,
+direction, optimizer mode, physical width, per-side margin, effective envelope,
+minimum available track width, and result size/length. A `both` direction run
+writes separate metadata for the forward and reverse outputs.
+
 ## Section gate editor
 
 After the HD map YAML has a centerline, use `hd_map_section_gate_editor.py` to

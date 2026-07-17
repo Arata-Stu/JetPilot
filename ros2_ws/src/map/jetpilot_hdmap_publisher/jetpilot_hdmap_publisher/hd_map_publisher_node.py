@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Publish lane markers and a primary centerline path from an editable HD map YAML."""
+"""Publish JetPilot lane markers and a primary centerline path from HD map YAML."""
 
 from __future__ import annotations
 

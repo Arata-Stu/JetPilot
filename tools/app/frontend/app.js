@@ -1,3 +1,6 @@
+const DEFAULT_RACELINE_VEHICLE_WIDTH_M = 0.25;
+const DEFAULT_RACELINE_SAFETY_MARGIN_M = 0.05;
+
 const state = {
   tab: "dashboard",
   config: null,
@@ -35,6 +38,10 @@ const state = {
     dirty: false,
     selectedGateId: "",
     gates: [],
+  },
+  racelineGeneration: {
+    vehicleWidthM: DEFAULT_RACELINE_VEHICLE_WIDTH_M,
+    safetyMarginM: DEFAULT_RACELINE_SAFETY_MARGIN_M,
   },
   selectedTaskId: null,
   fpv: {
@@ -283,6 +290,10 @@ function renderJoyProfile() {
 function renderFpv() {
   const running = state.tasks.filter((task) => task.kind === "fpv-viewer" && ["queued", "running", "stopping"].includes(task.status));
   const fpv = state.fpv;
+  const executionDisabled = !state.config?.custom_commands_enabled;
+  const executionDisabledAttrs = executionDisabled
+    ? 'disabled title="Enable trusted local custom commands to start the viewer"'
+    : "";
   return `
     <div class="page fpv-page">
       <section class="panel">
@@ -290,7 +301,7 @@ function renderFpv() {
           <h2>FPV RTP Viewer</h2>
           <span class="spacer"></span>
           <button onclick="copyFpvReceiverCommand()">Copy Command</button>
-          <button class="primary" onclick="startFpvViewer()">Start Viewer</button>
+          <button class="primary" onclick="startFpvViewer()" ${executionDisabledAttrs}>Start Viewer</button>
         </div>
         <div class="panel-body">
           <div class="form-grid">
@@ -346,11 +357,12 @@ function renderFpv() {
               ${state.localIps.map((ip) => `<button class="ghost" onclick="setFpvHost(${js(ip)})">${esc(ip)}</button>`).join("")}
             </div>
             <div class="actions full">
-              <button class="primary" onclick="startFpvViewer()">Start Viewer</button>
+              <button class="primary" onclick="startFpvViewer()" ${executionDisabledAttrs}>Start Viewer</button>
               <button onclick="copyFpvReceiverCommand()">Copy Command</button>
               <button onclick="copyFpvJetsonCommand()">Copy Jetson Command</button>
               ${running.length ? `<button class="danger" onclick="stopTask(${js(running[0].task_id)})">Stop Running Viewer</button>` : ""}
             </div>
+            ${executionDisabled ? `<div class="notice full">Starting an FPV viewer from the browser is disabled by default. Copy the command and run it locally, or explicitly enable trusted local custom commands.</div>` : ""}
           </div>
         </div>
       </section>
@@ -924,6 +936,7 @@ function renderMapWorkspace() {
         </div>
         <aside class="map-side-panel">
           ${renderHdMapEditor(detail)}
+          ${renderRacelineClearance(detail)}
           ${renderSectionGateEditor(detail)}
           ${renderLayerToggles()}
           ${renderMapInspector(detail)}
@@ -931,6 +944,113 @@ function renderMapWorkspace() {
       </div>
     </div>
   `;
+}
+
+function racelineEnvelopeLabel(vehicleWidthM, safetyMarginM) {
+  return `${(vehicleWidthM + 2 * safetyMarginM).toFixed(3)} m total`;
+}
+
+function renderRacelineClearance(detail) {
+  const options = state.racelineGeneration;
+  const centerlineReady = Boolean(detail.map?.artifacts?.centerline_csv?.exists);
+  return `
+    <div class="inspector-block">
+      <div class="inspector-title-row">
+        <h4>Raceline Clearance</h4>
+        <span class="${centerlineReady ? "ok" : "warn"}">${centerlineReady ? "Ready" : "Need centerline"}</span>
+      </div>
+      <div class="form-grid">
+        <div class="field">
+          <label for="raceline-vehicle-width">Vehicle width (m)</label>
+          <input
+            id="raceline-vehicle-width"
+            type="number"
+            min="0"
+            step="0.001"
+            value="${esc(options.vehicleWidthM)}"
+            oninput="updateRacelineGeneration('vehicleWidthM', this)"
+          />
+        </div>
+        <div class="field">
+          <label for="raceline-safety-margin">Boundary margin / side (m)</label>
+          <input
+            id="raceline-safety-margin"
+            type="number"
+            min="0"
+            step="0.001"
+            value="${esc(options.safetyMarginM)}"
+            oninput="updateRacelineGeneration('safetyMarginM', this)"
+          />
+        </div>
+        <div id="raceline-envelope" class="field-hint raceline-envelope-hint full">
+          Effective optimizer envelope: ${esc(racelineEnvelopeLabel(options.vehicleWidthM, options.safetyMarginM))}
+        </div>
+        <div class="actions full">
+          <button
+            class="primary"
+            onclick="runMapStage('generate-raceline', ${js(detail.map.path)})"
+            ${centerlineReady ? "" : "disabled"}
+          >Generate Raceline</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function updateRacelineGeneration(field, input) {
+  if (!["vehicleWidthM", "safetyMarginM"].includes(field)) return;
+  const raw = String(input?.value ?? "").trim();
+  const value = Number(raw);
+  const valid = raw !== "" && Number.isFinite(value) && value >= 0;
+  input?.setCustomValidity(valid ? "" : "Enter a finite value greater than or equal to 0");
+  if (valid) state.racelineGeneration[field] = value;
+
+  const vehicleInput = $("raceline-vehicle-width");
+  const marginInput = $("raceline-safety-margin");
+  const vehicleWidthM = Number(vehicleInput?.value);
+  const safetyMarginM = Number(marginInput?.value);
+  const inputsValid =
+    String(vehicleInput?.value ?? "").trim() !== "" &&
+    String(marginInput?.value ?? "").trim() !== "" &&
+    Number.isFinite(vehicleWidthM) &&
+    Number.isFinite(safetyMarginM) &&
+    vehicleWidthM >= 0 &&
+    safetyMarginM >= 0;
+  const envelope = $("raceline-envelope");
+  if (envelope) {
+    envelope.textContent = inputsValid
+      ? `Effective optimizer envelope: ${racelineEnvelopeLabel(vehicleWidthM, safetyMarginM)}`
+      : "Vehicle width and per-side margin must both be non-negative numbers.";
+  }
+}
+
+function racelineGenerationPayload() {
+  const vehicleInput = $("raceline-vehicle-width");
+  const marginInput = $("raceline-safety-margin");
+  const rawVehicleWidth = vehicleInput
+    ? String(vehicleInput.value).trim()
+    : state.racelineGeneration.vehicleWidthM;
+  const rawSafetyMargin = marginInput
+    ? String(marginInput.value).trim()
+    : state.racelineGeneration.safetyMarginM;
+  const vehicleWidthM = Number(rawVehicleWidth);
+  const safetyMarginM = Number(rawSafetyMargin);
+  if (
+    rawVehicleWidth === "" ||
+    rawSafetyMargin === "" ||
+    !Number.isFinite(vehicleWidthM) ||
+    !Number.isFinite(safetyMarginM) ||
+    vehicleWidthM < 0 ||
+    safetyMarginM < 0
+  ) {
+    throw new Error("Vehicle width and boundary margin must be finite, non-negative numbers.");
+  }
+  state.racelineGeneration.vehicleWidthM = vehicleWidthM;
+  state.racelineGeneration.safetyMarginM = safetyMarginM;
+  return {
+    vehicle_width_m: vehicleWidthM,
+    safety_margin_m: safetyMarginM,
+  };
 }
 
 function renderLayerToggles() {
@@ -1279,8 +1399,8 @@ function renderJetsonTransfers() {
 }
 
 function renderTerminalPage() {
-  return `
-    <div class="page">
+  const commandRunner = state.config?.custom_commands_enabled
+    ? `
       <section class="panel">
         <div class="panel-header"><h2>Run Command</h2></div>
         <div class="panel-body">
@@ -1291,7 +1411,17 @@ function renderTerminalPage() {
             <div class="actions full"><button class="primary" onclick="runCustomCommand()">Run</button><button onclick="copyText($('custom-command').value)">Copy</button></div>
           </div>
         </div>
-      </section>
+      </section>`
+    : `
+      <section class="panel">
+        <div class="panel-header"><h2>Command Execution Disabled</h2></div>
+        <div class="panel-body">
+          <div class="notice">The Console does not accept arbitrary commands by default. Task history and logs remain available below.</div>
+        </div>
+      </section>`;
+  return `
+    <div class="page">
+      ${commandRunner}
       <section class="panel">
         <div class="panel-header"><h2>Task History</h2><span class="spacer"></span><button onclick="refreshAll()">Refresh</button></div>
         <div class="panel-body">${renderTaskTable(state.tasks)}</div>
@@ -1522,6 +1652,10 @@ async function stopTask(taskId) {
 }
 
 async function runCustomCommand() {
+  if (!state.config?.custom_commands_enabled) {
+    toast("Custom command execution is disabled", "error");
+    return;
+  }
   const payload = {
     title: $("custom-title").value,
     kind: "custom",
@@ -1585,6 +1719,10 @@ function buildFpvJetsonCommand(fpv = state.fpv) {
 }
 
 async function startFpvViewer() {
+  if (!state.config?.custom_commands_enabled) {
+    toast("Starting the viewer is disabled; copy and run the command locally", "error");
+    return;
+  }
   const fpv = readFpvForm();
   const command = buildFpvReceiverCommand(fpv);
   const result = await api("/api/tasks/run", {
@@ -2524,9 +2662,22 @@ async function saveHdMapFromEditor() {
 
 async function runMapStage(stage, mapDir) {
   const endpoint = `/api/maps/${stage}`;
-  const result = await api(endpoint, { method: "POST", body: JSON.stringify({ map_dir: mapDir }) });
-  await refreshAll();
-  selectTask(result.task.task_id);
+  const body = { map_dir: mapDir };
+  if (stage === "generate-raceline") {
+    try {
+      Object.assign(body, racelineGenerationPayload());
+    } catch (error) {
+      toast(error.message, "error");
+      return;
+    }
+  }
+  try {
+    const result = await api(endpoint, { method: "POST", body: JSON.stringify(body) });
+    await refreshAll();
+    selectTask(result.task.task_id);
+  } catch (error) {
+    toast(`Map stage failed: ${error.message}`, "error");
+  }
 }
 
 async function openMapWorkspace(path) {
@@ -2537,6 +2688,9 @@ async function openMapWorkspace(path) {
   try {
     const detail = await api(apiPath("/api/maps/detail", { path }));
     state.selectedMapDetail = detail;
+    state.selectedMapPath = detail.map.path;
+    const index = state.maps.findIndex((item) => item.path === path || item.path === detail.map.path);
+    if (index >= 0) state.maps[index] = detail.map;
     render();
   } catch (error) {
     toast(`Map load failed: ${error.message}`, "error");
@@ -2806,9 +2960,11 @@ async function inspectJetson() {
   state.jetsonTarget = target;
   state.jetsonInspectBusy = true;
   render();
-  const params = new URLSearchParams(target);
   try {
-    const result = await api(`/api/jetson/inspect?${params.toString()}`);
+    const result = await api("/api/jetson/inspect", {
+      method: "POST",
+      body: JSON.stringify(target),
+    });
     state.jetsonInspect = { ...result, inspected_at: new Date().toISOString() };
   } catch (error) {
     state.jetsonInspect = {
@@ -2998,6 +3154,7 @@ window.updateMapDirPreview = updateMapDirPreview;
 window.startMapBuild = startMapBuild;
 window.copyMapBuildCommand = copyMapBuildCommand;
 window.runMapStage = runMapStage;
+window.updateRacelineGeneration = updateRacelineGeneration;
 window.openMapWorkspace = openMapWorkspace;
 window.refreshSelectedMap = refreshSelectedMap;
 window.toggleMapLayer = toggleMapLayer;

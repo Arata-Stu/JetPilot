@@ -3,6 +3,14 @@ project(jetpilot_system_launch)
 
 find_package(ament_cmake_auto REQUIRED)
 
+if(BUILD_TESTING)
+  find_package(ament_cmake_pytest REQUIRED)
+  ament_add_pytest_test(
+    test_bringup_replay_safety
+    test/test_bringup_replay_safety.py
+  )
+endif()
+
 ament_auto_package(INSTALL_TO_SHARE
   launch
   config

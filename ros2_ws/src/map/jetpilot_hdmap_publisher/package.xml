@@ -1,8 +1,8 @@
 <?xml version="1.0"?>
 <package format="3">
-  <name>hd_map_publisher</name>
+  <name>jetpilot_hdmap_publisher</name>
   <version>0.1.0</version>
-  <description>Publish local HD map lane markers and primary centerline paths from editable YAML.</description>
+  <description>Publish JetPilot HD map lane markers and primary centerline paths from editable YAML.</description>
 
   <maintainer email="you@example.com">Your Name</maintainer>
   <license>Apache-2.0</license>

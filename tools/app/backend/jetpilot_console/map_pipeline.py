@@ -1,13 +1,27 @@
 from __future__ import annotations
 
+import math
 import shlex
 from pathlib import Path
 
 from .config import ConsoleConfig
 
 
+DEFAULT_RACELINE_VEHICLE_WIDTH_M = 0.25
+DEFAULT_RACELINE_SAFETY_MARGIN_M = 0.05
+
+
 def _q(value: str | Path) -> str:
     return shlex.quote(str(value))
+
+
+def _nonnegative_finite(value: float, label: str) -> float:
+    if isinstance(value, bool):
+        raise ValueError(f"{label} must be a finite value greater than or equal to 0")
+    parsed = float(value)
+    if not math.isfinite(parsed) or parsed < 0.0:
+        raise ValueError(f"{label} must be a finite value greater than or equal to 0")
+    return parsed
 
 
 def _source_ros_setup(config: ConsoleConfig) -> str:
@@ -128,7 +142,6 @@ ros2 launch {_q(config.launch_package)} bringup.launch.py \\
   use_sim_time:=true \\
   enable_rosbag_replay:=true \\
   rosbag_start_delay_s:=5.0 \\
-  replay_additional_args:=--clock \\
   enable_operation:=false \\
   enable_control:=false \\
   enable_vehicle:=false \\
@@ -174,13 +187,23 @@ ros2 run vslam_map_tools export_aligned_landmarks_offline.py \\
 """
 
 
-def generate_raceline_script(config: ConsoleConfig, map_dir: str) -> str:
+def generate_raceline_script(
+    config: ConsoleConfig,
+    map_dir: str,
+    *,
+    vehicle_width_m: float = DEFAULT_RACELINE_VEHICLE_WIDTH_M,
+    safety_margin_m: float = DEFAULT_RACELINE_SAFETY_MARGIN_M,
+) -> str:
     map_path = Path(map_dir)
     name = map_path.name
+    vehicle_width = _nonnegative_finite(vehicle_width_m, "vehicle_width_m")
+    safety_margin = _nonnegative_finite(safety_margin_m, "safety_margin_m")
     return f"""set -euo pipefail
 {_q(config.python_bin)} {_q(config.python_ws / "map_tools" / "generate_raceline.py")} \\
   --centerline {_q(map_path / f"{name}_hd_map_centerline.csv")} \\
   --output {_q(map_path / f"{name}_raceline.csv")} \\
+  --vehicle-width-m {vehicle_width:.9g} \\
+  --safety-margin-m {safety_margin:.9g} \\
   --show-progress
 """
 

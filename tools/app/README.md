@@ -23,17 +23,50 @@ tools/app/scripts/start.sh --host 127.0.0.1 --port 8765
 When running inside the JetPilot Docker environment, use the `tools` mount:
 
 ```bash
-/workspaces/tools/app/scripts/start.sh --host 0.0.0.0 --port 8765
+/workspaces/tools/app/scripts/start.sh --host 127.0.0.1 --port 8765
 ```
 
 The Docker launcher mounts the top-level `tools` directory to
 `/workspaces/tools` alongside `ros2_ws`, `python_ws`, `record`, and `map`.
+The JetPilot container uses host networking, so the loopback bind is reachable
+from the Linux host without exposing the Console to the LAN.
 
 Then open:
 
 ```text
 http://127.0.0.1:8765
 ```
+
+## Local security defaults
+
+The Console is an operator tool and does not provide user authentication. Its
+safe defaults are therefore:
+
+- listen on `127.0.0.1` only;
+- reject cross-origin, non-JSON, and JSON bodies larger than 1 MiB for every
+  POST endpoint;
+- accept only literal loopback IPs or `localhost` in the Host header during
+  loopback operation, preventing DNS-rebinding access;
+- disable the arbitrary command endpoint and its browser form;
+- save only the five generated Joy YAML filenames under
+  `${ROS2_WS}/joy_profiles`, using atomic file replacement and refusing
+  symlink outputs;
+- constrain rosbag/map task paths to `RECORD_ROOT` or `MAP_ROOT` and validate
+  SSH targets before starting transfers.
+
+The normal map and transfer actions remain available. If arbitrary command
+execution is deliberately needed on a trusted local machine, opt in for that
+process only:
+
+```bash
+JETPILOT_CONSOLE_ENABLE_CUSTOM_COMMANDS=true \
+  tools/app/scripts/start.sh --host 127.0.0.1 --port 8765
+```
+
+A non-loopback bind additionally requires `--allow-remote`, and cannot be
+combined with custom command execution. It still exposes an unauthenticated
+operator service and is not recommended; prefer Docker host networking plus
+the loopback address.
 
 Implemented in this MVP:
 
@@ -141,7 +174,8 @@ editor.
 - Select a rosbag, output base directory, and map name. The base directory is
   prefilled from `MAP_ROOT`.
 - Predict the camera topic config from `ros2_ws/src/launch/jetpilot_system_launch/config/localization/`
-  while still allowing a manual override.
+  while still allowing a manual override inside that directory. Model and local
+  input/output paths are likewise restricted to their configured workspace roots.
 - Run VGL/VSLAM map build as a task.
 - Show generated artifacts:
   - `cuvgl_map/`
@@ -176,7 +210,7 @@ editor.
 - Actions:
   - prepare landmark raster
   - edit and save HD map YAML/centerline CSV
-  - generate raceline
+  - generate raceline with adjustable vehicle width and per-side boundary margin
   - generate line preview
   - copy paths and commands
 
@@ -272,6 +306,7 @@ SSE  /api/tasks/{task_id}/stream
 
 GET  /api/rosbags/local
 POST /api/transfers/jetson-to-local
+POST /api/jetson/inspect
 
 GET  /api/maps/local
 GET  /api/maps/detail?path=/workspaces/map/course_a
@@ -283,6 +318,22 @@ POST /api/maps/generate-raceline
 POST /api/maps/generate-preview
 POST /api/transfers/local-to-jetson
 ```
+
+`POST /api/maps/generate-raceline` accepts the following JSON body. Both width
+values are metres and must be finite and non-negative:
+
+```json
+{
+  "map_dir": "/workspaces/map/course_a",
+  "vehicle_width_m": 0.25,
+  "safety_margin_m": 0.05
+}
+```
+
+The effective optimizer envelope is `vehicle_width_m + 2 * safety_margin_m`.
+The API defaults preserve the existing `0.25 m` vehicle and `0.05 m` per-side
+margin behavior. Generation keeps the existing raceline CSV layout and writes
+the selected values to `<map_name>_raceline.meta.json` for reproducibility.
 
 ## Pipeline Stages
 

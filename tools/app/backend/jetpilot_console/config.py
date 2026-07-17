@@ -4,6 +4,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from .security import env_flag
+
 
 def _app_root() -> Path:
     env_root = os.environ.get("JETPILOT_CONSOLE_APP_ROOT")
@@ -53,6 +55,7 @@ class ConsoleConfig:
     jetson_ips: list[str]
     jetson_map_root: str
     jetson_record_root: str
+    enable_custom_commands: bool
 
     @classmethod
     def from_env(cls) -> "ConsoleConfig":
@@ -60,19 +63,19 @@ class ConsoleConfig:
         repo_root = _workspace_root(app_root)
         state_dir = Path(
             os.environ.get("JETPILOT_CONSOLE_STATE_DIR", str(app_root / ".state"))
-        ).expanduser()
+        ).expanduser().resolve(strict=False)
         ros2_ws = Path(
             os.environ.get(
                 "ROS2_WS",
                 str(_default_mount_path(repo_root, "ros2_ws", "/workspaces/ros2_ws")),
             )
-        ).expanduser()
+        ).expanduser().resolve(strict=False)
         python_ws = Path(
             os.environ.get(
                 "PYTHON_WS",
                 str(_default_mount_path(repo_root, "python_ws", str(ros2_ws.parent / "python_ws"))),
             )
-        ).expanduser()
+        ).expanduser().resolve(strict=False)
         jetson_ips = os.environ.get(
             "JETSON_REMOTE_IPS", "10.42.0.1 192.168.55.1 192.168.11.190"
         ).split()
@@ -88,13 +91,13 @@ class ConsoleConfig:
                     "RECORD_ROOT",
                     str(_default_mount_path(repo_root, "record", "/workspaces/record")),
                 )
-            ).expanduser(),
+            ).expanduser().resolve(strict=False),
             map_root=Path(
                 os.environ.get(
                     "MAP_ROOT",
                     str(_default_mount_path(repo_root, "map", "/workspaces/map")),
                 )
-            ).expanduser(),
+            ).expanduser().resolve(strict=False),
             ros2_ws=ros2_ws,
             python_ws=python_ws,
             python_bin=os.environ.get("PYTHON_BIN", "/opt/env/bin/python"),
@@ -106,6 +109,10 @@ class ConsoleConfig:
             ),
             jetson_record_root=os.environ.get(
                 "JETSON_RECORD_ROOT", "/home/tamiya/workspaces/JetPilot/record"
+            ),
+            enable_custom_commands=env_flag(
+                os.environ.get("JETPILOT_CONSOLE_ENABLE_CUSTOM_COMMANDS"),
+                default=False,
             ),
         )
 
@@ -124,4 +131,5 @@ class ConsoleConfig:
             "jetson_ips": self.jetson_ips,
             "jetson_map_root": self.jetson_map_root,
             "jetson_record_root": self.jetson_record_root,
+            "custom_commands_enabled": self.enable_custom_commands,
         }

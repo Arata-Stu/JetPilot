@@ -64,7 +64,7 @@ Inside Docker, do not run `open` or `xdg-open`. To start only the Joy Profile
 Editor, run:
 
 ```bash
-/workspaces/tools/app/scripts/start_joy_profile_editor.sh --host 0.0.0.0 --port 8766
+/workspaces/tools/app/scripts/start_joy_profile_editor.sh --host 127.0.0.1 --port 8766
 ```
 
 Then open this URL on the host:
@@ -77,7 +77,7 @@ If you want the full JetPilot Console as well, start the existing Console
 server instead:
 
 ```bash
-/workspaces/tools/app/scripts/start.sh --host 0.0.0.0 --port 8765
+/workspaces/tools/app/scripts/start.sh --host 127.0.0.1 --port 8765
 ```
 
 Then open this URL on the host:

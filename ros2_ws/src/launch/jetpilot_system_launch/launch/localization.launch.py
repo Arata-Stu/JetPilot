@@ -258,7 +258,7 @@ def add_nodes(args: lu.ArgumentContainer):
             hd_map_parameters.insert(0, args.hd_map_publisher_param)
 
         actions.append(lu.Node(
-            package='hd_map_publisher',
+            package='jetpilot_hdmap_publisher',
             executable='hd_map_publisher_node.py',
             name='hd_map_publisher',
             output='screen',
@@ -272,7 +272,7 @@ def add_nodes(args: lu.ArgumentContainer):
 
     if enable_section_localizer and hd_map_available:
         actions.append(lu.Node(
-            package='hd_map_publisher',
+            package='jetpilot_hdmap_publisher',
             executable='hd_map_section_localizer_node.py',
             name='hd_map_section_localizer',
             output='screen',

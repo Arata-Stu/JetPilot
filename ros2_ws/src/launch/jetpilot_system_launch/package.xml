@@ -9,9 +9,12 @@
 
   <buildtool_depend>ament_cmake_auto</buildtool_depend>
 
+  <test_depend>ament_cmake_pytest</test_depend>
+
   <exec_depend>custom_joy_node</exec_depend>
   <exec_depend>jetpilot_bag_tools</exec_depend>
   <exec_depend>jetpilot_control</exec_depend>
+  <exec_depend>jetpilot_hdmap_publisher</exec_depend>
   <exec_depend>jetpilot_operation</exec_depend>
   <exec_depend>jetpilot_teleop_tools</exec_depend>
   <exec_depend>jetpilot_rtp_tools</exec_depend>
@@ -19,8 +22,10 @@
   <exec_depend>pca9685_rc_driver</exec_depend>
   <exec_depend>rc_serial_reader</exec_depend>
   <exec_depend>jetpilot_vesc_interface</exec_depend>
+  <exec_depend>isaac_ros_launch_utils</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
+  <exec_depend>rosbag2</exec_depend>
   <exec_depend>rviz2</exec_depend>
   <exec_depend>vslam_map_tools</exec_depend>
 
