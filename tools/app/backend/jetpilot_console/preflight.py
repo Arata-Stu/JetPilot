@@ -919,18 +919,28 @@ def _parse_rosbag_metadata(text: str) -> dict[str, Any]:
     topics: dict[str, dict[str, Any]] = {}
     current_topic: dict[str, Any] | None = None
     topic_indent = -1
+    qos_indent: int | None = None
 
     def flush_topic() -> None:
-        nonlocal current_topic
+        nonlocal current_topic, qos_indent
         if current_topic and current_topic.get("name"):
             topics[str(current_topic["name"])] = dict(current_topic)
         current_topic = None
+        qos_indent = None
 
     for raw_line in text.splitlines():
         stripped = raw_line.strip()
         if not stripped or stripped.startswith("#"):
             continue
         indent = len(raw_line) - len(raw_line.lstrip(" "))
+        if current_topic is not None and qos_indent is not None:
+            if indent > qos_indent:
+                previous = str(current_topic.get("offered_qos_profiles") or "")
+                current_topic["offered_qos_profiles"] = "\n".join(
+                    part for part in (previous, stripped) if part
+                )
+                continue
+            qos_indent = None
 
         if stripped.startswith("storage_identifier:"):
             storage_identifier = _yaml_string(stripped.split(":", 1)[1])
@@ -959,6 +969,10 @@ def _parse_rosbag_metadata(text: str) -> dict[str, Any]:
                 key, separator, raw_value = stripped.partition(":")
                 if separator and key in {"name", "type", "serialization_format"}:
                     current_topic[key] = _yaml_string(raw_value)
+                elif separator and key == "offered_qos_profiles":
+                    value = _yaml_string(raw_value)
+                    current_topic[key] = "" if value in {"|", ">"} else value
+                    qos_indent = indent
                 elif separator and key == "message_count":
                     try:
                         current_topic[key] = int(_yaml_string(raw_value))
@@ -1149,6 +1163,78 @@ def _check_mapping_topics(
         "Stereo images, CameraInfo, and static transforms are present in the bag metadata.",
         details={"topics": sorted(required)},
     )
+    _check_mapping_qos(topics, cameras, report)
+
+
+def _check_mapping_qos(
+    topics: Mapping[str, Any],
+    cameras: list[dict[str, str]],
+    report: _Report,
+) -> None:
+    camera_topics: dict[str, str] = {}
+    for camera in cameras:
+        camera_name = camera.get("name") or "stereo camera"
+        camera_topics[camera["left"]] = f"{camera_name} left image"
+        camera_topics[camera["right"]] = f"{camera_name} right image"
+        camera_topics[camera["left_camera_info"]] = f"{camera_name} left CameraInfo"
+        camera_topics[camera["right_camera_info"]] = f"{camera_name} right CameraInfo"
+
+    unavailable: list[dict[str, str]] = []
+    best_effort: list[dict[str, str]] = []
+    for topic, role in camera_topics.items():
+        info = topics.get(topic)
+        if not isinstance(info, Mapping):
+            continue
+        reliabilities = _topic_qos_reliabilities(info)
+        if not reliabilities:
+            unavailable.append({"topic": topic, "role": role})
+        elif "best_effort" in reliabilities and "reliable" not in reliabilities:
+            best_effort.append({"topic": topic, "role": role, "reliability": "best_effort"})
+
+    if best_effort:
+        report.add(
+            "rosbag.mapping_qos",
+            "Mapping input QoS",
+            WARNING,
+            "Some selected camera topics are recorded as best-effort; VGL may request reliable QoS and receive no messages during replay.",
+            remediation=(
+                "Use a rosbag play QoS override for these topics or record the VGL input topics "
+                "with reliable QoS."
+            ),
+            details={"best_effort": best_effort, "unavailable": unavailable},
+        )
+        return
+    if unavailable:
+        report.add(
+            "rosbag.mapping_qos",
+            "Mapping input QoS",
+            WARNING,
+            "metadata.yaml does not include QoS profiles for every selected camera topic.",
+            remediation="Run a short offline replay check and watch for RELIABILITY_QOS_POLICY warnings.",
+            details={"unavailable": unavailable},
+        )
+        return
+
+    report.add(
+        "rosbag.mapping_qos",
+        "Mapping input QoS",
+        PASS,
+        "Selected camera topics include QoS metadata and are not best-effort only.",
+        details={"topics": sorted(camera_topics)},
+    )
+
+
+def _topic_qos_reliabilities(topic_info: Mapping[str, Any]) -> set[str]:
+    raw_profiles = topic_info.get("offered_qos_profiles")
+    if raw_profiles is None:
+        return set()
+    text = str(raw_profiles).lower()
+    values: set[str] = set()
+    if "best_effort" in text or "besteffort" in text:
+        values.add("best_effort")
+    if "reliable" in text:
+        values.add("reliable")
+    return values
 
 
 def _inspect_map_output(config: ConsoleConfig, raw_value: Any, report: _Report) -> None:

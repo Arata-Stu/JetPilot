@@ -61,7 +61,13 @@ class PreflightTest(unittest.TestCase):
         )
         return path
 
-    def bag(self, *, topics: tuple[str, ...] = CAMERA_TOPICS, storage: bool = True) -> Path:
+    def bag(
+        self,
+        *,
+        topics: tuple[str, ...] = CAMERA_TOPICS,
+        storage: bool = True,
+        reliability: str | None = "reliable",
+    ) -> Path:
         bag = self.record_root / "run_001"
         bag.mkdir(exist_ok=True)
         if storage:
@@ -77,9 +83,19 @@ class PreflightTest(unittest.TestCase):
                     f"        name: {topic}",
                     f"        type: {message_type}",
                     "        serialization_format: cdr",
-                    "      message_count: 10",
                 ]
             )
+            if reliability:
+                topic_lines.extend(
+                    [
+                        "        offered_qos_profiles: |",
+                        "          - history: keep_last",
+                        "            depth: 5",
+                        f"            reliability: {reliability}",
+                        "            durability: volatile",
+                    ]
+                )
+            topic_lines.append("      message_count: 10")
         (bag / "metadata.yaml").write_text(
             "\n".join(
                 [
@@ -170,6 +186,7 @@ lanes:
         self.assertTrue(result["ready"])
         self.assertEqual(result["status"], PASS)
         self.assertEqual(self.check(result, "rosbag.mapping_topics")["status"], PASS)
+        self.assertEqual(self.check(result, "rosbag.mapping_qos")["status"], PASS)
         self.assertEqual(result["resolved"]["rosbag"], str(bag.resolve()))
         json.dumps(result)
 
@@ -204,6 +221,40 @@ lanes:
         topic_check = self.check(result, "rosbag.mapping_topics")
         self.assertEqual(topic_check["status"], BLOCKED)
         self.assertEqual(topic_check["details"]["missing"][0]["topic"], "/tf_static")
+
+    def test_map_build_warns_for_best_effort_camera_qos(self) -> None:
+        self.camera_config()
+        bag = self.bag(reliability="best_effort")
+        result = evaluate_preflight(
+            self.config,
+            "map-build",
+            {"rosbag": str(bag), "map_dir": str(self.map_root / "new_map")},
+        )
+
+        qos_check = self.check(result, "rosbag.mapping_qos")
+        self.assertTrue(result["ready"])
+        self.assertEqual(qos_check["status"], "warning")
+        self.assertEqual(
+            qos_check["details"]["best_effort"][0]["topic"],
+            "/realsense/infra1/image_rect_raw",
+        )
+
+    def test_map_build_warns_when_camera_qos_metadata_is_missing(self) -> None:
+        self.camera_config()
+        bag = self.bag(reliability=None)
+        result = evaluate_preflight(
+            self.config,
+            "map-build",
+            {"rosbag": str(bag), "map_dir": str(self.map_root / "new_map")},
+        )
+
+        qos_check = self.check(result, "rosbag.mapping_qos")
+        self.assertTrue(result["ready"])
+        self.assertEqual(qos_check["status"], "warning")
+        self.assertEqual(
+            qos_check["details"]["unavailable"][0]["topic"],
+            "/realsense/infra1/image_rect_raw",
+        )
 
     def test_map_build_blocks_required_topic_with_wrong_message_type(self) -> None:
         self.camera_config()
@@ -249,6 +300,11 @@ lanes:
             "        name: /tf_static\n"
             "        type: tf2_msgs/msg/TFMessage\n"
             "        serialization_format: cdr\n"
+            "        offered_qos_profiles: |\n"
+            "          - history: keep_last\n"
+            "            depth: 5\n"
+            "            reliability: reliable\n"
+            "            durability: volatile\n"
             "      message_count: 10"
         )
         for label, replacement in (
@@ -256,7 +312,12 @@ lanes:
                 "missing",
                 "        name: /tf_static\n"
                 "        type: tf2_msgs/msg/TFMessage\n"
-                "        serialization_format: cdr",
+                "        serialization_format: cdr\n"
+                "        offered_qos_profiles: |\n"
+                "          - history: keep_last\n"
+                "            depth: 5\n"
+                "            reliability: reliable\n"
+                "            durability: volatile",
             ),
             ("invalid", topic_block.replace("message_count: 10", "message_count: unknown")),
         ):

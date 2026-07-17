@@ -109,11 +109,31 @@ def build_vgl_vslam_script(
 ) -> str:
     topic_config_path = topic_config or str(default_topic_config(config))
     create_steps = " ".join(shlex.quote(step) for step in steps.split())
-    rviz_value = "true" if enable_rviz else "false"
+    # Automated offline replay is easier to shut down cleanly without RViz in the
+    # launch graph. The UI can still visualize the generated artifacts afterward.
+    rviz_value = "false"
     return f"""set -euo pipefail
 {_source_ros_setup(config)}
 mkdir -p {_q(map_dir)}
 requested_map_dir={_q(map_dir)}
+offline_launch_pid=""
+offline_stop_launch() {{
+  stop_signal="${{1:-INT}}"
+  stop_status=0
+  if [ -n "$offline_launch_pid" ]; then
+    if kill -0 "$offline_launch_pid" 2>/dev/null; then
+      kill -s "$stop_signal" "$offline_launch_pid" 2>/dev/null || true
+    fi
+    if wait "$offline_launch_pid" 2>/dev/null; then
+      stop_status=0
+    else
+      stop_status=$?
+    fi
+  fi
+  offline_launch_pid=""
+  return "$stop_status"
+}}
+trap 'offline_stop_launch TERM || true' EXIT
 export FOUNDATIONSTEREO_MODEL_RES={_q(fs_model_res)}
 echo "[stage] create cuVGL map"
 ros2 run isaac_mapping_ros create_map_offline.py \\
@@ -141,15 +161,19 @@ echo "[stage] offline eval for cuVSLAM snapshot"
 ros2 launch {_q(config.launch_package)} bringup.launch.py \\
   use_sim_time:=true \\
   enable_rosbag_replay:=true \\
-  rosbag_start_delay_s:=5.0 \\
+  replay_additional_args:='--clock --start-paused' \\
+  rosbag_start_delay_s:=0.0 \\
+  rosbag_shutdown_on_exit:=false \\
   enable_operation:=false \\
   enable_control:=false \\
   enable_vehicle:=false \\
+  publish_vehicle_description:=false \\
+  enable_sensor_kit:=false \\
   enable_localization:=true \\
   vslam_enable_slam:=true \\
   vslam_enable_visualization:=true \\
   vslam_save_map_folder_path:="$cuvslam_map" \\
-  enable_vgl:=true \\
+  enable_vgl:=false \\
   vgl_topic_config_file:={_q(topic_config_path)} \\
   vgl_model_dir:={_q(output_model_dir)} \\
   enable_rviz:={rviz_value} \\
@@ -163,7 +187,52 @@ ros2 launch {_q(config.launch_package)} bringup.launch.py \\
   vslam_snapshot_landmarks_topic:=/visual_slam/vis/landmarks_cloud \\
   vslam_snapshot_write_interval_s:=5.0 \\
   rosbag:={_q(rosbag)} \\
-  map_dir:="$generated_map_dir"
+  map_dir:="$generated_map_dir" &
+offline_launch_pid=$!
+offline_ready=0
+for offline_attempt in $(seq 1 180); do
+  if ! kill -0 "$offline_launch_pid" 2>/dev/null; then
+    echo "offline eval launch exited before replay became ready"
+    offline_stop_launch TERM || true
+    exit 22
+  fi
+  offline_nodes="$(ros2 node list 2>/dev/null || true)"
+  offline_resume_type="$(ros2 service type /rosbag2_player/resume 2>/dev/null || true)"
+  if [[ "$offline_nodes" == *visual_slam_node* ]] && [[ "$offline_nodes" == *vslam_reference_snapshot_recorder* ]] && [[ "$offline_resume_type" == *rosbag2_interfaces/srv/Resume* ]]; then
+    offline_ready=1
+    break
+  fi
+  sleep 1
+done
+if [ "$offline_ready" -ne 1 ]; then
+  echo "offline eval readiness timed out after 180 seconds"
+  offline_stop_launch TERM || true
+  exit 23
+fi
+echo "[stage] offline eval graph ready; starting paused rosbag replay"
+sleep 5
+ros2 service call /rosbag2_player/resume rosbag2_interfaces/srv/Resume '{{}}'
+offline_player_missing=0
+while kill -0 "$offline_launch_pid" 2>/dev/null; do
+  offline_resume_type="$(ros2 service type /rosbag2_player/resume 2>/dev/null || true)"
+  if [[ "$offline_resume_type" != *rosbag2_interfaces/srv/Resume* ]]; then
+    offline_player_missing=$((offline_player_missing + 1))
+  else
+    offline_player_missing=0
+  fi
+  if [ "$offline_player_missing" -ge 5 ]; then
+    break
+  fi
+  sleep 1
+done
+echo "[stage] rosbag replay finished; draining offline eval output"
+sleep 5
+if offline_stop_launch INT; then offline_launch_status=0; else offline_launch_status=$?; fi
+if [ "$offline_launch_status" -ne 0 ] && [ "$offline_launch_status" -ne 130 ]; then
+  echo "offline eval launch exited with status $offline_launch_status"
+  exit "$offline_launch_status"
+fi
+trap - EXIT
 """
 
 
