@@ -127,6 +127,7 @@ def add_nodes(args: lu.ArgumentContainer):
             'vslam_publish_map_to_odom_tf': True,
             'vslam_enable_slam': lu.is_true(args.vslam_enable_slam),
             'vslam_enable_visualization': lu.is_true(args.vslam_enable_visualization),
+            'vslam_localize_on_startup': lu.is_true(args.vslam_localize_on_startup),
             'vslam_enable_ground_constraint_in_odometry':
                 lu.is_true(args.vslam_enable_ground_constraint_in_odometry),
             'vslam_enable_ground_constraint_in_slam':
@@ -339,6 +340,7 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('vslam_enable_ground_constraint_in_odometry', False, cli=True)
     args.add_arg('vslam_enable_ground_constraint_in_slam', False, cli=True)
     args.add_arg('vslam_enable_visualization', False, cli=True)
+    args.add_arg('vslam_localize_on_startup', False, cli=True)
     args.add_arg('vslam_hint_request_topic', '/visual_slam/trigger_hint', cli=True)
     args.add_arg('vslam_pose_hint_topic', '/localization/pose_hint', cli=True)
     args.add_arg('vslam_save_map_folder_path', '', cli=True)

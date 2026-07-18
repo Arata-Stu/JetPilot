@@ -576,7 +576,10 @@ run_offline_eval() {
   fi
 
   [[ -d "${map_dir}/cuvgl_map" ]] || die "cuVGL map was not found: ${map_dir}/cuvgl_map"
+  [[ -d "$cuvslam_map_dir" ]] || die "cuVSLAM map was not found for offline eval load: $cuvslam_map_dir"
   rm -f "$snapshot_path"
+  echo "[stage] offline eval will load cuVSLAM map: $cuvslam_map_dir"
+  echo "[stage] offline eval use_sim_time: true"
 
   offline_stop_launch() {
     local stop_signal="${1:-INT}"
@@ -618,7 +621,7 @@ run_offline_eval() {
     enable_localization:=true \
     vslam_enable_slam:=true \
     vslam_enable_visualization:=true \
-    vslam_save_map_folder_path:="$cuvslam_map_dir" \
+    vslam_localize_on_startup:=true \
     enable_vgl:=false \
     vgl_topic_config_file:="$topic_config_file" \
     vgl_model_dir:="$OUTPUT_MODEL_DIR" \

@@ -168,7 +168,13 @@ fi
 echo "[stage] using map artifacts folder: $generated_map_dir"
 snapshot="$generated_map_dir/vslam_reference_snapshot.json"
 cuvslam_map="$generated_map_dir/cuvslam_map"
+if [ ! -d "$cuvslam_map" ]; then
+  echo "cuVSLAM map was not found for offline eval load: $cuvslam_map"
+  exit 24
+fi
 rm -f "$snapshot"
+echo "[stage] offline eval will load cuVSLAM map: $cuvslam_map"
+echo "[stage] offline eval use_sim_time: true"
 echo "[stage] offline eval for cuVSLAM snapshot"
 ros2 launch {_q(config.launch_package)} bringup.launch.py \\
   use_sim_time:=true \\
@@ -184,7 +190,7 @@ ros2 launch {_q(config.launch_package)} bringup.launch.py \\
   enable_localization:=true \\
   vslam_enable_slam:=true \\
   vslam_enable_visualization:=true \\
-  vslam_save_map_folder_path:="$cuvslam_map" \\
+  vslam_localize_on_startup:=true \\
   enable_vgl:=false \\
   vgl_topic_config_file:={_q(topic_config_path)} \\
   vgl_model_dir:={_q(output_model_dir)} \\

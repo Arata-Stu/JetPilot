@@ -277,6 +277,7 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('vslam_enable_ground_constraint_in_odometry', False, cli=True)
     args.add_arg('vslam_enable_ground_constraint_in_slam', False, cli=True)
     args.add_arg('vslam_enable_visualization', False, cli=True)
+    args.add_arg('vslam_localize_on_startup', False, cli=True)
     args.add_arg('vslam_hint_request_topic', '/visual_slam/trigger_hint', cli=True)
     args.add_arg('vslam_pose_hint_topic', '/localization/pose_hint', cli=True)
     args.add_arg('vslam_save_map_folder_path', '', cli=True)
@@ -540,6 +541,7 @@ def generate_launch_description() -> lut.LaunchDescription:
                 'vslam_enable_ground_constraint_in_slam':
                     args.vslam_enable_ground_constraint_in_slam,
                 'vslam_enable_visualization': args.vslam_enable_visualization,
+                'vslam_localize_on_startup': args.vslam_localize_on_startup,
                 'vslam_hint_request_topic': args.vslam_hint_request_topic,
                 'vslam_pose_hint_topic': args.vslam_pose_hint_topic,
                 'vslam_save_map_folder_path': args.vslam_save_map_folder_path,
