@@ -24,6 +24,12 @@ ROS package と Python module の名前は `jetpilot_hdmap_publisher` です。
 marker と path は YAML の `frame_id` を使います。必要なら
 `frame_id_override` parameter で上書きできます。
 
+## Algorithm
+
+`hd_map_publisher_node.py` は YAML の lane、boundary、section gate を読み込み、RViz 表示用 marker と planning 入力用 `Path` に変換します。primary path は `primary_lane_id` の centerline だけを publish し、複数 lane の選択は `jetpilot_planning` に任せます。
+
+`hd_map_section_localizer_node.py` は `map -> base_link` TF を周期 lookup し、section gate と lane centerline から現在 section を推定します。車両位置が lane から `max_lane_distance_m` より離れている場合や TF が取れない場合は `unknown` を publish し、planning 側の watchdog が停止判断できるようにします。
+
 ## Run
 
 ```bash

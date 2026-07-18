@@ -53,3 +53,9 @@ ros2 launch jetpilot_controller jetpilot_controller.launch.xml
 制御計算は`PathTrackingController` interfaceからROS nodeを分離しています。将来は
 `MpcController`を同interfaceで実装し、nodeのfactoryに`algorithm: mpc`を追加します。
 ROS topic、watchdog、安全停止、command limitはそのまま共用できます。
+
+## Control algorithm
+
+Pure Pursuit は planner の `Path` を `base_link` 座標へ変換し、現在速度に応じた lookahead 距離で追従点を選びます。選ばれた点から曲率を計算し、wheelbase と最大舵角を使って正規化 steering command へ変換します。
+
+longitudinal 側は target speed と odometry speed の差を見て throttle/brake を出す単純な比例制御です。target speed が不正、未受信、timeout の場合は安全停止します。横加速度上限から速度も制限するため、小さい半径の path では target speed より低い速度指令になることがあります。

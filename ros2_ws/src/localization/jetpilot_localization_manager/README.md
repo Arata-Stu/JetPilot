@@ -68,3 +68,9 @@ colcon test-result --verbose
 ```
 
 The unit tests cover frame, finite-number, quaternion, covariance, and timestamp pose validation.
+
+## Topic handling notes
+
+`/localization/pose_hint_required` と `/localization/pose_hint_state` は reliable transient-local QoS です。UI、controller、後から起動した diagnostic node が最新状態をすぐ読めるようにしています。
+
+`/localization/trigger` は joystick 由来の edge trigger、`/localization/relocalize` は UI/CLI 由来の service trigger として扱います。どちらも同じ state machine に入り、進行中の request がある場合は新しい request として再開します。
