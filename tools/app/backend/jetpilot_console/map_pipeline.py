@@ -141,6 +141,9 @@ offline_stop_launch() {{
   offline_launch_pid=""
   return "$stop_status"
 }}
+offline_topic_publishers() {{
+  ros2 topic info "$1" 2>/dev/null | awk '/Publisher count:/ {{print $3; found=1}} END {{if (!found) print 0}}'
+}}
 trap 'offline_stop_launch TERM 5 || kill -KILL "$offline_launch_pid" 2>/dev/null || true' EXIT
 export FOUNDATIONSTEREO_MODEL_RES={_q(fs_model_res)}
 echo "[stage] create cuVGL map"
@@ -208,14 +211,14 @@ for offline_attempt in $(seq 1 180); do
   fi
   offline_nodes="$(ros2 node list 2>/dev/null || true)"
   offline_resume_type="$(ros2 service type /rosbag2_player/resume 2>/dev/null || true)"
-  if [[ "$offline_nodes" == *visual_slam_node* ]] && [[ "$offline_nodes" == *vslam_reference_snapshot_recorder* ]] && [[ "$offline_resume_type" == *rosbag2_interfaces/srv/Resume* ]]; then
+  if [[ "$offline_nodes" == *visual_slam_node* ]] && [[ "$offline_nodes" == *vslam_reference_snapshot_recorder* ]] && [[ "$offline_resume_type" == *rosbag2_interfaces/srv/Resume* ]] && [ "$(offline_topic_publishers /visual_slam/tracking/slam_path)" -gt 0 ] && [ "$(offline_topic_publishers /visual_slam/tracking/odometry)" -gt 0 ] && [ "$(offline_topic_publishers /visual_slam/vis/landmarks_cloud)" -gt 0 ]; then
     offline_ready=1
     break
   fi
   sleep 1
 done
 if [ "$offline_ready" -ne 1 ]; then
-  echo "offline eval readiness timed out after 180 seconds"
+  echo "offline eval readiness timed out after 180 seconds; VSLAM publishers did not become available"
   offline_stop_launch TERM || true
   exit 23
 fi

@@ -599,6 +599,9 @@ run_offline_eval() {
     offline_launch_pid=""
     return "$stop_status"
   }
+  offline_topic_publishers() {
+    ros2 topic info "$1" 2>/dev/null | awk '/Publisher count:/ {print $3; found=1} END {if (!found) print 0}'
+  }
   trap 'offline_stop_launch TERM 5 || kill -KILL "$offline_launch_pid" 2>/dev/null || true' EXIT
 
   ros2 launch "$JETPILOT_LAUNCH_PACKAGE" bringup.launch.py \
@@ -643,7 +646,10 @@ run_offline_eval() {
     offline_resume_type="$(ros2 service type /rosbag2_player/resume 2>/dev/null || true)"
     if [[ "$offline_nodes" == *visual_slam_node* ]] \
       && [[ "$offline_nodes" == *vslam_reference_snapshot_recorder* ]] \
-      && [[ "$offline_resume_type" == *rosbag2_interfaces/srv/Resume* ]]; then
+      && [[ "$offline_resume_type" == *rosbag2_interfaces/srv/Resume* ]] \
+      && (( $(offline_topic_publishers /visual_slam/tracking/slam_path) > 0 )) \
+      && (( $(offline_topic_publishers /visual_slam/tracking/odometry) > 0 )) \
+      && (( $(offline_topic_publishers "$VSLAM_LANDMARKS_TOPIC") > 0 )); then
       offline_ready=1
       break
     fi
@@ -652,7 +658,7 @@ run_offline_eval() {
 
   if [[ "$offline_ready" != "1" ]]; then
     offline_stop_launch TERM || true
-    die "offline eval readiness timed out after 180 seconds"
+    die "offline eval readiness timed out after 180 seconds; VSLAM publishers did not become available"
   fi
 
   echo "[stage] offline eval graph ready; starting paused rosbag replay"

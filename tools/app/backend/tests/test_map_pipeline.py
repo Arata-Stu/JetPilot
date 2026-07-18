@@ -34,6 +34,8 @@ class BuildVglVslamScriptTest(unittest.TestCase):
         self.assertIn("trap 'offline_stop_launch TERM 5 || kill -KILL", script)
         self.assertIn("offline_stop_launch INT 20", script)
         self.assertIn("offline eval did not stop after SIGINT", script)
+        self.assertIn("offline_topic_publishers", script)
+        self.assertIn("VSLAM publishers did not become available", script)
         self.assertIn('rm -f "$snapshot"', script)
         self.assertNotIn('"$offline_launch_status" -ne 143', script)
         self.assertIn("enable_vgl:=false", script)
