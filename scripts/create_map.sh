@@ -686,7 +686,7 @@ run_offline_eval() {
     offline_launch_pid=""
     offline_launch_status=0
   fi
-  if (( offline_launch_status != 0 && offline_launch_status != 130 )); then
+  if (( offline_launch_status != 0 && offline_launch_status != 130 && offline_launch_status != 143 )); then
     die "offline eval launch exited with status $offline_launch_status"
   fi
   trap - EXIT

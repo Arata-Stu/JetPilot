@@ -244,7 +244,7 @@ if [ "$offline_launch_status" -eq 124 ]; then
   offline_launch_pid=""
   offline_launch_status=0
 fi
-if [ "$offline_launch_status" -ne 0 ] && [ "$offline_launch_status" -ne 130 ]; then
+if [ "$offline_launch_status" -ne 0 ] && [ "$offline_launch_status" -ne 130 ] && [ "$offline_launch_status" -ne 143 ]; then
   echo "offline eval launch exited with status $offline_launch_status"
   exit "$offline_launch_status"
 fi
