@@ -580,6 +580,7 @@ run_offline_eval() {
   rm -f "$snapshot_path"
   echo "[stage] offline eval will load cuVSLAM map: $cuvslam_map_dir"
   echo "[stage] offline eval use_sim_time: true"
+  echo "[stage] offline eval VSLAM visualization: true"
 
   offline_stop_launch() {
     local stop_signal="${1:-INT}"
@@ -667,6 +668,20 @@ run_offline_eval() {
   echo "[stage] offline eval graph ready; starting paused rosbag replay"
   sleep 5
   ros2 service call /rosbag2_player/resume rosbag2_interfaces/srv/Resume '{}'
+
+  for offline_attempt in $(seq 1 15); do
+    if [[ -s "$snapshot_path" ]]; then
+      break
+    fi
+    if ! kill -0 "$offline_launch_pid" 2>/dev/null; then
+      break
+    fi
+    sleep 1
+  done
+  if [[ ! -s "$snapshot_path" ]]; then
+    offline_stop_launch TERM 5 || true
+    die "offline eval produced no VSLAM snapshot messages after replay started; refusing to drain an empty run"
+  fi
 
   while kill -0 "$offline_launch_pid" 2>/dev/null; do
     offline_resume_type="$(ros2 service type /rosbag2_player/resume 2>/dev/null || true)"
