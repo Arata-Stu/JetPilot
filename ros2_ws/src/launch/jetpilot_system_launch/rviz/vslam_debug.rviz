@@ -5,6 +5,9 @@ Panels:
     Property Tree Widget:
       Expanded:
         - /Global Options1
+        - /Sensors1
+        - /Sensors1/Image1
+        - /Sensors1/Image1/Topic1
       Splitter Ratio: 0.5
     Tree Height: 334
   - Class: rviz_common/Selection
@@ -22,7 +25,7 @@ Panels:
     Experimental: false
     Name: Time
     SyncMode: 0
-    SyncSource: VSLAM Landmarks
+    SyncSource: ""
 Visualization Manager:
   Class: ""
   Displays:
@@ -55,23 +58,13 @@ Visualization Manager:
             All Enabled: true
             base_link:
               Value: true
-            realsense_accel_frame:
-              Value: true
-            realsense_accel_optical_frame:
-              Value: true
             realsense_aligned_depth_to_infra1_frame:
               Value: true
             realsense_camera_link:
               Value: true
-            realsense_camera_link_mount:
+            realsense_color_frame:
               Value: true
-            realsense_gyro_frame:
-              Value: true
-            realsense_gyro_optical_frame:
-              Value: true
-            realsense_imu_frame:
-              Value: true
-            realsense_imu_optical_frame:
+            realsense_color_optical_frame:
               Value: true
             realsense_infra1_frame:
               Value: true
@@ -81,47 +74,17 @@ Visualization Manager:
               Value: true
             realsense_infra2_optical_frame:
               Value: true
-            map:
-              Value: true
-            odom:
-              Value: true
-            omap:
-              Value: true
           Marker Scale: 0.5
           Name: TF
           Show Arrows: true
           Show Axes: true
           Show Names: false
           Tree:
-            map:
-              odom:
-                base_link:
-                  realsense_camera_link_mount:
-                    realsense_camera_link:
-                      realsense_accel_frame:
-                        realsense_accel_optical_frame:
-                          {}
-                      realsense_aligned_depth_to_infra1_frame:
-                        realsense_infra1_optical_frame:
-                          {}
-                      realsense_gyro_frame:
-                        realsense_gyro_optical_frame:
-                          {}
-                        realsense_imu_frame:
-                          realsense_imu_optical_frame:
-                            {}
-                      realsense_infra1_frame:
-                        {}
-                      realsense_infra2_frame:
-                        realsense_infra2_optical_frame:
-                          {}
-              omap:
-                {}
+            {}
           Update Interval: 0
           Value: true
       Enabled: true
       Name: Reference
-      Value: true
     - Class: rviz_common/Group
       Displays:
         - Alpha: 1
@@ -226,7 +189,6 @@ Visualization Manager:
           Value: true
       Enabled: true
       Name: VSLAM
-      Value: true
     - Class: rviz_common/Group
       Displays:
         - Class: rviz_default_plugins/MarkerArray
@@ -296,7 +258,6 @@ Visualization Manager:
           Value: true
       Enabled: true
       Name: HD Map
-      Value: true
     - Class: rviz_common/Group
       Displays:
         - Alpha: 1
@@ -329,7 +290,6 @@ Visualization Manager:
           Value: true
       Enabled: true
       Name: Planning
-      Value: true
     - Class: rviz_common/Group
       Displays:
         - Class: rviz_default_plugins/Image
@@ -343,12 +303,11 @@ Visualization Manager:
             Depth: 5
             Durability Policy: Volatile
             History Policy: Keep Last
-            Reliability Policy: Reliable
-            Value: /camera/left/image_raw
+            Reliability Policy: Best Effort
+            Value: /realsense/color/image_raw
           Value: true
       Enabled: true
       Name: Sensors
-      Value: true
   Enabled: true
   Global Options:
     Background Color: 30; 30; 30
