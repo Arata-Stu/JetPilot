@@ -51,6 +51,7 @@ private:
   std::string select_encoder(const std::string & codec) const;
   bool has_gst_element(const std::string & name) const;
   UdpSinkStats read_udp_sink_stats() const;
+  bool status_log_enabled() const;
   bool copy_image_to_buffer(
     const sensor_msgs::msg::Image & msg,
     const ImageFormat & format,

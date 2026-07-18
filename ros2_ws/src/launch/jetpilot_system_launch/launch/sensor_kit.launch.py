@@ -31,6 +31,8 @@ def add_sensor_interface(args: lu.ArgumentContainer):
                 'rtp_mtu': args.rtp_mtu,
                 'rtp_payload': args.rtp_payload,
                 'rtp_encoder': args.rtp_encoder,
+                'rtp_enable_status_log': str(
+                    lu.is_true(args.rtp_enable_status_log)).lower(),
                 'use_sim_time': str(lu.is_true(args.use_sim_time)).lower(),
             },
         ),
@@ -68,6 +70,7 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('rtp_mtu', '1200', cli=True)
     args.add_arg('rtp_payload', '96', cli=True)
     args.add_arg('rtp_encoder', 'auto', cli=True)
+    args.add_arg('rtp_enable_status_log', False, cli=True)
     args.add_arg('use_sim_time', False, cli=True)
 
     args.add_opaque_function(add_sensor_interface)

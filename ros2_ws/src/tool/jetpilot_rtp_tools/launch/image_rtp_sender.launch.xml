@@ -9,6 +9,7 @@
   <arg name="gop" default="60"/>
   <arg name="mtu" default="1200"/>
   <arg name="payload" default="96"/>
+  <arg name="enable_status_log" default="false" description="Print periodic RTP status/info logs"/>
   <arg name="use_sim_time" default="false"/>
 
   <node pkg="jetpilot_rtp_tools" exec="image_rtp_sender_node" name="image_rtp_sender" output="screen">
@@ -22,6 +23,7 @@
     <param name="gop" value="$(var gop)"/>
     <param name="mtu" value="$(var mtu)"/>
     <param name="payload" value="$(var payload)"/>
+    <param name="enable_status_log" value="$(var enable_status_log)"/>
     <param name="use_sim_time" value="$(var use_sim_time)"/>
   </node>
 </launch>

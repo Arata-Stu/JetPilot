@@ -29,6 +29,8 @@ def launch_sensor_kit(args: lu.ArgumentContainer) -> list[lut.Action]:
                     'rtp_mtu': args.rtp_mtu,
                     'rtp_payload': args.rtp_payload,
                     'rtp_encoder': args.rtp_encoder,
+                    'rtp_enable_status_log': str(
+                        lu.is_true(args.rtp_enable_status_log)).lower(),
                     'use_sim_time': str(lu.is_true(args.use_sim_time)).lower(),
                 },
             ),
@@ -91,6 +93,7 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('rtp_mtu', '1200')
     args.add_arg('rtp_payload', '96')
     args.add_arg('rtp_encoder', 'auto')
+    args.add_arg('rtp_enable_status_log', False)
 
     args.add_arg('enable_silky_evcam', True)
     args.add_arg('silky_evcam_launch', 'launch/pipeline.launch.py')

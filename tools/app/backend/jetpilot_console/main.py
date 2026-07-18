@@ -22,6 +22,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from .bag_analysis import AnalysisRepository, build_analysis_script, rosbag_detail
 from .config import ConsoleConfig
+from .fpv_stream import FpvStreamManager, FpvStreamSettings
 from .indexes import scan_maps, scan_rosbags
 from .map_detail import (
     build_map_detail,
@@ -176,6 +177,7 @@ class ConsoleState:
         self.loopback_only = loopback_only
         self.tasks = None if joy_only else TaskManager(config.state_dir, config.repo_root)
         self.analyses = None if joy_only else AnalysisRepository(config.analysis_root)
+        self.fpv_stream = None if joy_only else FpvStreamManager()
 
 
 class ConsoleHTTPServer(ThreadingHTTPServer):
@@ -190,6 +192,8 @@ class Handler(BaseHTTPRequestHandler):
     server: ConsoleHTTPServer
 
     def log_message(self, format: str, *args: Any) -> None:
+        if getattr(self, "path", "") in {"/api/fpv/status", "/api/fpv/heartbeat"}:
+            return
         print(f"[{self.log_date_time_string()}] {format % args}")
 
     def do_GET(self) -> None:
@@ -219,6 +223,12 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/network/local-ips":
             self._json({"ips": local_ip_candidates()})
+            return
+        if path == "/api/fpv/status":
+            self._json({"fpv": self.server.state.fpv_stream.status()})  # type: ignore[union-attr]
+            return
+        if path == "/api/fpv/stream":
+            self._fpv_stream(query)
             return
         if path == "/api/tasks":
             self._json({"tasks": self.server.state.tasks.list_tasks()})  # type: ignore[union-attr]
@@ -297,6 +307,33 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
                 return
             self._json(preflight)
+            return
+
+        if path == "/api/fpv/start":
+            try:
+                settings = FpvStreamSettings.from_mapping(body)
+                status = self.server.state.fpv_stream.start(settings)  # type: ignore[union-attr]
+            except (RuntimeError, ValueError) as exc:
+                self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                return
+            self._json({"fpv": status}, HTTPStatus.CREATED)
+            return
+
+        if path == "/api/fpv/heartbeat":
+            session_id = str(body.get("session_id") or "")
+            ok = self.server.state.fpv_stream.heartbeat(session_id)  # type: ignore[union-attr]
+            self._json({"ok": ok}, HTTPStatus.OK if ok else HTTPStatus.CONFLICT)
+            return
+
+        if path == "/api/fpv/stop":
+            session_id = str(body.get("session_id") or "")
+            if not session_id:
+                self._json({"error": "session_id is required"}, HTTPStatus.BAD_REQUEST)
+                return
+            stopped = self.server.state.fpv_stream.stop(session_id)  # type: ignore[union-attr]
+            self._json(
+                {"ok": True, "stopped": stopped, "fpv": self.server.state.fpv_stream.status()},  # type: ignore[union-attr]
+            )
             return
 
         if path == "/api/tasks/run":
@@ -496,6 +533,43 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "private, max-age=31536000, immutable")
         self.end_headers()
         self.wfile.write(payload)
+
+    def _fpv_stream(self, query: dict[str, list[str]]) -> None:
+        manager = self.server.state.fpv_stream
+        if manager is None:
+            self._json({"error": "FPV receiver is unavailable"}, HTTPStatus.NOT_FOUND)
+            return
+        requested_session = str(query.get("session", [""])[0] or "")
+        session_id = requested_session or manager.current_session_id()
+        if not session_id or not manager.session_is_running(session_id):
+            self._json({"error": "FPV receiver is not running"}, HTTPStatus.CONFLICT)
+            return
+
+        boundary = b"jetpilot-frame"
+        self.send_response(HTTPStatus.OK)
+        self.send_header(
+            "Content-Type",
+            f"multipart/x-mixed-replace; boundary={boundary.decode('ascii')}",
+        )
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+        self.send_header("Pragma", "no-cache")
+        self.end_headers()
+
+        sequence = 0
+        try:
+            while manager.session_is_running(session_id):
+                item = manager.wait_for_frame(session_id, sequence, timeout=2.0)
+                if item is None:
+                    continue
+                sequence, frame = item
+                self.wfile.write(b"--" + boundary + b"\r\n")
+                self.wfile.write(b"Content-Type: image/jpeg\r\n")
+                self.wfile.write(f"Content-Length: {len(frame)}\r\n\r\n".encode("ascii"))
+                self.wfile.write(frame)
+                self.wfile.write(b"\r\n")
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, OSError, TimeoutError):
+            return
 
     def _map_detail(self, query: dict[str, list[str]]) -> None:
         map_dir = query.get("path", [""])[0]
@@ -1233,7 +1307,12 @@ def main() -> int:
         print(f"State directory : {config.state_dir}")
     if args.allow_remote and not is_loopback_bind(args.host):
         print("WARNING: remote access is enabled and this server has no user authentication")
-    server.serve_forever()
+    try:
+        server.serve_forever()
+    finally:
+        if state.fpv_stream is not None:
+            state.fpv_stream.stop()
+        server.server_close()
     return 0
 
 

@@ -75,6 +75,9 @@ Implemented in this MVP:
   `RECORD_ROOT/.jetpilot_analysis`).
 - Synchronized drive viewer for image frames, operation mode, applied control,
   speed, and localized trajectory.
+- Embedded notebook-side RTP viewer in the FPV tab. The backend owns the UDP
+  receiver and GStreamer decoder, rate-limits/re-scales the browser relay to at
+  most 1280x720 at 30 FPS, and serves it as an in-page MJPEG stream.
 - Optional offline VGL/VSLAM replay when a recorded localization trajectory is
   unavailable, using an isolated configurable ROS domain.
 - Analysis preflight checks for required topics, selected Map artifacts, VGL
@@ -174,6 +177,26 @@ ANALYSIS_ROOT=/workspaces/record/.jetpilot_analysis \
 JETPILOT_ANALYSIS_ROS_DOMAIN_ID=92 \
 tools/app/scripts/start.sh --host 127.0.0.1 --port 8765
 ```
+
+## Live RTP in the FPV tab
+
+The browser cannot open an RTP/UDP socket directly. **FPV → Start in Browser**
+therefore starts a fixed, validated GStreamer pipeline in the Console backend
+on the notebook. It decodes `h264`, `h265`, `mjpeg`, or `raw` RTP and relays the
+newest frames to the page. This path does not require enabling the arbitrary
+custom-command endpoint.
+
+Set the codec, source width/height, FPS, UDP port, and payload to match the
+Jetson sender, then select the notebook IP used by the Jetson command. For
+MJPEG, RTP payload type 26 is selected automatically. Keep the external viewer
+stopped while the embedded viewer owns the same UDP port.
+
+The receiver stops when you leave the FPV tab, close the page, press **Stop**,
+or the browser heartbeat disappears. Missing GStreamer elements and UDP port
+conflicts are shown in the FPV status panel. The Console host/container must
+provide the GStreamer tools, codec plugins, and JPEG encoder listed in
+`tools/rtp_video_experiment/README.md`; the repository's `additional_setting`
+Docker layer installs those plugin sets.
 
 ## Non-Goals For MVP
 

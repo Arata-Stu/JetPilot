@@ -55,6 +55,16 @@ const state = {
     payload: 96,
     displaySink: "glimagesink",
     noDisplay: false,
+    browserStatus: {
+      available: false,
+      running: false,
+      session_id: "",
+      frame_count: 0,
+      jpeg_bytes: 0,
+      settings: null,
+      last_frame_age_s: null,
+      last_error: "",
+    },
   },
   terminalCollapsed: false,
   logDialogOpen: false,
@@ -118,6 +128,7 @@ let mapBuildPreflightTimer = null;
 let racelinePreflightTimer = null;
 let analysisPreflightTimer = null;
 let forceVisiblePreflightOnce = false;
+let fpvHeartbeatBusy = false;
 
 const $ = (id) => document.getElementById(id);
 const esc = (value) =>
@@ -734,7 +745,7 @@ function sh(value) {
 }
 
 async function refreshAll() {
-  const [config, tasks, rosbags, maps, cameraTopicConfigs, localIps, analyses] = await Promise.all([
+  const [config, tasks, rosbags, maps, cameraTopicConfigs, localIps, analyses, fpvStatus] = await Promise.all([
     api("/api/config"),
     api("/api/tasks"),
     api("/api/rosbags/local"),
@@ -742,6 +753,7 @@ async function refreshAll() {
     api("/api/map-builder/camera-topic-configs"),
     api("/api/network/local-ips").catch(() => ({ ips: [] })),
     api("/api/analyses").catch(() => ({ analyses: [] })),
+    api("/api/fpv/status").catch(() => ({ fpv: { available: false, running: false } })),
   ]);
   state.config = config;
   state.tasks = tasks.tasks || [];
@@ -750,6 +762,7 @@ async function refreshAll() {
   state.cameraTopicConfigs = cameraTopicConfigs.configs || [];
   state.localIps = localIps.ips || [];
   state.analysis.analyses = normalizeAnalysisList(analyses);
+  state.fpv.browserStatus = fpvStatus.fpv || state.fpv.browserStatus;
   let selectedMapReloadPath = null;
   if (state.selectedMapPath && !state.maps.some((item) => item.path === state.selectedMapPath)) {
     const replacement = state.maps.find((item) => item.path.startsWith(`${state.selectedMapPath}/`))
@@ -767,11 +780,18 @@ async function refreshAll() {
     }
   }
   forceVisiblePreflightOnce = true;
-  render();
+  if (state.tab === "fpv" && state.fpv.browserStatus?.running && $("fpv-browser-image")) {
+    updateFpvBrowserStatusDom();
+  } else {
+    render();
+  }
 }
 
 function setTab(tab) {
   if (state.tab === "bag-analysis" && tab !== "bag-analysis") pauseAnalysisPlayback();
+  if (state.tab === "fpv" && tab !== "fpv" && state.fpv.browserStatus?.running) {
+    stopBrowserFpv({ silent: true, renderAfter: false });
+  }
   state.tab = tab;
   render();
 }
@@ -853,19 +873,53 @@ function renderJoyProfile() {
 function renderFpv() {
   const running = state.tasks.filter((task) => task.kind === "fpv-viewer" && ["queued", "running", "stopping"].includes(task.status));
   const fpv = state.fpv;
+  const browserStatus = fpv.browserStatus || {};
+  const browserRunning = Boolean(browserStatus.running);
+  const browserHasFrames = Number(browserStatus.frame_count || 0) > 0;
+  const browserStalled = fpvBrowserIsStalled(browserStatus);
   const destinationIssue = fpvDestinationIssue(fpv);
   const executionDisabled = !state.config?.custom_commands_enabled;
-  const executionDisabledAttrs = executionDisabled
-    ? 'disabled title="Enable trusted local custom commands to start the viewer"'
+  const executionDisabledAttrs = executionDisabled || browserRunning
+    ? `disabled title="${browserRunning ? "Stop the browser view before opening an external viewer" : "Enable trusted local custom commands to start the viewer"}"`
+    : "";
+  const browserStartDisabled = !browserStatus.available || browserRunning || running.length
+    ? `disabled title="${running.length ? "Stop the external viewer first" : browserRunning ? "Browser view is already running" : "GStreamer is not available on the Console host"}"`
+    : "";
+  const streamUrl = browserRunning && browserStatus.session_id
+    ? apiPath("/api/fpv/stream", { session: browserStatus.session_id })
     : "";
   return `
     <div class="page fpv-page">
+      <section class="panel fpv-live-panel">
+        <div class="panel-header">
+          <h2>Browser Live View</h2>
+          <span id="fpv-browser-badge" class="status ${browserStalled ? "stopping" : browserRunning ? "running" : browserStatus.last_error ? "failed" : "idle"}">${browserRunning ? (browserStalled ? "STALLED" : browserHasFrames ? "LIVE" : "WAITING") : browserStatus.last_error ? "ERROR" : "STOPPED"}</span>
+          <span class="spacer"></span>
+          <button class="primary" onclick="startBrowserFpv()" ${browserStartDisabled}>Start in Browser</button>
+          <button onclick="stopBrowserFpv()" ${browserRunning ? "" : "disabled"}>Stop</button>
+        </div>
+        <div class="panel-body fpv-live-body">
+          <div class="fpv-video-stage">
+            ${streamUrl ? `<img id="fpv-browser-image" src="${esc(streamUrl)}" alt="Live RTP camera" onload="handleFpvBrowserImageLoad()" onerror="handleFpvBrowserImageError()" />` : ""}
+            <div id="fpv-video-placeholder" class="fpv-video-placeholder ${browserRunning && browserHasFrames && !browserStalled ? "" : "visible"}">
+              <strong>${browserStalled ? `No new RTP frame for ${esc(Number(browserStatus.last_frame_age_s).toFixed(1))}s` : browserRunning ? `Waiting for RTP on UDP ${esc(browserStatus.settings?.port || fpv.port)}...` : "Browser receiver is stopped"}</strong>
+              <span>The Console receives RTP on the notebook and relays browser-safe video here.</span>
+            </div>
+          </div>
+          <div class="fpv-live-footer">
+            <span id="fpv-browser-stats">${esc(fpvBrowserStatusText(browserStatus))}</span>
+            <span>Large camera frames are scaled to fit without overflowing the page.</span>
+          </div>
+          <div id="fpv-browser-error" class="notice full" ${browserStatus.last_error ? "" : "hidden"}>${esc(browserStatus.last_error || "")}</div>
+          ${running.length ? `<div class="notice full">An external receiver is using this RTP port. Stop it before starting the browser view.</div>` : ""}
+        </div>
+      </section>
       <section class="panel">
         <div class="panel-header">
-          <h2>FPV RTP Viewer</h2>
+          <h2>RTP Receiver Settings</h2>
           <span class="spacer"></span>
           <button onclick="copyFpvReceiverCommand()">Copy Command</button>
-          <button class="primary" onclick="startFpvViewer()" ${executionDisabledAttrs}>Start Viewer</button>
+          <button onclick="startFpvViewer()" ${executionDisabledAttrs}>Open External Viewer</button>
         </div>
         <div class="panel-body">
           <div class="form-grid">
@@ -875,7 +929,7 @@ function renderFpv() {
             </div>
             <div class="field">
               <label>Codec</label>
-              <select id="fpv-codec" onchange="updateFpvCommandPreview()">
+              <select id="fpv-codec" onchange="handleFpvCodecChange()">
                 ${["h264", "h265", "mjpeg", "raw"].map((codec) => `<option value="${codec}" ${fpv.codec === codec ? "selected" : ""}>${codec}</option>`).join("")}
               </select>
             </div>
@@ -903,7 +957,7 @@ function renderFpv() {
             </div>
             <div class="field">
               <label>Payload</label>
-              <input id="fpv-payload" type="number" min="0" value="${esc(fpv.payload)}" oninput="updateFpvCommandPreview()" />
+              <input id="fpv-payload" type="number" min="0" max="127" value="${esc(fpv.codec === "mjpeg" ? 26 : fpv.payload)}" oninput="updateFpvCommandPreview()" ${fpv.codec === "mjpeg" ? "disabled title=\"JPEG RTP uses payload type 26\"" : ""} />
             </div>
             <label class="check-row">
               <input id="fpv-no-display" type="checkbox" ${fpv.noDisplay ? "checked" : ""} onchange="updateFpvCommandPreview()" />
@@ -922,12 +976,14 @@ function renderFpv() {
             </div>
             <div id="fpv-destination-notice" class="notice full" ${destinationIssue ? "" : "hidden"}>${esc(destinationIssue)}</div>
             <div class="actions full">
-              <button class="primary" onclick="startFpvViewer()" ${executionDisabledAttrs}>Start Viewer</button>
+              <button class="primary" onclick="startBrowserFpv()" ${browserStartDisabled}>Start in Browser</button>
+              <button onclick="startFpvViewer()" ${executionDisabledAttrs}>Open External Viewer</button>
               <button onclick="copyFpvReceiverCommand()">Copy Command</button>
               <button onclick="copyFpvJetsonCommand()">Copy Jetson Command</button>
               ${running.length ? `<button class="danger" onclick="stopTask(${js(running[0].task_id)})">Stop Running Viewer</button>` : ""}
             </div>
-            ${executionDisabled ? `<div class="notice full">Starting an FPV viewer from the browser is disabled by default. Copy the command and run it locally, or explicitly enable trusted local custom commands.</div>` : ""}
+            ${executionDisabled ? `<div class="notice full">Opening a separate desktop viewer is disabled by default. The embedded browser view remains available without enabling custom commands.</div>` : ""}
+            <div class="notice full">Use either the embedded browser view or the external GStreamer viewer. Two receivers should not bind the same UDP port at once.</div>
           </div>
         </div>
       </section>
@@ -3821,19 +3877,38 @@ function readNumberInput(id, fallback) {
 }
 
 function readFpvForm(updateState = true) {
+  const codec = $("fpv-codec")?.value || state.fpv.codec;
   const next = {
     host: $("fpv-host") ? $("fpv-host").value.trim() : state.fpv.host,
-    codec: $("fpv-codec")?.value || state.fpv.codec,
+    codec,
     width: readNumberInput("fpv-width", state.fpv.width),
     height: readNumberInput("fpv-height", state.fpv.height),
     fps: readNumberInput("fpv-fps", state.fpv.fps),
     port: readNumberInput("fpv-port", state.fpv.port),
-    payload: readNumberInput("fpv-payload", state.fpv.payload),
+    payload: codec === "mjpeg" ? 26 : readNumberInput("fpv-payload", state.fpv.payload),
     displaySink: $("fpv-display-sink")?.value || state.fpv.displaySink,
     noDisplay: Boolean($("fpv-no-display")?.checked ?? state.fpv.noDisplay),
+    browserStatus: state.fpv.browserStatus,
   };
   if (updateState) state.fpv = next;
   return next;
+}
+
+function handleFpvCodecChange() {
+  const codec = $("fpv-codec")?.value || state.fpv.codec;
+  const payload = $("fpv-payload");
+  if (payload) {
+    if (codec === "mjpeg") {
+      payload.value = "26";
+      payload.disabled = true;
+      payload.title = "JPEG RTP uses payload type 26";
+    } else {
+      if (payload.value === "26") payload.value = "96";
+      payload.disabled = false;
+      payload.title = "";
+    }
+  }
+  updateFpvCommandPreview();
 }
 
 function fpvDestinationIssue(fpv = state.fpv) {
@@ -3849,6 +3924,166 @@ function fpvDestinationIssue(fpv = state.fpv) {
     return "RTP port must be between 1 and 65535";
   }
   return "";
+}
+
+function fpvBrowserStatusText(status = state.fpv.browserStatus || {}) {
+  if (!status.available) return "GStreamer is not available on the Console host";
+  if (fpvBrowserIsStalled(status)) {
+    return `RTP stalled · no new frame for ${Number(status.last_frame_age_s).toFixed(1)}s · ${Number(status.frame_count).toLocaleString()} frames received`;
+  }
+  if (status.running && !status.frame_count) {
+    return `Waiting for RTP packets on UDP ${status.settings?.port || state.fpv.port}`;
+  }
+  if (status.frame_count) {
+    const output = status.settings
+      ? `${status.settings.output_width}x${status.settings.output_height}@${status.settings.output_fps}`
+      : "browser stream";
+    const age = Number.isFinite(Number(status.last_frame_age_s))
+      ? ` · last frame ${Number(status.last_frame_age_s).toFixed(1)}s ago`
+      : "";
+    return `${Number(status.frame_count).toLocaleString()} frames · ${fmtBytes(status.jpeg_bytes)} · ${output}${age}`;
+  }
+  if (status.last_error) return "Receiver stopped with an error";
+  return "Ready to receive on the notebook";
+}
+
+function fpvBrowserIsStalled(status = state.fpv.browserStatus || {}) {
+  return Boolean(
+    status.running
+    && Number(status.frame_count || 0) > 0
+    && Number.isFinite(Number(status.last_frame_age_s))
+    && Number(status.last_frame_age_s) > 3,
+  );
+}
+
+function fpvBrowserPayload(fpv = state.fpv) {
+  return {
+    codec: fpv.codec,
+    width: fpv.width,
+    height: fpv.height,
+    fps: fpv.fps,
+    port: fpv.port,
+    payload: fpv.payload,
+  };
+}
+
+async function startBrowserFpv() {
+  const external = state.tasks.find((task) => task.kind === "fpv-viewer" && ["queued", "running", "stopping"].includes(task.status));
+  if (external) {
+    toast("Stop the external RTP viewer before starting the browser view", "error");
+    return;
+  }
+  const fpv = readFpvForm();
+  try {
+    const result = await api("/api/fpv/start", {
+      method: "POST",
+      body: JSON.stringify(fpvBrowserPayload(fpv)),
+    });
+    state.fpv.browserStatus = result.fpv || {};
+    render();
+    toast("Browser RTP receiver started");
+  } catch (error) {
+    toast(`Could not start browser receiver: ${error.message}`, "error");
+  }
+}
+
+async function stopBrowserFpv({ silent = false, renderAfter = true } = {}) {
+  const sessionId = state.fpv.browserStatus?.session_id || "";
+  if (!sessionId) return;
+  try {
+    const result = await api("/api/fpv/stop", {
+      method: "POST",
+      body: JSON.stringify({ session_id: sessionId }),
+    });
+    if (
+      state.fpv.browserStatus?.running
+      && state.fpv.browserStatus?.session_id
+      && state.fpv.browserStatus.session_id !== sessionId
+    ) {
+      return;
+    }
+    state.fpv.browserStatus = result.fpv || { available: true, running: false };
+    if (renderAfter && state.tab === "fpv") render();
+    if (!silent) toast("Browser RTP receiver stopped");
+  } catch (error) {
+    if (!silent) toast(`Could not stop browser receiver: ${error.message}`, "error");
+  }
+}
+
+function handleFpvBrowserImageLoad() {
+  const image = $("fpv-browser-image");
+  if (image) image.classList.add("loaded");
+  const placeholder = $("fpv-video-placeholder");
+  if (placeholder) placeholder.classList.remove("visible");
+}
+
+function handleFpvBrowserImageError() {
+  const placeholder = $("fpv-video-placeholder");
+  if (placeholder) {
+    placeholder.classList.add("visible");
+    const title = placeholder.querySelector("strong");
+    if (title) title.textContent = "The browser stream stopped";
+  }
+}
+
+function updateFpvBrowserStatusDom() {
+  const status = state.fpv.browserStatus || {};
+  const badge = $("fpv-browser-badge");
+  const stalled = fpvBrowserIsStalled(status);
+  if (badge) {
+    badge.className = `status ${stalled ? "stopping" : status.running ? "running" : status.last_error ? "failed" : "idle"}`;
+    badge.textContent = status.running ? (stalled ? "STALLED" : status.frame_count ? "LIVE" : "WAITING") : status.last_error ? "ERROR" : "STOPPED";
+  }
+  const stats = $("fpv-browser-stats");
+  if (stats) stats.textContent = fpvBrowserStatusText(status);
+  const error = $("fpv-browser-error");
+  if (error) {
+    error.textContent = status.last_error || "";
+    error.hidden = !status.last_error;
+  }
+  const placeholder = $("fpv-video-placeholder");
+  if (placeholder) {
+    const waiting = status.running && !status.frame_count;
+    placeholder.classList.toggle("visible", Boolean(!status.running || waiting || stalled));
+    const title = placeholder.querySelector("strong");
+    if (title) {
+      title.textContent = stalled
+        ? `No new RTP frame for ${Number(status.last_frame_age_s).toFixed(1)}s`
+        : waiting
+          ? `Waiting for RTP on UDP ${status.settings?.port || state.fpv.port}...`
+          : !status.running
+            ? "Browser receiver is stopped"
+            : "";
+    }
+  }
+}
+
+async function pollFpvBrowserStatus() {
+  if (fpvHeartbeatBusy || state.tab !== "fpv" || !state.fpv.browserStatus?.running) return;
+  fpvHeartbeatBusy = true;
+  const previousSession = state.fpv.browserStatus.session_id;
+  try {
+    await api("/api/fpv/heartbeat", {
+      method: "POST",
+      body: JSON.stringify({ session_id: previousSession }),
+    });
+    const result = await api("/api/fpv/status");
+    const next = result.fpv || {};
+    state.fpv.browserStatus = next;
+    if (!next.running || next.session_id !== previousSession) {
+      render();
+      return;
+    }
+    updateFpvBrowserStatusDom();
+  } catch {
+    const result = await api("/api/fpv/status").catch(() => null);
+    if (result?.fpv) {
+      state.fpv.browserStatus = result.fpv;
+      if (!result.fpv.running) render();
+    }
+  } finally {
+    fpvHeartbeatBusy = false;
+  }
 }
 
 function buildFpvReceiverCommand(fpv = state.fpv) {
@@ -3886,6 +4121,10 @@ function buildFpvJetsonCommand(fpv = state.fpv) {
 async function startFpvViewer() {
   if (!state.config?.custom_commands_enabled) {
     toast("Starting the viewer is disabled; copy and run the command locally", "error");
+    return;
+  }
+  if (state.fpv.browserStatus?.running) {
+    toast("Stop the browser RTP view before starting the external viewer", "error");
     return;
   }
   const fpv = readFpvForm();
@@ -5343,6 +5582,11 @@ window.stopTask = stopTask;
 window.runCustomCommand = runCustomCommand;
 window.selectPipelineMap = selectPipelineMap;
 window.startFpvViewer = startFpvViewer;
+window.startBrowserFpv = startBrowserFpv;
+window.stopBrowserFpv = stopBrowserFpv;
+window.handleFpvBrowserImageLoad = handleFpvBrowserImageLoad;
+window.handleFpvBrowserImageError = handleFpvBrowserImageError;
+window.handleFpvCodecChange = handleFpvCodecChange;
 window.copyFpvReceiverCommand = copyFpvReceiverCommand;
 window.copyFpvJetsonCommand = copyFpvJetsonCommand;
 window.setFpvHost = setFpvHost;
@@ -5444,6 +5688,11 @@ setInterval(() => {
         return;
       }
       state.tasks = nextTasks;
+      if (state.tab === "fpv" && state.fpv.browserStatus?.running && $("fpv-browser-image")) {
+        updateTaskChrome();
+        updateFpvBrowserStatusDom();
+        return;
+      }
       refreshVisiblePreflightDom();
       if (mapTaskFinished && state.selectedMapPath) {
         await refreshSelectedMapData({ preserveViewport: state.tab === "maps" });
@@ -5458,3 +5707,16 @@ setInterval(() => {
     })
     .catch(() => {});
 }, 5000);
+
+setInterval(() => {
+  pollFpvBrowserStatus();
+}, 2000);
+
+window.addEventListener("beforeunload", () => {
+  if (!state.fpv.browserStatus?.running || !navigator.sendBeacon) return;
+  const body = new Blob(
+    [JSON.stringify({ session_id: state.fpv.browserStatus.session_id })],
+    { type: "application/json" },
+  );
+  navigator.sendBeacon("/api/fpv/stop", body);
+});

@@ -36,6 +36,11 @@ public:
   {
     return node.read_udp_sink_stats().available;
   }
+
+  static bool status_log_enabled(const ImageRtpSenderComponent & node)
+  {
+    return node.status_log_enabled();
+  }
 };
 
 namespace
@@ -95,6 +100,17 @@ TEST_F(ImageRtpSenderComponentTest, RejectsInvalidPort)
   EXPECT_THROW(
     ImageRtpSenderComponent(options_with_destination("192.0.2.10", 70000)),
     std::invalid_argument);
+}
+
+TEST_F(ImageRtpSenderComponentTest, StatusLogIsOffByDefaultAndCanChangeAtRuntime)
+{
+  auto node = std::make_shared<ImageRtpSenderComponent>(
+    options_with_destination("127.0.0.1", 5004));
+  EXPECT_FALSE(ImageRtpSenderComponentTestAccess::status_log_enabled(*node));
+
+  const auto result = node->set_parameter(rclcpp::Parameter("enable_status_log", true));
+  ASSERT_TRUE(result.successful) << result.reason;
+  EXPECT_TRUE(ImageRtpSenderComponentTestAccess::status_log_enabled(*node));
 }
 
 TEST_F(ImageRtpSenderComponentTest, ConfiguresUnquotedUdpDestinationAfterParsing)

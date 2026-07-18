@@ -95,6 +95,7 @@ def launch_realsense(args: lu.ArgumentContainer) -> list[lut.Action]:
                     'mtu': lut.ParameterValue(args.rtp_mtu, value_type=int),
                     'payload': lut.ParameterValue(args.rtp_payload, value_type=int),
                     'encoder': args.rtp_encoder,
+                    'enable_status_log': lu.is_true(args.rtp_enable_status_log),
                     'use_sim_time': lu.is_true(args.use_sim_time),
                 },
             ],
@@ -140,6 +141,7 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('rtp_mtu', '1200')
     args.add_arg('rtp_payload', '96')
     args.add_arg('rtp_encoder', 'auto')
+    args.add_arg('rtp_enable_status_log', False)
     args.add_arg('use_sim_time', False)
     args.add_opaque_function(launch_realsense)
 

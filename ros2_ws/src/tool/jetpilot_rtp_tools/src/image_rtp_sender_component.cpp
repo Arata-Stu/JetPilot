@@ -74,6 +74,7 @@ ImageRtpSenderComponent::ImageRtpSenderComponent(const rclcpp::NodeOptions & opt
     declare_parameter<std::string>("h264_encoder_extra", "num-B-Frames=0 preset-level=1");
   h265_encoder_extra_ =
     declare_parameter<std::string>("h265_encoder_extra", "num-B-Frames=0 preset-level=1");
+  declare_parameter<bool>("enable_status_log", false);
 
   if (host_.empty()) {
     throw std::invalid_argument(
@@ -101,10 +102,12 @@ ImageRtpSenderComponent::ImageRtpSenderComponent(const rclcpp::NodeOptions & opt
     std::chrono::seconds(2),
     std::bind(&ImageRtpSenderComponent::status_callback, this));
 
-  RCLCPP_INFO(
-    get_logger(),
-    "RTP sender waiting for %s, destination=%s:%d, codec=%s, encoder=%s",
-    image_topic_.c_str(), host_.c_str(), port_, codec_.c_str(), encoder_.c_str());
+  if (status_log_enabled()) {
+    RCLCPP_INFO(
+      get_logger(),
+      "RTP sender waiting for %s, destination=%s:%d, codec=%s, encoder=%s",
+      image_topic_.c_str(), host_.c_str(), port_, codec_.c_str(), encoder_.c_str());
+  }
 }
 
 ImageRtpSenderComponent::~ImageRtpSenderComponent()
@@ -415,12 +418,14 @@ bool ImageRtpSenderComponent::start_pipeline(
   sink_bytes_.store(0, std::memory_order_relaxed);
   last_flow_return_ = GST_FLOW_OK;
 
-  RCLCPP_INFO(
-    get_logger(), "Started RTP pipeline for destination %s:%d: %s",
-    host_.c_str(), port_, pipeline_description.c_str());
-  RCLCPP_INFO(
-    get_logger(), "RTP input caps: video/x-raw,format=%s,width=%u,height=%u,framerate=%d/1",
-    format.gst_format.c_str(), msg.width, msg.height, fps_);
+  if (status_log_enabled()) {
+    RCLCPP_INFO(
+      get_logger(), "Started RTP pipeline for destination %s:%d: %s",
+      host_.c_str(), port_, pipeline_description.c_str());
+    RCLCPP_INFO(
+      get_logger(), "RTP input caps: video/x-raw,format=%s,width=%u,height=%u,framerate=%d/1",
+      format.gst_format.c_str(), msg.width, msg.height, fps_);
+  }
   return true;
 }
 
@@ -482,6 +487,11 @@ ImageRtpSenderComponent::UdpSinkStats ImageRtpSenderComponent::read_udp_sink_sta
   result.bytes_sent = bytes_sent;
   gst_structure_free(stats);
   return result;
+}
+
+bool ImageRtpSenderComponent::status_log_enabled() const
+{
+  return get_parameter("enable_status_log").as_bool();
 }
 
 void ImageRtpSenderComponent::poll_bus()
@@ -548,9 +558,11 @@ void ImageRtpSenderComponent::status_callback()
   std::lock_guard<std::mutex> lock(pipeline_mutex_);
   poll_bus();
   if (!pipeline_started_) {
-    RCLCPP_INFO_THROTTLE(
-      get_logger(), *get_clock(), 10000,
-      "RTP sender still waiting for image topic %s", image_topic_.c_str());
+    if (status_log_enabled()) {
+      RCLCPP_INFO_THROTTLE(
+        get_logger(), *get_clock(), 10000,
+        "RTP sender still waiting for image topic %s", image_topic_.c_str());
+    }
     return;
   }
 
@@ -566,15 +578,17 @@ void ImageRtpSenderComponent::status_callback()
   last_reported_udp_packets_ = udp_packets;
   GstState state = GST_STATE_NULL;
   gst_element_get_state(pipeline_, &state, nullptr, 0);
-  RCLCPP_INFO(
-    get_logger(),
-    "RTP sender status: appsrc_pushed=%" PRIu64 " (+%" PRIu64 "/2s), appsrc_dropped=%"
-    PRIu64 ", rtp_packets=%" PRIu64 " (+%" PRIu64 "/2s), rtp_bytes=%" PRIu64
-    ", stats_source=%s, last_flow=%s, state=%s, bus_errors=%" PRIu64
-    ", destination=%s:%d",
-    pushed_frames_, delta, dropped_frames_, udp_packets, udp_packet_delta, udp_bytes,
-    udp_stats.available ? "udpsink" : "sink-pad", gst_flow_get_name(last_flow_return_),
-    gst_element_state_get_name(state), bus_error_count_, host_.c_str(), port_);
+  if (status_log_enabled()) {
+    RCLCPP_INFO(
+      get_logger(),
+      "RTP sender status: appsrc_pushed=%" PRIu64 " (+%" PRIu64 "/2s), appsrc_dropped=%"
+      PRIu64 ", rtp_packets=%" PRIu64 " (+%" PRIu64 "/2s), rtp_bytes=%" PRIu64
+      ", stats_source=%s, last_flow=%s, state=%s, bus_errors=%" PRIu64
+      ", destination=%s:%d",
+      pushed_frames_, delta, dropped_frames_, udp_packets, udp_packet_delta, udp_bytes,
+      udp_stats.available ? "udpsink" : "sink-pad", gst_flow_get_name(last_flow_return_),
+      gst_element_state_get_name(state), bus_error_count_, host_.c_str(), port_);
+  }
   if (delta > 0 && udp_packet_delta == 0) {
     RCLCPP_WARN(
       get_logger(),
