@@ -27,6 +27,8 @@ sudo apt install -y \
   gstreamer1.0-plugins-bad \
   gstreamer1.0-plugins-ugly \
   gstreamer1.0-libav \
+  gstreamer1.0-nice \
+  gir1.2-gst-plugins-bad-1.0 \
   python3-gi \
   python3-gst-1.0 \
   v4l-utils \
@@ -36,6 +38,9 @@ sudo apt install -y \
 
 Jetson では JetPack の multimedia GStreamer plugin が必要です。
 `gst-inspect-1.0 nvv4l2h264enc` と `gst-inspect-1.0 nvv4l2h265enc` が通ることを確認します。
+Console の WebRTC 表示を使う notebook/container では、さらに
+GStreamer 1.20 以上であること、および `gst-inspect-1.0 webrtcbin` と
+`gst-inspect-1.0 nice` が成功することを確認します。
 
 ## Quick Start
 

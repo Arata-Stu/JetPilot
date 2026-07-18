@@ -53,14 +53,26 @@ const state = {
     fps: 60,
     port: 5004,
     payload: 96,
+    transport: "webrtc",
     displaySink: "glimagesink",
     noDisplay: false,
+    starting: false,
+    webrtcPlaying: false,
+    webrtcClientState: "closed",
+    webrtcClientError: "",
+    webrtcStats: null,
+    webrtcLastProgressAtMs: 0,
+    webrtcLastFramesDecoded: 0,
+    webrtcLastVideoTime: 0,
+    webrtcRtpObservedAtMs: 0,
     browserStatus: {
       available: false,
       running: false,
       session_id: "",
       frame_count: 0,
       jpeg_bytes: 0,
+      rtp_packet_count: 0,
+      rtp_bytes: 0,
       settings: null,
       last_frame_age_s: null,
       last_error: "",
@@ -129,6 +141,10 @@ let racelinePreflightTimer = null;
 let analysisPreflightTimer = null;
 let forceVisiblePreflightOnce = false;
 let fpvHeartbeatBusy = false;
+let fpvPeerConnection = null;
+let fpvPeerSessionId = "";
+let fpvRemoteStream = null;
+let fpvLifecycleGeneration = 0;
 
 const $ = (id) => document.getElementById(id);
 const esc = (value) =>
@@ -745,6 +761,7 @@ function sh(value) {
 }
 
 async function refreshAll() {
+  const previousFpvSession = state.fpv.browserStatus?.session_id || "";
   const [config, tasks, rosbags, maps, cameraTopicConfigs, localIps, analyses, fpvStatus] = await Promise.all([
     api("/api/config"),
     api("/api/tasks"),
@@ -763,6 +780,14 @@ async function refreshAll() {
   state.localIps = localIps.ips || [];
   state.analysis.analyses = normalizeAnalysisList(analyses);
   state.fpv.browserStatus = fpvStatus.fpv || state.fpv.browserStatus;
+  noteFpvWebRtcRtpObserved(state.fpv.browserStatus);
+  if (
+    fpvPeerConnection
+    && (!state.fpv.browserStatus?.running || state.fpv.browserStatus.session_id !== previousFpvSession)
+  ) {
+    closeFpvPeerConnection();
+    resetFpvWebRtcPlaybackState();
+  }
   let selectedMapReloadPath = null;
   if (state.selectedMapPath && !state.maps.some((item) => item.path === state.selectedMapPath)) {
     const replacement = state.maps.find((item) => item.path.startsWith(`${state.selectedMapPath}/`))
@@ -780,7 +805,7 @@ async function refreshAll() {
     }
   }
   forceVisiblePreflightOnce = true;
-  if (state.tab === "fpv" && state.fpv.browserStatus?.running && $("fpv-browser-image")) {
+  if (state.tab === "fpv" && state.fpv.browserStatus?.running && fpvMediaElement()) {
     updateFpvBrowserStatusDom();
   } else {
     render();
@@ -789,7 +814,14 @@ async function refreshAll() {
 
 function setTab(tab) {
   if (state.tab === "bag-analysis" && tab !== "bag-analysis") pauseAnalysisPlayback();
-  if (state.tab === "fpv" && tab !== "fpv" && state.fpv.browserStatus?.running) {
+  if (
+    state.tab === "fpv"
+    && tab !== "fpv"
+    && (
+      state.fpv.starting
+      || fpvReceiverCanAutoStop(state.fpv.browserStatus)
+    )
+  ) {
     stopBrowserFpv({ silent: true, renderAfter: false });
   }
   state.tab = tab;
@@ -822,6 +854,7 @@ function render() {
       <div class="toast-region" id="toast-region" aria-live="polite"></div>
     </div>
   `;
+  attachFpvRemoteStream();
   scrollLogToEnd();
   const forcePreflight = forceVisiblePreflightOnce;
   forceVisiblePreflightOnce = false;
@@ -875,42 +908,78 @@ function renderFpv() {
   const fpv = state.fpv;
   const browserStatus = fpv.browserStatus || {};
   const browserRunning = Boolean(browserStatus.running);
-  const browserHasFrames = Number(browserStatus.frame_count || 0) > 0;
+  const browserStarting = Boolean(fpv.starting);
+  const browserBusy = browserRunning || browserStarting;
+  const selectedTransport = fpv.transport || "webrtc";
+  const activeTransport = fpvStatusTransport(browserStatus);
+  const browserUsesWebRtc = browserRunning && activeTransport === "webrtc";
+  const browserOwnsWebRtc = fpvWebRtcSessionIsOwned(browserStatus);
+  const browserHasFrames = browserUsesWebRtc
+    ? Boolean(fpv.webrtcPlaying || Number(fpv.webrtcStats?.framesDecoded || 0) > 0)
+    : Number(browserStatus.frame_count || 0) > 0;
   const browserStalled = fpvBrowserIsStalled(browserStatus);
   const destinationIssue = fpvDestinationIssue(fpv);
   const executionDisabled = !state.config?.custom_commands_enabled;
-  const executionDisabledAttrs = executionDisabled || browserRunning
-    ? `disabled title="${browserRunning ? "Stop the browser view before opening an external viewer" : "Enable trusted local custom commands to start the viewer"}"`
+  const executionDisabledAttrs = executionDisabled || browserBusy
+    ? `disabled title="${browserBusy ? "Stop the browser view before opening an external viewer" : "Enable trusted local custom commands to start the viewer"}"`
     : "";
-  const browserStartDisabled = !browserStatus.available || browserRunning || running.length
-    ? `disabled title="${running.length ? "Stop the external viewer first" : browserRunning ? "Browser view is already running" : "GStreamer is not available on the Console host"}"`
+  const browserSettingsDisabled = browserBusy
+    ? `disabled title="Stop the browser receiver before changing its RTP settings"`
     : "";
-  const streamUrl = browserRunning && browserStatus.session_id
+  const webRtcUnavailable = selectedTransport === "webrtc" && !browserStatus.webrtc?.available;
+  const webRtcCodecUnsupported = selectedTransport === "webrtc" && fpv.codec !== "h264";
+  const browserWebRtcUnsupported = selectedTransport === "webrtc" && !window.RTCPeerConnection;
+  const browserTransportUnavailable = selectedTransport === "mjpeg"
+    ? !browserStatus.available
+    : webRtcUnavailable || webRtcCodecUnsupported || browserWebRtcUnsupported;
+  const browserStartReason = running.length
+    ? "Stop the external viewer first"
+    : browserStarting
+      ? "Browser receiver is starting"
+      : browserRunning
+        ? "Browser view is already running"
+        : webRtcCodecUnsupported
+          ? "WebRTC passthrough currently requires H.264"
+          : browserWebRtcUnsupported
+            ? "This browser does not support WebRTC"
+            : webRtcUnavailable
+              ? (browserStatus.webrtc?.error || "WebRTC dependencies are unavailable")
+              : "GStreamer is not available on the Console host";
+  const browserStartDisabled = browserTransportUnavailable || browserBusy || running.length
+    ? `disabled title="${esc(browserStartReason)}"`
+    : "";
+  const streamUrl = browserRunning && activeTransport === "mjpeg" && browserStatus.session_id
     ? apiPath("/api/fpv/stream", { session: browserStatus.session_id })
     : "";
+  const startLabel = browserStarting
+    ? "Starting..."
+    : selectedTransport === "webrtc"
+      ? "Start WebRTC"
+      : "Start MJPEG";
   return `
     <div class="page fpv-page">
       <section class="panel fpv-live-panel">
         <div class="panel-header">
           <h2>Browser Live View</h2>
-          <span id="fpv-browser-badge" class="status ${browserStalled ? "stopping" : browserRunning ? "running" : browserStatus.last_error ? "failed" : "idle"}">${browserRunning ? (browserStalled ? "STALLED" : browserHasFrames ? "LIVE" : "WAITING") : browserStatus.last_error ? "ERROR" : "STOPPED"}</span>
+          <span id="fpv-browser-badge" class="status ${fpv.webrtcClientError || browserStatus.last_error ? "failed" : browserUsesWebRtc && !browserOwnsWebRtc ? "running" : browserStalled ? "stopping" : browserRunning ? "running" : "idle"}">${fpv.webrtcClientError || browserStatus.last_error ? "ERROR" : browserRunning ? (browserUsesWebRtc && !browserOwnsWebRtc ? "OTHER TAB" : browserStalled ? "STALLED" : browserHasFrames ? "LIVE" : browserUsesWebRtc && fpv.webrtcClientState === "connecting" ? "CONNECTING" : "WAITING") : "STOPPED"}</span>
           <span class="spacer"></span>
-          <button class="primary" onclick="startBrowserFpv()" ${browserStartDisabled}>Start in Browser</button>
-          <button onclick="stopBrowserFpv()" ${browserRunning ? "" : "disabled"}>Stop</button>
+          <button class="primary" onclick="startBrowserFpv()" ${browserStartDisabled}>${startLabel}</button>
+          <button onclick="stopBrowserFpv()" ${browserBusy ? "" : "disabled"}>Stop</button>
         </div>
         <div class="panel-body fpv-live-body">
           <div class="fpv-video-stage">
+            ${browserUsesWebRtc ? `<video id="fpv-browser-video" autoplay playsinline muted onplaying="handleFpvBrowserVideoPlaying()" onwaiting="handleFpvBrowserVideoWaiting()"></video>` : ""}
             ${streamUrl ? `<img id="fpv-browser-image" src="${esc(streamUrl)}" alt="Live RTP camera" onload="handleFpvBrowserImageLoad()" onerror="handleFpvBrowserImageError()" />` : ""}
             <div id="fpv-video-placeholder" class="fpv-video-placeholder ${browserRunning && browserHasFrames && !browserStalled ? "" : "visible"}">
-              <strong>${browserStalled ? `No new RTP frame for ${esc(Number(browserStatus.last_frame_age_s).toFixed(1))}s` : browserRunning ? `Waiting for RTP on UDP ${esc(browserStatus.settings?.port || fpv.port)}...` : "Browser receiver is stopped"}</strong>
-              <span>The Console receives RTP on the notebook and relays browser-safe video here.</span>
+              <strong>${browserUsesWebRtc && !browserOwnsWebRtc ? "WebRTC session is open in another page" : browserStalled ? esc(fpvBrowserStallMessage(browserStatus)) : browserStarting ? "Starting browser receiver..." : browserRunning ? `Waiting for RTP on UDP ${esc(browserStatus.settings?.port || fpv.port)}...` : "Browser receiver is stopped"}</strong>
+              <span>${activeTransport === "webrtc" ? "The Console passes H.264 into a low-latency WebRTC video track." : "The Console receives RTP and relays browser-safe MJPEG here."}</span>
             </div>
           </div>
           <div class="fpv-live-footer">
             <span id="fpv-browser-stats">${esc(fpvBrowserStatusText(browserStatus))}</span>
-            <span>Large camera frames are scaled to fit without overflowing the page.</span>
+            <span>${activeTransport === "webrtc" ? "WebRTC H.264 passthrough · no JPEG conversion" : "MJPEG compatibility relay"} · video always scales to fit.</span>
           </div>
-          <div id="fpv-browser-error" class="notice full" ${browserStatus.last_error ? "" : "hidden"}>${esc(browserStatus.last_error || "")}</div>
+          <div id="fpv-browser-error" class="notice full" ${browserStatus.last_error || fpv.webrtcClientError ? "" : "hidden"}>${esc(fpv.webrtcClientError || browserStatus.last_error || "")}</div>
           ${running.length ? `<div class="notice full">An external receiver is using this RTP port. Stop it before starting the browser view.</div>` : ""}
         </div>
       </section>
@@ -929,8 +998,15 @@ function renderFpv() {
             </div>
             <div class="field">
               <label>Codec</label>
-              <select id="fpv-codec" onchange="handleFpvCodecChange()">
+              <select id="fpv-codec" onchange="handleFpvCodecChange()" ${browserSettingsDisabled}>
                 ${["h264", "h265", "mjpeg", "raw"].map((codec) => `<option value="${codec}" ${fpv.codec === codec ? "selected" : ""}>${codec}</option>`).join("")}
+              </select>
+            </div>
+            <div class="field">
+              <label>Browser transport</label>
+              <select id="fpv-transport" onchange="handleFpvTransportChange()" ${browserSettingsDisabled}>
+                <option value="webrtc" ${selectedTransport === "webrtc" ? "selected" : ""}>WebRTC (low latency, H.264)</option>
+                <option value="mjpeg" ${selectedTransport === "mjpeg" ? "selected" : ""}>MJPEG (compatibility)</option>
               </select>
             </div>
             <div class="field">
@@ -941,23 +1017,23 @@ function renderFpv() {
             </div>
             <div class="field">
               <label>Width</label>
-              <input id="fpv-width" type="number" min="1" value="${esc(fpv.width)}" oninput="updateFpvCommandPreview()" />
+              <input id="fpv-width" type="number" min="1" value="${esc(fpv.width)}" oninput="updateFpvCommandPreview()" ${browserSettingsDisabled} />
             </div>
             <div class="field">
               <label>Height</label>
-              <input id="fpv-height" type="number" min="1" value="${esc(fpv.height)}" oninput="updateFpvCommandPreview()" />
+              <input id="fpv-height" type="number" min="1" value="${esc(fpv.height)}" oninput="updateFpvCommandPreview()" ${browserSettingsDisabled} />
             </div>
             <div class="field">
               <label>FPS</label>
-              <input id="fpv-fps" type="number" min="1" value="${esc(fpv.fps)}" oninput="updateFpvCommandPreview()" />
+              <input id="fpv-fps" type="number" min="1" value="${esc(fpv.fps)}" oninput="updateFpvCommandPreview()" ${browserSettingsDisabled} />
             </div>
             <div class="field">
               <label>Port</label>
-              <input id="fpv-port" type="number" min="1" value="${esc(fpv.port)}" oninput="updateFpvCommandPreview()" />
+              <input id="fpv-port" type="number" min="1" value="${esc(fpv.port)}" oninput="updateFpvCommandPreview()" ${browserSettingsDisabled} />
             </div>
             <div class="field">
               <label>Payload</label>
-              <input id="fpv-payload" type="number" min="0" max="127" value="${esc(fpv.codec === "mjpeg" ? 26 : fpv.payload)}" oninput="updateFpvCommandPreview()" ${fpv.codec === "mjpeg" ? "disabled title=\"JPEG RTP uses payload type 26\"" : ""} />
+              <input id="fpv-payload" type="number" min="0" max="127" value="${esc(fpv.codec === "mjpeg" ? 26 : fpv.payload)}" oninput="updateFpvCommandPreview()" ${browserSettingsDisabled || (fpv.codec === "mjpeg" ? "disabled title=\"JPEG RTP uses payload type 26\"" : "")} />
             </div>
             <label class="check-row">
               <input id="fpv-no-display" type="checkbox" ${fpv.noDisplay ? "checked" : ""} onchange="updateFpvCommandPreview()" />
@@ -976,13 +1052,14 @@ function renderFpv() {
             </div>
             <div id="fpv-destination-notice" class="notice full" ${destinationIssue ? "" : "hidden"}>${esc(destinationIssue)}</div>
             <div class="actions full">
-              <button class="primary" onclick="startBrowserFpv()" ${browserStartDisabled}>Start in Browser</button>
+              <button class="primary" onclick="startBrowserFpv()" ${browserStartDisabled}>${startLabel}</button>
               <button onclick="startFpvViewer()" ${executionDisabledAttrs}>Open External Viewer</button>
               <button onclick="copyFpvReceiverCommand()">Copy Command</button>
               <button onclick="copyFpvJetsonCommand()">Copy Jetson Command</button>
               ${running.length ? `<button class="danger" onclick="stopTask(${js(running[0].task_id)})">Stop Running Viewer</button>` : ""}
             </div>
             ${executionDisabled ? `<div class="notice full">Opening a separate desktop viewer is disabled by default. The embedded browser view remains available without enabling custom commands.</div>` : ""}
+            ${webRtcUnavailable ? `<div class="notice full">WebRTC is unavailable: ${esc(browserStatus.webrtc?.error || "required GStreamer WebRTC components are missing")}. Select MJPEG compatibility mode or install the listed WebRTC packages.</div>` : ""}
             <div class="notice full">Use either the embedded browser view or the external GStreamer viewer. Two receivers should not bind the same UDP port at once.</div>
           </div>
         </div>
@@ -3878,7 +3955,9 @@ function readNumberInput(id, fallback) {
 
 function readFpvForm(updateState = true) {
   const codec = $("fpv-codec")?.value || state.fpv.codec;
+  const transport = $("fpv-transport")?.value || state.fpv.transport || "mjpeg";
   const next = {
+    ...state.fpv,
     host: $("fpv-host") ? $("fpv-host").value.trim() : state.fpv.host,
     codec,
     width: readNumberInput("fpv-width", state.fpv.width),
@@ -3886,9 +3965,14 @@ function readFpvForm(updateState = true) {
     fps: readNumberInput("fpv-fps", state.fpv.fps),
     port: readNumberInput("fpv-port", state.fpv.port),
     payload: codec === "mjpeg" ? 26 : readNumberInput("fpv-payload", state.fpv.payload),
+    transport,
     displaySink: $("fpv-display-sink")?.value || state.fpv.displaySink,
     noDisplay: Boolean($("fpv-no-display")?.checked ?? state.fpv.noDisplay),
     browserStatus: state.fpv.browserStatus,
+    webrtcPlaying: state.fpv.webrtcPlaying,
+    webrtcClientState: state.fpv.webrtcClientState,
+    webrtcClientError: state.fpv.webrtcClientError,
+    webrtcStats: state.fpv.webrtcStats,
   };
   if (updateState) state.fpv = next;
   return next;
@@ -3908,7 +3992,23 @@ function handleFpvCodecChange() {
       payload.title = "";
     }
   }
+  const transport = $("fpv-transport");
+  if (transport && codec !== "h264" && transport.value === "webrtc") {
+    transport.value = "mjpeg";
+    toast("WebRTC passthrough currently supports H.264; switched to MJPEG compatibility mode");
+  }
   updateFpvCommandPreview();
+}
+
+function handleFpvTransportChange() {
+  const transport = $("fpv-transport")?.value || "mjpeg";
+  const codec = $("fpv-codec")?.value || state.fpv.codec;
+  if (transport === "webrtc" && codec !== "h264") {
+    $("fpv-transport").value = "mjpeg";
+    toast("Select H.264 before enabling WebRTC passthrough", "error");
+  }
+  readFpvForm();
+  render();
 }
 
 function fpvDestinationIssue(fpv = state.fpv) {
@@ -3927,6 +4027,39 @@ function fpvDestinationIssue(fpv = state.fpv) {
 }
 
 function fpvBrowserStatusText(status = state.fpv.browserStatus || {}) {
+  const transport = fpvStatusTransport(status);
+  if (transport === "webrtc") {
+    if (!status.webrtc?.available) {
+      return `WebRTC unavailable · ${status.webrtc?.error || "required GStreamer components are missing"}`;
+    }
+    if (state.fpv.webrtcClientError) return `WebRTC error · ${state.fpv.webrtcClientError}`;
+    if (status.running && !fpvWebRtcSessionIsOwned(status)) {
+      return "WebRTC session is open in another page · stop it there or wait for its lease to expire";
+    }
+    if (fpvWebRtcPlaybackIsStalled(status)) {
+      return `WebRTC playback stalled · RTP is still arriving · ${Number(status.rtp_packet_count || 0).toLocaleString()} packets received by Console`;
+    }
+    if (fpvBackendMediaIsStalled(status)) {
+      return `RTP stalled · no packet for ${Number(fpvLastMediaAge(status)).toFixed(1)}s · ${Number(status.rtp_packet_count || 0).toLocaleString()} packets`;
+    }
+    if (status.running && !Number(status.rtp_packet_count || 0)) {
+      const phase = status.webrtc?.phase || state.fpv.webrtcClientState;
+      return `${phase === "connected" ? "WebRTC connected" : "WebRTC connecting"} · waiting for H.264 RTP on UDP ${status.settings?.port || state.fpv.port}`;
+    }
+    if (status.running) {
+      const stats = state.fpv.webrtcStats || {};
+      const decoded = Number(stats.framesDecoded || 0).toLocaleString();
+      const received = Number(stats.packetsReceived || 0).toLocaleString();
+      const lost = Number(stats.packetsLost || 0).toLocaleString();
+      const jitter = Number.isFinite(Number(stats.averageJitterBufferMs))
+        ? ` · jitter buffer ${Number(stats.averageJitterBufferMs).toFixed(1)}ms`
+        : "";
+      const age = Number.isFinite(Number(fpvLastMediaAge(status)))
+        ? ` · last RTP ${Number(fpvLastMediaAge(status)).toFixed(1)}s ago`
+        : "";
+      return `WebRTC ${state.fpv.webrtcClientState || status.webrtc?.phase || "connecting"} · ${decoded} frames decoded · ${received} packets received · ${lost} lost${jitter}${age}`;
+    }
+  }
   if (!status.available) return "GStreamer is not available on the Console host";
   if (fpvBrowserIsStalled(status)) {
     return `RTP stalled · no new frame for ${Number(status.last_frame_age_s).toFixed(1)}s · ${Number(status.frame_count).toLocaleString()} frames received`;
@@ -3948,12 +4081,74 @@ function fpvBrowserStatusText(status = state.fpv.browserStatus || {}) {
 }
 
 function fpvBrowserIsStalled(status = state.fpv.browserStatus || {}) {
+  return fpvBackendMediaIsStalled(status) || fpvWebRtcPlaybackIsStalled(status);
+}
+
+function fpvBackendMediaIsStalled(status = state.fpv.browserStatus || {}) {
+  const transport = fpvStatusTransport(status);
+  const mediaCount = transport === "webrtc"
+    ? Number(status.rtp_packet_count || 0)
+    : Number(status.frame_count || 0);
+  const mediaAge = fpvLastMediaAge(status);
   return Boolean(
     status.running
-    && Number(status.frame_count || 0) > 0
-    && Number.isFinite(Number(status.last_frame_age_s))
-    && Number(status.last_frame_age_s) > 3,
+    && mediaCount > 0
+    && Number.isFinite(Number(mediaAge))
+    && Number(mediaAge) > 3,
   );
+}
+
+function fpvWebRtcPlaybackIsStalled(status = state.fpv.browserStatus || {}) {
+  if (!fpvWebRtcSessionIsOwned(status)) return false;
+  if (Number(status.rtp_packet_count || 0) <= 0 || fpvBackendMediaIsStalled(status)) return false;
+  const lastProgressAt = Number(state.fpv.webrtcLastProgressAtMs || state.fpv.webrtcRtpObservedAtMs || 0);
+  return lastProgressAt > 0 && Date.now() - lastProgressAt > 3000;
+}
+
+function fpvWebRtcSessionIsOwned(status = state.fpv.browserStatus || {}) {
+  return Boolean(
+    status.running
+    && fpvStatusTransport(status) === "webrtc"
+    && fpvPeerConnection
+    && fpvPeerConnection.connectionState !== "closed"
+    && fpvPeerSessionId
+    && fpvPeerSessionId === status.session_id,
+  );
+}
+
+function fpvReceiverCanAutoStop(status = state.fpv.browserStatus || {}) {
+  if (!status.running) return false;
+  return fpvStatusTransport(status) !== "webrtc" || fpvWebRtcSessionIsOwned(status);
+}
+
+function fpvBrowserStallMessage(status = state.fpv.browserStatus || {}) {
+  if (fpvWebRtcPlaybackIsStalled(status)) {
+    return "WebRTC video stopped while RTP is still arriving";
+  }
+  const age = Number(fpvLastMediaAge(status));
+  const mediaLabel = fpvStatusTransport(status) === "webrtc" ? "RTP packet" : "decoded frame";
+  return Number.isFinite(age) ? `No new ${mediaLabel} for ${age.toFixed(1)}s` : "RTP input stopped";
+}
+
+function noteFpvWebRtcRtpObserved(status = state.fpv.browserStatus || {}) {
+  if (
+    status.running
+    && fpvStatusTransport(status) === "webrtc"
+    && Number(status.rtp_packet_count || 0) > 0
+    && !state.fpv.webrtcRtpObservedAtMs
+  ) {
+    state.fpv.webrtcRtpObservedAtMs = Date.now();
+  }
+}
+
+function fpvLastMediaAge(status = state.fpv.browserStatus || {}) {
+  const transport = fpvStatusTransport(status);
+  return transport === "webrtc" ? status.last_packet_age_s : status.last_frame_age_s;
+}
+
+function fpvStatusTransport(status = state.fpv.browserStatus || {}) {
+  if (!status.running) return state.fpv.transport || "mjpeg";
+  return status.settings?.transport || status.transport || state.fpv.transport || "mjpeg";
 }
 
 function fpvBrowserPayload(fpv = state.fpv) {
@@ -3964,50 +4159,276 @@ function fpvBrowserPayload(fpv = state.fpv) {
     fps: fpv.fps,
     port: fpv.port,
     payload: fpv.payload,
+    transport: fpv.transport || "mjpeg",
   };
 }
 
 async function startBrowserFpv() {
+  if (state.fpv.starting || state.fpv.browserStatus?.running) return;
   const external = state.tasks.find((task) => task.kind === "fpv-viewer" && ["queued", "running", "stopping"].includes(task.status));
   if (external) {
     toast("Stop the external RTP viewer before starting the browser view", "error");
     return;
   }
   const fpv = readFpvForm();
+  closeFpvPeerConnection();
+  const lifecycleGeneration = fpvLifecycleGeneration;
+  resetFpvWebRtcPlaybackState();
+  state.fpv.starting = true;
+  state.fpv.webrtcClientState = "closed";
+  state.fpv.webrtcClientError = "";
+  if (state.tab === "fpv") render();
+  let startedSessionId = "";
   try {
     const result = await api("/api/fpv/start", {
       method: "POST",
       body: JSON.stringify(fpvBrowserPayload(fpv)),
     });
+    startedSessionId = result.fpv?.session_id || "";
+    if (lifecycleGeneration !== fpvLifecycleGeneration) {
+      await stopFpvSessionSilently(startedSessionId);
+      return;
+    }
     state.fpv.browserStatus = result.fpv || {};
-    render();
-    toast("Browser RTP receiver started");
+    state.fpv.starting = false;
+    noteFpvWebRtcRtpObserved(state.fpv.browserStatus);
+    if (state.tab === "fpv") render();
+    if (fpv.transport === "webrtc") {
+      const connected = await connectBrowserFpvWebRtc(startedSessionId, lifecycleGeneration);
+      if (!connected || lifecycleGeneration !== fpvLifecycleGeneration) {
+        await stopFpvSessionSilently(startedSessionId);
+        return;
+      }
+      toast("WebRTC receiver started");
+    } else {
+      toast("MJPEG browser receiver started");
+    }
   } catch (error) {
-    toast(`Could not start browser receiver: ${error.message}`, "error");
+    if (lifecycleGeneration !== fpvLifecycleGeneration) {
+      await stopFpvSessionSilently(startedSessionId);
+      return;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    const cleanedUp = await stopFailedFpvSession(startedSessionId, lifecycleGeneration, message);
+    if (cleanedUp) toast(`Could not start browser receiver: ${message}`, "error");
   }
 }
 
 async function stopBrowserFpv({ silent = false, renderAfter = true } = {}) {
+  const previousStatus = state.fpv.browserStatus || {};
   const sessionId = state.fpv.browserStatus?.session_id || "";
-  if (!sessionId) return;
+  closeFpvPeerConnection();
+  const lifecycleGeneration = fpvLifecycleGeneration;
+  resetFpvWebRtcPlaybackState();
+  state.fpv.starting = false;
+  state.fpv.webrtcClientState = "closed";
+  state.fpv.webrtcClientError = "";
+  state.fpv.browserStatus = stoppedFpvBrowserStatus(previousStatus);
+  if (!sessionId) {
+    if (renderAfter && state.tab === "fpv") render();
+    return;
+  }
   try {
     const result = await api("/api/fpv/stop", {
       method: "POST",
       body: JSON.stringify({ session_id: sessionId }),
     });
-    if (
-      state.fpv.browserStatus?.running
-      && state.fpv.browserStatus?.session_id
-      && state.fpv.browserStatus.session_id !== sessionId
-    ) {
-      return;
-    }
+    if (lifecycleGeneration !== fpvLifecycleGeneration) return;
     state.fpv.browserStatus = result.fpv || { available: true, running: false };
     if (renderAfter && state.tab === "fpv") render();
     if (!silent) toast("Browser RTP receiver stopped");
   } catch (error) {
+    if (lifecycleGeneration !== fpvLifecycleGeneration) return;
+    state.fpv.webrtcClientError = `Could not stop browser receiver: ${error.message}`;
+    if (renderAfter && state.tab === "fpv") render();
     if (!silent) toast(`Could not stop browser receiver: ${error.message}`, "error");
   }
+}
+
+async function stopFpvSessionSilently(sessionId) {
+  if (!sessionId) return null;
+  try {
+    return await api("/api/fpv/stop", {
+      method: "POST",
+      body: JSON.stringify({ session_id: sessionId }),
+    });
+  } catch {
+    return null;
+  }
+}
+
+async function stopFailedFpvSession(sessionId, lifecycleGeneration, message) {
+  if (lifecycleGeneration !== fpvLifecycleGeneration) return false;
+  const previousStatus = state.fpv.browserStatus || {};
+  closeFpvPeerConnection();
+  const cleanupGeneration = fpvLifecycleGeneration;
+  resetFpvWebRtcPlaybackState();
+  state.fpv.starting = false;
+  state.fpv.webrtcClientState = "failed";
+  state.fpv.webrtcClientError = message;
+  state.fpv.browserStatus = stoppedFpvBrowserStatus(previousStatus);
+  updateFpvBrowserStatusDom();
+  const result = await stopFpvSessionSilently(sessionId);
+  if (cleanupGeneration !== fpvLifecycleGeneration) return false;
+  if (result?.fpv) state.fpv.browserStatus = result.fpv;
+  state.fpv.webrtcClientError = message;
+  if (state.tab === "fpv") render();
+  return true;
+}
+
+function stoppedFpvBrowserStatus(status = {}) {
+  return {
+    ...status,
+    running: false,
+    session_id: "",
+    last_error: "",
+  };
+}
+
+function resetFpvWebRtcPlaybackState() {
+  state.fpv.webrtcPlaying = false;
+  state.fpv.webrtcStats = null;
+  state.fpv.webrtcLastProgressAtMs = 0;
+  state.fpv.webrtcLastFramesDecoded = 0;
+  state.fpv.webrtcLastVideoTime = 0;
+  state.fpv.webrtcRtpObservedAtMs = 0;
+}
+
+function fpvMediaElement() {
+  return $("fpv-browser-video") || $("fpv-browser-image");
+}
+
+function closeFpvPeerConnection({ invalidate = true } = {}) {
+  if (invalidate) fpvLifecycleGeneration += 1;
+  const connection = fpvPeerConnection;
+  fpvPeerConnection = null;
+  fpvPeerSessionId = "";
+  fpvRemoteStream = null;
+  const video = $("fpv-browser-video");
+  if (video) video.srcObject = null;
+  if (!connection) return;
+  connection.ontrack = null;
+  connection.onconnectionstatechange = null;
+  connection.oniceconnectionstatechange = null;
+  try {
+    connection.close();
+  } catch {
+    // A connection which already failed may throw while closing on older browsers.
+  }
+}
+
+function fpvPeerIsCurrent(connection, sessionId, lifecycleGeneration) {
+  return Boolean(
+    lifecycleGeneration === fpvLifecycleGeneration
+    && connection === fpvPeerConnection
+    && sessionId === fpvPeerSessionId,
+  );
+}
+
+function attachFpvRemoteStream() {
+  const video = $("fpv-browser-video");
+  if (!video || !fpvRemoteStream) return;
+  if (video.srcObject !== fpvRemoteStream) video.srcObject = fpvRemoteStream;
+  video.play().catch(() => {});
+}
+
+function waitForFpvIceGathering(connection, timeoutMs = 8000) {
+  if (connection.iceGatheringState === "complete") return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const timeout = window.setTimeout(() => {
+      connection.removeEventListener("icegatheringstatechange", onChange);
+      reject(new Error("browser ICE gathering timed out"));
+    }, timeoutMs);
+    const onChange = () => {
+      if (connection.iceGatheringState !== "complete") return;
+      window.clearTimeout(timeout);
+      connection.removeEventListener("icegatheringstatechange", onChange);
+      resolve();
+    };
+    connection.addEventListener("icegatheringstatechange", onChange);
+  });
+}
+
+async function connectBrowserFpvWebRtc(sessionId, lifecycleGeneration) {
+  if (!window.RTCPeerConnection) throw new Error("this browser does not support WebRTC");
+  if (!sessionId) throw new Error("WebRTC session was not created");
+  if (lifecycleGeneration !== fpvLifecycleGeneration) return false;
+
+  const connection = new RTCPeerConnection({ iceServers: [], bundlePolicy: "max-bundle" });
+  fpvPeerConnection = connection;
+  fpvPeerSessionId = sessionId;
+  state.fpv.webrtcClientState = "connecting";
+
+  connection.ontrack = (event) => {
+    if (!fpvPeerIsCurrent(connection, sessionId, lifecycleGeneration)) return;
+    fpvRemoteStream = event.streams[0] || new MediaStream([event.track]);
+    attachFpvRemoteStream();
+  };
+  connection.onconnectionstatechange = () => {
+    if (!fpvPeerIsCurrent(connection, sessionId, lifecycleGeneration)) return;
+    state.fpv.webrtcClientState = connection.connectionState;
+    if (connection.connectionState === "failed") {
+      state.fpv.webrtcPlaying = false;
+      void stopFailedFpvSession(sessionId, lifecycleGeneration, "WebRTC connection failed");
+      return;
+    }
+    if (connection.connectionState === "closed") {
+      state.fpv.webrtcPlaying = false;
+    }
+    updateFpvBrowserStatusDom();
+  };
+  connection.oniceconnectionstatechange = () => {
+    if (!fpvPeerIsCurrent(connection, sessionId, lifecycleGeneration)) return;
+    if (connection.iceConnectionState === "failed") {
+      void stopFailedFpvSession(sessionId, lifecycleGeneration, "ICE connection failed");
+    }
+  };
+
+  const offerResult = await api("/api/fpv/webrtc/offer", {
+    method: "POST",
+    body: JSON.stringify({ session_id: sessionId }),
+  });
+  if (!fpvPeerIsCurrent(connection, sessionId, lifecycleGeneration)) return false;
+  const offer = offerResult.offer || {};
+  if (offer.type !== "offer" || !offer.sdp) throw new Error("Console returned an invalid WebRTC offer");
+  await connection.setRemoteDescription(offer);
+  if (!fpvPeerIsCurrent(connection, sessionId, lifecycleGeneration)) return false;
+  const answer = await connection.createAnswer();
+  if (!fpvPeerIsCurrent(connection, sessionId, lifecycleGeneration)) return false;
+  await connection.setLocalDescription(answer);
+  if (!fpvPeerIsCurrent(connection, sessionId, lifecycleGeneration)) return false;
+  await waitForFpvIceGathering(connection);
+  if (!fpvPeerIsCurrent(connection, sessionId, lifecycleGeneration)) return false;
+  const local = connection.localDescription;
+  if (!local?.type || !local?.sdp) throw new Error("browser did not create a complete WebRTC answer");
+  const answerResult = await api("/api/fpv/webrtc/answer", {
+    method: "POST",
+    body: JSON.stringify({
+      session_id: sessionId,
+      type: local.type,
+      sdp: local.sdp,
+    }),
+  });
+  if (!fpvPeerIsCurrent(connection, sessionId, lifecycleGeneration)) return false;
+  if (answerResult.fpv) state.fpv.browserStatus = answerResult.fpv;
+  updateFpvBrowserStatusDom();
+  return true;
+}
+
+function handleFpvBrowserVideoPlaying() {
+  state.fpv.webrtcPlaying = true;
+  state.fpv.webrtcClientError = "";
+  state.fpv.webrtcLastProgressAtMs = Date.now();
+  const video = $("fpv-browser-video");
+  if (video) state.fpv.webrtcLastVideoTime = Number(video.currentTime || 0);
+  const placeholder = $("fpv-video-placeholder");
+  if (placeholder) placeholder.classList.remove("visible");
+  updateFpvBrowserStatusDom();
+}
+
+function handleFpvBrowserVideoWaiting() {
+  state.fpv.webrtcPlaying = false;
+  updateFpvBrowserStatusDom();
 }
 
 function handleFpvBrowserImageLoad() {
@@ -4030,30 +4451,45 @@ function updateFpvBrowserStatusDom() {
   const status = state.fpv.browserStatus || {};
   const badge = $("fpv-browser-badge");
   const stalled = fpvBrowserIsStalled(status);
+  const transport = fpvStatusTransport(status);
+  const usesWebRtc = transport === "webrtc";
+  const unownedWebRtc = usesWebRtc && status.running && !fpvWebRtcSessionIsOwned(status);
+  const hasMedia = usesWebRtc
+    ? Boolean(state.fpv.webrtcPlaying || Number(state.fpv.webrtcStats?.framesDecoded || 0) > 0)
+    : Number(status.frame_count || 0) > 0;
+  const clientFailed = Boolean(state.fpv.webrtcClientError);
   if (badge) {
-    badge.className = `status ${stalled ? "stopping" : status.running ? "running" : status.last_error ? "failed" : "idle"}`;
-    badge.textContent = status.running ? (stalled ? "STALLED" : status.frame_count ? "LIVE" : "WAITING") : status.last_error ? "ERROR" : "STOPPED";
+    badge.className = `status ${clientFailed || status.last_error ? "failed" : unownedWebRtc ? "running" : stalled ? "stopping" : status.running ? "running" : "idle"}`;
+    badge.textContent = clientFailed || status.last_error
+      ? "ERROR"
+      : status.running
+        ? (unownedWebRtc ? "OTHER TAB" : stalled ? "STALLED" : hasMedia ? "LIVE" : usesWebRtc && state.fpv.webrtcClientState === "connecting" ? "CONNECTING" : "WAITING")
+        : "STOPPED";
   }
   const stats = $("fpv-browser-stats");
   if (stats) stats.textContent = fpvBrowserStatusText(status);
   const error = $("fpv-browser-error");
   if (error) {
-    error.textContent = status.last_error || "";
-    error.hidden = !status.last_error;
+    error.textContent = state.fpv.webrtcClientError || status.last_error || "";
+    error.hidden = !state.fpv.webrtcClientError && !status.last_error;
   }
   const placeholder = $("fpv-video-placeholder");
   if (placeholder) {
-    const waiting = status.running && !status.frame_count;
-    placeholder.classList.toggle("visible", Boolean(!status.running || waiting || stalled));
+    const waiting = status.running && !hasMedia;
+    placeholder.classList.toggle("visible", Boolean(!status.running || waiting || stalled || clientFailed));
     const title = placeholder.querySelector("strong");
     if (title) {
-      title.textContent = stalled
-        ? `No new RTP frame for ${Number(status.last_frame_age_s).toFixed(1)}s`
-        : waiting
-          ? `Waiting for RTP on UDP ${status.settings?.port || state.fpv.port}...`
-          : !status.running
-            ? "Browser receiver is stopped"
-            : "";
+      title.textContent = clientFailed
+        ? state.fpv.webrtcClientError
+        : unownedWebRtc
+          ? "WebRTC session is open in another page"
+          : stalled
+            ? fpvBrowserStallMessage(status)
+            : waiting
+              ? `${usesWebRtc && state.fpv.webrtcClientState === "connecting" ? "Connecting WebRTC and waiting" : "Waiting"} for RTP on UDP ${status.settings?.port || state.fpv.port}...`
+              : !status.running
+                ? "Browser receiver is stopped"
+                : "";
     }
   }
 }
@@ -4062,27 +4498,98 @@ async function pollFpvBrowserStatus() {
   if (fpvHeartbeatBusy || state.tab !== "fpv" || !state.fpv.browserStatus?.running) return;
   fpvHeartbeatBusy = true;
   const previousSession = state.fpv.browserStatus.session_id;
+  const lifecycleGeneration = fpvLifecycleGeneration;
   try {
-    await api("/api/fpv/heartbeat", {
-      method: "POST",
-      body: JSON.stringify({ session_id: previousSession }),
-    });
+    const shouldRenewLease = fpvStatusTransport(state.fpv.browserStatus) !== "webrtc"
+      || fpvWebRtcSessionIsOwned(state.fpv.browserStatus);
+    if (shouldRenewLease) {
+      await api("/api/fpv/heartbeat", {
+        method: "POST",
+        body: JSON.stringify({ session_id: previousSession }),
+      });
+    }
+    if (
+      lifecycleGeneration !== fpvLifecycleGeneration
+      || previousSession !== state.fpv.browserStatus?.session_id
+    ) return;
     const result = await api("/api/fpv/status");
+    if (
+      lifecycleGeneration !== fpvLifecycleGeneration
+      || previousSession !== state.fpv.browserStatus?.session_id
+    ) return;
     const next = result.fpv || {};
     state.fpv.browserStatus = next;
+    noteFpvWebRtcRtpObserved(next);
     if (!next.running || next.session_id !== previousSession) {
+      closeFpvPeerConnection();
+      resetFpvWebRtcPlaybackState();
       render();
       return;
     }
+    await refreshFpvWebRtcStats();
     updateFpvBrowserStatusDom();
   } catch {
+    if (lifecycleGeneration !== fpvLifecycleGeneration) return;
     const result = await api("/api/fpv/status").catch(() => null);
+    if (lifecycleGeneration !== fpvLifecycleGeneration) return;
     if (result?.fpv) {
       state.fpv.browserStatus = result.fpv;
-      if (!result.fpv.running) render();
+      noteFpvWebRtcRtpObserved(result.fpv);
+      if (!result.fpv.running) {
+        closeFpvPeerConnection();
+        resetFpvWebRtcPlaybackState();
+        render();
+      }
     }
   } finally {
     fpvHeartbeatBusy = false;
+  }
+}
+
+async function refreshFpvWebRtcStats() {
+  const connection = fpvPeerConnection;
+  const sessionId = fpvPeerSessionId;
+  const lifecycleGeneration = fpvLifecycleGeneration;
+  if (!connection || connection.connectionState === "closed") return;
+  try {
+    const reports = await connection.getStats();
+    if (!fpvPeerIsCurrent(connection, sessionId, lifecycleGeneration)) return;
+    let inbound = null;
+    reports.forEach((report) => {
+      if (report.type === "inbound-rtp" && (report.kind === "video" || report.mediaType === "video")) {
+        inbound = report;
+      }
+    });
+    if (!inbound) return;
+    const emitted = Number(inbound.jitterBufferEmittedCount || 0);
+    const hasDecodedFrameCounter = inbound.framesDecoded != null && Number.isFinite(Number(inbound.framesDecoded));
+    const framesDecoded = hasDecodedFrameCounter ? Number(inbound.framesDecoded) : 0;
+    const video = $("fpv-browser-video");
+    const videoTime = Number(video?.currentTime || 0);
+    if (
+      framesDecoded > Number(state.fpv.webrtcLastFramesDecoded || 0)
+      || (
+        !hasDecodedFrameCounter
+        && videoTime > Number(state.fpv.webrtcLastVideoTime || 0) + 0.01
+      )
+    ) {
+      state.fpv.webrtcLastProgressAtMs = Date.now();
+    }
+    state.fpv.webrtcLastFramesDecoded = framesDecoded;
+    state.fpv.webrtcLastVideoTime = videoTime;
+    state.fpv.webrtcStats = {
+      framesDecoded,
+      framesDropped: Number(inbound.framesDropped || 0),
+      packetsReceived: Number(inbound.packetsReceived || 0),
+      packetsLost: Number(inbound.packetsLost || 0),
+      bytesReceived: Number(inbound.bytesReceived || 0),
+      jitterSeconds: Number(inbound.jitter || 0),
+      averageJitterBufferMs: emitted > 0
+        ? (Number(inbound.jitterBufferDelay || 0) / emitted) * 1000
+        : 0,
+    };
+  } catch {
+    // Stats are diagnostic only; a browser may temporarily reject during ICE changes.
   }
 }
 
@@ -5688,7 +6195,7 @@ setInterval(() => {
         return;
       }
       state.tasks = nextTasks;
-      if (state.tab === "fpv" && state.fpv.browserStatus?.running && $("fpv-browser-image")) {
+      if (state.tab === "fpv" && state.fpv.browserStatus?.running && fpvMediaElement()) {
         updateTaskChrome();
         updateFpvBrowserStatusDom();
         return;
@@ -5713,9 +6220,12 @@ setInterval(() => {
 }, 2000);
 
 window.addEventListener("beforeunload", () => {
-  if (!state.fpv.browserStatus?.running || !navigator.sendBeacon) return;
+  if (!state.fpv.starting && !fpvReceiverCanAutoStop(state.fpv.browserStatus)) return;
+  const sessionId = state.fpv.browserStatus?.session_id || "";
+  closeFpvPeerConnection();
+  if (!sessionId || !navigator.sendBeacon) return;
   const body = new Blob(
-    [JSON.stringify({ session_id: state.fpv.browserStatus.session_id })],
+    [JSON.stringify({ session_id: sessionId })],
     { type: "application/json" },
   );
   navigator.sendBeacon("/api/fpv/stop", body);

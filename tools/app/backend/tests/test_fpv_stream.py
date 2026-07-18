@@ -34,6 +34,8 @@ class FpvStreamSettingsTests(unittest.TestCase):
             {"payload": 128},
             {"width": "2.5"},
             {"fps": True},
+            {"transport": "websocket"},
+            {"transport": "webrtc", "codec": "h265"},
         )
         for values in invalid_values:
             with self.subTest(values=values), self.assertRaises(ValueError):
@@ -111,6 +113,23 @@ class _RecordingFpvManager:
             "session_id": "test-session" if self.running else "",
             "settings": self.settings.as_json() if self.settings else None,
         }
+
+    def create_offer(self, session_id: str) -> dict[str, object]:
+        if not self.running or session_id != "test-session":
+            raise RuntimeError("stale WebRTC session")
+        return {"session_id": session_id, "type": "offer", "sdp": "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\n"}
+
+    def set_answer(
+        self,
+        session_id: str,
+        description_type: str,
+        sdp: str,
+    ) -> dict[str, object]:
+        if not self.running or session_id != "test-session":
+            raise RuntimeError("stale WebRTC session")
+        if description_type != "answer" or "m=video" not in sdp:
+            raise ValueError("invalid WebRTC answer")
+        return self.status()
 
     def current_session_id(self) -> str:
         return ""
@@ -218,6 +237,42 @@ class FpvHttpEndpointTests(unittest.TestCase):
         status, payload = self.request("GET", "/api/fpv/stream")
         self.assertEqual(status, 409)
         self.assertIn("not running", payload["error"])
+
+    def test_webrtc_offer_and_answer_are_scoped_to_the_active_session(self) -> None:
+        self.manager.running = True
+        status, payload = self.request(
+            "POST", "/api/fpv/webrtc/offer", {"session_id": "test-session"}
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(payload["offer"]["type"], "offer")
+
+        status, payload = self.request(
+            "POST",
+            "/api/fpv/webrtc/answer",
+            {
+                "session_id": "test-session",
+                "type": "answer",
+                "sdp": "v=0\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\n",
+            },
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["ok"])
+
+        status, payload = self.request(
+            "POST", "/api/fpv/webrtc/offer", {"session_id": "stale-session"}
+        )
+        self.assertEqual(status, 409)
+        self.assertIn("stale", payload["error"])
+
+    def test_webrtc_answer_requires_string_sdp(self) -> None:
+        self.manager.running = True
+        status, payload = self.request(
+            "POST",
+            "/api/fpv/webrtc/answer",
+            {"session_id": "test-session", "type": "answer", "sdp": 42},
+        )
+        self.assertEqual(status, 400)
+        self.assertIn("string", payload["error"])
 
 
 class FpvStreamManagerRegressionTests(unittest.TestCase):

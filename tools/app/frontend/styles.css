@@ -239,7 +239,8 @@ textarea {
   contain: inline-size paint;
 }
 
-.fpv-video-stage img {
+.fpv-video-stage img,
+.fpv-video-stage video {
   position: absolute;
   inset: 0;
   display: block;

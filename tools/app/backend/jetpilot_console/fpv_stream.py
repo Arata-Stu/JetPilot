@@ -11,6 +11,7 @@ from typing import Any, Mapping
 
 
 SUPPORTED_CODECS = frozenset({"h264", "h265", "mjpeg", "raw"})
+SUPPORTED_BROWSER_TRANSPORTS = frozenset({"mjpeg", "webrtc"})
 WEB_MAX_WIDTH = 1280
 WEB_MAX_HEIGHT = 720
 WEB_MAX_FPS = 30
@@ -75,6 +76,7 @@ class FpvStreamSettings:
     payload: int = 96
     jitter_latency_ms: int = 0
     jpeg_quality: int = 80
+    transport: str = "mjpeg"
 
     @classmethod
     def from_mapping(cls, values: Mapping[str, Any]) -> "FpvStreamSettings":
@@ -82,6 +84,12 @@ class FpvStreamSettings:
         if codec not in SUPPORTED_CODECS:
             supported = ", ".join(sorted(SUPPORTED_CODECS))
             raise ValueError(f"codec must be one of: {supported}")
+        transport = str(values.get("transport") or "mjpeg").strip().lower()
+        if transport not in SUPPORTED_BROWSER_TRANSPORTS:
+            supported = ", ".join(sorted(SUPPORTED_BROWSER_TRANSPORTS))
+            raise ValueError(f"transport must be one of: {supported}")
+        if transport == "webrtc" and codec != "h264":
+            raise ValueError("WebRTC currently requires the h264 RTP codec")
         payload = _bounded_int(
             values.get("payload"), field="payload", default=96, minimum=0, maximum=127
         )
@@ -114,6 +122,7 @@ class FpvStreamSettings:
                 minimum=20,
                 maximum=95,
             ),
+            transport=transport,
         )
 
     def browser_dimensions(self) -> tuple[int, int]:
@@ -137,6 +146,8 @@ def build_gstreamer_command(
     *,
     executable: str = "gst-launch-1.0",
 ) -> list[str]:
+    if settings.transport != "mjpeg":
+        raise ValueError("the MJPEG relay only accepts transport=mjpeg")
     command = [executable, "-q"]
     if settings.codec == "raw":
         caps = (

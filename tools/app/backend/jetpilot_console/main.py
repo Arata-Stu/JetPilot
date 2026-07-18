@@ -22,7 +22,8 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from .bag_analysis import AnalysisRepository, build_analysis_script, rosbag_detail
 from .config import ConsoleConfig
-from .fpv_stream import FpvStreamManager, FpvStreamSettings
+from .fpv_receiver import FpvReceiverManager
+from .fpv_stream import FpvStreamSettings
 from .indexes import scan_maps, scan_rosbags
 from .map_detail import (
     build_map_detail,
@@ -177,7 +178,11 @@ class ConsoleState:
         self.loopback_only = loopback_only
         self.tasks = None if joy_only else TaskManager(config.state_dir, config.repo_root)
         self.analyses = None if joy_only else AnalysisRepository(config.analysis_root)
-        self.fpv_stream = None if joy_only else FpvStreamManager()
+        self.fpv_stream = (
+            None
+            if joy_only
+            else FpvReceiverManager(allow_webrtc=loopback_only)
+        )
 
 
 class ConsoleHTTPServer(ThreadingHTTPServer):
@@ -323,6 +328,47 @@ class Handler(BaseHTTPRequestHandler):
             session_id = str(body.get("session_id") or "")
             ok = self.server.state.fpv_stream.heartbeat(session_id)  # type: ignore[union-attr]
             self._json({"ok": ok}, HTTPStatus.OK if ok else HTTPStatus.CONFLICT)
+            return
+
+        if path == "/api/fpv/webrtc/offer":
+            session_id = str(body.get("session_id") or "")
+            if not session_id:
+                self._json({"error": "session_id is required"}, HTTPStatus.BAD_REQUEST)
+                return
+            try:
+                offer = self.server.state.fpv_stream.create_offer(session_id)  # type: ignore[union-attr]
+            except ValueError as exc:
+                self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                return
+            except (RuntimeError, TimeoutError) as exc:
+                self._json({"error": str(exc)}, HTTPStatus.CONFLICT)
+                return
+            self._json({"offer": offer})
+            return
+
+        if path == "/api/fpv/webrtc/answer":
+            session_id = str(body.get("session_id") or "")
+            description_type = str(body.get("type") or "")
+            sdp = body.get("sdp")
+            if not session_id:
+                self._json({"error": "session_id is required"}, HTTPStatus.BAD_REQUEST)
+                return
+            if not isinstance(sdp, str):
+                self._json({"error": "sdp must be a string"}, HTTPStatus.BAD_REQUEST)
+                return
+            try:
+                status = self.server.state.fpv_stream.set_answer(  # type: ignore[union-attr]
+                    session_id,
+                    description_type,
+                    sdp,
+                )
+            except ValueError as exc:
+                self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                return
+            except (RuntimeError, TimeoutError) as exc:
+                self._json({"error": str(exc)}, HTTPStatus.CONFLICT)
+                return
+            self._json({"ok": True, "fpv": status})
             return
 
         if path == "/api/fpv/stop":
@@ -543,6 +589,12 @@ class Handler(BaseHTTPRequestHandler):
         session_id = requested_session or manager.current_session_id()
         if not session_id or not manager.session_is_running(session_id):
             self._json({"error": "FPV receiver is not running"}, HTTPStatus.CONFLICT)
+            return
+        if hasattr(manager, "stream_is_mjpeg") and not manager.stream_is_mjpeg(session_id):
+            self._json(
+                {"error": "the active FPV receiver uses WebRTC, not MJPEG"},
+                HTTPStatus.CONFLICT,
+            )
             return
 
         boundary = b"jetpilot-frame"
@@ -1311,7 +1363,7 @@ def main() -> int:
         server.serve_forever()
     finally:
         if state.fpv_stream is not None:
-            state.fpv_stream.stop()
+            state.fpv_stream.shutdown()
         server.server_close()
     return 0
 

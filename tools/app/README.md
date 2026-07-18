@@ -75,9 +75,10 @@ Implemented in this MVP:
   `RECORD_ROOT/.jetpilot_analysis`).
 - Synchronized drive viewer for image frames, operation mode, applied control,
   speed, and localized trajectory.
-- Embedded notebook-side RTP viewer in the FPV tab. The backend owns the UDP
-  receiver and GStreamer decoder, rate-limits/re-scales the browser relay to at
-  most 1280x720 at 30 FPS, and serves it as an in-page MJPEG stream.
+- Embedded notebook-side RTP viewer in the FPV tab. H.264 can be passed through
+  GStreamer WebRTC without decoding or JPEG conversion for the low-latency
+  path. The existing MJPEG browser relay remains available for H.265, MJPEG,
+  raw RTP, and compatibility testing.
 - Optional offline VGL/VSLAM replay when a recorded localization trajectory is
   unavailable, using an isolated configurable ROS domain.
 - Analysis preflight checks for required topics, selected Map artifacts, VGL
@@ -180,11 +181,14 @@ tools/app/scripts/start.sh --host 127.0.0.1 --port 8765
 
 ## Live RTP in the FPV tab
 
-The browser cannot open an RTP/UDP socket directly. **FPV → Start in Browser**
+The browser cannot open an RTP/UDP socket directly. **FPV → Start WebRTC**
 therefore starts a fixed, validated GStreamer pipeline in the Console backend
-on the notebook. It decodes `h264`, `h265`, `mjpeg`, or `raw` RTP and relays the
-newest frames to the page. This path does not require enabling the arbitrary
-custom-command endpoint.
+on the notebook. For H.264, it depayloads and repayloads the encoded stream into
+WebRTC without decoding, resizing, or JPEG conversion. This removes the main
+extra buffering and image-conversion stages of the compatibility relay. The
+**MJPEG** browser transport still decodes `h264`, `h265`, `mjpeg`, or `raw` RTP,
+keeps only the newest frame, limits it to 1280x720 at 30 FPS, and serves it to
+the page. Neither path requires enabling arbitrary custom commands.
 
 Set the codec, source width/height, FPS, UDP port, and payload to match the
 Jetson sender, then select the notebook IP used by the Jetson command. For
@@ -194,9 +198,23 @@ stopped while the embedded viewer owns the same UDP port.
 The receiver stops when you leave the FPV tab, close the page, press **Stop**,
 or the browser heartbeat disappears. Missing GStreamer elements and UDP port
 conflicts are shown in the FPV status panel. The Console host/container must
-provide the GStreamer tools, codec plugins, and JPEG encoder listed in
+provide the GStreamer tools and plugins listed in
 `tools/rtp_video_experiment/README.md`; the repository's `additional_setting`
-Docker layer installs those plugin sets.
+Docker layer installs most of those plugin sets. WebRTC additionally requires
+the distro packages `gstreamer1.0-nice` and
+`gir1.2-gst-plugins-bad-1.0` and GStreamer 1.20 or newer. Start the Console on
+loopback as documented above; the unauthenticated remote-bind mode intentionally
+disables WebRTC signaling.
+
+When the Console runs in Linux Docker, use host networking and keep the Console
+bound to `127.0.0.1`. This first local-only WebRTC path uses host ICE candidates
+without STUN/TURN; Docker bridge/NAT mode is not supported yet.
+
+The first WebRTC implementation supports H.264 only. If a browser or sender
+profile is incompatible, select **MJPEG (compatibility)** and compare behavior.
+The page reports browser-side decoded frames, received/lost packets, and RTP
+stall state so WebRTC and the external native viewer can be measured side by
+side.
 
 ## Non-Goals For MVP
 
