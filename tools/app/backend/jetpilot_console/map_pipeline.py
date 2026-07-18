@@ -33,6 +33,10 @@ def default_topic_config(config: ConsoleConfig) -> Path:
     return localization_config_dir(config) / "vgl_camera_topics.yaml"
 
 
+def default_vslam_rviz_config(config: ConsoleConfig) -> Path:
+    return config.ros2_ws / "install" / "jetpilot_system_launch" / "share" / "jetpilot_system_launch" / "rviz" / "vslam_debug.rviz"
+
+
 def localization_config_dir(config: ConsoleConfig) -> Path:
     return (
         config.ros2_ws
@@ -109,9 +113,8 @@ def build_vgl_vslam_script(
 ) -> str:
     topic_config_path = topic_config or str(default_topic_config(config))
     create_steps = " ".join(shlex.quote(step) for step in steps.split())
-    # Automated offline replay is easier to shut down cleanly without RViz in the
-    # launch graph. The UI can still visualize the generated artifacts afterward.
-    rviz_value = "false"
+    rviz_value = "true" if enable_rviz else "false"
+    rviz_config_file = default_vslam_rviz_config(config)
     return f"""set -euo pipefail
 {_source_ros_setup(config)}
 mkdir -p {_q(map_dir)}
@@ -183,6 +186,7 @@ ros2 launch {_q(config.launch_package)} bringup.launch.py \\
   vgl_topic_config_file:={_q(topic_config_path)} \\
   vgl_model_dir:={_q(output_model_dir)} \\
   enable_rviz:={rviz_value} \\
+  rviz_config_file:={_q(rviz_config_file)} \\
   enable_tool:=true \\
   enable_bag_manager:=false \\
   enable_joy:=false \\

@@ -14,7 +14,8 @@ CREATE_MAP_OFFLINE_STEPS="${CREATE_MAP_OFFLINE_STEPS:-edex compute_poses cuvgl}"
 ALLOW_OCCUPANCY_MAP_STEP="${ALLOW_OCCUPANCY_MAP_STEP:-false}"
 ROSBAG_START_DELAY_S="${ROSBAG_START_DELAY_S:-5.0}"
 ROSBAG_PLAY_ADDITIONAL_ARGS="${ROSBAG_PLAY_ADDITIONAL_ARGS:---clock}"
-ENABLE_OFFLINE_RVIZ="${ENABLE_OFFLINE_RVIZ:-false}"
+ENABLE_OFFLINE_RVIZ="${ENABLE_OFFLINE_RVIZ:-true}"
+OFFLINE_RVIZ_CONFIG_FILE="${OFFLINE_RVIZ_CONFIG_FILE:-${ROS2_WS}/install/jetpilot_system_launch/share/jetpilot_system_launch/rviz/vslam_debug.rviz}"
 ENABLE_HD_MAP_WORKFLOW="${ENABLE_HD_MAP_WORKFLOW:-ask}"
 CAMERA_TOPIC_CONFIG_FILE="${CAMERA_TOPIC_CONFIG_FILE:-}"
 VSLAM_LANDMARKS_TOPIC="${VSLAM_LANDMARKS_TOPIC:-/visual_slam/vis/landmarks_cloud}"
@@ -560,10 +561,15 @@ run_offline_eval() {
   local offline_player_missing=0
   local offline_launch_status=0
   local replay_additional_args
+  local rviz_config_file
 
   topic_config_file="$(resolve_camera_topic_config_file)"
   snapshot_path="${map_dir}/vslam_reference_snapshot.json"
   cuvslam_map_dir="${map_dir}/cuvslam_map"
+  rviz_config_file="$OFFLINE_RVIZ_CONFIG_FILE"
+  if [[ ! -f "$rviz_config_file" ]]; then
+    rviz_config_file="${ROS2_WS}/src/launch/jetpilot_system_launch/rviz/vslam_debug.rviz"
+  fi
   replay_additional_args="$ROSBAG_PLAY_ADDITIONAL_ARGS"
   if [[ " $replay_additional_args " != *" --start-paused "* ]]; then
     replay_additional_args="--start-paused $replay_additional_args"
@@ -613,7 +619,8 @@ run_offline_eval() {
     enable_vgl:=false \
     vgl_topic_config_file:="$topic_config_file" \
     vgl_model_dir:="$OUTPUT_MODEL_DIR" \
-    enable_rviz:=false \
+    enable_rviz:="$ENABLE_OFFLINE_RVIZ" \
+    rviz_config_file:="$rviz_config_file" \
     enable_tool:=true \
     enable_bag_manager:=false \
     enable_joy:=false \
@@ -750,6 +757,7 @@ main() {
     echo "ROS bag args    : $ROSBAG_PLAY_ADDITIONAL_ARGS"
     echo "HD postprocess  : $ENABLE_HD_MAP_WORKFLOW"
     echo "Offline RViz    : $ENABLE_OFFLINE_RVIZ"
+    echo "RViz config     : $OFFLINE_RVIZ_CONFIG_FILE"
     echo
 
     run_offline_eval "$bag_dir" "$output_dir"
@@ -769,6 +777,7 @@ main() {
   echo "ROS bag args    : $ROSBAG_PLAY_ADDITIONAL_ARGS"
   echo "HD postprocess  : $ENABLE_HD_MAP_WORKFLOW"
   echo "Offline RViz    : $ENABLE_OFFLINE_RVIZ"
+  echo "RViz config     : $OFFLINE_RVIZ_CONFIG_FILE"
   echo
 
   if ! prompt_yes_no "Run create_map_offline.py?"; then

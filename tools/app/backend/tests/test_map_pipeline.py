@@ -37,8 +37,8 @@ class BuildVglVslamScriptTest(unittest.TestCase):
         self.assertIn('rm -f "$snapshot"', script)
         self.assertNotIn('"$offline_launch_status" -ne 143', script)
         self.assertIn("enable_vgl:=false", script)
-        self.assertIn("enable_rviz:=false", script)
-        self.assertNotIn("enable_rviz:=true", script)
+        self.assertIn("enable_rviz:=true", script)
+        self.assertIn("rviz_config_file:=/workspaces/ros2_ws/install/jetpilot_system_launch/share/jetpilot_system_launch/rviz/vslam_debug.rviz", script)
         self.assertNotIn("visual_global_localization_node", script)
 
 
