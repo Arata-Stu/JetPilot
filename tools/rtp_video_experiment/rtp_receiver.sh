@@ -2,7 +2,7 @@
 set -euo pipefail
 
 CODEC="${CODEC:-${1:-h264}}"
-PORT="${PORT:-5000}"
+PORT="${PORT:-5004}"
 WIDTH="${WIDTH:-1280}"
 HEIGHT="${HEIGHT:-720}"
 FPS="${FPS:-30}"

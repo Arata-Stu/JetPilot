@@ -256,7 +256,7 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('sensor_kit_enable_color', False, cli=True)
     args.add_arg('sensor_kit_enable_rtp_stream', False, cli=True)
     args.add_arg('sensor_kit_rtp_image_topic', '/realsense/color/image_raw', cli=True)
-    args.add_arg('sensor_kit_rtp_host', '127.0.0.1', cli=True)
+    args.add_arg('sensor_kit_rtp_host', '', cli=True)
     args.add_arg('sensor_kit_rtp_port', '5004', cli=True)
     args.add_arg('sensor_kit_rtp_codec', 'h264', cli=True)
     args.add_arg('sensor_kit_rtp_fps', '60', cli=True)

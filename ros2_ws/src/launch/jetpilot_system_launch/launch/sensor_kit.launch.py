@@ -59,7 +59,7 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('enable_color', False, cli=True)
     args.add_arg('enable_rtp_stream', False, cli=True)
     args.add_arg('rtp_image_topic', '/realsense/color/image_raw', cli=True)
-    args.add_arg('rtp_host', '127.0.0.1', cli=True)
+    args.add_arg('rtp_host', '', cli=True)
     args.add_arg('rtp_port', '5004', cli=True)
     args.add_arg('rtp_codec', 'h264', cli=True)
     args.add_arg('rtp_fps', '60', cli=True)

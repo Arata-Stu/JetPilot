@@ -24,6 +24,17 @@ rclcpp_components_register_node(image_rtp_sender_component
   EXECUTABLE image_rtp_sender_node
 )
 
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(test_image_rtp_sender_component
+    test/test_image_rtp_sender_component.cpp
+  )
+  target_link_libraries(test_image_rtp_sender_component
+    image_rtp_sender_component
+    PkgConfig::GSTREAMER
+  )
+endif()
+
 install(DIRECTORY launch
   DESTINATION share/${PROJECT_NAME}
 )

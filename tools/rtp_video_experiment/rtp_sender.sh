@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 CODEC="${CODEC:-${1:-h264}}"
 HOST="${HOST:-127.0.0.1}"
-PORT="${PORT:-5000}"
+PORT="${PORT:-5004}"
 DEVICE="${DEVICE:-/dev/video0}"
 WIDTH="${WIDTH:-1280}"
 HEIGHT="${HEIGHT:-720}"

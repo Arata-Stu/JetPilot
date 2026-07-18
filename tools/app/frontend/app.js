@@ -750,7 +750,6 @@ async function refreshAll() {
   state.cameraTopicConfigs = cameraTopicConfigs.configs || [];
   state.localIps = localIps.ips || [];
   state.analysis.analyses = normalizeAnalysisList(analyses);
-  if (!state.fpv.host && state.localIps[0]) state.fpv.host = state.localIps[0];
   let selectedMapReloadPath = null;
   if (state.selectedMapPath && !state.maps.some((item) => item.path === state.selectedMapPath)) {
     const replacement = state.maps.find((item) => item.path.startsWith(`${state.selectedMapPath}/`))
@@ -854,6 +853,7 @@ function renderJoyProfile() {
 function renderFpv() {
   const running = state.tasks.filter((task) => task.kind === "fpv-viewer" && ["queued", "running", "stopping"].includes(task.status));
   const fpv = state.fpv;
+  const destinationIssue = fpvDestinationIssue(fpv);
   const executionDisabled = !state.config?.custom_commands_enabled;
   const executionDisabledAttrs = executionDisabled
     ? 'disabled title="Enable trusted local custom commands to start the viewer"'
@@ -920,6 +920,7 @@ function renderFpv() {
             <div class="actions full">
               ${state.localIps.map((ip) => `<button class="ghost" onclick="setFpvHost(${js(ip)})">${esc(ip)}</button>`).join("")}
             </div>
+            <div id="fpv-destination-notice" class="notice full" ${destinationIssue ? "" : "hidden"}>${esc(destinationIssue)}</div>
             <div class="actions full">
               <button class="primary" onclick="startFpvViewer()" ${executionDisabledAttrs}>Start Viewer</button>
               <button onclick="copyFpvReceiverCommand()">Copy Command</button>
@@ -3821,7 +3822,7 @@ function readNumberInput(id, fallback) {
 
 function readFpvForm(updateState = true) {
   const next = {
-    host: $("fpv-host")?.value.trim() || state.fpv.host,
+    host: $("fpv-host") ? $("fpv-host").value.trim() : state.fpv.host,
     codec: $("fpv-codec")?.value || state.fpv.codec,
     width: readNumberInput("fpv-width", state.fpv.width),
     height: readNumberInput("fpv-height", state.fpv.height),
@@ -3833,6 +3834,21 @@ function readFpvForm(updateState = true) {
   };
   if (updateState) state.fpv = next;
   return next;
+}
+
+function fpvDestinationIssue(fpv = state.fpv) {
+  const host = String(fpv.host || "").trim();
+  if (!host) return "Notebook receiver IP is required";
+  if (/\s|[\x00-\x1f\x7f]/.test(host)) return "Receiver host must not contain whitespace";
+  const lower = host.toLowerCase();
+  if (lower === "localhost" || lower === "::1" || lower === "[::1]" || lower.startsWith("127.")) {
+    return "Loopback addresses cannot send video to a remote notebook";
+  }
+  const port = Number(fpv.port);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    return "RTP port must be between 1 and 65535";
+  }
+  return "";
 }
 
 function buildFpvReceiverCommand(fpv = state.fpv) {
@@ -3850,11 +3866,13 @@ function buildFpvReceiverCommand(fpv = state.fpv) {
 }
 
 function buildFpvJetsonCommand(fpv = state.fpv) {
+  const issue = fpvDestinationIssue(fpv);
+  if (issue) return `# ${issue}. Select an IP candidate or enter it above.`;
   return [
     "ros2 launch jetpilot_system_launch bringup.launch.py",
     "enable_sensor_kit:=true",
     "sensor_kit_enable_rtp_stream:=true",
-    `sensor_kit_rtp_host:=${sh(fpv.host || "<mac-ip>")}`,
+    `sensor_kit_rtp_host:=${sh(fpv.host)}`,
     `sensor_kit_rtp_port:=${sh(fpv.port)}`,
     `sensor_kit_rtp_codec:=${sh(fpv.codec)}`,
     `sensor_kit_rtp_fps:=${sh(fpv.fps)}`,
@@ -3896,6 +3914,11 @@ function copyFpvReceiverCommand() {
 
 function copyFpvJetsonCommand() {
   const fpv = readFpvForm();
+  const issue = fpvDestinationIssue(fpv);
+  if (issue) {
+    toast(issue, "error");
+    return;
+  }
   const command = buildFpvJetsonCommand(fpv);
   const preview = $("fpv-jetson-command");
   if (preview) preview.value = command;
@@ -3915,6 +3938,12 @@ function updateFpvCommandPreview() {
   if (receiverPreview) receiverPreview.value = buildFpvReceiverCommand(fpv);
   const jetsonPreview = $("fpv-jetson-command");
   if (jetsonPreview) jetsonPreview.value = buildFpvJetsonCommand(fpv);
+  const destinationNotice = $("fpv-destination-notice");
+  if (destinationNotice) {
+    const issue = fpvDestinationIssue(fpv);
+    destinationNotice.textContent = issue;
+    destinationNotice.hidden = !issue;
+  }
 }
 
 function fillMapDir() {

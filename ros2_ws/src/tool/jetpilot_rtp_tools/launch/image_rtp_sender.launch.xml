@@ -1,8 +1,9 @@
 <launch>
   <arg name="image_topic" default="/realsense/color/image_raw"/>
-  <arg name="host" default="127.0.0.1"/>
+  <arg name="host" default="" description="Notebook receiver IP address (required)"/>
   <arg name="port" default="5004"/>
   <arg name="codec" default="h264"/>
+  <arg name="encoder" default="auto"/>
   <arg name="fps" default="60"/>
   <arg name="bitrate" default="4000000"/>
   <arg name="gop" default="60"/>
@@ -15,6 +16,7 @@
     <param name="host" value="$(var host)"/>
     <param name="port" value="$(var port)"/>
     <param name="codec" value="$(var codec)"/>
+    <param name="encoder" value="$(var encoder)"/>
     <param name="fps" value="$(var fps)"/>
     <param name="bitrate" value="$(var bitrate)"/>
     <param name="gop" value="$(var gop)"/>

@@ -1,6 +1,7 @@
 #include "jetpilot_rtp_tools/image_rtp_sender_component.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cinttypes>
 #include <cstring>
@@ -16,18 +17,34 @@ namespace
 {
 std::once_flag gst_init_flag;
 
-std::string shell_quote_for_gst(const std::string & value)
+std::string trim_copy(const std::string & value)
 {
-  std::string quoted = "'";
-  for (const char c : value) {
-    if (c == '\'') {
-      quoted += "'\\''";
-    } else {
-      quoted += c;
-    }
-  }
-  quoted += "'";
-  return quoted;
+  const auto first = std::find_if_not(
+    value.begin(), value.end(), [](const unsigned char c) {
+      return std::isspace(c) != 0;
+    });
+  const auto last = std::find_if_not(
+    value.rbegin(), value.rend(), [](const unsigned char c) {
+      return std::isspace(c) != 0;
+    }).base();
+  return first < last ? std::string(first, last) : std::string{};
+}
+
+bool contains_whitespace_or_control(const std::string & value)
+{
+  return std::any_of(value.begin(), value.end(), [](const unsigned char c) {
+    return std::isspace(c) != 0 || std::iscntrl(c) != 0;
+  });
+}
+
+bool is_loopback_host(const std::string & value)
+{
+  std::string lower = value;
+  std::transform(lower.begin(), lower.end(), lower.begin(), [](const unsigned char c) {
+    return static_cast<char>(std::tolower(c));
+  });
+  return lower == "localhost" || lower == "::1" || lower == "[::1]" ||
+         lower.rfind("127.", 0) == 0;
 }
 
 int positive_or_default(const int value, const int default_value)
@@ -44,7 +61,7 @@ ImageRtpSenderComponent::ImageRtpSenderComponent(const rclcpp::NodeOptions & opt
   });
 
   image_topic_ = declare_parameter<std::string>("image_topic", "/realsense/color/image_raw");
-  host_ = declare_parameter<std::string>("host", "127.0.0.1");
+  host_ = trim_copy(declare_parameter<std::string>("host", ""));
   port_ = declare_parameter<int>("port", 5004);
   codec_ = declare_parameter<std::string>("codec", "h264");
   encoder_ = declare_parameter<std::string>("encoder", "auto");
@@ -57,6 +74,23 @@ ImageRtpSenderComponent::ImageRtpSenderComponent(const rclcpp::NodeOptions & opt
     declare_parameter<std::string>("h264_encoder_extra", "num-B-Frames=0 preset-level=1");
   h265_encoder_extra_ =
     declare_parameter<std::string>("h265_encoder_extra", "num-B-Frames=0 preset-level=1");
+
+  if (host_.empty()) {
+    throw std::invalid_argument(
+            "RTP parameter 'host' is required; set it to the notebook receiver IP address");
+  }
+  if (contains_whitespace_or_control(host_)) {
+    throw std::invalid_argument("RTP parameter 'host' must not contain whitespace");
+  }
+  if (port_ < 1 || port_ > 65535) {
+    throw std::invalid_argument("RTP parameter 'port' must be between 1 and 65535");
+  }
+  if (is_loopback_host(host_)) {
+    RCLCPP_WARN(
+      get_logger(),
+      "RTP destination %s is loopback-only; a remote notebook will not receive this stream",
+      host_.c_str());
+  }
 
   auto qos = rclcpp::SensorDataQoS();
   qos.keep_last(1);
@@ -139,8 +173,7 @@ std::string ImageRtpSenderComponent::select_encoder(const std::string & codec) c
   return "";
 }
 
-std::string ImageRtpSenderComponent::build_pipeline_description(
-  const sensor_msgs::msg::Image & msg, const ImageFormat & format) const
+std::string ImageRtpSenderComponent::build_pipeline_description() const
 {
   std::ostringstream pipeline;
   pipeline
@@ -214,10 +247,9 @@ std::string ImageRtpSenderComponent::build_pipeline_description(
     throw std::runtime_error("unsupported codec: " + codec_);
   }
 
-  pipeline
-    << "! udpsink host=" << shell_quote_for_gst(host_)
-    << " port=" << port_
-    << " sync=false async=false";
+  // gst_parse_launch() is not a shell. Applying a shell-quoted value here makes the quote
+  // characters part of the hostname, so host/port are set on the element after parsing.
+  pipeline << "! udpsink name=rtp_sink sync=false async=false";
 
   return pipeline.str();
 }
@@ -225,9 +257,42 @@ std::string ImageRtpSenderComponent::build_pipeline_description(
 bool ImageRtpSenderComponent::start_pipeline(
   const sensor_msgs::msg::Image & msg, const ImageFormat & format)
 {
-  const auto pipeline_description = build_pipeline_description(msg, format);
+  std::string pipeline_description;
+  try {
+    pipeline_description = build_pipeline_description();
+  } catch (const std::exception & error) {
+    RCLCPP_ERROR_THROTTLE(
+      get_logger(), *get_clock(), 5000,
+      "Failed to build RTP pipeline: %s", error.what());
+    return false;
+  }
   GError * error = nullptr;
   GstElement * pipeline = gst_parse_launch(pipeline_description.c_str(), &error);
+  GstElement * appsrc = nullptr;
+  GstElement * udp_sink = nullptr;
+  GstPad * udp_sink_pad = nullptr;
+  gulong udp_sink_probe_id = 0;
+  const auto cleanup = [&]() {
+    if (pipeline != nullptr) {
+      gst_element_set_state(pipeline, GST_STATE_NULL);
+    }
+    if (udp_sink_pad != nullptr && udp_sink_probe_id != 0) {
+      gst_pad_remove_probe(udp_sink_pad, udp_sink_probe_id);
+    }
+    if (udp_sink_pad != nullptr) {
+      gst_object_unref(udp_sink_pad);
+    }
+    if (udp_sink != nullptr) {
+      gst_object_unref(udp_sink);
+    }
+    if (appsrc != nullptr) {
+      gst_object_unref(appsrc);
+    }
+    if (pipeline != nullptr) {
+      gst_object_unref(pipeline);
+    }
+  };
+
   if (pipeline == nullptr) {
     RCLCPP_ERROR(
       get_logger(), "Failed to create RTP pipeline: %s",
@@ -238,14 +303,70 @@ bool ImageRtpSenderComponent::start_pipeline(
     return false;
   }
   if (error != nullptr) {
-    RCLCPP_WARN(get_logger(), "GStreamer parse warning: %s", error->message);
+    RCLCPP_ERROR(get_logger(), "GStreamer pipeline parse failed: %s", error->message);
     g_error_free(error);
+    cleanup();
+    return false;
   }
 
-  GstElement * appsrc = gst_bin_get_by_name(GST_BIN(pipeline), "src");
+  appsrc = gst_bin_get_by_name(GST_BIN(pipeline), "src");
   if (appsrc == nullptr) {
     RCLCPP_ERROR(get_logger(), "Failed to find appsrc in RTP pipeline");
-    gst_object_unref(pipeline);
+    cleanup();
+    return false;
+  }
+
+  udp_sink = gst_bin_get_by_name(GST_BIN(pipeline), "rtp_sink");
+  if (udp_sink == nullptr) {
+    RCLCPP_ERROR(get_logger(), "Failed to find udpsink in RTP pipeline");
+    cleanup();
+    return false;
+  }
+
+  g_object_set(
+    G_OBJECT(udp_sink),
+    "host", host_.c_str(),
+    "port", port_,
+    nullptr);
+  gchar * configured_host = nullptr;
+  gchar * configured_clients = nullptr;
+  gint configured_port = 0;
+  g_object_get(
+    G_OBJECT(udp_sink),
+    "host", &configured_host,
+    "port", &configured_port,
+    "clients", &configured_clients,
+    nullptr);
+  const bool destination_matches =
+    configured_host != nullptr && host_ == configured_host && configured_port == port_ &&
+    configured_clients != nullptr && configured_clients[0] != '\0';
+  if (!destination_matches) {
+    RCLCPP_ERROR(
+      get_logger(),
+      "Failed to configure or resolve RTP destination: requested=%s:%d actual=%s:%d clients=%s",
+      host_.c_str(), port_, configured_host != nullptr ? configured_host : "<null>",
+      configured_port, configured_clients != nullptr ? configured_clients : "<null>");
+    g_free(configured_host);
+    g_free(configured_clients);
+    cleanup();
+    return false;
+  }
+  g_free(configured_host);
+  g_free(configured_clients);
+
+  udp_sink_pad = gst_element_get_static_pad(udp_sink, "sink");
+  if (udp_sink_pad == nullptr) {
+    RCLCPP_ERROR(get_logger(), "Failed to find udpsink sink pad in RTP pipeline");
+    cleanup();
+    return false;
+  }
+  udp_sink_probe_id = gst_pad_add_probe(
+    udp_sink_pad,
+    static_cast<GstPadProbeType>(GST_PAD_PROBE_TYPE_BUFFER | GST_PAD_PROBE_TYPE_BUFFER_LIST),
+    &ImageRtpSenderComponent::udp_sink_probe_callback, this, nullptr);
+  if (udp_sink_probe_id == 0) {
+    RCLCPP_ERROR(get_logger(), "Failed to install RTP packet diagnostics probe");
+    cleanup();
     return false;
   }
 
@@ -274,27 +395,93 @@ bool ImageRtpSenderComponent::start_pipeline(
   const auto state_change = gst_element_set_state(pipeline, GST_STATE_PLAYING);
   if (state_change == GST_STATE_CHANGE_FAILURE) {
     RCLCPP_ERROR(get_logger(), "Failed to start RTP pipeline");
-    gst_object_unref(appsrc);
-    gst_object_unref(pipeline);
+    cleanup();
     return false;
   }
 
   pipeline_ = pipeline;
   appsrc_ = appsrc;
+  udp_sink_ = udp_sink;
+  udp_sink_pad_ = udp_sink_pad;
+  udp_sink_probe_id_ = udp_sink_probe_id;
   pipeline_started_ = true;
   frame_index_ = 0;
   pushed_frames_ = 0;
   dropped_frames_ = 0;
   last_reported_pushed_frames_ = 0;
+  last_reported_udp_packets_ = 0;
+  bus_error_count_ = 0;
+  sink_packets_.store(0, std::memory_order_relaxed);
+  sink_bytes_.store(0, std::memory_order_relaxed);
   last_flow_return_ = GST_FLOW_OK;
 
   RCLCPP_INFO(
-    get_logger(), "Started RTP pipeline: %s",
-    pipeline_description.c_str());
+    get_logger(), "Started RTP pipeline for destination %s:%d: %s",
+    host_.c_str(), port_, pipeline_description.c_str());
   RCLCPP_INFO(
     get_logger(), "RTP input caps: video/x-raw,format=%s,width=%u,height=%u,framerate=%d/1",
     format.gst_format.c_str(), msg.width, msg.height, fps_);
   return true;
+}
+
+GstPadProbeReturn ImageRtpSenderComponent::udp_sink_probe_callback(
+  GstPad * pad, GstPadProbeInfo * info, gpointer user_data)
+{
+  (void)pad;
+  auto * sender = static_cast<ImageRtpSenderComponent *>(user_data);
+  if (sender == nullptr || info == nullptr) {
+    return GST_PAD_PROBE_OK;
+  }
+
+  std::uint64_t packets = 0;
+  std::uint64_t bytes = 0;
+  if ((GST_PAD_PROBE_INFO_TYPE(info) & GST_PAD_PROBE_TYPE_BUFFER) != 0) {
+    GstBuffer * buffer = GST_PAD_PROBE_INFO_BUFFER(info);
+    if (buffer != nullptr) {
+      packets = 1;
+      bytes = gst_buffer_get_size(buffer);
+    }
+  } else if ((GST_PAD_PROBE_INFO_TYPE(info) & GST_PAD_PROBE_TYPE_BUFFER_LIST) != 0) {
+    GstBufferList * list = GST_PAD_PROBE_INFO_BUFFER_LIST(info);
+    if (list != nullptr) {
+      const guint length = gst_buffer_list_length(list);
+      packets = length;
+      for (guint index = 0; index < length; ++index) {
+        GstBuffer * buffer = gst_buffer_list_get(list, index);
+        if (buffer != nullptr) {
+          bytes += gst_buffer_get_size(buffer);
+        }
+      }
+    }
+  }
+  sender->sink_packets_.fetch_add(packets, std::memory_order_relaxed);
+  sender->sink_bytes_.fetch_add(bytes, std::memory_order_relaxed);
+  return GST_PAD_PROBE_OK;
+}
+
+ImageRtpSenderComponent::UdpSinkStats ImageRtpSenderComponent::read_udp_sink_stats() const
+{
+  UdpSinkStats result;
+  if (udp_sink_ == nullptr || g_signal_lookup("get-stats", G_OBJECT_TYPE(udp_sink_)) == 0) {
+    return result;
+  }
+
+  GstStructure * stats = nullptr;
+  g_signal_emit_by_name(udp_sink_, "get-stats", host_.c_str(), port_, &stats);
+  if (stats == nullptr) {
+    return result;
+  }
+
+  guint64 packets_sent = 0;
+  guint64 bytes_sent = 0;
+  const bool has_packets =
+    gst_structure_get_uint64(stats, "packets-sent", &packets_sent) != FALSE;
+  const bool has_bytes = gst_structure_get_uint64(stats, "bytes-sent", &bytes_sent) != FALSE;
+  result.available = has_packets && has_bytes;
+  result.packets_sent = packets_sent;
+  result.bytes_sent = bytes_sent;
+  gst_structure_free(stats);
+  return result;
 }
 
 void ImageRtpSenderComponent::poll_bus()
@@ -320,6 +507,7 @@ void ImageRtpSenderComponent::poll_bus()
           error != nullptr ? error->message : "unknown",
           debug != nullptr ? " / " : "",
           debug != nullptr ? debug : "");
+        ++bus_error_count_;
         if (error != nullptr) {
           g_error_free(error);
         }
@@ -368,12 +556,31 @@ void ImageRtpSenderComponent::status_callback()
 
   const auto delta = pushed_frames_ - last_reported_pushed_frames_;
   last_reported_pushed_frames_ = pushed_frames_;
+  const auto sink_packets = sink_packets_.load(std::memory_order_relaxed);
+  const auto sink_bytes = sink_bytes_.load(std::memory_order_relaxed);
+  const auto udp_stats = read_udp_sink_stats();
+  const auto udp_packets = udp_stats.available ? udp_stats.packets_sent : sink_packets;
+  const auto udp_bytes = udp_stats.available ? udp_stats.bytes_sent : sink_bytes;
+  const auto udp_packet_delta = udp_packets >= last_reported_udp_packets_ ?
+    udp_packets - last_reported_udp_packets_ : udp_packets;
+  last_reported_udp_packets_ = udp_packets;
+  GstState state = GST_STATE_NULL;
+  gst_element_get_state(pipeline_, &state, nullptr, 0);
   RCLCPP_INFO(
     get_logger(),
-    "RTP sender status: pushed=%" PRIu64 " (+%" PRIu64 "/2s), dropped=%" PRIu64
-    ", last_flow=%s, destination=%s:%d",
-    pushed_frames_, delta, dropped_frames_, gst_flow_get_name(last_flow_return_),
-    host_.c_str(), port_);
+    "RTP sender status: appsrc_pushed=%" PRIu64 " (+%" PRIu64 "/2s), appsrc_dropped=%"
+    PRIu64 ", rtp_packets=%" PRIu64 " (+%" PRIu64 "/2s), rtp_bytes=%" PRIu64
+    ", stats_source=%s, last_flow=%s, state=%s, bus_errors=%" PRIu64
+    ", destination=%s:%d",
+    pushed_frames_, delta, dropped_frames_, udp_packets, udp_packet_delta, udp_bytes,
+    udp_stats.available ? "udpsink" : "sink-pad", gst_flow_get_name(last_flow_return_),
+    gst_element_state_get_name(state), bus_error_count_, host_.c_str(), port_);
+  if (delta > 0 && udp_packet_delta == 0) {
+    RCLCPP_WARN(
+      get_logger(),
+      "Images reached appsrc but no RTP packets reached udpsink in the last 2 seconds; "
+      "check the encoder/payloader and GStreamer errors above");
+  }
 }
 
 bool ImageRtpSenderComponent::copy_image_to_buffer(
@@ -383,6 +590,9 @@ bool ImageRtpSenderComponent::copy_image_to_buffer(
 {
   const std::size_t packed_step = static_cast<std::size_t>(msg.width) * format.bytes_per_pixel;
   const std::size_t packed_size = packed_step * static_cast<std::size_t>(msg.height);
+  if (msg.step < packed_step) {
+    return false;
+  }
   if (msg.data.size() < static_cast<std::size_t>(msg.step) * static_cast<std::size_t>(msg.height)) {
     return false;
   }
@@ -465,11 +675,27 @@ void ImageRtpSenderComponent::stop_pipeline()
   std::lock_guard<std::mutex> lock(pipeline_mutex_);
   if (appsrc_ != nullptr) {
     gst_app_src_end_of_stream(GST_APP_SRC(appsrc_));
+  }
+  if (pipeline_ != nullptr) {
+    gst_element_set_state(pipeline_, GST_STATE_NULL);
+  }
+  if (udp_sink_pad_ != nullptr && udp_sink_probe_id_ != 0) {
+    gst_pad_remove_probe(udp_sink_pad_, udp_sink_probe_id_);
+  }
+  udp_sink_probe_id_ = 0;
+  if (udp_sink_pad_ != nullptr) {
+    gst_object_unref(udp_sink_pad_);
+    udp_sink_pad_ = nullptr;
+  }
+  if (udp_sink_ != nullptr) {
+    gst_object_unref(udp_sink_);
+    udp_sink_ = nullptr;
+  }
+  if (appsrc_ != nullptr) {
     gst_object_unref(appsrc_);
     appsrc_ = nullptr;
   }
   if (pipeline_ != nullptr) {
-    gst_element_set_state(pipeline_, GST_STATE_NULL);
     gst_object_unref(pipeline_);
     pipeline_ = nullptr;
   }

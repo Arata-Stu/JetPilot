@@ -17,7 +17,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("role", choices=("sender", "receiver"))
     parser.add_argument("--codec", choices=("raw", "mjpeg", "h264", "h265"), default="h264")
     parser.add_argument("--host", default="127.0.0.1", help="Receiver IP for sender mode")
-    parser.add_argument("--port", type=int, default=5000)
+    parser.add_argument("--port", type=int, default=5004)
     parser.add_argument("--device", default="/dev/video0")
     parser.add_argument("--width", type=int, default=1280)
     parser.add_argument("--height", type=int, default=720)

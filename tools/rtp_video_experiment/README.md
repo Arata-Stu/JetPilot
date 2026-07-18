@@ -42,7 +42,7 @@ Jetson では JetPack の multimedia GStreamer plugin が必要です。
 Notebook 側で receiver を起動します。
 
 ```bash
-CODEC=h264 PORT=5000 ./tools/rtp_video_experiment/rtp_receiver.sh
+CODEC=h264 PORT=5004 ./tools/rtp_video_experiment/rtp_receiver.sh
 ```
 
 Jetson 側で sender を起動します。
@@ -79,7 +79,7 @@ Notebook:
 ```bash
 python3 tools/rtp_video_experiment/gst_rtp_probe.py receiver \
   --codec h264 \
-  --port 5000 \
+  --port 5004 \
   --width 1280 \
   --height 720 \
   --fps 30 \
@@ -104,7 +104,7 @@ stage 差分、RTP packet 到着、decode/render 投入の分布を見る用途�
 
 ```bash
 # raw RGB
-CODEC=raw PORT=5000 ./tools/rtp_video_experiment/rtp_receiver.sh
+CODEC=raw PORT=5004 ./tools/rtp_video_experiment/rtp_receiver.sh
 HOST=192.168.55.100 CODEC=raw ./tools/rtp_video_experiment/rtp_sender.sh
 
 # MJPEG
@@ -161,4 +161,3 @@ CSV の任意 column に対して統計量を出せます。
 python3 tools/rtp_video_experiment/summarize_csv.py \
   record/rtp_video/sender_h264.csv --column size_bytes
 ```
-
