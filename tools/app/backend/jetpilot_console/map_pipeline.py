@@ -162,6 +162,7 @@ fi
 echo "[stage] using map artifacts folder: $generated_map_dir"
 snapshot="$generated_map_dir/vslam_reference_snapshot.json"
 cuvslam_map="$generated_map_dir/cuvslam_map"
+rm -f "$snapshot"
 echo "[stage] offline eval for cuVSLAM snapshot"
 ros2 launch {_q(config.launch_package)} bringup.launch.py \\
   use_sim_time:=true \\
@@ -244,7 +245,7 @@ if [ "$offline_launch_status" -eq 124 ]; then
   offline_launch_pid=""
   offline_launch_status=0
 fi
-if [ "$offline_launch_status" -ne 0 ] && [ "$offline_launch_status" -ne 130 ] && [ "$offline_launch_status" -ne 143 ]; then
+if [ "$offline_launch_status" -ne 0 ] && [ "$offline_launch_status" -ne 130 ]; then
   echo "offline eval launch exited with status $offline_launch_status"
   exit "$offline_launch_status"
 fi

@@ -570,6 +570,7 @@ run_offline_eval() {
   fi
 
   [[ -d "${map_dir}/cuvgl_map" ]] || die "cuVGL map was not found: ${map_dir}/cuvgl_map"
+  rm -f "$snapshot_path"
 
   offline_stop_launch() {
     local stop_signal="${1:-INT}"
@@ -686,7 +687,7 @@ run_offline_eval() {
     offline_launch_pid=""
     offline_launch_status=0
   fi
-  if (( offline_launch_status != 0 && offline_launch_status != 130 && offline_launch_status != 143 )); then
+  if (( offline_launch_status != 0 && offline_launch_status != 130 )); then
     die "offline eval launch exited with status $offline_launch_status"
   fi
   trap - EXIT
