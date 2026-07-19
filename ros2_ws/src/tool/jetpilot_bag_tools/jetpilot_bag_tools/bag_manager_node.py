@@ -49,15 +49,14 @@ DEFAULT_TOPICS = [
     "/event_camera/events_raw",
     "/event_camera/event_image",
     "/event_camera/diagnostics",
-    # RealSense RGB / depth candidates. CameraInfo is required for offline VSLAM.
+    # FLIR Boson thermal camera. Keep raw mono16 for offline analysis.
+    "/flir/camera_info",
+    "/flir/image_raw",
+    # RealSense RGB candidates. CameraInfo is required for offline VSLAM.
     "/realsense/color/camera_info",
     "/realsense/color/image_raw",
     "/realsense/color/image_raw/compressed",
     "/realsense/color/metadata",
-    "/realsense/depth/camera_info",
-    "/realsense/depth/image_rect_raw",
-    "/realsense/depth/image_rect_raw/compressedDepth",
-    "/realsense/depth/metadata",
     # RealSense stereo infrared candidates. CameraInfo is required for offline VSLAM.
     "/realsense/infra1/camera_info",
     "/realsense/infra1/image_rect_raw",

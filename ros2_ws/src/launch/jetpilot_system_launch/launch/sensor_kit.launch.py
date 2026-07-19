@@ -10,31 +10,44 @@ def add_sensor_interface(args: lu.ArgumentContainer):
     ):
         return []
 
+    launch_arguments = {
+        'camera_name': args.camera_name,
+        'container_name': args.container_name,
+        'run_standalone': str(lu.is_true(args.run_standalone)).lower(),
+        'enable_depth': str(lu.is_true(args.enable_depth)).lower(),
+        'enable_color': str(lu.is_true(args.enable_color)).lower(),
+        'enable_rtp_stream': str(lu.is_true(args.enable_rtp_stream)).lower(),
+        'rtp_image_topic': args.rtp_image_topic,
+        'rtp_host': args.rtp_host,
+        'rtp_port': args.rtp_port,
+        'rtp_codec': args.rtp_codec,
+        'rtp_fps': args.rtp_fps,
+        'rtp_bitrate': args.rtp_bitrate,
+        'rtp_gop': args.rtp_gop,
+        'rtp_mtu': args.rtp_mtu,
+        'rtp_payload': args.rtp_payload,
+        'rtp_encoder': args.rtp_encoder,
+        'rtp_enable_status_log': str(
+            lu.is_true(args.rtp_enable_status_log)).lower(),
+        'enable_flir': str(lu.is_true(args.enable_flir)).lower(),
+        'flir_namespace': args.flir_namespace,
+        'flir_node_name': args.flir_node_name,
+        'flir_camera_name': args.flir_camera_name,
+        'flir_frame_id': args.flir_frame_id,
+        'flir_video_device': args.flir_video_device,
+        'flir_pixel_format': args.flir_pixel_format,
+        'flir_image_width': args.flir_image_width,
+        'flir_image_height': args.flir_image_height,
+        'flir_framerate': args.flir_framerate,
+        'flir_io_method': args.flir_io_method,
+        'use_sim_time': str(lu.is_true(args.use_sim_time)).lower(),
+    }
+
     return [
         lu.include(
             args.sensor_interface_pkg,
             args.sensor_interface_launch,
-            launch_arguments={
-                'camera_name': args.camera_name,
-                'container_name': args.container_name,
-                'run_standalone': str(lu.is_true(args.run_standalone)).lower(),
-                'enable_depth': str(lu.is_true(args.enable_depth)).lower(),
-                'enable_color': str(lu.is_true(args.enable_color)).lower(),
-                'enable_rtp_stream': str(lu.is_true(args.enable_rtp_stream)).lower(),
-                'rtp_image_topic': args.rtp_image_topic,
-                'rtp_host': args.rtp_host,
-                'rtp_port': args.rtp_port,
-                'rtp_codec': args.rtp_codec,
-                'rtp_fps': args.rtp_fps,
-                'rtp_bitrate': args.rtp_bitrate,
-                'rtp_gop': args.rtp_gop,
-                'rtp_mtu': args.rtp_mtu,
-                'rtp_payload': args.rtp_payload,
-                'rtp_encoder': args.rtp_encoder,
-                'rtp_enable_status_log': str(
-                    lu.is_true(args.rtp_enable_status_log)).lower(),
-                'use_sim_time': str(lu.is_true(args.use_sim_time)).lower(),
-            },
+            launch_arguments=launch_arguments,
         ),
         lu.log_info([
             'Sensor interface: ',
@@ -71,6 +84,17 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('rtp_payload', '96', cli=True)
     args.add_arg('rtp_encoder', 'auto', cli=True)
     args.add_arg('rtp_enable_status_log', False, cli=True)
+    args.add_arg('enable_flir', True, cli=True)
+    args.add_arg('flir_namespace', 'flir', cli=True)
+    args.add_arg('flir_node_name', 'boson', cli=True)
+    args.add_arg('flir_camera_name', 'boson', cli=True)
+    args.add_arg('flir_frame_id', 'boson_optical_frame', cli=True)
+    args.add_arg('flir_video_device', '/dev/video0', cli=True)
+    args.add_arg('flir_pixel_format', 'mono16', cli=True)
+    args.add_arg('flir_image_width', '640', cli=True)
+    args.add_arg('flir_image_height', '512', cli=True)
+    args.add_arg('flir_framerate', '60.0', cli=True)
+    args.add_arg('flir_io_method', 'mmap', cli=True)
     args.add_arg('use_sim_time', False, cli=True)
 
     args.add_opaque_function(add_sensor_interface)

@@ -266,6 +266,17 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('sensor_kit_rtp_payload', '96', cli=True)
     args.add_arg('sensor_kit_rtp_encoder', 'auto', cli=True)
     args.add_arg('sensor_kit_rtp_enable_status_log', False, cli=True)
+    args.add_arg('sensor_kit_enable_flir', True, cli=True)
+    args.add_arg('sensor_kit_flir_namespace', 'flir', cli=True)
+    args.add_arg('sensor_kit_flir_node_name', 'boson', cli=True)
+    args.add_arg('sensor_kit_flir_camera_name', 'boson', cli=True)
+    args.add_arg('sensor_kit_flir_frame_id', 'boson_optical_frame', cli=True)
+    args.add_arg('sensor_kit_flir_video_device', '/dev/video0', cli=True)
+    args.add_arg('sensor_kit_flir_pixel_format', 'mono16', cli=True)
+    args.add_arg('sensor_kit_flir_image_width', '640', cli=True)
+    args.add_arg('sensor_kit_flir_image_height', '512', cli=True)
+    args.add_arg('sensor_kit_flir_framerate', '60.0', cli=True)
+    args.add_arg('sensor_kit_flir_io_method', 'mmap', cli=True)
 
     args.add_arg('enable_localization', False, cli=True)
     args.add_arg('localization_camera_name', 'realsense', cli=True)
@@ -522,6 +533,17 @@ def generate_launch_description() -> lut.LaunchDescription:
                 'rtp_payload': args.sensor_kit_rtp_payload,
                 'rtp_encoder': args.sensor_kit_rtp_encoder,
                 'rtp_enable_status_log': args.sensor_kit_rtp_enable_status_log,
+                'enable_flir': args.sensor_kit_enable_flir,
+                'flir_namespace': args.sensor_kit_flir_namespace,
+                'flir_node_name': args.sensor_kit_flir_node_name,
+                'flir_camera_name': args.sensor_kit_flir_camera_name,
+                'flir_frame_id': args.sensor_kit_flir_frame_id,
+                'flir_video_device': args.sensor_kit_flir_video_device,
+                'flir_pixel_format': args.sensor_kit_flir_pixel_format,
+                'flir_image_width': args.sensor_kit_flir_image_width,
+                'flir_image_height': args.sensor_kit_flir_image_height,
+                'flir_framerate': args.sensor_kit_flir_framerate,
+                'flir_io_method': args.sensor_kit_flir_io_method,
                 'use_sim_time': args.use_sim_time,
             },
             condition=IfCondition(args.enable_sensor_kit),

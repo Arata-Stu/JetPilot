@@ -81,7 +81,8 @@ Options:
       --bag-manager    Enable bag manager recording control
       --no-bag-manager Disable bag manager recording control
       --sensor-kit NAME
-                        Select sensor kit: realsense, realsense-silky
+                        Select sensor kit: realsense, flir, realsense-silky,
+                        realsense-silky-flir
       --rviz-config NAME_OR_PATH
                         Select RViz config: default, vslam-debug, or absolute path
       --components LIST
@@ -288,13 +289,47 @@ apply_sensor_kit() {
       set_arg sensor_kit_camera_name realsense
       set_arg sensor_kit_rtp_image_topic /realsense/color/image_raw
       ;;
+    flir|boson|flir-boson|flir_boson)
+      set_arg sensor_kit_interface_pkg jetpilot_system_launch
+      set_arg sensor_kit_interface_launch launch/sensors/flir_boson.launch.py
+      set_arg sensor_kit_camera_name realsense
+      set_arg sensor_kit_rtp_image_topic /flir/image_raw
+      set_arg sensor_kit_enable_flir true
+      set_arg sensor_kit_flir_namespace flir
+      set_arg sensor_kit_flir_node_name boson
+      set_arg sensor_kit_flir_camera_name boson
+      set_arg sensor_kit_flir_frame_id boson_optical_frame
+      set_arg sensor_kit_flir_video_device /dev/video0
+      set_arg sensor_kit_flir_pixel_format mono16
+      set_arg sensor_kit_flir_image_width 640
+      set_arg sensor_kit_flir_image_height 512
+      set_arg sensor_kit_flir_framerate 60.0
+      set_arg sensor_kit_flir_io_method mmap
+      ;;
     realsense-silky|realsense_silky|silky)
       set_arg sensor_kit_interface_pkg jetpilot_system_launch
       set_arg sensor_kit_interface_launch launch/sensors/realsense_silky_evcam.launch.py
       set_arg sensor_kit_camera_name realsense
       set_arg sensor_kit_rtp_image_topic /realsense/color/image_raw
       ;;
-    *) die "sensor kit must be realsense or realsense-silky: $sensor_kit" ;;
+    realsense-silky-flir|realsense_silky_flir|all)
+      set_arg sensor_kit_interface_pkg jetpilot_system_launch
+      set_arg sensor_kit_interface_launch launch/sensors/realsense_silky_flir.launch.py
+      set_arg sensor_kit_camera_name realsense
+      set_arg sensor_kit_rtp_image_topic /realsense/color/image_raw
+      set_arg sensor_kit_enable_flir true
+      set_arg sensor_kit_flir_namespace flir
+      set_arg sensor_kit_flir_node_name boson
+      set_arg sensor_kit_flir_camera_name boson
+      set_arg sensor_kit_flir_frame_id boson_optical_frame
+      set_arg sensor_kit_flir_video_device /dev/video0
+      set_arg sensor_kit_flir_pixel_format mono16
+      set_arg sensor_kit_flir_image_width 640
+      set_arg sensor_kit_flir_image_height 512
+      set_arg sensor_kit_flir_framerate 60.0
+      set_arg sensor_kit_flir_io_method mmap
+      ;;
+    *) die "sensor kit must be realsense, flir, realsense-silky, or realsense-silky-flir: $sensor_kit" ;;
   esac
 }
 
@@ -865,13 +900,29 @@ configure_sensor_kit_interactively() {
 
   current_launch="$(get_arg sensor_kit_interface_launch 2>/dev/null || true)"
   case "$current_launch" in
+    *realsense_silky_flir.launch.py)
+      options+=('realsense-silky-flir  RealSense + SilkyEvCam/OpenEB + FLIR Boson')
+      options+=('realsense-silky       RealSense + SilkyEvCam/OpenEB')
+      options+=('flir                  FLIR Boson')
+      options+=('realsense             RealSense')
+      ;;
     *realsense_silky_evcam.launch.py)
       options+=('realsense-silky  RealSense + SilkyEvCam/OpenEB')
+      options+=('realsense-silky-flir  RealSense + SilkyEvCam/OpenEB + FLIR Boson')
+      options+=('flir             FLIR Boson')
       options+=('realsense        RealSense')
+      ;;
+    *flir_boson.launch.py)
+      options+=('flir                  FLIR Boson')
+      options+=('realsense-silky-flir  RealSense + SilkyEvCam/OpenEB + FLIR Boson')
+      options+=('realsense-silky       RealSense + SilkyEvCam/OpenEB')
+      options+=('realsense             RealSense')
       ;;
     *)
       options+=('realsense        RealSense')
       options+=('realsense-silky  RealSense + SilkyEvCam/OpenEB')
+      options+=('realsense-silky-flir  RealSense + SilkyEvCam/OpenEB + FLIR Boson')
+      options+=('flir             FLIR Boson')
       ;;
   esac
 

@@ -70,6 +70,32 @@ def launch_sensor_kit(args: lu.ArgumentContainer) -> list[lut.Action]:
             ]),
         ])
 
+    if lu.is_true(args.enable_flir):
+        flir_run_standalone = (
+            lu.is_true(args.run_standalone) and not lu.is_true(args.enable_realsense)
+        )
+        actions.extend([
+            lu.include(
+                'jetpilot_system_launch',
+                'launch/sensors/flir_boson.launch.py',
+                launch_arguments={
+                    'container_name': args.container_name,
+                    'run_standalone': str(flir_run_standalone).lower(),
+                    'flir_namespace': args.flir_namespace,
+                    'flir_node_name': args.flir_node_name,
+                    'flir_camera_name': args.flir_camera_name,
+                    'flir_frame_id': args.flir_frame_id,
+                    'flir_video_device': args.flir_video_device,
+                    'flir_pixel_format': args.flir_pixel_format,
+                    'flir_image_width': args.flir_image_width,
+                    'flir_image_height': args.flir_image_height,
+                    'flir_framerate': args.flir_framerate,
+                    'flir_io_method': args.flir_io_method,
+                    'use_sim_time': str(lu.is_true(args.use_sim_time)).lower(),
+                },
+            ),
+        ])
+
     return actions
 
 
@@ -94,17 +120,6 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('rtp_payload', '96')
     args.add_arg('rtp_encoder', 'auto')
     args.add_arg('rtp_enable_status_log', False)
-    args.add_arg('enable_flir', False)
-    args.add_arg('flir_namespace', 'flir')
-    args.add_arg('flir_node_name', 'boson')
-    args.add_arg('flir_camera_name', 'boson')
-    args.add_arg('flir_frame_id', 'boson_optical_frame')
-    args.add_arg('flir_video_device', '/dev/video0')
-    args.add_arg('flir_pixel_format', 'mono16')
-    args.add_arg('flir_image_width', '640')
-    args.add_arg('flir_image_height', '512')
-    args.add_arg('flir_framerate', '60.0')
-    args.add_arg('flir_io_method', 'mmap')
 
     args.add_arg('enable_silky_evcam', True)
     args.add_arg('silky_evcam_launch', 'launch/pipeline.launch.py')
@@ -120,6 +135,18 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('silky_evcam_event_image_encoding', 'bgr8')
     args.add_arg('silky_evcam_event_image_publish_empty', True)
     args.add_arg('silky_evcam_event_image_publisher_depth', '2')
+
+    args.add_arg('enable_flir', True)
+    args.add_arg('flir_namespace', 'flir')
+    args.add_arg('flir_node_name', 'boson')
+    args.add_arg('flir_camera_name', 'boson')
+    args.add_arg('flir_frame_id', 'boson_optical_frame')
+    args.add_arg('flir_video_device', '/dev/video0')
+    args.add_arg('flir_pixel_format', 'mono16')
+    args.add_arg('flir_image_width', '640')
+    args.add_arg('flir_image_height', '512')
+    args.add_arg('flir_framerate', '60.0')
+    args.add_arg('flir_io_method', 'mmap')
 
     args.add_arg('use_sim_time', False)
     args.add_opaque_function(launch_sensor_kit)

@@ -117,6 +117,30 @@ def test_sensor_kit_launch_can_be_selected_explicitly() -> None:
     assert "sensor_kit_camera_name:=realsense" in output
 
 
+def test_flir_sensor_kit_launches_can_be_selected_explicitly() -> None:
+    flir = run_launcher(
+        "drive-vesc",
+        "--sensor-kit",
+        "flir",
+        "--dry-run",
+    ).stdout
+    all_sensors = run_launcher(
+        "drive-vesc",
+        "--sensor-kit",
+        "realsense-silky-flir",
+        "--dry-run",
+    ).stdout
+
+    assert "sensor_kit_interface_launch:=launch/sensors/flir_boson.launch.py" in flir
+    assert "sensor_kit_rtp_image_topic:=/flir/image_raw" in flir
+    assert (
+        "sensor_kit_interface_launch:=launch/sensors/realsense_silky_flir.launch.py"
+        in all_sensors
+    )
+    assert "sensor_kit_flir_video_device:=/dev/video0" in all_sensors
+    assert "sensor_kit_flir_pixel_format:=mono16" in all_sensors
+
+
 def test_unknown_sensor_kit_is_rejected() -> None:
     result = run_launcher(
         "drive-vesc",
@@ -127,7 +151,7 @@ def test_unknown_sensor_kit_is_rejected() -> None:
     )
 
     assert result.returncode != 0
-    assert "sensor kit must be realsense or realsense-silky" in result.stderr
+    assert "sensor kit must be realsense, flir, realsense-silky, or realsense-silky-flir" in result.stderr
 
 
 def test_empty_launch_arguments_are_not_emitted() -> None:

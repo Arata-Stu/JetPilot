@@ -13,6 +13,19 @@ JetPilot 全体の bringup をまとめる launch package です。tool、operat
 | `sensor_kit.launch.py` | camera launch と RTP stream をまとめる |
 | `vehicle.launch.py` | vehicle interface と camera static TF |
 
+## Sensor kit variants
+
+`sensor_kit.launch.py` は既定では RealSense を起動します。`sensor_interface_launch` を差し替えると、次の構成を選べます。
+
+| Launch | Sensors |
+| --- | --- |
+| `launch/sensors/realsense.launch.py` | RealSense |
+| `launch/sensors/flir_boson.launch.py` | FLIR Boson via `usb_cam` composable node |
+| `launch/sensors/realsense_silky_evcam.launch.py` | RealSense + SilkyEvCam/OpenEB |
+| `launch/sensors/realsense_silky_flir.launch.py` | RealSense + SilkyEvCam/OpenEB + FLIR Boson |
+
+FLIR の既定 topic は `/flir/camera_info` と `/flir/image_raw`、既定 frame は `boson_optical_frame` です。デバイスや format は `sensor_kit_flir_video_device:=/dev/video0`、`sensor_kit_flir_pixel_format:=mono16` のように bringup 引数で上書きできます。
+
 ## Topic flow
 
 標準的な自律走行の制御 topic は次の流れです。
