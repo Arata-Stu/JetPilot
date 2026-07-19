@@ -19,13 +19,20 @@
       # 画像・同期処理設定
       # ==========================================
       enable_rectify_images: true
+      image_buffer_size: 10
       image_sync_match_threshold_ms: 3.0
       image_qos_profile: "SENSOR_DATA"
+      input_qos: "SENSOR_DATA"
+      input_qos_depth: 0
+      input_image_topic_name: "visual_localization/image"
+      input_camera_info_topic_name: "visual_localization/camera_info"
 
       # ==========================================
       # VGL (Visual Global Localization) 動作設定
       # ==========================================
       use_initial_guess: false
+      use_tf_transforms: true
+      use_topic_transforms: false
       enable_continuous_localization: false
       localization_precision_level: 2
       vgl_frequency: 1.0

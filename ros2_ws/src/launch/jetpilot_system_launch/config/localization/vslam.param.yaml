@@ -23,9 +23,14 @@
     # ============================================
     num_cameras: 2
     min_num_images: 2
+    multicam_mode: 1
+    tracking_mode: 0
     sync_matching_threshold_ms: 5.0
     enable_image_denoising: false
     rectified_images: true
+    depth_camera_id: 0
+    depth_enable_stereo_tracking: false
+    depth_scale_factor: 1000.0
 
     # ============================================
     # Ground Constraints
@@ -42,8 +47,8 @@
     #   [false, false] ドローン、3D環境（ドリフト注意）
     #   [true,  false] 非推奨（矛盾した設定）
     # ============================================
-    enable_ground_constraint_in_odometry: true
-    enable_ground_constraint_in_slam: true
+    enable_ground_constraint_in_odometry: false
+    enable_ground_constraint_in_slam: false
     
     # ============================================
     # SLAM Mode
@@ -52,7 +57,7 @@
     #   true: SLAM有効（地図作成 + ループクロージャー + 最適化）
     #   false: オドメトリのみ（相対移動推定のみ）
     # ============================================
-    enable_localization_n_mapping: true
+    enable_localization_n_mapping: false
 
     # ============================================
     # IMU Fusion Settings
@@ -186,13 +191,15 @@
     image_buffer_size: 100
     imu_buffer_size: 50
     image_qos: "SENSOR_DATA"
+    image_qos_depth: 0
     imu_qos: "SENSOR_DATA"
+    imu_qos_depth: 0
     
     # ============================================
     # Output Parameters
     # ============================================
     override_publishing_stamp: false
-    publish_map_to_odom_tf: false
+    publish_map_to_odom_tf: true
     publish_odom_to_base_tf: true
     invert_map_to_odom_tf: false
     invert_odom_to_base_tf: false
