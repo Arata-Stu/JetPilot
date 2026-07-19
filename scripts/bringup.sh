@@ -47,6 +47,9 @@ localization-only    Localization stack; camera input is already running
 localization         Sensor kit + localization + RViz (map required)
 localize-live        Sensor kit + localization + RViz (alias of localization)
 replay-localization  Safe rosbag replay + localization + RViz (bag/map required)
+offline-vslam        Rosbag replay + VSLAM visualization + RViz (bag required)
+offline-vslam-map    Rosbag replay + VSLAM mapping debug + RViz (bag/map required)
+offline-localization Rosbag replay + VGL/VSLAM localization + RViz (bag/map required)
 vehicle-pca          PCA9685 vehicle interface only
 vehicle-vesc         VESC vehicle interface only
 teleop-pca           Joy/teleop/operation + PCA9685 vehicle
@@ -92,6 +95,11 @@ Examples:
   $(basename "$0") --preset localization --map /workspaces/map/course_a
   $(basename "$0") replay-localization --bag /workspaces/record/run_01 \\
     --map /workspaces/map/course_a --rate 0.5
+  $(basename "$0") offline-vslam --bag /workspaces/record/run_01 --rate 0.5
+  $(basename "$0") offline-vslam-map --bag /workspaces/record/run_01 \\
+    --map /workspaces/map/course_a
+  $(basename "$0") offline-localization --bag /workspaces/record/run_01 \\
+    --map /workspaces/map/course_a
   $(basename "$0") runtime-vesc --map /workspaces/map/course_a --dry-run
   $(basename "$0") custom --components sensor,localization,hd-map,control,vehicle-vesc \\
     --map /workspaces/map/course_a --raceline /workspaces/map/course_a/course_raceline.csv
@@ -106,6 +114,7 @@ EOF
 known_preset() {
   case "$1" in
     sensor|localization-only|localization|localize-live|replay-localization|\
+      offline-vslam|offline-vslam-map|offline-localization|\
       vehicle-pca|vehicle-vesc|teleop-pca|teleop-vesc|\
       drive-pca|drive-vesc|runtime-pca|runtime-vesc|custom) return 0 ;;
     *) return 1 ;;
@@ -310,6 +319,24 @@ enable_localization_stack() {
   set_arg publish_vehicle_description true
 }
 
+enable_offline_replay_stack() {
+  set_arg enable_rosbag_replay true
+  set_arg use_sim_time true
+  set_arg enable_sensor_kit false
+  set_arg enable_tool false
+  set_arg enable_bag_manager false
+  set_arg enable_joy false
+  set_arg enable_teleop false
+  set_arg enable_rc_serial false
+  set_arg enable_operation false
+  set_arg enable_planning false
+  set_arg enable_control false
+  set_arg publish_vehicle_description false
+  set_arg enable_rviz true
+  apply_vehicle none
+  REQUIRES_ROSBAG=true
+}
+
 apply_preset() {
   local preset="$1"
 
@@ -336,6 +363,35 @@ apply_preset() {
       apply_vehicle none
       REQUIRES_MAP=true
       REQUIRES_ROSBAG=true
+      ;;
+    offline-vslam)
+      enable_offline_replay_stack
+      set_arg enable_localization true
+      set_arg enable_vslam true
+      set_arg enable_vgl false
+      set_arg enable_localization_manager false
+      set_arg vslam_enable_slam false
+      set_arg vslam_enable_visualization true
+      ;;
+    offline-vslam-map)
+      enable_offline_replay_stack
+      set_arg enable_localization true
+      set_arg enable_vslam true
+      set_arg enable_vgl false
+      set_arg enable_localization_manager false
+      set_arg vslam_enable_slam true
+      set_arg vslam_enable_visualization true
+      REQUIRES_MAP=true
+      ;;
+    offline-localization)
+      enable_offline_replay_stack
+      enable_localization_stack
+      set_arg enable_vslam true
+      set_arg enable_vgl true
+      set_arg vslam_enable_slam false
+      set_arg vslam_enable_visualization true
+      set_arg vslam_localize_on_startup true
+      REQUIRES_MAP=true
       ;;
     vehicle-pca)
       apply_vehicle pca

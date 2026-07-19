@@ -40,6 +40,9 @@ def test_presets_are_listed() -> None:
         "localization",
         "localize-live",
         "replay-localization",
+        "offline-vslam",
+        "offline-vslam-map",
+        "offline-localization",
         "drive-pca",
         "drive-vesc",
         "runtime-pca",
@@ -283,6 +286,86 @@ def test_replay_preset_is_safe_and_requires_inputs(tmp_path: Path) -> None:
     assert "requires --map" in missing_map.stderr
 
 
+def test_offline_vslam_replays_bag_without_map(tmp_path: Path) -> None:
+    bag = tmp_path / "bag"
+    bag.mkdir()
+    (bag / "metadata.yaml").write_text("rosbag2_bagfile_information: {}\n")
+
+    output = run_launcher(
+        "offline-vslam",
+        "--bag",
+        str(bag),
+        "--dry-run",
+    ).stdout
+
+    assert "enable_rosbag_replay:=true" in output
+    assert "use_sim_time:=true" in output
+    assert "enable_sensor_kit:=false" in output
+    assert "enable_localization:=true" in output
+    assert "enable_vslam:=true" in output
+    assert "enable_vgl:=false" in output
+    assert "enable_vehicle:=false" in output
+    assert "map_dir:=" not in output
+
+
+def test_offline_vslam_map_runs_mapping_debug_without_output_map(tmp_path: Path) -> None:
+    bag = tmp_path / "bag"
+    map_dir = tmp_path / "map"
+    bag.mkdir()
+    map_dir.mkdir()
+    (bag / "metadata.yaml").write_text("rosbag2_bagfile_information: {}\n")
+
+    output = run_launcher(
+        "offline-vslam-map",
+        "--bag",
+        str(bag),
+        "--map",
+        str(map_dir),
+        "--dry-run",
+    ).stdout
+
+    assert "enable_rosbag_replay:=true" in output
+    assert "vslam_enable_slam:=true" in output
+    assert "vslam_enable_visualization:=true" in output
+    assert "enable_vslam_snapshot:=false" in output
+    assert "vslam_save_map_folder_path:=" not in output
+    assert "vslam_snapshot_output:=" not in output
+    assert f"map_dir:={map_dir}" in output
+
+    missing_map = run_launcher(
+        "offline-vslam-map",
+        "--bag",
+        str(bag),
+        "--dry-run",
+        check=False,
+    )
+    assert missing_map.returncode != 0
+    assert "requires --map" in missing_map.stderr
+
+
+def test_offline_localization_uses_vgl_and_vslam_with_map(tmp_path: Path) -> None:
+    bag = tmp_path / "bag"
+    map_dir = tmp_path / "map"
+    bag.mkdir()
+    map_dir.mkdir()
+    (bag / "metadata.yaml").write_text("rosbag2_bagfile_information: {}\n")
+
+    output = run_launcher(
+        "offline-localization",
+        "--bag",
+        str(bag),
+        "--map",
+        str(map_dir),
+        "--dry-run",
+    ).stdout
+
+    assert "enable_rosbag_replay:=true" in output
+    assert "enable_vslam:=true" in output
+    assert "enable_vgl:=true" in output
+    assert "vslam_localize_on_startup:=true" in output
+    assert "enable_vehicle:=false" in output
+
+
 def test_overrides_replace_instead_of_duplicate() -> None:
     output = run_launcher(
         "localize-live",
@@ -337,6 +420,9 @@ def test_every_noninteractive_preset_emits_unique_launch_arguments(tmp_path: Pat
         "localization",
         "localize-live",
         "replay-localization",
+        "offline-vslam",
+        "offline-vslam-map",
+        "offline-localization",
         "vehicle-pca",
         "vehicle-vesc",
         "teleop-pca",
@@ -353,11 +439,18 @@ def test_every_noninteractive_preset_emits_unique_launch_arguments(tmp_path: Pat
             "localization",
             "localize-live",
             "replay-localization",
+            "offline-vslam-map",
+            "offline-localization",
             "runtime-pca",
             "runtime-vesc",
         }:
             arguments += ["--map", str(map_dir)]
-        if preset == "replay-localization":
+        if preset in {
+            "replay-localization",
+            "offline-vslam",
+            "offline-vslam-map",
+            "offline-localization",
+        }:
             arguments += ["--bag", str(bag)]
 
         output = run_launcher(*arguments).stdout
