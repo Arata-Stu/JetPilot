@@ -14,6 +14,7 @@ VEHICLE_BACKEND='none'
 MAP_DIR="${BRINGUP_MAP_DIR:-}"
 ROSBAG="${BRINGUP_ROSBAG:-}"
 RACELINE_CSV="${BRINGUP_RACELINE_CSV:-}"
+RVIZ_CONFIG="${BRINGUP_RVIZ_CONFIG:-}"
 REPLAY_RATE='1.0'
 DRY_RUN=false
 ASSUME_YES=false
@@ -81,6 +82,8 @@ Options:
       --no-bag-manager Disable bag manager recording control
       --sensor-kit NAME
                         Select sensor kit: realsense, realsense-silky
+      --rviz-config NAME_OR_PATH
+                        Select RViz config: default, vslam-debug, or absolute path
       --components LIST
                         Custom component list, e.g. sensor,joy,teleop,vehicle-vesc
       --set ARG:=VALUE Override one bringup launch argument
@@ -295,6 +298,27 @@ apply_sensor_kit() {
   esac
 }
 
+resolve_rviz_config() {
+  local config="$1"
+
+  case "$config" in
+    default)
+      printf '%s' "${ROS2_WS}/install/${LAUNCH_PACKAGE}/share/${LAUNCH_PACKAGE}/rviz/default.rviz"
+      ;;
+    vslam-debug|vslam_debug|vslam)
+      printf '%s' "${ROS2_WS}/install/${LAUNCH_PACKAGE}/share/${LAUNCH_PACKAGE}/rviz/vslam_debug.rviz"
+      ;;
+    /*)
+      printf '%s' "$config"
+      ;;
+    *)
+      printf 'error: rviz config must be default, vslam-debug, or an absolute path: %s\n' \
+        "$config" >&2
+      return 1
+      ;;
+  esac
+}
+
 enable_teleop_stack() {
   set_arg enable_tool true
   set_arg enable_bag_manager false
@@ -333,6 +357,7 @@ enable_offline_replay_stack() {
   set_arg enable_control false
   set_arg publish_vehicle_description false
   set_arg enable_rviz true
+  set_arg rviz_config_file "$(resolve_rviz_config vslam-debug)"
   apply_vehicle none
   REQUIRES_ROSBAG=true
 }
@@ -370,7 +395,7 @@ apply_preset() {
       set_arg enable_vslam true
       set_arg enable_vgl false
       set_arg enable_localization_manager false
-      set_arg vslam_enable_slam false
+      set_arg vslam_enable_slam true
       set_arg vslam_enable_visualization true
       ;;
     offline-vslam-map)
@@ -854,6 +879,29 @@ configure_sensor_kit_interactively() {
   apply_sensor_kit "${selection%%[[:space:]]*}"
 }
 
+configure_rviz_interactively() {
+  local selection
+  local options=(
+    'vslam-debug  VSLAM debug'
+    'default      Default'
+    'path         パスを手入力...'
+  )
+
+  selection="$(choose_one 'RViz config' "${options[@]}")" || exit $?
+  case "${selection%%[[:space:]]*}" in
+    vslam-debug)
+      RVIZ_CONFIG="$(resolve_rviz_config vslam-debug)"
+      ;;
+    default)
+      RVIZ_CONFIG="$(resolve_rviz_config default)"
+      ;;
+    path)
+      RVIZ_CONFIG="$(prompt_path 'RViz config file' "$RVIZ_CONFIG")"
+      ;;
+    *) die "unknown RViz config selection: $selection" ;;
+  esac
+}
+
 normalize_rosbag_path() {
   if [[ -f "$ROSBAG" && "$(basename "$ROSBAG")" == 'metadata.yaml' ]]; then
     ROSBAG="$(dirname "$ROSBAG")"
@@ -923,6 +971,13 @@ validate_configuration() {
     driver_param="$(get_arg vehicle_driver_param)"
     [[ "$DRY_RUN" == 'true' || -f "$driver_param" ]] \
       || die "vehicle driver parameter file does not exist: $driver_param"
+  fi
+  if is_true "$(get_arg enable_rviz)" \
+    && [[ -n "$(get_arg rviz_config_file 2>/dev/null || true)" ]]; then
+    local rviz_config_file
+    rviz_config_file="$(get_arg rviz_config_file)"
+    [[ "$DRY_RUN" == 'true' || -f "$rviz_config_file" ]] \
+      || die "RViz config file does not exist: $rviz_config_file"
   fi
 }
 
@@ -994,6 +1049,10 @@ print_summary() {
   printf '  control      : %s\n' "$(get_arg enable_control)"
   printf '  map          : %s\n' "${MAP_DIR:-none}"
   printf '  rosbag       : %s\n' "${ROSBAG:-none}"
+  if is_true "$(get_arg enable_rviz)"; then
+    printf '  rviz config  : %s\n' \
+      "$(get_arg rviz_config_file 2>/dev/null || printf 'default')"
+  fi
   printf '\nCommand:\n  '
   printf '%q ' "${command[@]}"
   printf '\n\n'
@@ -1054,6 +1113,12 @@ while (($# > 0)); do
       shift 2
       ;;
     --sensor-kit=*) CLI_SENSOR_KIT="${1#*=}"; shift ;;
+    --rviz-config)
+      (($# >= 2)) || die '--rviz-config requires default, vslam-debug, or an absolute path'
+      RVIZ_CONFIG="$2"
+      shift 2
+      ;;
+    --rviz-config=*) RVIZ_CONFIG="${1#*=}"; shift ;;
     --components)
       (($# >= 2)) || die '--components requires a comma-separated list'
       CUSTOM_COMPONENTS="$2"
@@ -1128,6 +1193,14 @@ if [[ -n "$CLI_BAG_MANAGER" ]]; then
   else
     set_arg enable_bag_manager false
   fi
+fi
+if [[ "$INTERACTIVE" == 'true' && -z "$RVIZ_CONFIG" ]] \
+  && is_true "$(get_arg enable_rviz)"; then
+  configure_rviz_interactively
+fi
+if [[ -n "$RVIZ_CONFIG" ]]; then
+  resolved_rviz_config="$(resolve_rviz_config "$RVIZ_CONFIG")" || exit $?
+  set_arg rviz_config_file "$resolved_rviz_config"
 fi
 
 if [[ "$REQUIRES_MAP" == 'true' && -z "$MAP_DIR" && "$INTERACTIVE" == 'true' ]]; then

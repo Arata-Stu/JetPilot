@@ -303,9 +303,45 @@ def test_offline_vslam_replays_bag_without_map(tmp_path: Path) -> None:
     assert "enable_sensor_kit:=false" in output
     assert "enable_localization:=true" in output
     assert "enable_vslam:=true" in output
+    assert "vslam_enable_slam:=true" in output
+    assert "vslam_enable_visualization:=true" in output
     assert "enable_vgl:=false" in output
     assert "enable_vehicle:=false" in output
+    assert "rviz_config_file:=" in output
+    assert "vslam_debug.rviz" in output
     assert "map_dir:=" not in output
+
+
+def test_rviz_config_can_be_selected_explicitly_for_rviz_presets(tmp_path: Path) -> None:
+    bag = tmp_path / "bag"
+    bag.mkdir()
+    (bag / "metadata.yaml").write_text("rosbag2_bagfile_information: {}\n")
+
+    output = run_launcher(
+        "offline-vslam",
+        "--bag",
+        str(bag),
+        "--rviz-config",
+        "default",
+        "--dry-run",
+    ).stdout
+
+    assert "enable_rviz:=true" in output
+    assert "rviz_config_file:=" in output
+    assert "default.rviz" in output
+    assert "vslam_debug.rviz" not in output
+
+    invalid = run_launcher(
+        "offline-vslam",
+        "--bag",
+        str(bag),
+        "--rviz-config",
+        "unknown",
+        "--dry-run",
+        check=False,
+    )
+    assert invalid.returncode != 0
+    assert "rviz config must be default, vslam-debug, or an absolute path" in invalid.stderr
 
 
 def test_offline_vslam_map_runs_mapping_debug_without_output_map(tmp_path: Path) -> None:
