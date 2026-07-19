@@ -77,6 +77,26 @@ def test_drive_presets_enable_live_sensor_teleop_and_vehicle() -> None:
     assert "enable_localization:=false" in output
 
 
+def test_bag_manager_can_be_enabled_explicitly_for_drive_presets() -> None:
+    output = run_launcher("drive-vesc", "--bag-manager", "--dry-run").stdout
+
+    assert "enable_tool:=true" in output
+    assert "enable_bag_manager:=true" in output
+
+
+def test_bag_manager_can_be_disabled_explicitly_for_custom_components() -> None:
+    output = run_launcher(
+        "custom",
+        "--components",
+        "sensor,bag-manager,joy,teleop,operation,vehicle-vesc",
+        "--no-bag-manager",
+        "--dry-run",
+    ).stdout
+
+    assert "enable_tool:=true" in output
+    assert "enable_bag_manager:=false" in output
+
+
 def test_empty_launch_arguments_are_not_emitted() -> None:
     output = run_launcher("vehicle-vesc", "--dry-run").stdout
 

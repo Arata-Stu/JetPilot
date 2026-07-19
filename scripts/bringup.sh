@@ -18,6 +18,7 @@ REPLAY_RATE='1.0'
 DRY_RUN=false
 ASSUME_YES=false
 INTERACTIVE=false
+CLI_BAG_MANAGER=''
 REQUIRES_MAP=false
 REQUIRES_ROSBAG=false
 REQUIRES_RACELINE=false
@@ -72,6 +73,8 @@ Options:
       --raceline PATH  Enable the C++ raceline loader with this generated CSV
       --rate RATE      Rosbag replay rate (default: 1.0)
       --vehicle TYPE   Override vehicle backend: none, pca, vesc
+      --bag-manager    Enable bag manager recording control
+      --no-bag-manager Disable bag manager recording control
       --components LIST
                         Custom component list, e.g. sensor,joy,teleop,vehicle-vesc
       --set ARG:=VALUE Override one bringup launch argument
@@ -89,7 +92,7 @@ Examples:
   $(basename "$0") runtime-vesc --map /workspaces/map/course_a --dry-run
   $(basename "$0") custom --components sensor,localization,hd-map,control,vehicle-vesc \\
     --map /workspaces/map/course_a --raceline /workspaces/map/course_a/course_raceline.csv
-  $(basename "$0") custom --components sensor,joy,teleop,operation,vehicle-vesc
+  $(basename "$0") custom --components sensor,bag-manager,joy,teleop,operation,vehicle-vesc
 
 The launcher starts from explicit all-OFF module settings. Vehicle hardware is
 never enabled by a localization/replay preset, and replay + vehicle overrides
@@ -262,7 +265,7 @@ apply_vehicle() {
 
 enable_teleop_stack() {
   set_arg enable_tool true
-  set_arg enable_bag_manager true
+  set_arg enable_bag_manager false
   set_arg enable_joy true
   set_arg enable_teleop true
   set_arg enable_operation true
@@ -724,6 +727,33 @@ choose_preset_interactively() {
   PRESET="${selection%%[[:space:]]*}"
 }
 
+configure_bag_manager_interactively() {
+  local selection
+  local current
+  local options=()
+
+  current="$(get_arg enable_bag_manager)"
+  if is_true "$current"; then
+    options+=('on   Bag manager ON')
+    options+=('off  Bag manager OFF')
+  else
+    options+=('off  Bag manager OFF')
+    options+=('on   Bag manager ON')
+  fi
+
+  selection="$(choose_one 'Bag manager' "${options[@]}")" || exit $?
+  case "${selection%%[[:space:]]*}" in
+    on)
+      set_arg enable_tool true
+      set_arg enable_bag_manager true
+      ;;
+    off)
+      set_arg enable_bag_manager false
+      ;;
+    *) die "unknown bag manager selection: $selection" ;;
+  esac
+}
+
 normalize_rosbag_path() {
   if [[ -f "$ROSBAG" && "$(basename "$ROSBAG")" == 'metadata.yaml' ]]; then
     ROSBAG="$(dirname "$ROSBAG")"
@@ -905,6 +935,14 @@ while (($# > 0)); do
       shift 2
       ;;
     --vehicle=*) CLI_VEHICLE="${1#*=}"; shift ;;
+    --bag-manager)
+      CLI_BAG_MANAGER=true
+      shift
+      ;;
+    --no-bag-manager)
+      CLI_BAG_MANAGER=false
+      shift
+      ;;
     --components)
       (($# >= 2)) || die '--components requires a comma-separated list'
       CUSTOM_COMPONENTS="$2"
@@ -961,6 +999,17 @@ if [[ "$PRESET" == 'custom' ]]; then
 fi
 if [[ -n "${CLI_VEHICLE:-}" ]]; then
   apply_vehicle "$CLI_VEHICLE"
+fi
+if [[ "$INTERACTIVE" == 'true' && "$PRESET" != 'custom' && -z "$CLI_BAG_MANAGER" ]]; then
+  configure_bag_manager_interactively
+fi
+if [[ -n "$CLI_BAG_MANAGER" ]]; then
+  if is_true "$CLI_BAG_MANAGER"; then
+    set_arg enable_tool true
+    set_arg enable_bag_manager true
+  else
+    set_arg enable_bag_manager false
+  fi
 fi
 
 if [[ "$REQUIRES_MAP" == 'true' && -z "$MAP_DIR" && "$INTERACTIVE" == 'true' ]]; then
