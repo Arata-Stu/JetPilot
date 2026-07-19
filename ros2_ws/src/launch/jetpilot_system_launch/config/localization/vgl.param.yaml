@@ -20,6 +20,7 @@
       # ==========================================
       enable_rectify_images: true
       image_sync_match_threshold_ms: 3.0
+      image_qos_profile: "SENSOR_DATA"
 
       # ==========================================
       # VGL (Visual Global Localization) 動作設定

@@ -308,6 +308,7 @@ def generate_launch_description() -> lut.LaunchDescription:
         'vgl_model_dir',
         '/workspaces/ros2_ws/isaac_ros_assets/models/visual_global_localization',
         cli=True)
+    args.add_arg('vgl_image_qos_profile', 'SENSOR_DATA', cli=True)
     args.add_arg('enable_occupancy_map_server', False, cli=True)
     args.add_arg('enable_occupancy_map_lifecycle_manager', False, cli=True)
     args.add_arg('enable_omap_frame', False, cli=True)
@@ -560,6 +561,7 @@ def generate_launch_description() -> lut.LaunchDescription:
                 'enable_vgl': args.enable_vgl,
                 'vgl_topic_config_file': args.vgl_topic_config_file,
                 'vgl_model_dir': args.vgl_model_dir,
+                'vgl_image_qos_profile': args.vgl_image_qos_profile,
                 'enable_occupancy_map_server': args.enable_occupancy_map_server,
                 'enable_occupancy_map_lifecycle_manager':
                     args.enable_occupancy_map_lifecycle_manager,

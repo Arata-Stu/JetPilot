@@ -105,6 +105,7 @@ def add_visual_global_localization(args: lu.ArgumentContainer) -> list[lut.Actio
         'debug_dir': args.vgl_debug_dir,
         'debug_map_raw_dir': args.vgl_debug_map_raw_dir,
         'base_frame': args.vgl_base_frame,
+        'image_qos_profile': args.vgl_image_qos_profile,
         'use_sim_time': lut.ParameterValue(args.use_sim_time, value_type=bool),
     }
     
@@ -156,6 +157,7 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('vgl_localization_precision_level', 2)
     args.add_arg('vgl_enable_debug', False)
     args.add_arg('vgl_frequency', '1.0')
+    args.add_arg('vgl_image_qos_profile', 'SENSOR_DATA')
     args.add_arg('topic_config_file', lu.get_path('jetpilot_system_launch', 'config/localization/vgl_camera_topics.yaml'))
     args.add_arg('vgl_camera_optical_frames', '')
     args.add_arg('vgl_base_frame', 'base_link')

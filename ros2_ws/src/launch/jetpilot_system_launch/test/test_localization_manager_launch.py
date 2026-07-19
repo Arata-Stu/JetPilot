@@ -85,6 +85,8 @@ def test_configurable_localization_endpoints_are_wired_to_producers() -> None:
     assert "'localization_trigger_topic': args.localization_trigger_topic" in tool_source
     assert "'vgl_trigger_service': args.vgl_trigger_service" in localization_source
     assert "'vgl_pose_topic': args.vgl_pose_topic" in localization_source
+    assert "'vgl_image_qos_profile': args.vgl_image_qos_profile" in localization_source
+    assert "'image_qos_profile': args.vgl_image_qos_profile" in vgl_source
     assert "('visual_localization/trigger_localization', args.vgl_trigger_service)" in vgl_source
     assert "('visual_localization/pose', args.vgl_pose_topic)" in vgl_source
     assert "'vslam_diagnostics_topic': args.localization_diagnostics_topic" in localization_source
