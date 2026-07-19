@@ -19,6 +19,7 @@ DRY_RUN=false
 ASSUME_YES=false
 INTERACTIVE=false
 CLI_BAG_MANAGER=''
+CLI_SENSOR_KIT=''
 REQUIRES_MAP=false
 REQUIRES_ROSBAG=false
 REQUIRES_RACELINE=false
@@ -75,6 +76,8 @@ Options:
       --vehicle TYPE   Override vehicle backend: none, pca, vesc
       --bag-manager    Enable bag manager recording control
       --no-bag-manager Disable bag manager recording control
+      --sensor-kit NAME
+                        Select sensor kit: realsense, realsense-silky
       --components LIST
                         Custom component list, e.g. sensor,joy,teleop,vehicle-vesc
       --set ARG:=VALUE Override one bringup launch argument
@@ -260,6 +263,26 @@ apply_vehicle() {
       set_arg vehicle_driver_param "$(vesc_driver_param)"
       ;;
     *) die "vehicle backend must be none, pca, or vesc: $backend" ;;
+  esac
+}
+
+apply_sensor_kit() {
+  local sensor_kit="$1"
+
+  case "$sensor_kit" in
+    realsense)
+      set_arg sensor_kit_interface_pkg jetpilot_system_launch
+      set_arg sensor_kit_interface_launch launch/sensors/realsense.launch.py
+      set_arg sensor_kit_camera_name realsense
+      set_arg sensor_kit_rtp_image_topic /realsense/color/image_raw
+      ;;
+    realsense-silky|realsense_silky|silky)
+      set_arg sensor_kit_interface_pkg jetpilot_system_launch
+      set_arg sensor_kit_interface_launch launch/sensors/realsense_silky_evcam.launch.py
+      set_arg sensor_kit_camera_name realsense
+      set_arg sensor_kit_rtp_image_topic /realsense/color/image_raw
+      ;;
+    *) die "sensor kit must be realsense or realsense-silky: $sensor_kit" ;;
   esac
 }
 
@@ -754,6 +777,27 @@ configure_bag_manager_interactively() {
   esac
 }
 
+configure_sensor_kit_interactively() {
+  local selection
+  local current_launch
+  local options=()
+
+  current_launch="$(get_arg sensor_kit_interface_launch 2>/dev/null || true)"
+  case "$current_launch" in
+    *realsense_silky_evcam.launch.py)
+      options+=('realsense-silky  RealSense + SilkyEvCam/OpenEB')
+      options+=('realsense        RealSense')
+      ;;
+    *)
+      options+=('realsense        RealSense')
+      options+=('realsense-silky  RealSense + SilkyEvCam/OpenEB')
+      ;;
+  esac
+
+  selection="$(choose_one 'Sensor kit launch' "${options[@]}")" || exit $?
+  apply_sensor_kit "${selection%%[[:space:]]*}"
+}
+
 normalize_rosbag_path() {
   if [[ -f "$ROSBAG" && "$(basename "$ROSBAG")" == 'metadata.yaml' ]]; then
     ROSBAG="$(dirname "$ROSBAG")"
@@ -880,6 +924,11 @@ print_summary() {
   printf '  preset       : %s\n' "$PRESET"
   printf '  vehicle      : %s\n' "$displayed_backend"
   printf '  sensor       : %s\n' "$(get_arg enable_sensor_kit)"
+  if is_true "$(get_arg enable_sensor_kit)"; then
+    printf '  sensor launch: %s/%s\n' \
+      "$(get_arg sensor_kit_interface_pkg 2>/dev/null || printf 'jetpilot_system_launch')" \
+      "$(get_arg sensor_kit_interface_launch 2>/dev/null || printf 'launch/sensors/realsense.launch.py')"
+  fi
   printf '  localization : %s\n' "$(get_arg enable_localization)"
   printf '  tool/teleop  : %s / %s\n' \
     "$(get_arg enable_tool)" "$(get_arg enable_teleop)"
@@ -943,6 +992,12 @@ while (($# > 0)); do
       CLI_BAG_MANAGER=false
       shift
       ;;
+    --sensor-kit)
+      (($# >= 2)) || die '--sensor-kit requires realsense or realsense-silky'
+      CLI_SENSOR_KIT="$2"
+      shift 2
+      ;;
+    --sensor-kit=*) CLI_SENSOR_KIT="${1#*=}"; shift ;;
     --components)
       (($# >= 2)) || die '--components requires a comma-separated list'
       CUSTOM_COMPONENTS="$2"
@@ -999,6 +1054,13 @@ if [[ "$PRESET" == 'custom' ]]; then
 fi
 if [[ -n "${CLI_VEHICLE:-}" ]]; then
   apply_vehicle "$CLI_VEHICLE"
+fi
+if [[ "$INTERACTIVE" == 'true' && -z "$CLI_SENSOR_KIT" ]] \
+  && is_true "$(get_arg enable_sensor_kit)"; then
+  configure_sensor_kit_interactively
+fi
+if [[ -n "$CLI_SENSOR_KIT" ]]; then
+  apply_sensor_kit "$CLI_SENSOR_KIT"
 fi
 if [[ "$INTERACTIVE" == 'true' && "$PRESET" != 'custom' && -z "$CLI_BAG_MANAGER" ]]; then
   configure_bag_manager_interactively

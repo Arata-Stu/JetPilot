@@ -97,6 +97,36 @@ def test_bag_manager_can_be_disabled_explicitly_for_custom_components() -> None:
     assert "enable_bag_manager:=false" in output
 
 
+def test_sensor_kit_launch_can_be_selected_explicitly() -> None:
+    output = run_launcher(
+        "drive-vesc",
+        "--sensor-kit",
+        "realsense-silky",
+        "--dry-run",
+    ).stdout
+
+    assert "enable_sensor_kit:=true" in output
+    assert "sensor_kit_interface_pkg:=jetpilot_system_launch" in output
+    assert (
+        "sensor_kit_interface_launch:=launch/sensors/realsense_silky_evcam.launch.py"
+        in output
+    )
+    assert "sensor_kit_camera_name:=realsense" in output
+
+
+def test_unknown_sensor_kit_is_rejected() -> None:
+    result = run_launcher(
+        "drive-vesc",
+        "--sensor-kit",
+        "unknown-camera",
+        "--dry-run",
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "sensor kit must be realsense or realsense-silky" in result.stderr
+
+
 def test_empty_launch_arguments_are_not_emitted() -> None:
     output = run_launcher("vehicle-vesc", "--dry-run").stdout
 
