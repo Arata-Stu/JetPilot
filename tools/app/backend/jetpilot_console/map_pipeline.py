@@ -195,7 +195,7 @@ ros2 launch {_q(config.launch_package)} bringup.launch.py \\
   vslam_localize_on_startup:=true \\
   enable_vgl:=false \\
   vgl_topic_config_file:={_q(topic_config_path)} \\
-  vgl_model_dir:={_q(output_model_dir)} \\
+{f"  vgl_model_dir:={_q(output_model_dir)} \\\n" if output_model_dir else ""}\
   enable_rviz:={rviz_value} \\
   rviz_config_file:={_q(rviz_config_file)} \\
   enable_tool:=true \\

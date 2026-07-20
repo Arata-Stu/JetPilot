@@ -581,8 +581,11 @@ def build_analysis_script(
                 '    enable_vgl:="$offline_enable_vgl" \\',
                 "    enable_localization_manager:=true \\",
                 f"    vgl_topic_config_file:={_q(topic_config)} \\",
-                f"    vgl_model_dir:={_q(model_dir or '')} \\",
-                '    map_dir:="$offline_map_dir" \\',
+                *(
+                    [f"    vgl_model_dir:={_q(model_dir)} \\"]
+                    if model_dir else []
+                ),
+                '    ${offline_map_dir:+map_dir:="$offline_map_dir"} \\',
                 "    enable_tool:=true \\",
                 "    enable_bag_manager:=false \\",
                 "    enable_joy:=false \\",
