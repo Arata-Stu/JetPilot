@@ -558,77 +558,118 @@ def _snapshot_samples(path: Path) -> list[dict[str, object]]:
     if not isinstance(data, dict):
         raise RuntimeError("Offline localization snapshot root must be an object")
     localization = data.get("localization")
-    if not isinstance(localization, dict) or not localization.get("required"):
-        raise RuntimeError(
-            "Offline localization snapshot has no strict localization contract. "
-            "Run the JetPilot offline analysis recorder with require_localized_map enabled."
-        )
-    if not localization.get("confirmed"):
-        raise RuntimeError(
-            "VGL/VSLAM did not reach the confirmed localized state; no offline trajectory was accepted."
-        )
-    try:
-        accepted_samples = int(localization.get("accepted_odometry_samples") or 0)
-        minimum_samples = int(localization.get("minimum_required_odometry_samples") or 2)
-    except (TypeError, ValueError):
-        accepted_samples, minimum_samples = 0, 2
-    # Unit fixtures and strict recorder output both carry the sample array; if
-    # explicit recorder counters are present they must also prove a useful run.
-    if "accepted_odometry_samples" in localization and accepted_samples < minimum_samples:
-        raise RuntimeError(
-            f"Offline localization produced only {accepted_samples} accepted samples; "
-            f"at least {minimum_samples} are required."
-        )
-    raw_samples = data.get("odometry_samples")
-    if not isinstance(raw_samples, list) or not raw_samples:
-        raise RuntimeError(
-            "Offline localization was confirmed but produced no synchronized map-frame odometry samples."
-        )
-    samples: list[dict[str, object]] = []
-    for raw in raw_samples or []:
-        if not isinstance(raw, dict):
-            continue
-        try:
-            header_timestamp_ns = int(raw.get("timestamp_ns"))
-            received_timestamp_ns = int(raw.get("received_timestamp_ns") or 0)
-            # The viewer uses rosbag storage time for images and controls. During
-            # offline replay, /clock is the same time axis; prefer callback receive
-            # time so VSLAM header conventions cannot shift the trajectory.
-            timestamp_ns = received_timestamp_ns or header_timestamp_ns
-        except (TypeError, ValueError):
-            continue
-        if timestamp_ns <= 0:
-            continue
-        frame_id = str(raw.get("frame_id") or "").strip().lstrip("/")
-        if frame_id != "map":
+    if not isinstance(localization, dict):
+        raise RuntimeError("Offline localization snapshot is missing 'localization' metadata.")
+    require_localized_map = bool(localization.get("required"))
+    if require_localized_map:
+        # Strict path: VGL/VSLAM map-localized mode must confirm localization.
+        if not localization.get("confirmed"):
             raise RuntimeError(
-                f"Offline localization sample is in {frame_id or '<empty>'} frame, not map."
+                "VGL/VSLAM did not reach the confirmed localized state; no offline trajectory was accepted."
             )
-        pose = raw.get("pose") or {}
-        position = pose.get("position") or {}
-        orientation = pose.get("orientation") or {}
-        twist = raw.get("twist") or {}
-        linear = twist.get("linear") or {}
-        speed = math.sqrt(
-            sum(_finite(linear.get(axis)) ** 2 for axis in ("x", "y", "z"))
-        )
-        sample = {
-            "_timestamp_ns": timestamp_ns,
-            "_header_timestamp_ns": header_timestamp_ns or None,
-            "x": _finite(position.get("x")),
-            "y": _finite(position.get("y")),
-            "z": _finite(position.get("z")),
-            "yaw": _quaternion_yaw_dict(orientation),
-            "speed_mps": speed,
-            "frame_id": frame_id,
-            "child_frame_id": str(raw.get("child_frame_id") or ""),
-        }
-        samples.append(sample)
-    if not samples:
-        raise RuntimeError(
-            "Offline localization produced no samples on the rosbag /clock time axis."
-        )
-    return samples
+        try:
+            accepted_samples = int(localization.get("accepted_odometry_samples") or 0)
+            minimum_samples = int(localization.get("minimum_required_odometry_samples") or 2)
+        except (TypeError, ValueError):
+            accepted_samples, minimum_samples = 0, 2
+        if "accepted_odometry_samples" in localization and accepted_samples < minimum_samples:
+            raise RuntimeError(
+                f"Offline localization produced only {accepted_samples} accepted samples; "
+                f"at least {minimum_samples} are required."
+            )
+        raw_samples = data.get("odometry_samples")
+        if not isinstance(raw_samples, list) or not raw_samples:
+            raise RuntimeError(
+                "Offline localization was confirmed but produced no synchronized map-frame odometry samples."
+            )
+        samples: list[dict[str, object]] = []
+        for raw in raw_samples or []:
+            if not isinstance(raw, dict):
+                continue
+            try:
+                header_timestamp_ns = int(raw.get("timestamp_ns"))
+                received_timestamp_ns = int(raw.get("received_timestamp_ns") or 0)
+                timestamp_ns = received_timestamp_ns or header_timestamp_ns
+            except (TypeError, ValueError):
+                continue
+            if timestamp_ns <= 0:
+                continue
+            frame_id = str(raw.get("frame_id") or "").strip().lstrip("/")
+            if frame_id != "map":
+                raise RuntimeError(
+                    f"Offline localization sample is in {frame_id or '<empty>'} frame, not map."
+                )
+            pose = raw.get("pose") or {}
+            position = pose.get("position") or {}
+            orientation = pose.get("orientation") or {}
+            twist = raw.get("twist") or {}
+            linear = twist.get("linear") or {}
+            speed = math.sqrt(
+                sum(_finite(linear.get(axis)) ** 2 for axis in ("x", "y", "z"))
+            )
+            sample = {
+                "_timestamp_ns": timestamp_ns,
+                "_header_timestamp_ns": header_timestamp_ns or None,
+                "x": _finite(position.get("x")),
+                "y": _finite(position.get("y")),
+                "z": _finite(position.get("z")),
+                "yaw": _quaternion_yaw_dict(orientation),
+                "speed_mps": speed,
+                "frame_id": frame_id,
+                "child_frame_id": str(raw.get("child_frame_id") or ""),
+            }
+            samples.append(sample)
+        if not samples:
+            raise RuntimeError(
+                "Offline localization produced no samples on the rosbag /clock time axis."
+            )
+        return samples
+    else:
+        # Relaxed path: vslam_from_scratch records in odom frame without map localization.
+        # Accept any received odometry samples regardless of frame.
+        raw_samples = data.get("odometry_samples")
+        if not isinstance(raw_samples, list) or not raw_samples:
+            raise RuntimeError(
+                "VSLAM from scratch produced no odometry samples in the snapshot."
+            )
+        samples = []
+        for raw in raw_samples:
+            if not isinstance(raw, dict):
+                continue
+            try:
+                header_timestamp_ns = int(raw.get("timestamp_ns"))
+                received_timestamp_ns = int(raw.get("received_timestamp_ns") or 0)
+                timestamp_ns = received_timestamp_ns or header_timestamp_ns
+            except (TypeError, ValueError):
+                continue
+            if timestamp_ns <= 0:
+                continue
+            pose = raw.get("pose") or {}
+            position = pose.get("position") or {}
+            orientation = pose.get("orientation") or {}
+            twist = raw.get("twist") or {}
+            linear = twist.get("linear") or {}
+            speed = math.sqrt(
+                sum(_finite(linear.get(axis)) ** 2 for axis in ("x", "y", "z"))
+            )
+            frame_id = str(raw.get("frame_id") or "odom").strip().lstrip("/")
+            sample = {
+                "_timestamp_ns": timestamp_ns,
+                "_header_timestamp_ns": header_timestamp_ns or None,
+                "x": _finite(position.get("x")),
+                "y": _finite(position.get("y")),
+                "z": _finite(position.get("z")),
+                "yaw": _quaternion_yaw_dict(orientation),
+                "speed_mps": speed,
+                "frame_id": frame_id,
+                "child_frame_id": str(raw.get("child_frame_id") or ""),
+            }
+            samples.append(sample)
+        if not samples:
+            raise RuntimeError(
+                "VSLAM from scratch produced no usable odometry samples in the snapshot."
+            )
+        return samples
 
 
 def _quaternion_yaw_dict(orientation: Mapping[str, Any]) -> float:
@@ -891,7 +932,9 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
                 ).strip()
             except OSError:
                 candidate_method = ""
-            if candidate_method in {"vgl", "vslam_identity", "vslam_identity_fallback"}:
+            if candidate_method in {
+                "vgl", "vslam_identity", "vslam_identity_fallback", "vslam_from_scratch"
+            }:
                 offline_localization_method = candidate_method
         offline_snapshot_samples = _snapshot_samples(trajectory_snapshot)
     else:
