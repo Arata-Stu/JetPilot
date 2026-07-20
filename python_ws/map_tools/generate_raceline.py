@@ -105,8 +105,8 @@ def remove_duplicate_points(points: np.ndarray, *extra_columns: np.ndarray) -> T
         return (points, *extra_columns)
 
     keep = np.ones(len(points), dtype=bool)
-    keep[1:] = np.linalg.norm(np.diff(points, axis=0), axis=1) > 1e-9
-    if np.linalg.norm(points[0] - points[-1]) <= 1e-9:
+    keep[1:] = np.linalg.norm(np.diff(points, axis=0), axis=1) > 1e-4
+    if np.linalg.norm(points[0] - points[-1]) <= 1e-4:
         keep[-1] = False
 
     return (points[keep], *(col[keep] for col in extra_columns))
@@ -171,6 +171,7 @@ def write_raceline_metadata(
     widths: np.ndarray,
     point_count: int,
     track_length: float,
+    opt_params: dict | None = None,
 ) -> str:
     metadata_path = metadata_path_for_output(output_path)
     metadata = {
@@ -192,6 +193,7 @@ def write_raceline_metadata(
         "result": {
             "point_count": int(point_count),
             "closed_track_length_m": float(track_length),
+            "actual_optimizer_parameters": opt_params or {},
         },
     }
 
@@ -327,46 +329,58 @@ def build_reftrack_interp_with_retry(
     stepsize_reg: float,
     spline_smoothing: float,
     debug: bool,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, float]:
-    smoothing = max(float(spline_smoothing), 1e-6)
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, float, float, float]:
+    smoothing_init = max(float(spline_smoothing), 1e-6)
     attempted = []
 
-    for _ in range(6):
-        attempted.append(smoothing)
+    stepsize_candidates = [(float(stepsize_prep), float(stepsize_reg))]
+    for scale in (1.25, 1.5, 2.0, 2.5, 3.0):
+        cand = (float(stepsize_prep) * scale, float(stepsize_reg) * scale)
+        if cand not in stepsize_candidates:
+            stepsize_candidates.append(cand)
 
-        if debug:
-            print(
-                f"[global-opt] spline approximation with smoothing={smoothing:g}",
-                file=sys.stderr,
-                flush=True,
+    for sp_prep, sp_reg in stepsize_candidates:
+        smoothing = smoothing_init
+        for _ in range(16):
+            if smoothing not in attempted:
+                attempted.append(smoothing)
+
+            if debug:
+                print(
+                    f"[global-opt] spline approximation with smoothing={smoothing:g}, stepsize_prep={sp_prep:g}, stepsize_reg={sp_reg:g}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+
+            reftrack_interp = tph.spline_approximation.spline_approximation(
+                track=reftrack,
+                k_reg=3,
+                s_reg=smoothing,
+                stepsize_prep=sp_prep,
+                stepsize_reg=sp_reg,
+                debug=debug,
             )
 
-        reftrack_interp = tph.spline_approximation.spline_approximation(
-            track=reftrack,
-            k_reg=3,
-            s_reg=smoothing,
-            stepsize_prep=stepsize_prep,
-            stepsize_reg=stepsize_reg,
-            debug=debug,
-        )
+            refpath_interp_cl = np.vstack((reftrack_interp[:, :2], reftrack_interp[0, :2]))
+            coeffs_x, coeffs_y, a_interp, normvec = tph.calc_splines.calc_splines(path=refpath_interp_cl)
 
-        refpath_interp_cl = np.vstack((reftrack_interp[:, :2], reftrack_interp[0, :2]))
-        coeffs_x, coeffs_y, a_interp, normvec = tph.calc_splines.calc_splines(path=refpath_interp_cl)
+            if not tph.check_normals_crossing.check_normals_crossing(
+                track=reftrack_interp,
+                normvec_normalized=normvec,
+                horizon=10,
+            ):
+                return reftrack_interp, a_interp, normvec, coeffs_x, coeffs_y, smoothing, sp_prep, sp_reg
 
-        if not tph.check_normals_crossing.check_normals_crossing(
-            track=reftrack_interp,
-            normvec_normalized=normvec,
-            horizon=10,
-        ):
-            return reftrack_interp, a_interp, normvec, coeffs_x, coeffs_y, smoothing
+            smoothing *= 2.0
 
-        smoothing *= 2.0
-
-    attempted_str = ", ".join(f"{value:g}" for value in attempted)
+    attempted_str = ", ".join(f"{value:g}" for value in attempted[:20])
+    if len(attempted) > 20:
+        attempted_str += f" (and {len(attempted) - 20} more values up to {attempted[-1]:g})"
 
     raise RuntimeError(
-        "Spline normals cross even after retrying higher --global-opt-spline-smoothing values: "
-        f"{attempted_str}. Try a smoother centerline or a larger initial smoothing value."
+        "Spline normals cross even after retrying higher --global-opt-spline-smoothing values "
+        f"and step sizes: {attempted_str}. Try adjusting --global-opt-stepsize-prep and "
+        "--global-opt-stepsize-reg, or verify that the centerline does not have self-intersections or sharp kinks."
     )
 
 
@@ -459,7 +473,7 @@ def generate_global_opt_raceline(
     decel_limit: float,
     debug: bool,
     progress: ProgressReporter | None = None,
-) -> np.ndarray:
+) -> Tuple[np.ndarray, dict]:
     if opt_type not in {"shortest_path", "mincurv", "mincurv_iqp"}:
         raise RuntimeError("global-opt backend supports shortest_path, mincurv, and mincurv_iqp.")
 
@@ -504,7 +518,7 @@ def generate_global_opt_raceline(
     if progress is not None:
         progress.step(1, 5, "Smoothing reference track")
 
-    reftrack_interp, a_interp, normvec, coeffs_x, coeffs_y, smoothing_used = build_reftrack_interp_with_retry(
+    reftrack_interp, a_interp, normvec, coeffs_x, coeffs_y, smoothing_used, stepsize_prep_used, stepsize_reg_used = build_reftrack_interp_with_retry(
         tph=tph,
         reftrack=reftrack,
         stepsize_prep=stepsize_prep,
@@ -520,10 +534,12 @@ def generate_global_opt_raceline(
         source="Interpolated centerline",
     )
 
-    if debug and smoothing_used != spline_smoothing:
+    if smoothing_used != spline_smoothing or stepsize_prep_used != stepsize_prep or stepsize_reg_used != stepsize_reg:
         print(
-            "Adjusted global-opt spline smoothing from "
-            f"{spline_smoothing:g} to {smoothing_used:g} to avoid crossing normals.",
+            f"[global-opt] Adjusted spline parameters to avoid crossing normals -> "
+            f"smoothing: {spline_smoothing:g} => {smoothing_used:g}, "
+            f"stepsize_prep: {stepsize_prep:g} => {stepsize_prep_used:g}, "
+            f"stepsize_reg: {stepsize_reg:g} => {stepsize_reg_used:g}",
             file=sys.stderr,
             flush=True,
         )
@@ -558,7 +574,7 @@ def generate_global_opt_raceline(
             if progress is not None:
                 progress.step(2, 5, "Running iterative minimum-curvature optimizer")
 
-            alpha, reftrack_interp, normvec = call_iqp_handler_compat(
+            alpha, reftrack_interp, width_opt = call_iqp_handler_compat(
                 tph=tph,
                 reftrack_interp=reftrack_interp,
                 normvec=normvec,
@@ -568,7 +584,7 @@ def generate_global_opt_raceline(
                 curvature_limit=curvature_limit,
                 width_opt=width_opt,
                 debug=debug,
-                stepsize_reg=stepsize_reg,
+                stepsize_reg=stepsize_reg_used,
             )
 
         except TypeError:
@@ -644,17 +660,21 @@ def generate_global_opt_raceline(
     if progress is not None:
         progress.step(5, 5, "Assembling output")
 
-    return np.column_stack([s, raceline_xy[:, 0], raceline_xy[:, 1], psi, kappa, vx, ax])
+    return np.column_stack([s, raceline_xy[:, 0], raceline_xy[:, 1], psi, kappa, vx, ax]), {
+        "spline_smoothing": smoothing_used,
+        "stepsize_prep": stepsize_prep_used,
+        "stepsize_reg": stepsize_reg_used,
+    }
 
 
 def generate_with_selected_backend(
     args: argparse.Namespace,
     centerline: np.ndarray,
     widths: np.ndarray,
-) -> Tuple[np.ndarray, str]:
+) -> Tuple[np.ndarray, str, dict]:
     progress = ProgressReporter(enabled=args.show_progress)
 
-    raceline = generate_global_opt_raceline(
+    raceline, opt_params = generate_global_opt_raceline(
         centerline=centerline,
         widths=widths,
         optimizer_root=args.optimizer_root or default_optimizer_root(),
@@ -675,7 +695,7 @@ def generate_with_selected_backend(
         progress=progress,
     )
 
-    return raceline, "global-opt"
+    return raceline, "global-opt", opt_params
 
 
 def run(args: argparse.Namespace) -> None:
@@ -706,7 +726,7 @@ def run(args: argparse.Namespace) -> None:
     )
 
     for direction, centerline, widths, direction_out_path in direction_plan:
-        raceline, backend_used = generate_with_selected_backend(args, centerline, widths)
+        raceline, backend_used, opt_params = generate_with_selected_backend(args, centerline, widths)
 
         np.savetxt(
             direction_out_path,
@@ -733,6 +753,7 @@ def run(args: argparse.Namespace) -> None:
             widths=widths,
             point_count=len(raceline),
             track_length=closed_length,
+            opt_params=opt_params,
         )
         print(f"Track length: {closed_length:.3f} m")
         print(f"Wrote raceline CSV: {direction_out_path}")
