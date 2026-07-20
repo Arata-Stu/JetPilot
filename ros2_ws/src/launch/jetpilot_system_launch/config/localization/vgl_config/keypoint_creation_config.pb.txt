@@ -1,4 +1,3 @@
-cat keypoint_creation_config.pb.txt 
 sift_cv_cuda_detector {
   # in order to increase success rate, increase layers, suggest formulat is log(min(image_width,image_height))/log(2)-2
   max_layers_per_octave: 6
