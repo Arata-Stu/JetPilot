@@ -5,12 +5,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 from rosbags.rosbag2 import Reader
-from rosbags.typesys import get_typestore
-from rosbags.typesys.stores.ros2_jazzy import (
-    DiagnosticArray,
-    EventPacket,
-    Image,
-)
+from rosbags.typesys import Stores, get_typestore
 
 # Universal deserializer fallback across rosbags v0.9.x and v0.10.x+
 try:
@@ -105,7 +100,13 @@ class BagReader:
     def __init__(self, bag_path: Union[str, Path], namespace: str = "/event_camera"):
         self.bag_path = Path(bag_path)
         self.namespace = namespace.rstrip("/")
-        self.typestore = get_typestore(DiagnosticArray)
+        try:
+            self.typestore = get_typestore(Stores.ROS2_JAZZY)
+        except (AttributeError, KeyError):
+            try:
+                self.typestore = get_typestore(Stores.LATEST)
+            except Exception:
+                self.typestore = get_typestore()
         self._ensure_custom_types()
 
     def _ensure_custom_types(self) -> None:
