@@ -434,8 +434,8 @@ def build_analysis_script(
         raise ValueError("max_fps must be a finite value greater than 0 and at most 240")
     if trajectory_mode not in {"recorded", "offline", "none"}:
         raise ValueError("resolved trajectory_mode must be recorded, offline, or none")
-    if offline_localization_mode not in {"auto", "vgl", "vslam"}:
-        raise ValueError("offline_localization_mode must be auto, vgl, or vslam")
+    if offline_localization_mode not in {"auto", "vgl", "vslam", "vslam_from_scratch"}:
+        raise ValueError("offline_localization_mode must be auto, vgl, vslam, or vslam_from_scratch")
 
     status_file = analysis_dir / "status.json"
     snapshot = analysis_dir / "localization" / "vslam_snapshot.json"
@@ -482,8 +482,10 @@ def build_analysis_script(
     ]
 
     if trajectory_mode == "offline":
-        if map_dir is None or topic_config is None:
-            raise ValueError("offline localization requires map and camera topic config paths")
+        if topic_config is None:
+            raise ValueError("offline localization requires a camera topic config path")
+        if offline_localization_mode != "vslam_from_scratch" and map_dir is None:
+            raise ValueError("offline localization requires a map path (unless using vslam_from_scratch)")
         if offline_localization_mode in {"auto", "vgl"} and model_dir is None:
             raise ValueError("VGL localization requires a VGL model path")
         lines.extend(
@@ -535,16 +537,28 @@ def build_analysis_script(
                 '  offline_method="$1"',
                 '  offline_replay_progress="$2"',
                 '  offline_drain_progress="$3"',
+                f"  target_map_dir={_q(map_dir or '')}",
                 '  if [ "$offline_method" = "vgl" ]; then',
                 "    offline_enable_vgl=true",
                 "    offline_require_vgl_node=1",
                 "    offline_publish_identity_hint=0",
                 '    offline_method_label="VGL + VSLAM"',
+                '    offline_map_dir="$target_map_dir"',
+                "    offline_require_localized=true",
+                '  elif [ "$offline_method" = "vslam_from_scratch" ]; then',
+                "    offline_enable_vgl=false",
+                "    offline_require_vgl_node=0",
+                "    offline_publish_identity_hint=0",
+                '    offline_method_label="VSLAM from scratch (no map)"',
+                '    offline_map_dir=""',
+                "    offline_require_localized=false",
                 "  else",
                 "    offline_enable_vgl=false",
                 "    offline_require_vgl_node=0",
                 "    offline_publish_identity_hint=1",
                 '    offline_method_label="VSLAM identity hint"',
+                '    offline_map_dir="$target_map_dir"',
+                "    offline_require_localized=true",
                 "  fi",
                 f"  rm -f {_q(snapshot)} || return 20",
                 '  echo "[offline] starting $offline_method_label"',
@@ -568,7 +582,7 @@ def build_analysis_script(
                 "    enable_localization_manager:=true \\",
                 f"    vgl_topic_config_file:={_q(topic_config)} \\",
                 f"    vgl_model_dir:={_q(model_dir or '')} \\",
-                f"    map_dir:={_q(map_dir)} \\",
+                '    map_dir:="$offline_map_dir" \\',
                 "    enable_tool:=true \\",
                 "    enable_bag_manager:=false \\",
                 "    enable_joy:=false \\",
@@ -581,7 +595,7 @@ def build_analysis_script(
                 "    vslam_snapshot_localization_state_topic:=/localization/pose_hint_state \\",
                 "    vslam_snapshot_tf_topic:=/tf \\",
                 "    vslam_snapshot_map_frame:=map \\",
-                "    vslam_snapshot_require_localized_map:=true \\",
+                '    vslam_snapshot_require_localized_map:="$offline_require_localized" \\',
                 "    vslam_snapshot_write_interval_s:=0.0 \\",
                 "    enable_rviz:=false \\",
                 f"    rosbag:={_q(rosbag)} &",
@@ -702,6 +716,13 @@ def build_analysis_script(
                 [
                     "run_offline_localization_attempt vgl 0.15 0.40",
                     f"printf '%s\\n' vgl > {_q(localization_method_file)}",
+                ]
+            )
+        elif offline_localization_mode == "vslam_from_scratch":
+            lines.extend(
+                [
+                    "run_offline_localization_attempt vslam_from_scratch 0.15 0.40",
+                    f"printf '%s\\n' vslam_from_scratch > {_q(localization_method_file)}",
                 ]
             )
         else:

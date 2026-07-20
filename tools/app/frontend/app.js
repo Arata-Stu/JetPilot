@@ -1954,6 +1954,7 @@ function renderAnalysisForm() {
             ["auto", "Auto: try VGL, then VSLAM saved-map origin fallback"],
             ["vgl", "VGL required: stop if VGL cannot localize"],
             ["vslam", "VSLAM saved map only: use map origin as initial pose"],
+            ["vslam_from_scratch", "VSLAM from scratch: track/map from origin without existing map"],
           ].map(([value, label]) => `<option value="${value}" ${analysis.offlineLocalizationMode === value ? "selected" : ""}>${label}</option>`).join("")}
         </select>
         <div class="field-hint">The VSLAM-only fallback is valid when the bag starts near the selected Map origin. A confirmed localized state is still required before accepting its trajectory.</div>
@@ -2112,6 +2113,7 @@ function analysisLocalizationMethodLabel(value) {
     vgl: "VGL + VSLAM",
     vslam_identity: "VSLAM map origin",
     vslam_identity_fallback: "VSLAM map-origin fallback",
+    vslam_from_scratch: "VSLAM from scratch (no map)",
   }[String(value || "")] || "";
 }
 
