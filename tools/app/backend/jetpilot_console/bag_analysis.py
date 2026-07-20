@@ -578,7 +578,7 @@ def build_analysis_script(
                 "    enable_rosbag_replay:=true \\",
                 "    replay_additional_args:='--clock --start-paused' \\",
                 "    rosbag_start_delay_s:=0.0 \\",
-                "    rosbag_shutdown_on_exit:=true \\",
+                "    rosbag_shutdown_on_exit:=false \\",
                 "    enable_operation:=false \\",
                 "    enable_control:=false \\",
                 "    enable_vehicle:=false \\",
