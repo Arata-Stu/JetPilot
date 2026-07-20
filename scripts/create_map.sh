@@ -276,6 +276,7 @@ Environment:
   ALLOW_OCCUPANCY_MAP_STEP     Default: false
   CAMERA_TOPIC_CONFIG_FILE     Optional camera topic yaml override
   ENABLE_HD_MAP_WORKFLOW       true, false, or ask. Default: ask
+  ENABLE_ROSBAG_WARMUP_STEP    Enable 2-stage warmup wait before replay. Default: true
 EOF
 }
 
@@ -665,9 +666,22 @@ run_offline_eval() {
     die "offline eval readiness timed out after 180 seconds; VSLAM publishers did not become available"
   fi
 
-  echo "[stage] offline eval graph ready; starting paused rosbag replay"
-  sleep 5
-  ros2 service call /rosbag2_player/resume rosbag2_interfaces/srv/Resume '{}'
+  echo "[stage] offline eval graph ready; preparing rosbag replay"
+  if is_true_value "${ENABLE_ROSBAG_WARMUP_STEP:-true}"; then
+    echo "[stage] starting 2-stage wait (warmup step)"
+    sleep 5
+    echo "[stage] advancing rosbag by ~1 image frame (0.15s) for lazy initialization"
+    ros2 service call /rosbag2_player/resume rosbag2_interfaces/srv/Resume '{}'
+    sleep 0.15
+    ros2 service call /rosbag2_player/pause rosbag2_interfaces/srv/Pause '{}' || true
+    echo "[stage] waiting 5s for VGL/VSLAM initialization to settle during pause"
+    sleep 5
+    echo "[stage] resuming rosbag playback after warmup"
+    ros2 service call /rosbag2_player/resume rosbag2_interfaces/srv/Resume '{}'
+  else
+    sleep 5
+    ros2 service call /rosbag2_player/resume rosbag2_interfaces/srv/Resume '{}'
+  fi
 
   for offline_attempt in $(seq 1 15); do
     if [[ -s "$snapshot_path" ]]; then

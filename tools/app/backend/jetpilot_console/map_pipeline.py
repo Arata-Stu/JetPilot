@@ -110,6 +110,7 @@ def build_vgl_vslam_script(
     fs_model_res: str,
     output_model_dir: str,
     enable_rviz: bool,
+    enable_warmup_step: bool = True,
 ) -> str:
     topic_config_path = topic_config or str(default_topic_config(config))
     create_steps = " ".join(shlex.quote(step) for step in steps.split())
@@ -228,10 +229,23 @@ if [ "$offline_ready" -ne 1 ]; then
   echo "offline eval readiness timed out after 180 seconds; VSLAM publishers did not become available"
   offline_stop_launch TERM || true
   exit 23
+echo "[stage] offline eval graph ready; preparing rosbag replay"
+offline_enable_warmup="${{ENABLE_ROSBAG_WARMUP_STEP:-{'true' if enable_warmup_step else 'false'}}}"
+if [ "$offline_enable_warmup" = "true" ] || [ "$offline_enable_warmup" = "1" ]; then
+  echo "[stage] starting 2-stage wait (warmup step)"
+  sleep 5
+  echo "[stage] advancing rosbag by ~1 image frame (0.15s) for lazy initialization"
+  ros2 service call /rosbag2_player/resume rosbag2_interfaces/srv/Resume '{{}}'
+  sleep 0.15
+  ros2 service call /rosbag2_player/pause rosbag2_interfaces/srv/Pause '{{}}' || true
+  echo "[stage] waiting 5s for VGL/VSLAM initialization to settle during pause"
+  sleep 5
+  echo "[stage] resuming rosbag playback after warmup"
+  ros2 service call /rosbag2_player/resume rosbag2_interfaces/srv/Resume '{{}}'
+else
+  sleep 5
+  ros2 service call /rosbag2_player/resume rosbag2_interfaces/srv/Resume '{{}}'
 fi
-echo "[stage] offline eval graph ready; starting paused rosbag replay"
-sleep 5
-ros2 service call /rosbag2_player/resume rosbag2_interfaces/srv/Resume '{{}}'
 for offline_attempt in $(seq 1 15); do
   if [ -s "$snapshot" ]; then
     break
