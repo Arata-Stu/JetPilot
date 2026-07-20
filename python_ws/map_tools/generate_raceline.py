@@ -361,6 +361,24 @@ def build_reftrack_interp_with_retry(
                 debug=debug,
             )
 
+            # Re-interpolate right and left track widths along cumulative arclength from the
+            # validated raw centerline using piecewise linear interpolation. This ensures that
+            # large smoothing values applied to all 4 dimensions in splprep do not cause cubic
+            # overshoot or negative track widths (e.g. right=-2.775 m).
+            s_orig, _ = cumulative_s(reftrack[:, :2], closed=True)
+            s_interp, _ = cumulative_s(reftrack_interp[:, :2], closed=True)
+            unique_mask = np.concatenate([[True], np.diff(s_orig) > 1e-9])
+            if np.sum(unique_mask) >= 2:
+                s_u = s_orig[unique_mask]
+                w_r_u = reftrack[unique_mask, 2]
+                w_l_u = reftrack[unique_mask, 3]
+                s_eval = np.clip(s_interp, s_u[0], s_u[-1])
+                reftrack_interp[:, 2] = np.interp(s_eval, s_u, w_r_u)
+                reftrack_interp[:, 3] = np.interp(s_eval, s_u, w_l_u)
+            else:
+                reftrack_interp[:, 2] = np.maximum(reftrack_interp[:, 2], 0.0)
+                reftrack_interp[:, 3] = np.maximum(reftrack_interp[:, 3], 0.0)
+
             refpath_interp_cl = np.vstack((reftrack_interp[:, :2], reftrack_interp[0, :2]))
             coeffs_x, coeffs_y, a_interp, normvec = tph.calc_splines.calc_splines(path=refpath_interp_cl)
 
