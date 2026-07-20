@@ -107,8 +107,8 @@ def add_nodes(args: lu.ArgumentContainer):
                         'vgl_pose_topic': args.vgl_pose_topic,
                         'use_sim_time': use_sim_time,
                         'vgl_config_dir': lu.get_path(
-                            'isaac_ros_visual_mapping',
-                            'configs/single_stereo_localizer')
+                            'jetpilot_system_launch',
+                            'config/localization/vgl_config')
                     },
                 ))
         else:
