@@ -601,52 +601,48 @@ def _analyze_rosbag_preflight(
         )
 
     if resolved_mode == "offline":
-        if map_dir is None:
-            # _analysis_map already supplied the actionable blocked check for an
-            # explicit offline request. Auto without a map degrades to `none`.
-            if raw_mode == "offline":
-                return
+        offline_mode = str(
+            payload.get("offline_localization_mode") or "auto"
+        ).strip().lower()
+        if offline_mode not in {"auto", "vgl", "vslam", "vslam_from_scratch"}:
+            report.add(
+                "analysis.offline_localization_mode",
+                "Offline localization method",
+                BLOCKED,
+                "offline_localization_mode must be auto, vgl, vslam, or vslam_from_scratch.",
+                remediation="Select Auto, VGL + VSLAM, VSLAM only, or VSLAM from scratch.",
+                details={"value": offline_mode},
+            )
+            return
+        report.resolved["offline_localization_mode_requested"] = offline_mode
+        if offline_mode == "vslam_from_scratch":
+            resolved_offline_mode = "vslam_from_scratch"
+            report.resolved["offline_localization_mode"] = resolved_offline_mode
+            report.add(
+                "analysis.offline_localization_mode",
+                "Offline localization method",
+                PASS,
+                "Offline localization will run VSLAM from scratch without loading an existing map.",
+                details={"requested": offline_mode, "resolved": resolved_offline_mode},
+            )
+            cameras = _inspect_camera_config(config, payload.get("topic_config"), report)
+            if cameras is not None and bag_info is not None:
+                _check_mapping_topics(bag_info, cameras, report)
+            report.add(
+                "analysis.trajectory_source",
+                "Trajectory source",
+                PASS,
+                "Offline localization will generate the trajectory from scratch using VSLAM before extraction.",
+                details={
+                    "mode": "offline",
+                    "localization_mode": resolved_offline_mode,
+                },
+            )
         else:
-            offline_mode = str(
-                payload.get("offline_localization_mode") or "auto"
-            ).strip().lower()
-            if offline_mode not in {"auto", "vgl", "vslam", "vslam_from_scratch"}:
-                report.add(
-                    "analysis.offline_localization_mode",
-                    "Offline localization method",
-                    BLOCKED,
-                    "offline_localization_mode must be auto, vgl, vslam, or vslam_from_scratch.",
-                    remediation="Select Auto, VGL + VSLAM, VSLAM only, or VSLAM from scratch.",
-                    details={"value": offline_mode},
-                )
-                return
-            report.resolved["offline_localization_mode_requested"] = offline_mode
-            if offline_mode == "vslam_from_scratch":
-                resolved_offline_mode = "vslam_from_scratch"
-                report.resolved["offline_localization_mode"] = resolved_offline_mode
-                report.add(
-                    "analysis.offline_localization_mode",
-                    "Offline localization method",
-                    PASS,
-                    "Offline localization will run VSLAM from scratch without loading an existing map.",
-                    details={"requested": offline_mode, "resolved": resolved_offline_mode},
-                )
-                cameras = _inspect_camera_config(config, payload.get("topic_config"), report)
-                if cameras is not None and bag_info is not None:
-                    _check_mapping_topics(bag_info, cameras, report)
-                report.add(
-                    "analysis.trajectory_source",
-                    "Trajectory source",
-                    PASS,
-                    "Offline localization will generate the trajectory from scratch using VSLAM before extraction.",
-                    details={
-                        "mode": "offline",
-                        "localization_mode": resolved_offline_mode,
-                    },
-                )
-            else:
-                if map_dir is None:
+            if map_dir is None:
+                if raw_mode == "offline":
                     return
+            else:
                 vgl_map_available, vslam_map_available = _offline_map_artifacts(
                     map_dir,
                     report,
