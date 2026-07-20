@@ -478,6 +478,59 @@ def _centerline_pixels_from_samples(samples: np.ndarray, geometry: RasterGeometr
     return _polyline_pixels_from_samples(samples, geometry, closed_loop)
 
 
+def _dtw_centerline_samples(left_samples: np.ndarray, right_samples: np.ndarray) -> np.ndarray:
+    n = len(left_samples)
+    m = len(right_samples)
+    if n == 0 or m == 0:
+        return np.empty((0, 2), dtype=np.float64)
+
+    band = max(18, int(max(n, m) * 0.22), abs(n - m) + 2)
+    previous = np.full(m, np.inf, dtype=np.float64)
+    current = np.full(m, np.inf, dtype=np.float64)
+    backtrack = np.zeros((n, m), dtype=np.uint8)
+
+    for i in range(n):
+        current.fill(np.inf)
+        min_j = max(0, i - band)
+        max_j = min(m - 1, i + band)
+        for j in range(min_j, max_j + 1):
+            cost = float(np.linalg.norm(left_samples[i] - right_samples[j]))
+            if i == 0 and j == 0:
+                current[j] = cost
+                continue
+            diagonal = previous[j - 1] if i > 0 and j > 0 else np.inf
+            up = previous[j] if i > 0 else np.inf
+            side = current[j - 1] if j > 0 else np.inf
+            best = diagonal
+            move = 0
+            if up < best:
+                best = up
+                move = 1
+            if side < best:
+                best = side
+                move = 2
+            current[j] = cost + best
+            backtrack[i, j] = move
+        previous, current = current, previous
+
+    centers: List[np.ndarray] = []
+    i = n - 1
+    j = m - 1
+    while i >= 0 and j >= 0:
+        centers.append(0.5 * (left_samples[i] + right_samples[j]))
+        if i == 0 and j == 0:
+            break
+        move = int(backtrack[i, j])
+        if move == 0:
+            i -= 1
+            j -= 1
+        elif move == 1:
+            i -= 1
+        else:
+            j -= 1
+    return np.asarray(list(reversed(centers)), dtype=np.float64)
+
+
 def _chaikin_smooth(points: np.ndarray, closed_loop: bool) -> np.ndarray:
     if len(points) < 2:
         return points.copy()
@@ -562,17 +615,25 @@ def generate_centerline_from_bounds(
     if lane.closed_loop:
         aligned_right, right_offset = _best_closed_bound_alignment(left, right)
         sample_count = _centerline_sample_count(left, aligned_right, geometry, True, spacing_m)
-        fractions = np.arange(sample_count, dtype=np.float64) / float(sample_count)
+        dtw_count = max(24, min(512, sample_count))
+        fractions = np.arange(dtw_count, dtype=np.float64) / float(dtw_count)
         left_samples = _sample_polyline_array(left, fractions, closed_loop=True)
         right_samples = _sample_polyline_array(aligned_right, fractions + right_offset, closed_loop=True)
     else:
         aligned_right = _best_open_bound_alignment(left, right)
         sample_count = _centerline_sample_count(left, aligned_right, geometry, False, spacing_m)
-        fractions = np.linspace(0.0, 1.0, sample_count, dtype=np.float64)
+        dtw_count = max(24, min(512, sample_count))
+        fractions = np.linspace(0.0, 1.0, dtw_count, dtype=np.float64)
         left_samples = _sample_polyline_array(left, fractions, closed_loop=False)
         right_samples = _sample_polyline_array(aligned_right, fractions, closed_loop=False)
 
-    center_samples = 0.5 * (left_samples + right_samples)
+    center_samples = _dtw_centerline_samples(left_samples, right_samples)
+    if len(center_samples) > sample_count:
+        if lane.closed_loop:
+            fractions = np.arange(sample_count, dtype=np.float64) / float(sample_count)
+        else:
+            fractions = np.linspace(0.0, 1.0, sample_count, dtype=np.float64)
+        center_samples = _sample_polyline_array(center_samples, fractions, lane.closed_loop)
     centerline = _centerline_pixels_from_samples(center_samples, geometry, lane.closed_loop)
     minimum_centerline_points = AUTO_CENTERLINE_MIN_POINTS if lane.closed_loop else 2
     if len(centerline) < minimum_centerline_points:

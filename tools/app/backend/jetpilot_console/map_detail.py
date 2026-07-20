@@ -718,6 +718,63 @@ def _read_xy_csv(path: Path, delimiter: str, x_index: int, y_index: int) -> dict
     }
 
 
+def _sample_pose_point(sample: Any) -> list[float] | None:
+    if not isinstance(sample, dict):
+        return None
+    pose = sample.get("pose") if isinstance(sample.get("pose"), dict) else sample
+    position = pose.get("position") if isinstance(pose, dict) and isinstance(pose.get("position"), dict) else None
+    if not isinstance(position, dict):
+        return None
+    try:
+        x = float(position.get("x"))
+        y = float(position.get("y"))
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(x) or not math.isfinite(y):
+        return None
+    return [x, y]
+
+
+def _read_snapshot_odometry(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {"exists": False, "path": str(path), "points": [], "count": 0, "length_m": 0.0}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, json.JSONDecodeError):
+        return {"exists": True, "path": str(path), "points": [], "count": 0, "length_m": 0.0, "error": "snapshot could not be parsed"}
+
+    samples = data.get("odometry_samples")
+    source = "odometry_samples"
+    if not isinstance(samples, list) or not samples:
+        full_path = data.get("full_vslam_path")
+        samples = full_path.get("poses") if isinstance(full_path, dict) else []
+        source = "full_vslam_path"
+    if not isinstance(samples, list):
+        samples = []
+    points = []
+    if isinstance(samples, list):
+        for sample in samples:
+            point = _sample_pose_point(sample)
+            if point is not None:
+                points.append(point)
+    localization = data.get("localization") if isinstance(data.get("localization"), dict) else {}
+    try:
+        history_stride = int(localization.get("history_stride") or 1)
+    except (TypeError, ValueError):
+        history_stride = 1
+    return {
+        "exists": True,
+        "path": str(path),
+        "source": source,
+        "frame_id": str((samples[-1].get("frame_id") if samples and isinstance(samples[-1], dict) else "") or localization.get("map_frame") or ""),
+        "points": points,
+        "count": len(points),
+        "length_m": _polyline_length(points, False),
+        "localized": bool(localization.get("confirmed") or localization.get("confirmed_once")),
+        "history_stride": history_stride,
+    }
+
+
 def _display_name(map_root: Path, map_dir: Path) -> str:
     try:
         parts = map_dir.relative_to(map_root).parts
@@ -779,6 +836,7 @@ def build_map_detail(config: ConsoleConfig, map_dir_value: str) -> dict[str, Any
     centerline_path = map_dir / f"{name}_hd_map_centerline.csv"
     raceline_path = map_dir / f"{name}_raceline.csv"
     line_preview_path = map_dir / f"{name}_line_preview.png"
+    snapshot_path = map_dir / "vslam_reference_snapshot.json"
 
     hd_map, raster = _read_hd_map(hd_map_path)
     if raster is None:
@@ -792,6 +850,7 @@ def build_map_detail(config: ConsoleConfig, map_dir_value: str) -> dict[str, Any
 
     centerline = _read_xy_csv(centerline_path, ",", 0, 1)
     raceline = _read_xy_csv(raceline_path, ";", 1, 2)
+    odometry = _read_snapshot_odometry(snapshot_path)
     speed_override_count = sum(
         1 for section in hd_map.get("sections", []) if section.get("speed_override_mps") is not None
     )
@@ -804,6 +863,7 @@ def build_map_detail(config: ConsoleConfig, map_dir_value: str) -> dict[str, Any
         "hd_map": hd_map,
         "centerline_csv": centerline,
         "raceline_csv": raceline,
+        "odometry": odometry,
         "stats": {
             "lane_count": len(hd_map.get("lanes", [])),
             "primary_lane_id": hd_map.get("primary_lane_id") or "",
@@ -813,6 +873,7 @@ def build_map_detail(config: ConsoleConfig, map_dir_value: str) -> dict[str, Any
             "section_count": len(hd_map.get("sections", [])),
             "speed_override_count": speed_override_count,
             "raceline_points": raceline["count"],
+            "odometry_points": odometry["count"],
         },
     }
 

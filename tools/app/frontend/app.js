@@ -18,6 +18,7 @@ const state = {
     right_bound: true,
     centerline: true,
     raceline: true,
+    odometry: false,
     section_gates: true,
     section_labels: true,
   },
@@ -32,6 +33,9 @@ const state = {
     showCenterline: true,
     primaryLaneId: "lane_001",
     lanes: [],
+    undoStack: [],
+    redoStack: [],
+    dragSnapshot: null,
   },
   sectionEditor: {
     enabled: false,
@@ -3348,6 +3352,7 @@ function renderLayerToggles() {
     ["right_bound", "Right bound"],
     ["centerline", "Centerline"],
     ["raceline", "Raceline"],
+    ["odometry", "Odometry"],
     ["section_gates", "Section gates"],
     ["section_labels", "Labels"],
   ];
@@ -3385,6 +3390,8 @@ function renderHdMapEditor(detail) {
       </div>
       <div class="editor-actions">
         <button class="${editor.enabled ? "primary" : ""}" onclick="toggleHdMapEditor()">${editor.enabled ? "Editing" : "Edit"}</button>
+        <button id="map-editor-undo" onclick="undoMapEditor()" ${editor.enabled && editor.undoStack.length ? "" : "disabled"}>Undo</button>
+        <button id="map-editor-redo" onclick="redoMapEditor()" ${editor.enabled && editor.redoStack.length ? "" : "disabled"}>Redo</button>
         <button id="map-editor-save" onclick="saveHdMapFromEditor()" ${canSave ? "" : "disabled"}>Save</button>
         <button id="map-editor-delete" class="danger" onclick="deleteSelectedEditorPoint()" ${editor.enabled && selected ? "" : "disabled"}>Delete Pt</button>
       </div>
@@ -3481,6 +3488,7 @@ function renderMapInspector(detail) {
         ${statTile("sections", stats.section_count || 0)}
         ${statTile("gates", stats.section_gate_count || 0)}
         ${statTile("raceline pts", stats.raceline_points || 0)}
+        ${statTile("odom pts", stats.odometry_points || 0)}
       </div>
     </div>
     <div class="inspector-block">
@@ -4853,6 +4861,17 @@ function cloneMapPolyline(points = []) {
     .filter((point) => Number.isFinite(point[0]) && Number.isFinite(point[1]));
 }
 
+function cloneEditorLane(lane = defaultEditorLane()) {
+  return {
+    id: lane.id || "lane_001",
+    primary: lane.primary !== false,
+    closed_loop: lane.closed_loop !== false,
+    left_bound: cloneMapPolyline(lane.left_bound || []),
+    right_bound: cloneMapPolyline(lane.right_bound || []),
+    centerline: cloneMapPolyline(lane.centerline || []),
+  };
+}
+
 function defaultEditorLane() {
   return {
     id: "lane_001",
@@ -4868,14 +4887,7 @@ function laneForEditorFromDetail(detail) {
   const lanes = detail?.hd_map?.lanes || [];
   const source = lanes.find((lane) => lane.primary) || lanes[0];
   if (!source) return defaultEditorLane();
-  return {
-    id: source.id || "lane_001",
-    primary: true,
-    closed_loop: source.closed_loop !== false,
-    left_bound: cloneMapPolyline(source.left_bound || []),
-    right_bound: cloneMapPolyline(source.right_bound || []),
-    centerline: cloneMapPolyline(source.centerline || []),
-  };
+  return cloneEditorLane({ ...source, id: source.id || "lane_001", primary: true });
 }
 
 function ensureMapEditor(detail, options = {}) {
@@ -4893,6 +4905,9 @@ function ensureMapEditor(detail, options = {}) {
       zoom: sameMap ? state.mapEditor.zoom : 1,
       primaryLaneId: lane.id,
       lanes: [lane],
+      undoStack: [],
+      redoStack: [],
+      dragSnapshot: null,
     };
   }
   return state.mapEditor;
@@ -4901,6 +4916,52 @@ function ensureMapEditor(detail, options = {}) {
 function activeEditorLane() {
   if (!state.mapEditor.lanes.length) state.mapEditor.lanes = [defaultEditorLane()];
   return state.mapEditor.lanes[0];
+}
+
+function captureMapEditorSnapshot() {
+  return {
+    lanes: state.mapEditor.lanes.map(cloneEditorLane),
+    primaryLaneId: state.mapEditor.primaryLaneId,
+    activeField: state.mapEditor.activeField,
+    selected: state.mapEditor.selected ? { ...state.mapEditor.selected } : null,
+    dirty: state.mapEditor.dirty,
+  };
+}
+
+function restoreMapEditorSnapshot(snapshot) {
+  if (!snapshot) return;
+  state.mapEditor.lanes = (snapshot.lanes || []).map(cloneEditorLane);
+  if (!state.mapEditor.lanes.length) state.mapEditor.lanes = [defaultEditorLane()];
+  state.mapEditor.primaryLaneId = snapshot.primaryLaneId || state.mapEditor.lanes[0].id;
+  state.mapEditor.activeField = ["left_bound", "right_bound"].includes(snapshot.activeField)
+    ? snapshot.activeField
+    : "left_bound";
+  state.mapEditor.selected = snapshot.selected ? { ...snapshot.selected } : null;
+  state.mapEditor.dragging = null;
+  state.mapEditor.dragSnapshot = null;
+  state.mapEditor.dirty = Boolean(snapshot.dirty);
+}
+
+function rememberMapEditorState() {
+  state.mapEditor.undoStack.push(captureMapEditorSnapshot());
+  if (state.mapEditor.undoStack.length > 200) state.mapEditor.undoStack.shift();
+  state.mapEditor.redoStack = [];
+}
+
+function undoMapEditor() {
+  if (!state.mapEditor.enabled || !state.mapEditor.undoStack.length) return;
+  state.mapEditor.redoStack.push(captureMapEditorSnapshot());
+  restoreMapEditorSnapshot(state.mapEditor.undoStack.pop());
+  updateMapEditorChrome();
+  drawMapPreview();
+}
+
+function redoMapEditor() {
+  if (!state.mapEditor.enabled || !state.mapEditor.redoStack.length) return;
+  state.mapEditor.undoStack.push(captureMapEditorSnapshot());
+  restoreMapEditorSnapshot(state.mapEditor.redoStack.pop());
+  updateMapEditorChrome();
+  drawMapPreview();
 }
 
 function cloneSectionGate(gate) {
@@ -5154,6 +5215,7 @@ function toggleHdMapEditor() {
 function toggleEditorClosedLoop(checked) {
   if (!state.selectedMapDetail || !state.mapEditor.enabled) return;
   ensureMapEditor(state.selectedMapDetail);
+  rememberMapEditorState();
   const lane = activeEditorLane();
   lane.closed_loop = Boolean(checked);
   regenerateEditorCenterline(lane);
@@ -5189,6 +5251,10 @@ function updateMapEditorChrome() {
   if (save) save.disabled = !(state.mapEditor.enabled && rasterReady && !issue);
   const del = $("map-editor-delete");
   if (del) del.disabled = !(state.mapEditor.enabled && selected);
+  const undo = $("map-editor-undo");
+  if (undo) undo.disabled = !(state.mapEditor.enabled && state.mapEditor.undoStack.length);
+  const redo = $("map-editor-redo");
+  if (redo) redo.disabled = !(state.mapEditor.enabled && state.mapEditor.redoStack.length);
   for (const field of ["left_bound", "right_bound"]) {
     const button = $(`map-editor-field-${field}`);
     if (button) {
@@ -5397,6 +5463,89 @@ function dedupePolyline(points) {
   return result;
 }
 
+function resamplePolyline(points, count, closedLoop) {
+  const safeCount = Math.max(2, Math.floor(Number(count) || 2));
+  if (closedLoop) {
+    return Array.from({ length: safeCount }, (_, index) => samplePolylineAt(points, index / safeCount, true));
+  }
+  return Array.from({ length: safeCount }, (_, index) => samplePolylineAt(points, index / Math.max(1, safeCount - 1), false));
+}
+
+function dtwPointPairs(left, right) {
+  const n = left.length;
+  const m = right.length;
+  if (!n || !m) return [];
+  const band = Math.max(18, Math.floor(Math.max(n, m) * 0.22), Math.abs(n - m) + 2);
+  let previous = new Float64Array(m).fill(Number.POSITIVE_INFINITY);
+  let current = new Float64Array(m).fill(Number.POSITIVE_INFINITY);
+  const backtrack = new Uint8Array(n * m);
+
+  for (let i = 0; i < n; i += 1) {
+    current.fill(Number.POSITIVE_INFINITY);
+    const minJ = Math.max(0, i - band);
+    const maxJ = Math.min(m - 1, i + band);
+    for (let j = minJ; j <= maxJ; j += 1) {
+      const cost = pointDistance(left[i], right[j]);
+      if (i === 0 && j === 0) {
+        current[j] = cost;
+        continue;
+      }
+      const diagonal = i > 0 && j > 0 ? previous[j - 1] : Number.POSITIVE_INFINITY;
+      const up = i > 0 ? previous[j] : Number.POSITIVE_INFINITY;
+      const side = j > 0 ? current[j - 1] : Number.POSITIVE_INFINITY;
+      let best = diagonal;
+      let move = 0;
+      if (up < best) {
+        best = up;
+        move = 1;
+      }
+      if (side < best) {
+        best = side;
+        move = 2;
+      }
+      current[j] = cost + best;
+      backtrack[i * m + j] = move;
+    }
+    [previous, current] = [current, previous];
+  }
+
+  const pairs = [];
+  let i = n - 1;
+  let j = m - 1;
+  while (i >= 0 && j >= 0) {
+    pairs.push([left[i], right[j]]);
+    if (i === 0 && j === 0) break;
+    const move = backtrack[i * m + j];
+    if (move === 0) {
+      i -= 1;
+      j -= 1;
+    } else if (move === 1) {
+      i -= 1;
+    } else {
+      j -= 1;
+    }
+  }
+  return pairs.reverse();
+}
+
+function centerlineFromDtwBounds(lane, targetCount) {
+  const dtwCount = Math.max(24, Math.min(512, targetCount));
+  const leftSamples = resamplePolyline(lane.left_bound, dtwCount, lane.closed_loop);
+  const alignment = lane.closed_loop
+    ? closedRightBoundAlignment(lane.left_bound, lane.right_bound)
+    : { points: openRightBoundForEditor(lane.left_bound, lane.right_bound), offset: 0 };
+  const rightSamples = lane.closed_loop
+    ? Array.from({ length: dtwCount }, (_, index) => samplePolylineAt(alignment.points, index / dtwCount + alignment.offset, true))
+    : resamplePolyline(alignment.points, dtwCount, false);
+  const centerline = dtwPointPairs(leftSamples, rightSamples).map(([left, right]) => [
+    (left[0] + right[0]) * 0.5,
+    (left[1] + right[1]) * 0.5,
+  ]);
+  const deduped = dedupePolyline(centerline);
+  if (deduped.length <= targetCount) return deduped;
+  return dedupePolyline(resamplePolyline(deduped, targetCount, lane.closed_loop));
+}
+
 function regenerateEditorCenterline(lane) {
   lane.left_bound = cloneMapPolyline(lane.left_bound);
   lane.right_bound = cloneMapPolyline(lane.right_bound);
@@ -5411,17 +5560,7 @@ function regenerateEditorCenterline(lane) {
   const spacingCount = averageLength > 1.0e-9 ? Math.ceil(averageLength / 0.1) + (lane.closed_loop ? 0 : 1) : 0;
   const sampleCount = Math.max(lane.closed_loop ? 8 : 2, lane.left_bound.length, lane.right_bound.length, spacingCount);
   const count = Math.max(2, Math.min(2000, sampleCount));
-  const alignment = lane.closed_loop
-    ? closedRightBoundAlignment(lane.left_bound, lane.right_bound)
-    : { points: openRightBoundForEditor(lane.left_bound, lane.right_bound), offset: 0 };
-  const centerline = [];
-  for (let index = 0; index < count; index += 1) {
-    const fraction = lane.closed_loop ? index / count : index / Math.max(1, count - 1);
-    const left = samplePolylineAt(lane.left_bound, fraction, lane.closed_loop);
-    const right = samplePolylineAt(alignment.points, fraction + alignment.offset, lane.closed_loop);
-    centerline.push([(left[0] + right[0]) * 0.5, (left[1] + right[1]) * 0.5]);
-  }
-  lane.centerline = dedupePolyline(centerline);
+  lane.centerline = centerlineFromDtwBounds(lane, count);
 }
 
 function canvasEventInfo(event) {
@@ -5486,16 +5625,19 @@ function handleMapEditorPointerDown(event) {
   const lane = activeEditorLane();
   const nearest = nearestEditorPoint(detail, point, hitRadius);
   if (nearest) {
+    state.mapEditor.dragSnapshot = captureMapEditorSnapshot();
     state.mapEditor.activeField = nearest.field;
     state.mapEditor.selected = nearest;
     state.mapEditor.dragging = nearest;
   } else {
     const world = mapPixelToWorld(detail, canvas.width, canvas.height, point);
     if (!world) return;
+    rememberMapEditorState();
     const field = state.mapEditor.activeField;
     lane[field].push(world);
     state.mapEditor.selected = { field, index: lane[field].length - 1 };
     state.mapEditor.dragging = { ...state.mapEditor.selected };
+    state.mapEditor.dragSnapshot = null;
     regenerateEditorCenterline(lane);
     markMapEditorDirty();
   }
@@ -5514,6 +5656,12 @@ function handleMapEditorPointerMove(event) {
   if (!world) return;
   const lane = activeEditorLane();
   if (!lane[drag.field]?.[drag.index]) return;
+  if (state.mapEditor.dragSnapshot) {
+    state.mapEditor.undoStack.push(state.mapEditor.dragSnapshot);
+    if (state.mapEditor.undoStack.length > 200) state.mapEditor.undoStack.shift();
+    state.mapEditor.redoStack = [];
+    state.mapEditor.dragSnapshot = null;
+  }
   lane[drag.field][drag.index] = world;
   regenerateEditorCenterline(lane);
   markMapEditorDirty();
@@ -5523,6 +5671,7 @@ function handleMapEditorPointerMove(event) {
 function handleMapEditorPointerUp(event) {
   if (!state.mapEditor.dragging) return;
   state.mapEditor.dragging = null;
+  state.mapEditor.dragSnapshot = null;
   const canvas = event.currentTarget || $("map-preview-canvas");
   if (canvas?.releasePointerCapture && event.pointerId != null) {
     try {
@@ -5539,6 +5688,7 @@ function deleteEditorPoint(target) {
   if (!target) return false;
   const lane = activeEditorLane();
   if (!lane[target.field] || !lane[target.field][target.index]) return false;
+  rememberMapEditorState();
   lane[target.field].splice(target.index, 1);
   state.mapEditor.selected = null;
   state.mapEditor.dragging = null;
@@ -5615,6 +5765,9 @@ async function saveHdMapFromEditor() {
     ensureMapEditor(saved, { force: true });
     state.mapEditor.enabled = wasEnabled;
     state.mapEditor.dirty = false;
+    state.mapEditor.undoStack = [];
+    state.mapEditor.redoStack = [];
+    state.mapEditor.dragSnapshot = null;
     invalidateMapPreflights(saved.map.path);
     toast("HD map saved");
     render();
@@ -5802,6 +5955,9 @@ function drawMapLayers(ctx, detail, width, height) {
   const editorLanes = editorLanesForDetail(detail);
   const lanes = editorLanes || detail.hd_map?.lanes || [];
   const showCenterline = state.mapLayers.centerline && (!editorLanes || state.mapEditor.showCenterline);
+  if (state.mapLayers.odometry && detail.odometry?.points?.length) {
+    drawPolyline(ctx, detail.odometry.points.map(toPixel), "rgba(47, 128, 237, 0.86)", 2.5, false);
+  }
   for (const lane of lanes) {
     if (state.mapLayers.left_bound) drawPolyline(ctx, (lane.left_bound || []).map(toPixel), "#45c478", 3, lane.closed_loop);
     if (state.mapLayers.right_bound) drawPolyline(ctx, (lane.right_bound || []).map(toPixel), "#d878d8", 3, lane.closed_loop);
@@ -5929,6 +6085,7 @@ function collectMapPoints(detail) {
   }
   for (const gate of detail.hd_map?.section_gates || []) points.push(...(gate.line || []));
   points.push(...(detail.centerline_csv?.points || []), ...(detail.raceline_csv?.points || []));
+  points.push(...(detail.odometry?.points || []));
   return points.filter((point) => Array.isArray(point) && point.length >= 2);
 }
 
@@ -6257,6 +6414,8 @@ window.refreshSelectedMap = refreshSelectedMap;
 window.toggleMapLayer = toggleMapLayer;
 window.toggleHdMapEditor = toggleHdMapEditor;
 window.setMapEditorField = setMapEditorField;
+window.undoMapEditor = undoMapEditor;
+window.redoMapEditor = redoMapEditor;
 window.toggleEditorClosedLoop = toggleEditorClosedLoop;
 window.toggleEditorCenterline = toggleEditorCenterline;
 window.toggleSectionEditor = toggleSectionEditor;
@@ -6348,6 +6507,22 @@ setInterval(() => {
 setInterval(() => {
   pollFpvBrowserStatus();
 }, 2000);
+
+window.addEventListener("keydown", (event) => {
+  if (!state.mapEditor.enabled || state.tab !== "maps" || isEditingField()) return;
+  const key = String(event.key || "").toLowerCase();
+  if ((event.metaKey || event.ctrlKey) && key === "z") {
+    event.preventDefault();
+    if (event.shiftKey) redoMapEditor();
+    else undoMapEditor();
+  } else if ((event.metaKey || event.ctrlKey) && key === "y") {
+    event.preventDefault();
+    redoMapEditor();
+  } else if (["backspace", "delete"].includes(key) && state.mapEditor.selected) {
+    event.preventDefault();
+    deleteSelectedEditorPoint();
+  }
+});
 
 window.addEventListener("beforeunload", () => {
   if (!state.fpv.starting && !fpvReceiverCanAutoStop(state.fpv.browserStatus)) return;
