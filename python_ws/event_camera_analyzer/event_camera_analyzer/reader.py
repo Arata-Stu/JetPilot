@@ -5,13 +5,35 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 from rosbags.rosbag2 import Reader
-from rosbags.serde import deserialize_cdr
 from rosbags.typesys import get_typestore
 from rosbags.typesys.stores.ros2_jazzy import (
     DiagnosticArray,
     EventPacket,
     Image,
 )
+
+# Universal deserializer fallback across rosbags v0.9.x and v0.10.x+
+try:
+    from rosbags.serde import deserialize_cdr
+except ImportError:
+    try:
+        from rosbags.serde.cdr import deserialize_cdr
+    except ImportError:
+        deserialize_cdr = None
+
+
+def deserialize_message(rawdata: bytes, msgtype: str, typestore: Any) -> Any:
+    """Safely deserialize CDR message bytes across any rosbags version."""
+    if hasattr(typestore, "deserialize_cdr"):
+        return typestore.deserialize_cdr(rawdata, msgtype)
+    elif deserialize_cdr is not None:
+        return deserialize_cdr(rawdata, msgtype, typestore)
+    else:
+        raise RuntimeError(
+            "Could not find deserialize_cdr method on typestore or rosbags.serde. "
+            "Please verify your rosbags installation."
+        )
+
 
 # Definition for dynamic registration if event_camera_msgs is not in typestore
 EVENT_PACKET_MSG_DEF = """
@@ -133,7 +155,7 @@ class BagReader:
 
                 msgtype = connection.msgtype
                 try:
-                    msg = deserialize_cdr(rawdata, connection.msgtype, self.typestore)
+                    msg = deserialize_message(rawdata, connection.msgtype, self.typestore)
                 except Exception:
                     # Try fallback to standard types if custom typestore failed
                     continue
