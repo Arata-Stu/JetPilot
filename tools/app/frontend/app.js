@@ -1733,7 +1733,7 @@ function normalizeAnalysisRecord(item) {
     phase: statusRecord.phase || item.phase || manifest.phase || "",
     message: statusRecord.message || item.message || manifest.message || "",
     updated_at: statusRecord.updated_at || item.updated_at || manifest.updated_at || manifest.created_at || "",
-    task_id: statusRecord.task_id || item.task_id || manifest.task_id || "",
+    task_id: statusRecord.task_id || item.task_id || item.task?.task_id || manifest.task_id || "",
     rosbag,
     bag_path: rosbag,
     map: { ...manifestMap, path: mapPath || manifestMap.path || "" },
@@ -1996,7 +1996,7 @@ function renderAnalysisList() {
     const missing = analysisRecordMissing(item);
     const selected = id && id === state.analysis.selectedId;
     const canOpen = Boolean(item.timeline_available || status === "success");
-    const taskId = String(item.task_id || item.task?.task_id || "");
+    const taskId = String(item.task_id || item.task?.task_id || item.manifest?.task_id || item.status?.task_id || "");
     const bagPath = String(item.rosbag || item.bag_path || item.source?.rosbag || "");
     const mapPath = String(item.map_dir || item.map_path || item.map?.path || "");
     return `
@@ -2023,8 +2023,29 @@ function renderAnalysisViewer() {
   if (analysis.loadingResult) return `<div class="empty">Loading normalized timeline, frames, and map...</div>`;
   if (!analysis.selectedId || !analysis.timeline) {
     const selected = analysis.analyses.find((item) => analysisRecordId(item) === analysis.selectedId);
-    const waiting = Boolean(analysis.selectedId && selected && analysisRecordStatus(selected) !== "success");
-    return `<div class="analysis-viewer-empty"><strong>${waiting ? "Analysis is processing" : "Select a completed analysis"}</strong><span>${waiting ? esc(analysisRecordStage(selected)) : "The synchronized image, commands, mode, speed, and trajectory will appear here."}</span></div>`;
+    if (selected) {
+      const status = analysisRecordStatus(selected);
+      const taskId = String(selected.task_id || selected.task?.task_id || selected.manifest?.task_id || selected.status?.task_id || "");
+      const message = String(selected.message || selected.status?.message || selected.manifest?.message || "");
+      if (status === "failed" || status === "stopped") {
+        return `
+          <div class="analysis-viewer-empty failed-view">
+            <strong>Analysis ${esc(status.toUpperCase())}: ${esc(analysisRecordStage(selected))}</strong>
+            <span>${esc(message || "Check the task log for detailed ROS output and error backtraces.")}</span>
+            ${taskId ? `<div class="actions" style="margin-top: 1rem;"><button class="primary" onclick="openTaskLog(${js(taskId)})">Open Task Log (${esc(taskId)})</button></div>` : ""}
+          </div>
+        `;
+      }
+      const waiting = status !== "success";
+      return `
+        <div class="analysis-viewer-empty">
+          <strong>${waiting ? "Analysis is processing" : "Select a completed analysis"}</strong>
+          <span>${waiting ? esc(analysisRecordStage(selected)) : "The synchronized image, commands, mode, speed, and trajectory will appear here."}</span>
+          ${taskId && waiting ? `<div class="actions" style="margin-top: 1rem;"><button onclick="openTaskLog(${js(taskId)})">View Live Log</button></div>` : ""}
+        </div>
+      `;
+    }
+    return `<div class="analysis-viewer-empty"><strong>Select a completed analysis</strong><span>The synchronized image, commands, mode, speed, and trajectory will appear here.</span></div>`;
   }
   const timeline = analysis.timeline;
   const duration = analysisDuration(timeline);
