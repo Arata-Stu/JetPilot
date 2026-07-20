@@ -803,6 +803,25 @@ button.preflight-unverified {
   margin-bottom: 12px;
 }
 
+.selectable-row {
+  cursor: pointer;
+}
+
+.selectable-row input {
+  margin-right: 8px;
+}
+
+.transfer-queue-summary {
+  align-items: center;
+  background: #101317;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--soft);
+  display: flex;
+  gap: 8px;
+  padding: 8px;
+}
+
 .table-wrap {
   overflow: auto;
 }

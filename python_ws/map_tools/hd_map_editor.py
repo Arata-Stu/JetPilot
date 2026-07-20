@@ -1035,21 +1035,35 @@ class HdMapEditor:
         thickness: int,
         highlight: bool = False,
     ) -> None:
-        if not points:
+        clean_points: List[PointPx] = []
+        for point in points:
+            if len(point) < 2:
+                continue
+            x = float(point[0])
+            y = float(point[1])
+            if not math.isfinite(x) or not math.isfinite(y):
+                continue
+            clean_points.append(
+                (
+                    max(0, min(self.geometry.width - 1, int(round(x)))),
+                    max(0, min(self.geometry.height - 1, int(round(y)))),
+                )
+            )
+        if not clean_points:
             return
-        pts = np.asarray(points, dtype=np.int32).reshape((-1, 1, 2))
+        pts = np.asarray(clean_points, dtype=np.int32).reshape((-1, 1, 2))
         if highlight:
             cv2.polylines(
                 canvas,
                 [pts],
-                bool(closed and len(points) >= 3),
+                bool(closed and len(clean_points) >= 3),
                 (0, 0, 0),
                 thickness + 4,
                 cv2.LINE_AA,
             )
-        cv2.polylines(canvas, [pts], bool(closed and len(points) >= 3), color, thickness, cv2.LINE_AA)
+        cv2.polylines(canvas, [pts], bool(closed and len(clean_points) >= 3), color, thickness, cv2.LINE_AA)
         if point_radius > 0:
-            for point in points:
+            for point in clean_points:
                 if highlight:
                     cv2.circle(canvas, point, point_radius + 2, (0, 0, 0), -1, cv2.LINE_AA)
                 cv2.circle(canvas, point, point_radius, color, -1, cv2.LINE_AA)
@@ -1480,7 +1494,15 @@ class HdMapEditor:
         print("[INFO] HD map editor started. Press i for help and s to save.")
         keep_running = True
         while keep_running:
-            cv2.imshow(self.window_name, self._draw_map())
+            try:
+                frame = self._draw_map()
+            except Exception as exc:
+                frame = self.background.copy()
+                frame = cv2.resize(frame, (self.window_width, self.window_height), interpolation=cv2.INTER_AREA)
+                self._draw_panel(frame, 86)
+                self._draw_text(frame, f"Draw failed: {exc}", (22, 48), 0.64, (120, 190, 255))
+                print(f"[WARN] Draw failed: {exc}")
+            cv2.imshow(self.window_name, frame)
             key = cv2.waitKeyEx(20)
             if key >= 0:
                 keep_running = self._handle_key(key)

@@ -86,6 +86,12 @@ const state = {
   jetsonTarget: null,
   jetsonInspect: null,
   jetsonInspectBusy: false,
+  jetsonTransfer: {
+    selectedPullPaths: [],
+    running: false,
+    currentIndex: 0,
+    total: 0,
+  },
   preflight: {
     entries: {},
     pendingExecutions: {},
@@ -726,6 +732,10 @@ async function copyText(text, message = "Copied") {
   } catch (error) {
     toast(`Copy failed: ${error.message}`, "error");
   }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function fmtBytes(bytes) {
@@ -3617,6 +3627,15 @@ function renderJetsonSummary() {
 function renderJetsonTransfers() {
   const config = state.config || {};
   const sequences = jetsonRosbagSequences();
+  pruneSelectedJetsonPullPaths(sequences);
+  const selectedPullPaths = selectedJetsonPullPaths();
+  const queue = state.jetsonTransfer;
+  const queueRunning = Boolean(queue.running);
+  const queueText = queueRunning
+    ? `Running ${queue.currentIndex + 1} of ${queue.total}`
+    : selectedPullPaths.length
+      ? `${selectedPullPaths.length} selected`
+      : "No sequence selected";
   const sequenceOptions = sequences
     .map((sequence) => `<option value="${esc(sequence.path)}">${esc(sequence.name)} - ${esc(sequence.modified || sequence.path)}</option>`)
     .join("");
@@ -3624,14 +3643,14 @@ function renderJetsonTransfers() {
     .slice(0, 12)
     .map(
       (sequence) => `
-        <div class="mini-row">
+        <div class="mini-row selectable-row">
           <div>
-            <strong>${esc(sequence.name)}</strong>
+            <strong><label><input type="checkbox" ${selectedPullPaths.includes(sequence.path) ? "checked" : ""} onchange="toggleJetsonPullSelection(${js(sequence.path)}, this.checked)" /> ${esc(sequence.name)}</label></strong>
             <div class="path" title="${esc(sequence.path)}">${esc(sequence.path)}</div>
           </div>
           <div class="actions">
             <button onclick="useJetsonRosbag(${js(sequence.path)})">Use</button>
-            <button class="primary" onclick="pullJetsonRosbag(${js(sequence.path)})">Pull</button>
+            <button class="primary" onclick="pullJetsonRosbag(${js(sequence.path)})" ${queueRunning ? "disabled" : ""}>Pull</button>
           </div>
         </div>`,
     )
@@ -3639,7 +3658,7 @@ function renderJetsonTransfers() {
   return `
     <div class="transfer-grid">
       <section class="transfer-card">
-        <h3>Pull one rosbag sequence</h3>
+        <h3>Pull rosbag sequences</h3>
         <div class="form-grid">
           <div class="field full">
             <label>Discovered by metadata.yaml</label>
@@ -3650,8 +3669,14 @@ function renderJetsonTransfers() {
           </div>
           <div class="field full"><label>From Jetson</label><input id="pull-remote" value="" placeholder="${esc(config.jetson_record_root || "")}/<sequence>" /></div>
           <div class="field full"><label>To notebook</label><input id="pull-local" value="${esc(config.record_root || "")}" /></div>
+          <div class="transfer-queue-summary full">
+            <span>${esc(queueText)}</span>
+            <span class="spacer"></span>
+            <button onclick="selectAllJetsonPulls()" ${sequences.length && !queueRunning ? "" : "disabled"}>Select All</button>
+            <button onclick="clearJetsonPullSelection()" ${selectedPullPaths.length && !queueRunning ? "" : "disabled"}>Clear</button>
+          </div>
           <div class="actions full">
-            <button class="primary" onclick="startJetsonPull()">Pull Selected Sequence</button>
+            <button class="primary" onclick="startJetsonPull()" ${queueRunning ? "disabled" : ""}>${selectedPullPaths.length > 1 ? "Pull Selected in Order" : "Pull Selected Sequence"}</button>
             <button onclick="copyPullCommand()">Copy rsync Command</button>
           </div>
           ${
@@ -5373,6 +5398,8 @@ function dedupePolyline(points) {
 }
 
 function regenerateEditorCenterline(lane) {
+  lane.left_bound = cloneMapPolyline(lane.left_bound);
+  lane.right_bound = cloneMapPolyline(lane.right_bound);
   const minimum = lane.closed_loop ? 3 : 2;
   if (lane.left_bound.length < minimum || lane.right_bound.length < minimum) {
     lane.centerline = [];
@@ -5422,10 +5449,11 @@ function mapPixelToWorld(detail, width, height, pixel) {
   const yaw = Number(origin[2] || 0);
   const cos = Math.cos(yaw);
   const sin = Math.sin(yaw);
-  return [
+  const world = [
     Number(origin[0] || 0) + cos * localX - sin * localY,
     Number(origin[1] || 0) + sin * localX + cos * localY,
   ];
+  return world.every(Number.isFinite) ? world : null;
 }
 
 function nearestEditorPoint(detail, pixel, hitRadius) {
@@ -5703,24 +5731,36 @@ function drawMapPreview() {
   const detail = state.selectedMapDetail;
   const imageUrl = detail.raster?.image_url || detail.preview_image_url || "";
   const draw = (image = null) => {
-    const raster = detail.raster || {};
-    const naturalWidth = image?.naturalWidth || raster.width || 900;
-    const naturalHeight = image?.naturalHeight || raster.height || 620;
-    canvas.width = Math.max(320, naturalWidth);
-    canvas.height = Math.max(240, naturalHeight);
-    applyMapCanvasDisplay(canvas, canvas.width, canvas.height);
-    const ctx = canvas.getContext("2d");
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = "#0b0d10";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    if (image && state.mapLayers.landmark) {
-      ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
-      ctx.fillStyle = "rgba(8, 10, 12, 0.08)";
+    try {
+      const raster = detail.raster || {};
+      const naturalWidth = image?.naturalWidth || raster.width || 900;
+      const naturalHeight = image?.naturalHeight || raster.height || 620;
+      canvas.width = Math.max(320, naturalWidth);
+      canvas.height = Math.max(240, naturalHeight);
+      applyMapCanvasDisplay(canvas, canvas.width, canvas.height);
+      const ctx = canvas.getContext("2d");
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = "#0b0d10";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
-    } else {
-      drawGrid(ctx, canvas.width, canvas.height);
+      if (image && state.mapLayers.landmark) {
+        ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = "rgba(8, 10, 12, 0.08)";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+      } else {
+        drawGrid(ctx, canvas.width, canvas.height);
+      }
+      drawMapLayers(ctx, detail, canvas.width, canvas.height);
+    } catch (error) {
+      console.warn("Map preview draw failed", error);
+      const ctx = canvas.getContext("2d");
+      canvas.width = Math.max(320, canvas.width || 900);
+      canvas.height = Math.max(240, canvas.height || 620);
+      ctx.fillStyle = "#0b0d10";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = "#f2c94c";
+      ctx.font = "14px ui-sans-serif, system-ui";
+      ctx.fillText("Map preview could not draw this edit. Check the point data and try undo/delete.", 18, 28);
     }
-    drawMapLayers(ctx, detail, canvas.width, canvas.height);
   };
   if (imageUrl) {
     const cached = mapPreviewImages.get(imageUrl);
@@ -5819,7 +5859,7 @@ function drawEditorPointHandles(ctx, detail, toPixel) {
 }
 
 function drawPolyline(ctx, points, color, width, closed) {
-  const clean = points.filter((point) => Number.isFinite(point[0]) && Number.isFinite(point[1]));
+  const clean = points.filter((point) => Array.isArray(point) && Number.isFinite(point[0]) && Number.isFinite(point[1]));
   if (clean.length < 2) return;
   ctx.save();
   ctx.strokeStyle = color;
@@ -5957,6 +5997,7 @@ function pullLocalPath() {
 function useJetsonRosbag(path) {
   if ($("pull-remote")) $("pull-remote").value = path || "";
   if ($("pull-remote-select") && path) $("pull-remote-select").value = path;
+  if (path) setJetsonPullSelection([path], { renderAfter: false });
 }
 
 function pullJetsonRosbag(path) {
@@ -5967,8 +6008,8 @@ function pullJetsonRosbag(path) {
 async function startTransfer(direction, paths = null) {
   const target = jetsonTarget();
   const payload = {
-    host: target.host,
-    user: target.user,
+    host: paths?.host || target.host,
+    user: paths?.user || target.user,
     remote_path: paths?.remote || "",
     local_path: paths?.local || "",
   };
@@ -5976,17 +6017,95 @@ async function startTransfer(direction, paths = null) {
   const result = await api(endpoint, { method: "POST", body: JSON.stringify(payload) });
   await refreshAll();
   selectTask(result.task.task_id);
+  return result.task;
 }
 
-function startJetsonPull() {
-  if (!pullRemotePath()) {
-    window.alert("Select or enter one Jetson rosbag sequence first.");
+function selectedJetsonPullPaths() {
+  return [...new Set((state.jetsonTransfer.selectedPullPaths || []).filter(Boolean))];
+}
+
+function setJetsonPullSelection(paths, options = {}) {
+  state.jetsonTransfer.selectedPullPaths = [...new Set((paths || []).filter(Boolean))];
+  if (options.renderAfter !== false) render();
+}
+
+function toggleJetsonPullSelection(path, checked) {
+  const selected = new Set(selectedJetsonPullPaths());
+  if (checked) selected.add(path);
+  else selected.delete(path);
+  setJetsonPullSelection([...selected]);
+}
+
+function selectAllJetsonPulls() {
+  setJetsonPullSelection(jetsonRosbagSequences().map((sequence) => sequence.path));
+}
+
+function clearJetsonPullSelection() {
+  setJetsonPullSelection([]);
+}
+
+function pruneSelectedJetsonPullPaths(sequences) {
+  if (!state.jetsonTransfer.selectedPullPaths.length || !sequences.length) return;
+  const known = new Set(sequences.map((sequence) => sequence.path));
+  state.jetsonTransfer.selectedPullPaths = state.jetsonTransfer.selectedPullPaths.filter((path) => known.has(path));
+}
+
+async function waitForTransferTask(taskId) {
+  while (taskId) {
+    await sleep(1500);
+    const payload = await api(`/api/tasks/${encodeURIComponent(taskId)}`);
+    const task = payload.task;
+    if (!task || !isActiveTask(task)) return task;
+    const index = state.tasks.findIndex((item) => item.task_id === task.task_id);
+    if (index >= 0) state.tasks[index] = task;
+    updateTaskChrome();
+  }
+  return null;
+}
+
+async function startJetsonPull() {
+  const paths = selectedJetsonPullPaths();
+  const manualPath = pullRemotePath();
+  const pullPaths = paths.length ? paths : manualPath ? [manualPath] : [];
+  const target = jetsonTarget();
+  const localPath = pullLocalPath();
+  if (!pullPaths.length) {
+    window.alert("Select or enter at least one Jetson rosbag sequence first.");
     return null;
   }
-  return startTransfer("jetson-to-local", {
-    remote: pullRemotePath(),
-    local: pullLocalPath(),
-  });
+  state.jetsonTransfer.running = true;
+  state.jetsonTransfer.currentIndex = 0;
+  state.jetsonTransfer.total = pullPaths.length;
+  render();
+  try {
+    let lastTask = null;
+    for (let index = 0; index < pullPaths.length; index += 1) {
+      state.jetsonTransfer.currentIndex = index;
+      render();
+      lastTask = await startTransfer("jetson-to-local", {
+        host: target.host,
+        user: target.user,
+        remote: pullPaths[index],
+        local: localPath,
+      });
+      const finished = await waitForTransferTask(lastTask.task_id);
+      if (finished && finished.status !== "success") {
+        toast(`Transfer stopped at ${shortName(pullPaths[index])}: ${finished.status}`, "error");
+        break;
+      }
+    }
+    await refreshAll();
+    if (lastTask) selectTask(lastTask.task_id);
+    return lastTask;
+  } catch (error) {
+    toast(`Transfer failed: ${error.message}`, "error");
+    return null;
+  } finally {
+    state.jetsonTransfer.running = false;
+    state.jetsonTransfer.currentIndex = 0;
+    state.jetsonTransfer.total = 0;
+    render();
+  }
 }
 
 function startJetsonPush() {
@@ -5997,12 +6116,20 @@ function startJetsonPush() {
 }
 
 function copyPullCommand() {
-  if (!pullRemotePath()) {
-    window.alert("Select or enter one Jetson rosbag sequence first.");
+  const paths = selectedJetsonPullPaths();
+  const manualPath = pullRemotePath();
+  const pullPaths = paths.length ? paths : manualPath ? [manualPath] : [];
+  if (!pullPaths.length) {
+    window.alert("Select or enter at least one Jetson rosbag sequence first.");
     return;
   }
   const target = jetsonTarget();
-  copyText(`rsync -avhP ${sh(`${target.user}@${target.host}:${pullRemotePath()}`)} ${sh(trimTrailingSlash(pullLocalPath()) + "/")}`);
+  copyText(
+    pullPaths
+      .map((path) => `rsync -avhP ${sh(`${target.user}@${target.host}:${path}`)} ${sh(trimTrailingSlash(pullLocalPath()) + "/")}`)
+      .join("\n"),
+    pullPaths.length > 1 ? "rsync commands copied" : "rsync command copied",
+  );
 }
 
 function copyPushCommand() {
@@ -6152,6 +6279,9 @@ window.setJetsonHost = setJetsonHost;
 window.startTransfer = startTransfer;
 window.useJetsonRosbag = useJetsonRosbag;
 window.pullJetsonRosbag = pullJetsonRosbag;
+window.toggleJetsonPullSelection = toggleJetsonPullSelection;
+window.selectAllJetsonPulls = selectAllJetsonPulls;
+window.clearJetsonPullSelection = clearJetsonPullSelection;
 window.startJetsonPull = startJetsonPull;
 window.startJetsonPush = startJetsonPush;
 window.copyPullCommand = copyPullCommand;
