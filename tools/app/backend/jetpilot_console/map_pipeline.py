@@ -307,17 +307,20 @@ def generate_raceline_script(
     *,
     vehicle_width_m: float = DEFAULT_RACELINE_VEHICLE_WIDTH_M,
     safety_margin_m: float = DEFAULT_RACELINE_SAFETY_MARGIN_M,
+    preset: str | None = None,
 ) -> str:
     map_path = Path(map_dir)
     name = map_path.name
     vehicle_width = _nonnegative_finite(vehicle_width_m, "vehicle_width_m")
     safety_margin = _nonnegative_finite(safety_margin_m, "safety_margin_m")
+    selected_preset = preset if preset else ("f110" if vehicle_width <= 0.6 else "race-stacks")
     return f"""set -euo pipefail
 {_q(config.python_bin)} {_q(config.python_ws / "map_tools" / "generate_raceline.py")} \\
   --centerline {_q(map_path / f"{name}_hd_map_centerline.csv")} \\
   --output {_q(map_path / f"{name}_raceline.csv")} \\
   --vehicle-width-m {vehicle_width:.9g} \\
   --safety-margin-m {safety_margin:.9g} \\
+  --preset {selected_preset} \\
   --show-progress
 """
 

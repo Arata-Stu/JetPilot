@@ -22,7 +22,7 @@ from scipy import interpolate, spatial
 
 
 VALID_DIRECTIONS = ("forward", "reverse", "both")
-VALID_PRESETS = ("default", "race-stacks")
+VALID_PRESETS = ("default", "race-stacks", "f110", "fullscale")
 DEFAULT_VEHICLE_WIDTH_M = 0.25
 DEFAULT_SAFETY_MARGIN_M = 0.05
 
@@ -222,6 +222,28 @@ def default_optimizer_root() -> str:
 
 
 def preset_defaults(preset: str) -> dict:
+    if preset == "f110":
+        # Exact parameters from ETH Zurich race_stack racecar_f110.ini (F1TENTH / small scale RC / JetPilot scale)
+        return {
+            "opt_type": "mincurv",
+            "curvature_limit": 1.0,
+            "global_opt_stepsize_prep": 0.05,
+            "global_opt_stepsize_reg": 0.20,
+            "global_opt_stepsize_after_opt": 0.10,
+            "global_opt_spline_smoothing": 1.0,
+        }
+
+    if preset == "fullscale":
+        # Exact parameters from TUM / ETH Zurich race_stack racecar.ini (Full-scale racecar)
+        return {
+            "opt_type": "mincurv",
+            "curvature_limit": 0.12,
+            "global_opt_stepsize_prep": 1.0,
+            "global_opt_stepsize_reg": 3.0,
+            "global_opt_stepsize_after_opt": 2.0,
+            "global_opt_spline_smoothing": 10.0,
+        }
+
     if preset == "race-stacks":
         return {
             "opt_type": "mincurv",
@@ -330,22 +352,59 @@ def build_reftrack_interp_with_retry(
     spline_smoothing: float,
     debug: bool,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, float, float, float]:
+    # Phase 1: Try exact original TUM state first (standard/fast path for simple courses)
+    # This preserves proven baseline reliability without any width manipulation or horizon adjustment.
     smoothing_init = max(float(spline_smoothing), 1e-6)
+    if debug:
+        print(
+            f"[global-opt] Phase 1 (original TUM state): spline approximation with smoothing={smoothing_init:g}, stepsize_prep={stepsize_prep:g}, stepsize_reg={stepsize_reg:g}, horizon=10",
+            file=sys.stderr,
+            flush=True,
+        )
+
+    reftrack_orig = tph.spline_approximation.spline_approximation(
+        track=reftrack,
+        k_reg=3,
+        s_reg=smoothing_init,
+        stepsize_prep=stepsize_prep,
+        stepsize_reg=stepsize_reg,
+        debug=debug,
+    )
+    refpath_orig_cl = np.vstack((reftrack_orig[:, :2], reftrack_orig[0, :2]))
+    coeffs_x_orig, coeffs_y_orig, a_orig, normvec_orig = tph.calc_splines.calc_splines(path=refpath_orig_cl)
+
+    # Check if original TUM state is completely valid (no negative track width and no crossing normals at horizon=10)
+    orig_valid = (
+        np.all(reftrack_orig[:, 2:4] >= 0.0)
+        and not tph.check_normals_crossing.check_normals_crossing(
+            track=reftrack_orig,
+            normvec_normalized=normvec_orig,
+            horizon=10,
+        )
+    )
+
+    if orig_valid:
+        if debug:
+            print("[global-opt] Phase 1 succeeded (original TUM state is valid).", file=sys.stderr, flush=True)
+        return reftrack_orig, a_orig, normvec_orig, coeffs_x_orig, coeffs_y_orig, smoothing_init, stepsize_prep, stepsize_reg
+
+    # Phase 2: Fallback to adaptive repair for complex or angular courses where Phase 1 fails
+    if debug:
+        print(
+            "[global-opt] Phase 1 encountered crossing normals or negative track width on complex course. Transitioning to Phase 2 (adaptive repair)...",
+            file=sys.stderr,
+            flush=True,
+        )
+
     max_smoothing = max(smoothing_init * 4.0, 40.0)
-
-    # Calculate local horizon for normal crossing check based on stepsize_reg.
-    # On compact or indoor tracks (e.g. radius ~ 1m), checking horizon=10 across 3~5m
-    # falsely intersects normals across opposite legs of hairpin turns. We check local
-    # adjacent steps (~1.2m ahead) to prevent artificial smoothing from flattening corners.
     horizon_steps = max(2, min(10, int(1.2 / max(stepsize_reg, 0.05))))
-
     best_candidate = None
     smoothing = smoothing_init
 
     while smoothing <= max_smoothing:
         if debug:
             print(
-                f"[global-opt] spline approximation with smoothing={smoothing:g}, stepsize_prep={stepsize_prep:g}, stepsize_reg={stepsize_reg:g}",
+                f"[global-opt] Phase 2: spline approximation with smoothing={smoothing:g}, stepsize_prep={stepsize_prep:g}, stepsize_reg={stepsize_reg:g}, horizon={horizon_steps}",
                 file=sys.stderr,
                 flush=True,
             )
@@ -380,7 +439,6 @@ def build_reftrack_interp_with_retry(
         refpath_interp_cl = np.vstack((reftrack_interp[:, :2], reftrack_interp[0, :2]))
         coeffs_x, coeffs_y, a_interp, normvec = tph.calc_splines.calc_splines(path=refpath_interp_cl)
 
-        # If this is the initial (user-specified) smoothing or first valid candidate, save as best fallback
         if best_candidate is None:
             best_candidate = (reftrack_interp, a_interp, normvec, coeffs_x, coeffs_y, smoothing, stepsize_prep, stepsize_reg)
 
@@ -393,10 +451,6 @@ def build_reftrack_interp_with_retry(
 
         smoothing *= 2.0
 
-    # If local normals cross at all bounded smoothing levels, returning a track with excessive
-    # smoothing (>40) causes the centerline to depart from the track walls into a degenerate circle/oval.
-    # We safely return the initial/best candidate constrained within physical boundaries so that
-    # downstream optimizers can compute the raceline on accurate track geometry.
     if debug:
         print(
             f"[global-opt] Tight track curvature detected across smoothing limits; utilizing safe smoothing={best_candidate[5]:g} inside track boundaries.",
