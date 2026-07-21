@@ -2242,7 +2242,8 @@ function renderAnalysisViewer() {
         <div class="analysis-image-panel">
           ${renderAnalysisCameraSelector()}
           <div class="analysis-image-stage">
-            <img id="analysis-frame-image" alt="Selected rosbag image frame" decoding="async" />
+            <img id="analysis-frame-image-a" class="visible" alt="Selected rosbag image frame A" decoding="async" />
+            <img id="analysis-frame-image-b" alt="Selected rosbag image frame B" decoding="async" />
             <div id="analysis-frame-empty" class="analysis-frame-empty">${frames.length ? "Loading frame..." : "No image frames were extracted."}</div>
             <span id="analysis-frame-time" class="analysis-frame-time">${formatAnalysisClock(analysis.currentTime)}</span>
           </div>
@@ -2866,13 +2867,15 @@ function analysisAssetUrl(frame, channelTopic = null) {
 
 function updateAnalysisFrame(time) {
   const frames = analysisFrames();
-  const image = $("analysis-frame-image");
+  const imgA = $("analysis-frame-image-a");
+  const imgB = $("analysis-frame-image-b");
   const empty = $("analysis-frame-empty");
-  if (!image || !empty) return;
+  if (!empty) return;
+
   const index = timedRecordIndex(frames, time);
   if (index < 0) {
-    image.removeAttribute("src");
-    image.classList.remove("visible");
+    if (imgA) imgA.classList.remove("visible");
+    if (imgB) imgB.classList.remove("visible");
     empty.textContent = frames.length ? "Waiting for the first image frame..." : "No image frames were extracted.";
     empty.classList.add("visible");
     state.analysis.renderedFrameIndex = -1;
@@ -2892,7 +2895,8 @@ function updateAnalysisFrame(time) {
   );
 
   if (selectedChannel && !hasChannel) {
-    image.classList.remove("visible");
+    if (imgA) imgA.classList.remove("visible");
+    if (imgB) imgB.classList.remove("visible");
     empty.textContent = `No frame available for ${selectedChannel} at this time.`;
     empty.classList.add("visible");
     state.analysis.renderedFrameIndex = index;
@@ -2902,30 +2906,48 @@ function updateAnalysisFrame(time) {
 
   if (index !== state.analysis.renderedFrameIndex || state.analysis.renderedChannel !== selectedChannel) {
     const url = analysisAssetUrl(currentFrame, selectedChannel);
-    image.onload = () => {
-      const stage = image.closest(".analysis-image-stage");
-      if (stage) {
-        stage.dataset.frameSize = `${image.naturalWidth}×${image.naturalHeight}`;
-        stage.setAttribute(
-          "aria-label",
-          `Camera frame ${image.naturalWidth} by ${image.naturalHeight} pixels, fitted to the viewer`,
-        );
-      }
-      image.classList.add("visible");
-      empty.classList.remove("visible");
-    };
-    image.onerror = () => {
-      image.classList.remove("visible");
-      empty.textContent = "This frame could not be loaded.";
-      empty.classList.add("visible");
-    };
-    image.src = url;
+
+    // Double buffering: swap between imgA and imgB without unmounting
+    const activeImg = state.analysis.activeBufferImg === "b" ? imgB : imgA;
+    const targetImg = state.analysis.activeBufferImg === "b" ? imgA : imgB;
+
+    if (targetImg) {
+      targetImg.onload = () => {
+        targetImg.classList.add("visible");
+        if (activeImg && activeImg !== targetImg) {
+          activeImg.classList.remove("visible");
+        }
+        empty.classList.remove("visible");
+        state.analysis.activeBufferImg = state.analysis.activeBufferImg === "b" ? "a" : "b";
+
+        const stage = targetImg.closest(".analysis-image-stage");
+        if (stage) {
+          stage.dataset.frameSize = `${targetImg.naturalWidth}×${targetImg.naturalHeight}`;
+        }
+      };
+      targetImg.onerror = () => {
+        if (!activeImg || !activeImg.classList.contains("visible")) {
+          empty.textContent = "This frame could not be loaded.";
+          empty.classList.add("visible");
+        }
+      };
+      targetImg.src = url;
+    }
+
     state.analysis.renderedFrameIndex = index;
     state.analysis.renderedChannel = selectedChannel;
-    const next = frames[index + 1];
-    if (next) {
-      const preload = new Image();
-      preload.src = analysisAssetUrl(next, selectedChannel);
+
+    // Preload next & previous 4 frames for zero-latency frame-by-frame stepping
+    for (let offset = -2; offset <= 5; offset++) {
+      if (offset === 0) continue;
+      const targetIdx = index + offset;
+      if (targetIdx >= 0 && targetIdx < frames.length) {
+        const preloadUrl = analysisAssetUrl(frames[targetIdx], selectedChannel);
+        if (preloadUrl) {
+          const pImg = new Image();
+          pImg.src = preloadUrl;
+        }
+      }
     }
   }
 
