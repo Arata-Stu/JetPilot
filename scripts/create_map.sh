@@ -583,6 +583,29 @@ run_offline_eval() {
   echo "[stage] offline eval use_sim_time: true"
   echo "[stage] offline eval VSLAM visualization: true"
 
+  cleanup_offline_graph() {
+    echo "[stage] cleaning up any leftover ROS 2 offline nodes..."
+    pkill -f "visual_slam_node" 2>/dev/null || true
+    pkill -f "visual_global_localization_node" 2>/dev/null || true
+    pkill -f "localization_manager" 2>/dev/null || true
+    pkill -f "vslam_reference_snapshot_recorder" 2>/dev/null || true
+    pkill -f "rosbag2_player" 2>/dev/null || true
+    ros2 daemon stop 2>/dev/null || true
+    local quiet_attempt=0
+    local nodes
+    local resume_type
+    while (( quiet_attempt < 5 )); do
+      nodes="$(ros2 node list 2>/dev/null || true)"
+      resume_type="$(ros2 service type /rosbag2_player/resume 2>/dev/null || true)"
+      if [[ "$nodes" != *visual_slam_node* ]] && [[ "$nodes" != *visual_global_localization_node* ]] && [[ "$nodes" != *localization_manager* ]] && [[ "$nodes" != *vslam_reference_snapshot_recorder* ]] && [[ "$nodes" != *rosbag2_interfaces/srv/Resume* ]]; then
+        return 0
+      fi
+      pkill -9 -f "visual_slam_node|visual_global_localization_node|localization_manager|vslam_reference_snapshot_recorder|rosbag2_player" 2>/dev/null || true
+      quiet_attempt=$((quiet_attempt + 1))
+      sleep 1
+    done
+    return 0
+  }
   offline_stop_launch() {
     local stop_signal="${1:-INT}"
     local timeout_s="${2:-20}"
@@ -594,7 +617,8 @@ run_offline_eval() {
       fi
       while kill -0 "$offline_launch_pid" 2>/dev/null; do
         if (( waited_s >= timeout_s )); then
-          return 124
+          kill -9 "$offline_launch_pid" 2>/dev/null || true
+          break
         fi
         sleep 1
         waited_s=$((waited_s + 1))
@@ -602,12 +626,14 @@ run_offline_eval() {
       wait "$offline_launch_pid" 2>/dev/null || stop_status=$?
     fi
     offline_launch_pid=""
+    cleanup_offline_graph || true
     return "$stop_status"
   }
   offline_topic_publishers() {
     ros2 topic info "$1" 2>/dev/null | awk '/Publisher count:/ {print $3; found=1} END {if (!found) print 0}'
   }
   trap 'offline_stop_launch TERM 5 || kill -KILL "$offline_launch_pid" 2>/dev/null || true' EXIT
+  cleanup_offline_graph
 
   ros2 launch "$JETPILOT_LAUNCH_PACKAGE" bringup.launch.py \
     use_sim_time:=true \
