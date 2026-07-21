@@ -589,6 +589,11 @@ def build_analysis_script(
                 f"  rm -f {_q(snapshot)} || return 20",
                 '  echo "[offline] starting $offline_method_label"',
                 f"  {status_writer} --set-status running --stage offline_localization --progress \"$offline_replay_progress\" --message \"Starting $offline_method_label.\" || return 21",
+                # ── ensure stale nodes from previous runs are fully gone ─────
+                '  echo "[offline] waiting for any previous localization graph to clear before launch"',
+                "  if ! wait_for_offline_graph_quiescence; then",
+                "    return 29",
+                "  fi",
                 f"  ros2 launch {_q(config.launch_package)} bringup.launch.py \\",
                 "    use_sim_time:=true \\",
                 "    enable_rosbag_replay:=true \\",
