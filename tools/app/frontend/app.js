@@ -1839,18 +1839,19 @@ function analysisPreflightPayload() {
   const preset = state.analysis.analysisPreset || "telemetry";
 
   let selectedTopics = Array.isArray(state.analysis.selectedImageTopics)
-    ? [...state.analysis.selectedImageTopics]
+    ? [...state.analysis.selectedImageTopics].filter(Boolean)
     : [];
 
-  if (!selectedTopics.length) {
-    if (state.analysis.imageTopic) selectedTopics.push(state.analysis.imageTopic);
-    if (state.analysis.secondaryImageTopic) selectedTopics.push(state.analysis.secondaryImageTopic);
+  // If no checkbox state exists yet, default to single imageTopic
+  if (!selectedTopics.length && state.analysis.imageTopic) {
+    selectedTopics.push(state.analysis.imageTopic);
   }
-  selectedTopics = [...new Set(selectedTopics.filter(Boolean))];
+  selectedTopics = [...new Set(selectedTopics)];
 
-  let primary = state.analysis.primaryImageTopic || selectedTopics[0] || state.analysis.imageTopic || "";
-  if (primary && !selectedTopics.includes(primary)) {
-    selectedTopics.unshift(primary);
+  // Primary topic MUST be one of the selected topics
+  let primary = state.analysis.primaryImageTopic;
+  if (!primary || !selectedTopics.includes(primary)) {
+    primary = selectedTopics[0] || state.analysis.imageTopic || "";
   }
 
   const isTelemetryMode = preset === "telemetry";
@@ -2357,6 +2358,10 @@ async function selectAnalysisBag(path) {
       const key = `${kind}Topic`;
       state.analysis[key] = changed ? preferredAnalysisTopic(kind, analysisTopics(kind)) : previousTopics[kind];
     }
+    if (changed) {
+      state.analysis.selectedImageTopics = state.analysis.imageTopic ? [state.analysis.imageTopic] : [];
+      state.analysis.primaryImageTopic = state.analysis.imageTopic || "";
+    }
   } catch (error) {
     if (state.analysis.selectedBagPath === selectedPath) {
       state.analysis.bagDetail = { topics: [], error: error.message };
@@ -2833,10 +2838,19 @@ function renderAnalysisCameraSelector() {
   if (detailTopics.primary_image_topic) channelSet.add(detailTopics.primary_image_topic);
 
   const channels = [...channelSet].filter(Boolean);
-  if (channels.length <= 1) return "";
+  if (!channels.length) return "";
 
   const primaryTopic = detailTopics.primary_image_topic || detailTopics.image || channels[0];
   const currentChannel = state.analysis.selectedChannel || primaryTopic || channels[0];
+
+  if (channels.length === 1) {
+    return `
+      <div class="analysis-camera-selector" style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.5rem; background:rgba(255,255,255,0.03); padding:0.4rem 0.6rem; border-radius:6px;">
+        <span style="font-size:0.8rem; font-weight:600; color:#8a99a8;">Camera Channel:</span>
+        <strong style="font-size:0.82rem; color:#5aa8ff; background:#182026; padding:0.2rem 0.6rem; border-radius:4px; border:1px solid #28333e;">${esc(channels[0])}</strong>
+      </div>
+    `;
+  }
 
   return `
     <div class="analysis-camera-selector" style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.5rem; background:rgba(255,255,255,0.03); padding:0.4rem 0.6rem; border-radius:6px;">
