@@ -1837,10 +1837,21 @@ function analysisTopicOptions(kind, selected, optional = true) {
 
 function analysisPreflightPayload() {
   const preset = state.analysis.analysisPreset || "telemetry";
-  const primary = state.analysis.imageTopic;
-  const secondary = state.analysis.secondaryImageTopic;
-  const topics = [primary, secondary].filter(Boolean);
-  const uniqueTopics = [...new Set(topics)];
+
+  let selectedTopics = Array.isArray(state.analysis.selectedImageTopics)
+    ? [...state.analysis.selectedImageTopics]
+    : [];
+
+  if (!selectedTopics.length) {
+    if (state.analysis.imageTopic) selectedTopics.push(state.analysis.imageTopic);
+    if (state.analysis.secondaryImageTopic) selectedTopics.push(state.analysis.secondaryImageTopic);
+  }
+  selectedTopics = [...new Set(selectedTopics.filter(Boolean))];
+
+  let primary = state.analysis.primaryImageTopic || selectedTopics[0] || state.analysis.imageTopic || "";
+  if (primary && !selectedTopics.includes(primary)) {
+    selectedTopics.unshift(primary);
+  }
 
   const isTelemetryMode = preset === "telemetry";
   const mapDir = isTelemetryMode ? "" : state.analysis.selectedMapPath;
@@ -1853,7 +1864,7 @@ function analysisPreflightPayload() {
     map_dir: mapDir,
     topic_config: isTelemetryMode ? "" : state.analysis.topicConfigPath,
     image_topic: primary,
-    image_topics: uniqueTopics,
+    image_topics: selectedTopics,
     primary_image_topic: primary,
     control_topic: state.analysis.controlTopic,
     mode_topic: state.analysis.modeTopic,
@@ -1866,6 +1877,43 @@ function analysisPreflightPayload() {
   };
 }
 
+function toggleAnalysisImageTopic(topicName) {
+  if (!Array.isArray(state.analysis.selectedImageTopics)) {
+    state.analysis.selectedImageTopics = [];
+  }
+  const idx = state.analysis.selectedImageTopics.indexOf(topicName);
+  if (idx >= 0) {
+    state.analysis.selectedImageTopics.splice(idx, 1);
+    if (state.analysis.primaryImageTopic === topicName) {
+      state.analysis.primaryImageTopic = state.analysis.selectedImageTopics[0] || "";
+    }
+  } else {
+    state.analysis.selectedImageTopics.push(topicName);
+    if (!state.analysis.primaryImageTopic) {
+      state.analysis.primaryImageTopic = topicName;
+    }
+  }
+  state.analysis.imageTopic = state.analysis.primaryImageTopic;
+  const payload = analysisPreflightPayload();
+  bindAnalysisPreflight(payload);
+  scheduleAnalysisPreflight({ immediate: true, force: true });
+  if (state.tab === "bag-analysis") render();
+}
+
+function setAnalysisPrimaryTopic(topicName) {
+  state.analysis.primaryImageTopic = topicName;
+  state.analysis.imageTopic = topicName;
+  if (!Array.isArray(state.analysis.selectedImageTopics)) {
+    state.analysis.selectedImageTopics = [topicName];
+  } else if (!state.analysis.selectedImageTopics.includes(topicName)) {
+    state.analysis.selectedImageTopics.push(topicName);
+  }
+  const payload = analysisPreflightPayload();
+  bindAnalysisPreflight(payload);
+  scheduleAnalysisPreflight({ immediate: true, force: true });
+  if (state.tab === "bag-analysis") render();
+}
+
 function setAnalysisPreset(preset) {
   state.analysis.analysisPreset = preset;
   if (preset === "telemetry") {
@@ -1875,6 +1923,47 @@ function setAnalysisPreset(preset) {
   bindAnalysisPreflight(payload);
   scheduleAnalysisPreflight({ immediate: true, force: true });
   if (state.tab === "bag-analysis") render();
+}
+
+function renderAnalysisImageTopicsSelector() {
+  const imageTopics = analysisTopics("image");
+  if (!imageTopics.length) {
+    return `<div class="field-hint" style="color:#e06c75;">No image topics found in this rosbag.</div>`;
+  }
+
+  let selected = state.analysis.selectedImageTopics;
+  if (!Array.isArray(selected) || !selected.length) {
+    const defaultTopic = preferredAnalysisTopic("image", imageTopics);
+    selected = defaultTopic ? [defaultTopic] : [imageTopics[0].name];
+    state.analysis.selectedImageTopics = selected;
+  }
+  let primary = state.analysis.primaryImageTopic || selected[0] || imageTopics[0].name;
+  state.analysis.primaryImageTopic = primary;
+
+  return `
+    <div style="display:flex; flex-direction:column; gap:0.4rem; background:#111519; border:1px solid #28333e; border-radius:6px; padding:0.5rem 0.6rem;">
+      ${imageTopics.map((item) => {
+        const name = item.name;
+        const isChecked = selected.includes(name);
+        const isPrimary = primary === name;
+        return `
+          <div style="display:flex; align-items:center; justify-content:space-between; gap:0.5rem; padding:0.35rem 0.6rem; background:${isChecked ? '#1a242f' : '#14181c'}; border:1px solid ${isChecked ? '#386fa4' : '#222930'}; border-radius:5px;">
+            <label style="display:flex; align-items:center; gap:0.5rem; cursor:pointer; font-size:0.85rem; color:${isChecked ? '#fff' : '#8a99a8'}; flex:1; margin:0;">
+              <input type="checkbox" ${isChecked ? "checked" : ""} onchange="toggleAnalysisImageTopic(${js(name)})" />
+              <strong style="font-weight:600;">${esc(name)}</strong>
+              <span style="font-size:0.75rem; color:#687582;">${esc(item.type || "")}${item.count ? ` (${item.count} msgs)` : ""}</span>
+            </label>
+            ${isChecked ? `
+              <label style="display:flex; align-items:center; gap:0.3rem; font-size:0.78rem; color:${isPrimary ? '#5aa8ff' : '#687582'}; cursor:pointer; margin:0; font-weight:${isPrimary ? '700' : '400'};">
+                <input type="radio" name="primary_image_topic_group" ${isPrimary ? "checked" : ""} onchange="setAnalysisPrimaryTopic(${js(name)})" />
+                ${isPrimary ? "Primary Clock" : "Set Primary"}
+              </label>
+            ` : ""}
+          </div>
+        `;
+      }).join("")}
+    </div>
+  `;
 }
 
 function renderBagAnalysis() {
@@ -1917,6 +2006,7 @@ function renderAnalysisForm() {
 
   return `
     <div class="form-grid analysis-form">
+      <!-- 1. Rosbag Selection -->
       <div class="field full">
         <label for="analysis-bag">1. Select Rosbag</label>
         <select id="analysis-bag" onchange="selectAnalysisBag(this.value)">
@@ -1926,49 +2016,59 @@ function renderAnalysisForm() {
         <div class="field-hint">${analysis.bagDetailLoading ? "Inspecting topics..." : bag ? `${esc(bag.path)}${duration > 0 ? ` / ${formatAnalysisClock(duration)}` : ""}` : "Choose a local rosbag to inspect its topics."}</div>
       </div>
 
+      <!-- 2. Mode Selection Preset -->
       <div class="field full">
         <label>2. Select Analysis Mode</label>
-        <div class="preset-selector-cards" style="display:flex; gap:0.75rem; margin-top:0.3rem;">
-          <div class="preset-card" onclick="setAnalysisPreset('telemetry')" style="flex:1; padding:0.75rem 1rem; border:1.5px solid ${preset === 'telemetry' ? '#386fa4' : '#2d3744'}; background:${preset === 'telemetry' ? 'rgba(56,111,164,0.18)' : '#161b22'}; border-radius:6px; cursor:pointer; transition:all 0.15s ease;">
-            <strong style="display:block; font-size:0.95rem; color:#fff; margin-bottom:0.2rem;">🎬 Video & Telemetry Only</strong>
-            <span style="font-size:0.78rem; color:#8a99a8; line-height:1.3; display:block;">No VSLAM execution. Fast extraction for video playback, control signals, and recorded odometry.</span>
+        <div class="preset-selector-cards" style="display:flex; gap:0.75rem; margin-top:0.2rem;">
+          <div class="preset-card" onclick="setAnalysisPreset('telemetry')" style="flex:1; padding:0.65rem 0.85rem; border:1.5px solid ${preset === 'telemetry' ? '#386fa4' : '#2d3744'}; background:${preset === 'telemetry' ? 'rgba(56,111,164,0.18)' : '#161b22'}; border-radius:6px; cursor:pointer;">
+            <strong style="display:block; font-size:0.92rem; color:#fff; margin-bottom:0.15rem;">🎬 Video & Telemetry Only</strong>
+            <span style="font-size:0.76rem; color:#8a99a8; line-height:1.25; display:block;">No VSLAM. Fast extraction for video playback & control signals.</span>
           </div>
-          <div class="preset-card" onclick="setAnalysisPreset('map_vslam')" style="flex:1; padding:0.75rem 1rem; border:1.5px solid ${preset === 'map_vslam' ? '#386fa4' : '#2d3744'}; background:${preset === 'map_vslam' ? 'rgba(56,111,164,0.18)' : '#161b22'}; border-radius:6px; cursor:pointer; transition:all 0.15s ease;">
-            <strong style="display:block; font-size:0.95rem; color:#fff; margin-bottom:0.2rem;">🗺️ Map Alignment & VSLAM</strong>
-            <span style="font-size:0.78rem; color:#8a99a8; line-height:1.3; display:block;">Run VSLAM / VGL to align trajectory on an HD Map.</span>
+          <div class="preset-card" onclick="setAnalysisPreset('map_vslam')" style="flex:1; padding:0.65rem 0.85rem; border:1.5px solid ${preset === 'map_vslam' ? '#386fa4' : '#2d3744'}; background:${preset === 'map_vslam' ? 'rgba(56,111,164,0.18)' : '#161b22'}; border-radius:6px; cursor:pointer;">
+            <strong style="display:block; font-size:0.92rem; color:#fff; margin-bottom:0.15rem;">🗺️ Map Alignment & VSLAM</strong>
+            <span style="font-size:0.76rem; color:#8a99a8; line-height:1.25; display:block;">Run VSLAM / VGL to align trajectory on an HD Map.</span>
           </div>
         </div>
       </div>
 
-      <div class="field">
-        <label for="analysis-image-topic">Primary image topic (Timing Master)</label>
-        <select id="analysis-image-topic" onchange="updateAnalysisOption('imageTopic', this.value)">${analysisTopicOptions("image", analysis.imageTopic, false)}</select>
+      <!-- Action Button Area (Placed at the top for zero scrolling) -->
+      <div class="field full" style="background:rgba(255,255,255,0.02); border:1px solid #28333e; border-radius:8px; padding:0.75rem 0.85rem; display:flex; align-items:center; justify-content:space-between; gap:1rem; margin:0.25rem 0;">
+        <div>
+          <button id="analysis-start" class="primary" onclick="startBagAnalysis()" style="padding:0.55rem 1.4rem; font-size:0.95rem; font-weight:700;" ${preflightButtonAttrs("analyze-rosbag", payload)}>🚀 Start Analysis</button>
+          <button onclick="scheduleAnalysisPreflight({ immediate: true, force: true })" style="padding:0.55rem 0.8rem;">Recheck</button>
+        </div>
+        <div id="analysis-preflight-reason" style="font-size:0.8rem; color:#8a99a8; text-align:right;">${renderPreflightButtonReason("analyze-rosbag", payload)}</div>
       </div>
-      <div class="field">
-        <label for="analysis-secondary-image-topic">Secondary image topic (Optional 2nd Camera)</label>
-        <select id="analysis-secondary-image-topic" onchange="updateAnalysisOption('secondaryImageTopic', this.value)">${analysisTopicOptions("image", analysis.secondaryImageTopic, true)}</select>
+
+      <!-- 3. Multiple Camera Selection -->
+      <div class="field full">
+        <label>3. Select Image Topics (Check to include multiple cameras)</label>
+        ${renderAnalysisImageTopicsSelector()}
       </div>
+
+      <!-- 4. Telemetry Signals -->
       <div class="field">
-        <label for="analysis-control-topic">Applied control topic</label>
+        <label for="analysis-control-topic">Control Topic</label>
         <select id="analysis-control-topic" onchange="updateAnalysisOption('controlTopic', this.value)">${analysisTopicOptions("control", analysis.controlTopic)}</select>
       </div>
       <div class="field">
-        <label for="analysis-mode-topic">Operation mode topic</label>
+        <label for="analysis-mode-topic">Operation Mode Topic</label>
         <select id="analysis-mode-topic" onchange="updateAnalysisOption('modeTopic', this.value)">${analysisTopicOptions("mode", analysis.modeTopic)}</select>
       </div>
       <div class="field">
-        <label for="analysis-speed-topic">Speed topic (optional)</label>
+        <label for="analysis-speed-topic">Speed Topic (optional)</label>
         <select id="analysis-speed-topic" onchange="updateAnalysisOption('speedTopic', this.value)">${analysisTopicOptions("speed", analysis.speedTopic)}</select>
       </div>
       <div class="field">
-        <label for="analysis-pose-topic">Recorded pose topic (optional)</label>
+        <label for="analysis-pose-topic">Recorded Pose Topic (optional)</label>
         <select id="analysis-pose-topic" onchange="updateAnalysisOption('poseTopic', this.value)">${analysisTopicOptions("pose", analysis.poseTopic)}</select>
       </div>
       <div class="field">
-        <label for="analysis-max-fps">Image playback max FPS</label>
+        <label for="analysis-max-fps">Max FPS</label>
         <input id="analysis-max-fps" type="number" min="1" max="60" step="1" value="${esc(analysis.maxFps)}" onchange="updateAnalysisOption('maxFps', this.value)" />
       </div>
 
+      <!-- Map & VSLAM Configuration (Only when Map Mode is selected) -->
       ${preset === "map_vslam" ? `
         <div class="field full" style="border-top:1px solid #2d3744; padding-top:0.75rem; margin-top:0.25rem;">
           <strong style="color:#5aa8ff; font-size:0.88rem;">Map & VSLAM Configuration</strong>
@@ -1986,7 +2086,6 @@ function renderAnalysisForm() {
             <option value="">Use backend default</option>
             ${topicConfigs.map((config) => `<option value="${esc(config.path)}" ${config.path === analysis.topicConfigPath ? "selected" : ""}>${esc(config.name)}${config.recommended ? " - recommended" : ` - score ${esc(config.score)}`}</option>`).join("")}
           </select>
-          <div class="field-hint">Used only when Auto falls back to Offline or Offline is selected.</div>
         </div>
         <div class="field">
           <label for="analysis-trajectory-mode">Trajectory source</label>
@@ -2009,17 +2108,15 @@ function renderAnalysisForm() {
               ["vslam_from_scratch", "VSLAM from scratch: track/map from origin without existing map"],
             ].map(([value, label]) => `<option value="${value}" ${analysis.offlineLocalizationMode === value ? "selected" : ""}>${label}</option>`).join("")}
           </select>
-          <div class="field-hint">The VSLAM-only fallback is valid when the bag starts near the selected Map origin.</div>
         </div>
       ` : ''}
 
-      ${detail ? renderAnalysisTopicCoverage() : `<div class="notice full">Select a rosbag first. Topic availability and missing inputs will appear here.</div>`}
-      <div class="full" id="analysis-preflight">${renderReadinessPanel("analyze-rosbag", payload, { title: "Rosbag analysis readiness" })}</div>
-      <div class="actions full">
-        <button id="analysis-start" class="primary" onclick="startBagAnalysis()" ${preflightButtonAttrs("analyze-rosbag", payload)}>Start Analysis</button>
-        <button onclick="scheduleAnalysisPreflight({ immediate: true, force: true })">Recheck</button>
-      </div>
-      <div class="full" id="analysis-preflight-reason">${renderPreflightButtonReason("analyze-rosbag", payload)}</div>
+      <!-- Detailed Readiness Report (Collapsible) -->
+      <details class="full" style="margin-top:0.5rem; background:#111417; border:1px solid #252e37; border-radius:6px; padding:0.5rem 0.8rem;">
+        <summary style="font-size:0.82rem; font-weight:600; color:#8a99a8; cursor:pointer;">Preflight Readiness Details</summary>
+        <div id="analysis-preflight" style="margin-top:0.5rem;">${renderReadinessPanel("analyze-rosbag", payload, { title: "Rosbag analysis readiness" })}</div>
+        ${detail ? renderAnalysisTopicCoverage() : ''}
+      </details>
     </div>
   `;
 }
