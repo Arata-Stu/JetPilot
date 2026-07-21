@@ -121,27 +121,6 @@ def build_vgl_vslam_script(
 mkdir -p {_q(map_dir)}
 requested_map_dir={_q(map_dir)}
 offline_launch_pid=""
-cleanup_offline_graph() {{
-  echo "[stage] cleaning up any leftover ROS 2 offline nodes..."
-  pkill -f "visual_slam_node" 2>/dev/null || true
-  pkill -f "visual_global_localization_node" 2>/dev/null || true
-  pkill -f "localization_manager" 2>/dev/null || true
-  pkill -f "vslam_reference_snapshot_recorder" 2>/dev/null || true
-  pkill -f "rosbag2_player" 2>/dev/null || true
-  ros2 daemon stop 2>/dev/null || true
-  offline_quiet_attempt=0
-  while [ "$offline_quiet_attempt" -lt 5 ]; do
-    offline_nodes="$(ros2 node list 2>/dev/null || true)"
-    offline_resume_type="$(ros2 service type /rosbag2_player/resume 2>/dev/null || true)"
-    if [[ "$offline_nodes" != *visual_slam_node* ]] && [[ "$offline_nodes" != *visual_global_localization_node* ]] && [[ "$offline_nodes" != *localization_manager* ]] && [[ "$offline_nodes" != *vslam_reference_snapshot_recorder* ]] && [[ "$offline_resume_type" != *rosbag2_interfaces/srv/Resume* ]]; then
-      return 0
-    fi
-    pkill -9 -f "visual_slam_node|visual_global_localization_node|localization_manager|vslam_reference_snapshot_recorder|rosbag2_player" 2>/dev/null || true
-    offline_quiet_attempt=$((offline_quiet_attempt + 1))
-    sleep 1
-  done
-  return 0
-}}
 offline_stop_launch() {{
   stop_signal="${{1:-INT}}"
   timeout_s="${{2:-20}}"
@@ -153,8 +132,7 @@ offline_stop_launch() {{
     fi
     while kill -0 "$offline_launch_pid" 2>/dev/null; do
       if [ "$waited_s" -ge "$timeout_s" ]; then
-        kill -9 "$offline_launch_pid" 2>/dev/null || true
-        break
+        return 124
       fi
       sleep 1
       waited_s=$((waited_s + 1))
@@ -162,14 +140,12 @@ offline_stop_launch() {{
     wait "$offline_launch_pid" 2>/dev/null || stop_status=$?
   fi
   offline_launch_pid=""
-  cleanup_offline_graph || true
   return "$stop_status"
 }}
 offline_topic_publishers() {{
   ros2 topic info "$1" 2>/dev/null | awk '/Publisher count:/ {{print $3; found=1}} END {{if (!found) print 0}}'
 }}
 trap 'offline_stop_launch TERM 5 || kill -KILL "$offline_launch_pid" 2>/dev/null || true' EXIT
-cleanup_offline_graph
 export FOUNDATIONSTEREO_MODEL_RES={_q(fs_model_res)}
 echo "[stage] create cuVGL map"
 ros2 run isaac_mapping_ros create_map_offline.py \\
