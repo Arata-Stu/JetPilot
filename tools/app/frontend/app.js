@@ -2240,7 +2240,7 @@ function renderAnalysisViewer() {
       ${renderAnalysisSources()}
       <div class="analysis-media-grid">
         <div class="analysis-image-panel">
-          ${renderAnalysisCameraSelector(frames[0])}
+          ${renderAnalysisCameraSelector()}
           <div class="analysis-image-stage">
             <img id="analysis-frame-image" alt="Selected rosbag image frame" decoding="async" />
             <div id="analysis-frame-empty" class="analysis-frame-empty">${frames.length ? "Loading frame..." : "No image frames were extracted."}</div>
@@ -2817,17 +2817,31 @@ function stepAnalysisFrame(direction) {
   seekAnalysisTime(frames[index].t);
 }
 
-function renderAnalysisCameraSelector(frameSample) {
-  const frame = frameSample || (state.analysis.timeline?.frames?.[0]);
-  const channels = frame?.channels ? Object.keys(frame.channels) : [];
+function renderAnalysisCameraSelector() {
+  const detailTopics = state.analysis.detail?.topics || {};
+  const manifestImageTopics = Array.isArray(detailTopics.image_topics) ? detailTopics.image_topics : [];
+  const channelSet = new Set(manifestImageTopics);
+  const frames = analysisFrames();
+  const sampleCount = Math.min(frames.length, 100);
+  for (let i = 0; i < sampleCount; i += 1) {
+    if (frames[i]?.channels) {
+      Object.keys(frames[i].channels).forEach((k) => channelSet.add(k));
+    }
+  }
+  if (detailTopics.image) channelSet.add(detailTopics.image);
+  if (detailTopics.primary_image_topic) channelSet.add(detailTopics.primary_image_topic);
+
+  const channels = [...channelSet].filter(Boolean);
   if (channels.length <= 1) return "";
-  const currentChannel = state.analysis.selectedChannel || channels[0];
-  const primaryTopic = state.analysis.detail?.topics?.primary_image_topic || channels[0];
+
+  const primaryTopic = detailTopics.primary_image_topic || detailTopics.image || channels[0];
+  const currentChannel = state.analysis.selectedChannel || primaryTopic || channels[0];
+
   return `
     <div class="analysis-camera-selector" style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.5rem; background:rgba(255,255,255,0.03); padding:0.4rem 0.6rem; border-radius:6px;">
       <span style="font-size:0.8rem; font-weight:600; color:#8a99a8;">Camera Channel:</span>
       <select onchange="selectAnalysisCameraChannel(this.value)" style="padding:0.2rem 0.5rem; font-size:0.82rem; background:#182026; color:#fff; border:1px solid #303b44; border-radius:4px;">
-        ${channels.map((ch) => `<option value="${esc(ch)}" ${ch === currentChannel ? "selected" : ""}>${esc(ch)}${ch === primaryTopic ? " (Primary)" : ""}</option>`).join("")}
+        ${channels.map((ch) => `<option value="${esc(ch)}" ${ch === currentChannel ? "selected" : ""}>${esc(ch)}${ch === primaryTopic ? " (Primary Clock)" : ""}</option>`).join("")}
       </select>
     </div>
   `;
@@ -2866,11 +2880,28 @@ function updateAnalysisFrame(time) {
     return;
   }
 
+  const detailTopics = state.analysis.detail?.topics || {};
+  const primaryTopic = detailTopics.primary_image_topic || detailTopics.image || "";
   const firstFrameChannels = frames[0]?.channels ? Object.keys(frames[0].channels) : [];
-  const selectedChannel = state.analysis.selectedChannel || firstFrameChannels[0] || null;
+  const selectedChannel = state.analysis.selectedChannel || primaryTopic || firstFrameChannels[0] || null;
+
+  const currentFrame = frames[index];
+  const hasChannel = selectedChannel && (
+    selectedChannel === primaryTopic
+    || (currentFrame?.channels && Boolean(currentFrame.channels[selectedChannel]))
+  );
+
+  if (selectedChannel && !hasChannel) {
+    image.classList.remove("visible");
+    empty.textContent = `No frame available for ${selectedChannel} at this time.`;
+    empty.classList.add("visible");
+    state.analysis.renderedFrameIndex = index;
+    state.analysis.renderedChannel = selectedChannel;
+    return;
+  }
 
   if (index !== state.analysis.renderedFrameIndex || state.analysis.renderedChannel !== selectedChannel) {
-    const url = analysisAssetUrl(frames[index], selectedChannel);
+    const url = analysisAssetUrl(currentFrame, selectedChannel);
     image.onload = () => {
       const stage = image.closest(".analysis-image-stage");
       if (stage) {
@@ -2898,7 +2929,7 @@ function updateAnalysisFrame(time) {
     }
   }
 
-  const channelInfo = selectedChannel && frames[index]?.channels?.[selectedChannel];
+  const channelInfo = selectedChannel && currentFrame?.channels?.[selectedChannel];
   const deltaStr = channelInfo && Number.isFinite(channelInfo.delta_ms) && channelInfo.delta_ms !== 0
     ? ` (${channelInfo.delta_ms >= 0 ? "+" : ""}${channelInfo.delta_ms}ms)`
     : "";

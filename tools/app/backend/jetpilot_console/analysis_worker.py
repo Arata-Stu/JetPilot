@@ -1067,15 +1067,22 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
                 primary_width = 0
                 primary_height = 0
 
+                MAX_SYNC_DELTA_MS = 1500.0  # Allow up to 1.5 seconds timestamp difference for secondary cameras
+
                 for img_topic in image_topics:
                     latest = latest_decoded_images.get(img_topic)
                     if latest is None:
                         continue
+                    delta_ms = round((int(latest["timestamp_ns"]) - timestamp_ns) / 1e6, 3)
+
+                    # For secondary cameras, ignore images that are too old or far away in time (> 1.5s)
+                    if img_topic != primary_image_topic and abs(delta_ms) > MAX_SYNC_DELTA_MS:
+                        continue
+
                     slug = topic_slugs[img_topic]
                     rel_path = f"frames/{slug}/{filename}"
                     out_path = frames_dir / slug / filename
                     w, h = _write_jpeg(out_path, latest["image"], options.jpeg_quality)
-                    delta_ms = round((int(latest["timestamp_ns"]) - timestamp_ns) / 1e6, 3)
                     channels_payload[img_topic] = {
                         "path": rel_path,
                         "width": w,
