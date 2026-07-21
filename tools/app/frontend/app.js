@@ -2013,9 +2013,31 @@ function renderAnalysisList() {
         <div class="actions">
           <button class="${status === "success" ? "primary" : ""}" onclick="openAnalysisResult(${js(id)})" ${id && canOpen ? "" : "disabled"}>${selected && state.analysis.timeline ? "Viewing" : canOpen ? "Open" : "Processing"}</button>
           ${taskId ? `<button onclick="openTaskLog(${js(taskId)})">Log</button><button class="danger" onclick="stopTask(${js(taskId)})" ${["running", "queued"].includes(status) ? "" : "disabled"}>Stop</button>` : ""}
+          <button class="danger" onclick="deleteAnalysis(${js(id)})" ${["running", "queued"].includes(status) ? "disabled" : ""} title="Delete this analysis and all its data">Delete</button>
         </div>
       </article>`;
   }).join("")}</div>`;
+}
+
+async function deleteAnalysis(analysisId) {
+  if (!analysisId) return;
+  if (!confirm(`Delete analysis "${analysisId}"?\nThis will permanently remove all frames, timeline, and localization data.`)) return;
+  try {
+    const res = await fetch(`/api/analyses/${encodeURIComponent(analysisId)}`, { method: "DELETE" });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      alert(`Failed to delete: ${data.error || res.status}`);
+      return;
+    }
+    if (state.analysis.selectedId === analysisId) {
+      state.analysis.selectedId = null;
+      state.analysis.timeline = null;
+      state.analysis.detail = null;
+    }
+    await refreshAnalysisData();
+  } catch (err) {
+    alert(`Delete error: ${err.message}`);
+  }
 }
 
 function renderAnalysisViewer() {

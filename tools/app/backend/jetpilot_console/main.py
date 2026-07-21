@@ -453,6 +453,33 @@ class Handler(BaseHTTPRequestHandler):
 
         self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
 
+    def do_DELETE(self) -> None:
+        if not self._request_host_allowed():
+            return
+        parsed = urlparse(self.path)
+        path = parsed.path
+
+        if path.startswith("/api/analyses/"):
+            parts = path.strip("/").split("/")
+            # DELETE /api/analyses/{analysis_id}
+            if len(parts) == 2:
+                analysis_id = unquote(parts[1])
+                if self.server.state.analyses is None:
+                    self._json({"error": "analyses not available"}, HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+                try:
+                    self.server.state.analyses.delete(analysis_id)
+                    self._json({"ok": True, "analysis_id": analysis_id})
+                except FileNotFoundError:
+                    self._json({"error": f"analysis not found: {analysis_id}"}, HTTPStatus.NOT_FOUND)
+                except ValueError as exc:
+                    self._json({"error": str(exc)}, HTTPStatus.CONFLICT)
+                except OSError as exc:
+                    self._json({"error": f"could not delete analysis: {exc}"}, HTTPStatus.INTERNAL_SERVER_ERROR)
+                return
+
+        self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
+
     def _read_json(self) -> dict[str, Any]:
         length = validate_json_request_headers(
             content_type=self.headers.get("Content-Type"),

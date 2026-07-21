@@ -392,6 +392,22 @@ class AnalysisRepository:
             raise ValueError("analysis frame must be a JPEG, PNG, or WebP file")
         return candidate, mimetypes.guess_type(str(candidate))[0] or "application/octet-stream"
 
+    def delete(self, analysis_id: str) -> None:
+        """Delete an analysis directory and all its contents.
+
+        Raises ValueError if the analysis is still running (status == 'running').
+        Raises FileNotFoundError if the analysis does not exist.
+        """
+        import shutil
+
+        directory = self._directory(analysis_id)
+        status, _ = self._read_optional_json(directory / "status.json")
+        if status.get("status") == "running":
+            raise ValueError(
+                f"Analysis {analysis_id} is currently running. Stop it before deleting."
+            )
+        shutil.rmtree(directory)
+
 
 def _source_ros_setup(config: ConsoleConfig) -> str:
     setup = config.ros2_ws / "install" / "setup.bash"
@@ -578,7 +594,7 @@ def build_analysis_script(
                 "    enable_rosbag_replay:=true \\",
                 "    replay_additional_args:='--clock --start-paused' \\",
                 "    rosbag_start_delay_s:=0.0 \\",
-                "    rosbag_shutdown_on_exit:=false \\",
+                "    rosbag_shutdown_on_exit:=true \\",
                 "    enable_operation:=false \\",
                 "    enable_control:=false \\",
                 "    enable_vehicle:=false \\",
