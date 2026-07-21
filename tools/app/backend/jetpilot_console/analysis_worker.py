@@ -1067,10 +1067,14 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
         if recorded_tf_topic and topic == recorded_tf_topic:
             recorded_map_transforms.extend(_map_transform_samples(message, timestamp_ns))
             continue
-        timestamps.append(timestamp_ns)
+        timestamps.append(int(bag_timestamp_ns))
         header_timestamp_ns = _stamp_ns(message)
+        # Use True Camera Hardware Header Stamp if available, fallback to bag_timestamp
+        effective_timestamp_ns = header_timestamp_ns if (header_timestamp_ns and header_timestamp_ns > 0) else int(bag_timestamp_ns)
+
         common = {
-            "_timestamp_ns": timestamp_ns,
+            "_timestamp_ns": effective_timestamp_ns,
+            "_bag_timestamp_ns": int(bag_timestamp_ns),
             "_header_timestamp_ns": header_timestamp_ns,
         }
 
@@ -1079,7 +1083,7 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
                 image = _decode_image(message, topic)
                 latest_decoded_images[topic] = {
                     "image": image,
-                    "timestamp_ns": timestamp_ns,
+                    "timestamp_ns": effective_timestamp_ns,
                     "header_timestamp_ns": header_timestamp_ns,
                 }
             except Exception as exc:  # noqa: BLE001
@@ -1092,11 +1096,14 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
                 if len(frames) >= MAX_EXTRACTED_FRAMES:
                     frame_limit_reached = True
                     continue
-                if (
-                    last_frame_timestamp_ns is not None
-                    and timestamp_ns - last_frame_timestamp_ns < min_frame_interval_ns
-                ):
+
+                # Uniform Target Grid Sampler: Ensure smooth, jitter-free 15/30 FPS sampling from high Hz (60Hz/90Hz) sources
+                if last_frame_timestamp_ns is None:
+                    last_frame_timestamp_ns = effective_timestamp_ns
+                elif effective_timestamp_ns - last_frame_timestamp_ns < min_frame_interval_ns - 100_000:  # Allow 0.1ms tolerance
                     continue
+
+                last_frame_timestamp_ns = effective_timestamp_ns
 
                 frame_idx = len(frames)
                 filename = f"frame_{frame_idx:08d}.jpg"
@@ -1111,7 +1118,7 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
                     latest = latest_decoded_images.get(img_topic)
                     if latest is None:
                         continue
-                    delta_ms = round((int(latest["timestamp_ns"]) - timestamp_ns) / 1e6, 3)
+                    delta_ms = round((int(latest["timestamp_ns"]) - effective_timestamp_ns) / 1e6, 3)
 
                     # For secondary cameras, ignore images that are too old or far away in time (> 1.5s)
                     if img_topic != primary_image_topic and abs(delta_ms) > MAX_SYNC_DELTA_MS:
