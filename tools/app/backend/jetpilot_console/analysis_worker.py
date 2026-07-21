@@ -458,7 +458,11 @@ def _encoding_layout(encoding: str):
     return layouts[encoding]
 
 
-def _decode_image(message: Any):
+# Global state for thermal / 16-bit image contrast smoothing (topic -> (moving_low, moving_high))
+_THERMAL_SMOOTHING_STATE: dict[str, tuple[float, float]] = {}
+
+
+def _decode_image(message: Any, topic: str = ""):
     try:
         import cv2
         import numpy as np
@@ -470,9 +474,6 @@ def _decode_image(message: Any):
         encoded = np.frombuffer(raw_data, dtype=np.uint8)
         decoded = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
         if decoded is None:
-            # compressed_depth_image_transport prepends a small configuration
-            # header before the PNG payload. Locate a known image signature so
-            # the same viewer can still render a depth topic when selected.
             offsets = [
                 offset
                 for signature in (b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff")
@@ -498,15 +499,28 @@ def _decode_image(message: Any):
     array = array.reshape(height, width, channels) if channels > 1 else array.reshape(height, width)
     if bool(getattr(message, "is_bigendian", False)) and dtype.itemsize > 1:
         array = array.byteswap()
-    if array.dtype == np.uint16:
-        array = (array / 256).astype(np.uint8)
-    elif array.dtype in {np.dtype(np.int16), np.dtype(np.float32)}:
+
+    if array.dtype in {np.dtype(np.uint16), np.dtype(np.int16), np.dtype(np.float32)}:
         finite = np.isfinite(array)
         if not finite.any():
             array = np.zeros(array.shape, dtype=np.uint8)
         else:
             valid = array[finite]
-            low, high = np.percentile(valid, (1.0, 99.0))
+            raw_low, raw_high = np.percentile(valid, (1.0, 99.0))
+            if raw_high <= raw_low:
+                raw_high = raw_low + 1.0
+
+            # Smooth contrast min/max over time using Exponential Moving Average (EMA) to prevent flicker
+            topic_key = topic or "default"
+            if topic_key in _THERMAL_SMOOTHING_STATE:
+                prev_low, prev_high = _THERMAL_SMOOTHING_STATE[topic_key]
+                alpha = 0.08  # Smoothing factor (lower = smoother transitions)
+                low = prev_low * (1.0 - alpha) + raw_low * alpha
+                high = prev_high * (1.0 - alpha) + raw_high * alpha
+            else:
+                low, high = raw_low, raw_high
+            _THERMAL_SMOOTHING_STATE[topic_key] = (low, high)
+
             if high <= low:
                 array = np.zeros(array.shape, dtype=np.uint8)
             else:
@@ -1038,7 +1052,7 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
 
         if topic in image_topics:
             try:
-                image = _decode_image(message)
+                image = _decode_image(message, topic)
                 latest_decoded_images[topic] = {
                     "image": image,
                     "timestamp_ns": timestamp_ns,
