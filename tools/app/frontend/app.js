@@ -2909,12 +2909,13 @@ function updateAnalysisFrame(time) {
   );
 
   if (selectedChannel && !hasChannel) {
-    if (imgA) imgA.classList.remove("visible");
-    if (imgB) imgB.classList.remove("visible");
-    empty.textContent = `No frame available for ${selectedChannel} at this time.`;
-    empty.classList.add("visible");
+    // Keep current image visible to prevent blackout; update frame timestamp info
     state.analysis.renderedFrameIndex = index;
     state.analysis.renderedChannel = selectedChannel;
+    const frameTime = $("analysis-frame-time");
+    if (frameTime) {
+      frameTime.textContent = `${formatAnalysisClock(time)} / frame ${index + 1} of ${frames.length} (no new frame)`;
+    }
     return;
   }
 

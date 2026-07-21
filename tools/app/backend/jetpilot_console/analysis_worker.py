@@ -506,7 +506,10 @@ def _decode_image(message: Any, topic: str = ""):
     if array.dtype in {np.dtype(np.uint16), np.dtype(np.int16), np.dtype(np.float32)}:
         finite = np.isfinite(array)
         if not finite.any():
-            array = np.zeros(array.shape, dtype=np.uint8)
+            if array.dtype == np.uint16:
+                array = (array / 256.0).clip(0, 255).astype(np.uint8)
+            else:
+                array = np.full(array.shape, 128, dtype=np.uint8)
         else:
             valid = array[finite]
             raw_low, raw_high = np.percentile(valid, (0.5, 99.5))
@@ -523,12 +526,10 @@ def _decode_image(message: Any, topic: str = ""):
                 low, high, prev_mean = raw_low, raw_high, -1.0
             _THERMAL_SMOOTHING_STATE[topic_key] = (low, high, prev_mean)
 
-            if high <= low:
-                array = np.zeros(array.shape, dtype=np.uint8)
-            else:
-                array = np.clip((array - low) * (255.0 / (high - low)), 0, 255)
-                array[~finite] = 0
-                array = array.astype(np.uint8)
+            span = max(1.0e-3, high - low)
+            array = np.clip((array - low) * (255.0 / span), 0, 255)
+            array[~finite] = 0
+            array = array.astype(np.uint8)
 
     bayer_codes = {
         "bayer_rggb8": cv2.COLOR_BAYER_RG2BGR,
