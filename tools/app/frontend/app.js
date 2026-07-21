@@ -1836,14 +1836,22 @@ function analysisTopicOptions(kind, selected, optional = true) {
 }
 
 function analysisPreflightPayload() {
+  const preset = state.analysis.analysisPreset || "telemetry";
   const primary = state.analysis.imageTopic;
   const secondary = state.analysis.secondaryImageTopic;
   const topics = [primary, secondary].filter(Boolean);
   const uniqueTopics = [...new Set(topics)];
+
+  const isTelemetryMode = preset === "telemetry";
+  const mapDir = isTelemetryMode ? "" : state.analysis.selectedMapPath;
+  const trajectoryMode = isTelemetryMode
+    ? (state.analysis.poseTopic ? "recorded" : "auto")
+    : state.analysis.trajectoryMode;
+
   return {
     rosbag: state.analysis.selectedBagPath,
-    map_dir: state.analysis.selectedMapPath,
-    topic_config: state.analysis.topicConfigPath,
+    map_dir: mapDir,
+    topic_config: isTelemetryMode ? "" : state.analysis.topicConfigPath,
     image_topic: primary,
     image_topics: uniqueTopics,
     primary_image_topic: primary,
@@ -1851,10 +1859,22 @@ function analysisPreflightPayload() {
     mode_topic: state.analysis.modeTopic,
     pose_topic: state.analysis.poseTopic,
     speed_topic: state.analysis.speedTopic,
-    trajectory_mode: state.analysis.trajectoryMode,
-    offline_localization_mode: state.analysis.offlineLocalizationMode,
+    trajectory_mode: trajectoryMode,
+    offline_localization_mode: isTelemetryMode ? "" : state.analysis.offlineLocalizationMode,
     max_fps: state.analysis.maxFps,
+    preset: preset,
   };
+}
+
+function setAnalysisPreset(preset) {
+  state.analysis.analysisPreset = preset;
+  if (preset === "telemetry") {
+    state.analysis.selectedMapPath = "";
+  }
+  const payload = analysisPreflightPayload();
+  bindAnalysisPreflight(payload);
+  scheduleAnalysisPreflight({ immediate: true, force: true });
+  if (state.tab === "bag-analysis") render();
 }
 
 function renderBagAnalysis() {
@@ -1888,36 +1908,38 @@ function renderBagAnalysis() {
 
 function renderAnalysisForm() {
   const analysis = state.analysis;
+  const preset = analysis.analysisPreset || "telemetry";
   const payload = analysisPreflightPayload();
   const bag = state.rosbags.find((item) => item.path === analysis.selectedBagPath);
   const detail = analysis.bagDetail;
   const duration = Number(detail?.duration_s ?? detail?.duration_seconds ?? 0);
   const topicConfigs = state.cameraTopicConfigs || [];
+
   return `
     <div class="form-grid analysis-form">
       <div class="field full">
-        <label for="analysis-bag">Rosbag</label>
+        <label for="analysis-bag">1. Select Rosbag</label>
         <select id="analysis-bag" onchange="selectAnalysisBag(this.value)">
           <option value="">Select rosbag</option>
           ${state.rosbags.map((item) => `<option value="${esc(item.path)}" ${item.path === analysis.selectedBagPath ? "selected" : ""}>${esc(item.name)} - ${esc(item.path)}</option>`).join("")}
         </select>
         <div class="field-hint">${analysis.bagDetailLoading ? "Inspecting topics..." : bag ? `${esc(bag.path)}${duration > 0 ? ` / ${formatAnalysisClock(duration)}` : ""}` : "Choose a local rosbag to inspect its topics."}</div>
       </div>
+
       <div class="field full">
-        <label for="analysis-map">Map used for trajectory alignment</label>
-        <select id="analysis-map" onchange="updateAnalysisOption('selectedMapPath', this.value)">
-          <option value="">No map / telemetry only</option>
-          ${state.maps.map((map) => `<option value="${esc(map.path)}" ${map.path === analysis.selectedMapPath ? "selected" : ""}>${esc(mapOptionLabel(map))}</option>`).join("")}
-        </select>
+        <label>2. Select Analysis Mode</label>
+        <div class="preset-selector-cards" style="display:flex; gap:0.75rem; margin-top:0.3rem;">
+          <div class="preset-card" onclick="setAnalysisPreset('telemetry')" style="flex:1; padding:0.75rem 1rem; border:1.5px solid ${preset === 'telemetry' ? '#386fa4' : '#2d3744'}; background:${preset === 'telemetry' ? 'rgba(56,111,164,0.18)' : '#161b22'}; border-radius:6px; cursor:pointer; transition:all 0.15s ease;">
+            <strong style="display:block; font-size:0.95rem; color:#fff; margin-bottom:0.2rem;">🎬 Video & Telemetry Only</strong>
+            <span style="font-size:0.78rem; color:#8a99a8; line-height:1.3; display:block;">No VSLAM execution. Fast extraction for video playback, control signals, and recorded odometry.</span>
+          </div>
+          <div class="preset-card" onclick="setAnalysisPreset('map_vslam')" style="flex:1; padding:0.75rem 1rem; border:1.5px solid ${preset === 'map_vslam' ? '#386fa4' : '#2d3744'}; background:${preset === 'map_vslam' ? 'rgba(56,111,164,0.18)' : '#161b22'}; border-radius:6px; cursor:pointer; transition:all 0.15s ease;">
+            <strong style="display:block; font-size:0.95rem; color:#fff; margin-bottom:0.2rem;">🗺️ Map Alignment & VSLAM</strong>
+            <span style="font-size:0.78rem; color:#8a99a8; line-height:1.3; display:block;">Run VSLAM / VGL to align trajectory on an HD Map.</span>
+          </div>
+        </div>
       </div>
-      <div class="field full">
-        <label for="analysis-topic-config">Offline localization camera configuration</label>
-        <select id="analysis-topic-config" onchange="updateAnalysisOption('topicConfigPath', this.value)">
-          <option value="">Use backend default</option>
-          ${topicConfigs.map((config) => `<option value="${esc(config.path)}" ${config.path === analysis.topicConfigPath ? "selected" : ""}>${esc(config.name)}${config.recommended ? " - recommended" : ` - score ${esc(config.score)}`}</option>`).join("")}
-        </select>
-        <div class="field-hint">Used only when Auto falls back to Offline or Offline is selected.</div>
-      </div>
+
       <div class="field">
         <label for="analysis-image-topic">Primary image topic (Timing Master)</label>
         <select id="analysis-image-topic" onchange="updateAnalysisOption('imageTopic', this.value)">${analysisTopicOptions("image", analysis.imageTopic, false)}</select>
@@ -1943,32 +1965,54 @@ function renderAnalysisForm() {
         <select id="analysis-pose-topic" onchange="updateAnalysisOption('poseTopic', this.value)">${analysisTopicOptions("pose", analysis.poseTopic)}</select>
       </div>
       <div class="field">
-        <label for="analysis-trajectory-mode">Trajectory source</label>
-        <select id="analysis-trajectory-mode" onchange="updateAnalysisOption('trajectoryMode', this.value)">
-          ${[
-            ["auto", "Auto: recorded pose, then offline localization"],
-            ["recorded", "Recorded pose only"],
-            ["offline", "Run offline localization"],
-            ["none", "Do not create trajectory"],
-          ].map(([value, label]) => `<option value="${value}" ${analysis.trajectoryMode === value ? "selected" : ""}>${label}</option>`).join("")}
-        </select>
-      </div>
-      <div class="field">
         <label for="analysis-max-fps">Image playback max FPS</label>
         <input id="analysis-max-fps" type="number" min="1" max="60" step="1" value="${esc(analysis.maxFps)}" onchange="updateAnalysisOption('maxFps', this.value)" />
       </div>
-      <div class="field full">
-        <label for="analysis-offline-localization-mode">Offline localization method</label>
-        <select id="analysis-offline-localization-mode" onchange="updateAnalysisOption('offlineLocalizationMode', this.value)">
-          ${[
-            ["auto", "Auto: try VGL, then VSLAM saved-map origin fallback"],
-            ["vgl", "VGL required: stop if VGL cannot localize"],
-            ["vslam", "VSLAM saved map only: use map origin as initial pose"],
-            ["vslam_from_scratch", "VSLAM from scratch: track/map from origin without existing map"],
-          ].map(([value, label]) => `<option value="${value}" ${analysis.offlineLocalizationMode === value ? "selected" : ""}>${label}</option>`).join("")}
-        </select>
-        <div class="field-hint">The VSLAM-only fallback is valid when the bag starts near the selected Map origin. A confirmed localized state is still required before accepting its trajectory.</div>
-      </div>
+
+      ${preset === "map_vslam" ? `
+        <div class="field full" style="border-top:1px solid #2d3744; padding-top:0.75rem; margin-top:0.25rem;">
+          <strong style="color:#5aa8ff; font-size:0.88rem;">Map & VSLAM Configuration</strong>
+        </div>
+        <div class="field full">
+          <label for="analysis-map">Map used for trajectory alignment</label>
+          <select id="analysis-map" onchange="updateAnalysisOption('selectedMapPath', this.value)">
+            <option value="">No map / telemetry only</option>
+            ${state.maps.map((map) => `<option value="${esc(map.path)}" ${map.path === analysis.selectedMapPath ? "selected" : ""}>${esc(mapOptionLabel(map))}</option>`).join("")}
+          </select>
+        </div>
+        <div class="field full">
+          <label for="analysis-topic-config">Offline localization camera configuration</label>
+          <select id="analysis-topic-config" onchange="updateAnalysisOption('topicConfigPath', this.value)">
+            <option value="">Use backend default</option>
+            ${topicConfigs.map((config) => `<option value="${esc(config.path)}" ${config.path === analysis.topicConfigPath ? "selected" : ""}>${esc(config.name)}${config.recommended ? " - recommended" : ` - score ${esc(config.score)}`}</option>`).join("")}
+          </select>
+          <div class="field-hint">Used only when Auto falls back to Offline or Offline is selected.</div>
+        </div>
+        <div class="field">
+          <label for="analysis-trajectory-mode">Trajectory source</label>
+          <select id="analysis-trajectory-mode" onchange="updateAnalysisOption('trajectoryMode', this.value)">
+            ${[
+              ["auto", "Auto: recorded pose, then offline localization"],
+              ["recorded", "Recorded pose only"],
+              ["offline", "Run offline localization"],
+              ["none", "Do not create trajectory"],
+            ].map(([value, label]) => `<option value="${value}" ${analysis.trajectoryMode === value ? "selected" : ""}>${label}</option>`).join("")}
+          </select>
+        </div>
+        <div class="field full">
+          <label for="analysis-offline-localization-mode">Offline localization method</label>
+          <select id="analysis-offline-localization-mode" onchange="updateAnalysisOption('offlineLocalizationMode', this.value)">
+            ${[
+              ["auto", "Auto: try VGL, then VSLAM saved-map origin fallback"],
+              ["vgl", "VGL required: stop if VGL cannot localize"],
+              ["vslam", "VSLAM saved map only: use map origin as initial pose"],
+              ["vslam_from_scratch", "VSLAM from scratch: track/map from origin without existing map"],
+            ].map(([value, label]) => `<option value="${value}" ${analysis.offlineLocalizationMode === value ? "selected" : ""}>${label}</option>`).join("")}
+          </select>
+          <div class="field-hint">The VSLAM-only fallback is valid when the bag starts near the selected Map origin.</div>
+        </div>
+      ` : ''}
+
       ${detail ? renderAnalysisTopicCoverage() : `<div class="notice full">Select a rosbag first. Topic availability and missing inputs will appear here.</div>`}
       <div class="full" id="analysis-preflight">${renderReadinessPanel("analyze-rosbag", payload, { title: "Rosbag analysis readiness" })}</div>
       <div class="actions full">
