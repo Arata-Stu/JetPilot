@@ -986,6 +986,8 @@ find {shlex.quote(record_root)} -name metadata.yaml -printf '%TY-%Tm-%Td %TH:%TM
         try:
             rosbag = Path(str(resolved["rosbag"]))
             image_topic = str(resolved["image_topic"])
+            image_topics = resolved.get("image_topics") if isinstance(resolved.get("image_topics"), list) else [image_topic]
+            primary_image_topic = str(resolved.get("primary_image_topic") or image_topic)
             trajectory_mode = str(resolved["trajectory_mode"])
             offline_localization_mode = str(
                 resolved.get("offline_localization_mode") or "auto"
@@ -1010,6 +1012,8 @@ find {shlex.quote(record_root)} -name metadata.yaml -printf '%TY-%Tm-%Td %TH:%TM
             "rosbag",
             "map_dir",
             "image_topic",
+            "image_topics",
+            "primary_image_topic",
             "control_topic",
             "mode_topic",
             "pose_topic",
@@ -1040,6 +1044,8 @@ find {shlex.quote(record_root)} -name metadata.yaml -printf '%TY-%Tm-%Td %TH:%TM
                 analysis_dir=analysis_dir,
                 rosbag=rosbag,
                 image_topic=image_topic,
+                image_topics=image_topics,
+                primary_image_topic=primary_image_topic,
                 control_topic=str(resolved.get("control_topic") or ""),
                 mode_topic=str(resolved.get("mode_topic") or ""),
                 pose_topic=str(resolved.get("pose_topic") or ""),

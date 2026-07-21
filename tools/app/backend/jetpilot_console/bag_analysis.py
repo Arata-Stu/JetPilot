@@ -435,6 +435,8 @@ def build_analysis_script(
     topic_config: Path | None = None,
     model_dir: Path | None = None,
     enable_warmup_step: bool = True,
+    image_topics: list[str] | None = None,
+    primary_image_topic: str = "",
 ) -> str:
     """Build the Linux/Docker task script used by ``POST /api/analyses``.
 
@@ -754,6 +756,11 @@ def build_analysis_script(
         "--status-file",
         _q(status_file),
     ]
+    if image_topics:
+        for t in image_topics:
+            worker.extend(["--image-topics", _q(t)])
+    if primary_image_topic:
+        worker.extend(["--primary-image-topic", _q(primary_image_topic)])
     for option, value in (
         ("--control-topic", control_topic),
         ("--mode-topic", mode_topic),

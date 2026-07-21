@@ -839,7 +839,9 @@ def trajectory_map_consistency(
 class AnalysisOptions:
     rosbag: Path
     analysis_dir: Path
-    image_topic: str
+    image_topic: str = ""
+    image_topics: list[str] = field(default_factory=list)
+    primary_image_topic: str = ""
     control_topic: str = ""
     mode_topic: str = ""
     pose_topic: str = ""
@@ -866,9 +868,6 @@ class Progress:
         preserve_existing_failed: bool = False,
     ) -> None:
         def merge(previous: dict[str, object]) -> Mapping[str, object]:
-            # The shell EXIT trap runs after the worker's exception handler.
-            # Keep the worker's more specific failure message when it won that
-            # race, while still performing the decision under the JSON lock.
             if preserve_existing_failed and previous.get("status") == "failed":
                 return previous
             return {
@@ -888,13 +887,39 @@ class Progress:
         )
 
 
+def _topic_slug(topic: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9_.-]+", "_", topic.strip().lstrip("/")).strip("_")
+    return slug or "camera"
+
+
 def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
     options.rosbag = options.rosbag.expanduser().resolve()
     options.analysis_dir = options.analysis_dir.expanduser().resolve()
     if not options.rosbag.is_dir():
         raise FileNotFoundError(f"ROS bag folder was not found: {options.rosbag}")
-    if not options.image_topic:
-        raise ValueError("--image-topic is required")
+
+    # Resolve image topics
+    image_topics: list[str] = []
+    for t in options.image_topics:
+        for part in str(t).split(","):
+            val = part.strip()
+            if val and val not in image_topics:
+                image_topics.append(val)
+    if not image_topics and options.image_topic:
+        for part in options.image_topic.split(","):
+            val = part.strip()
+            if val and val not in image_topics:
+                image_topics.append(val)
+
+    if not image_topics:
+        raise ValueError("At least one image topic is required (--image-topic or --image-topics)")
+
+    primary_image_topic = (
+        options.primary_image_topic.strip()
+        if options.primary_image_topic and options.primary_image_topic.strip() in image_topics
+        else image_topics[0]
+    )
+
     if not math.isfinite(options.max_fps) or options.max_fps <= 0:
         raise ValueError("--max-fps must be greater than zero")
     if options.jpeg_quality < 1 or options.jpeg_quality > 100:
@@ -909,6 +934,10 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
     analysis_dir = options.analysis_dir
     frames_dir = analysis_dir / "frames"
     frames_dir.mkdir(parents=True, exist_ok=True)
+    topic_slugs = {topic: _topic_slug(topic) for topic in image_topics}
+    for slug in topic_slugs.values():
+        (frames_dir / slug).mkdir(parents=True, exist_ok=True)
+
     progress = Progress(
         options.status_file.expanduser().resolve()
         if options.status_file
@@ -941,19 +970,20 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
         offline_snapshot_samples = None
 
     reader, topic_types = _open_reader(options.rosbag)
-    if options.image_topic not in topic_types:
-        raise RuntimeError(f"Image topic was not found: {options.image_topic}")
-    requested = {
-        topic
-        for topic in (
-            options.image_topic,
-            options.control_topic,
-            options.mode_topic,
-            options.pose_topic,
-            options.speed_topic,
-        )
-        if topic
-    }
+    missing_image_topics = [t for t in image_topics if t not in topic_types]
+    if missing_image_topics:
+        raise RuntimeError("Image topics were not found in bag: " + ", ".join(missing_image_topics))
+
+    requested = set(image_topics)
+    for topic in (
+        options.control_topic,
+        options.mode_topic,
+        options.pose_topic,
+        options.speed_topic,
+    ):
+        if topic:
+            requested.add(topic)
+
     recorded_tf_topic = "/tf" if options.pose_topic and "/tf" in topic_types else ""
     if recorded_tf_topic:
         requested.add(recorded_tf_topic)
@@ -971,6 +1001,7 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
     recorded_map_transforms: list[dict[str, object]] = []
     timestamps: list[int] = []
     last_frame_timestamp_ns: int | None = None
+    latest_decoded_images: dict[str, dict[str, object]] = {}
     bag_duration_ns = _metadata_duration_ns(options.rosbag)
     effective_max_fps = options.max_fps
     if bag_duration_ns:
@@ -1005,35 +1036,77 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
             "_header_timestamp_ns": header_timestamp_ns,
         }
 
-        if topic == options.image_topic:
-            if len(frames) >= MAX_EXTRACTED_FRAMES:
-                frame_limit_reached = True
-                continue
-            if (
-                last_frame_timestamp_ns is not None
-                and timestamp_ns - last_frame_timestamp_ns < min_frame_interval_ns
-            ):
-                continue
+        if topic in image_topics:
             try:
                 image = _decode_image(message)
-                filename = f"frame_{len(frames):08d}.jpg"
-                width, height = _write_jpeg(
-                    frames_dir / filename, image, options.jpeg_quality
-                )
-            except Exception as exc:  # noqa: BLE001 - one corrupt frame must not abort a run.
+                latest_decoded_images[topic] = {
+                    "image": image,
+                    "timestamp_ns": timestamp_ns,
+                    "header_timestamp_ns": header_timestamp_ns,
+                }
+            except Exception as exc:  # noqa: BLE001
                 image_decode_errors += 1
                 if len(image_decode_error_examples) < 3:
                     image_decode_error_examples.append(str(exc))
                 continue
-            frames.append(
-                {
-                    **common,
-                    "path": f"frames/{filename}",
-                    "width": width,
-                    "height": height,
-                }
-            )
-            last_frame_timestamp_ns = timestamp_ns
+
+            if topic == primary_image_topic:
+                if len(frames) >= MAX_EXTRACTED_FRAMES:
+                    frame_limit_reached = True
+                    continue
+                if (
+                    last_frame_timestamp_ns is not None
+                    and timestamp_ns - last_frame_timestamp_ns < min_frame_interval_ns
+                ):
+                    continue
+
+                frame_idx = len(frames)
+                filename = f"frame_{frame_idx:08d}.jpg"
+                channels_payload: dict[str, object] = {}
+                primary_path = ""
+                primary_width = 0
+                primary_height = 0
+
+                for img_topic in image_topics:
+                    latest = latest_decoded_images.get(img_topic)
+                    if latest is None:
+                        continue
+                    slug = topic_slugs[img_topic]
+                    rel_path = f"frames/{slug}/{filename}"
+                    out_path = frames_dir / slug / filename
+                    w, h = _write_jpeg(out_path, latest["image"], options.jpeg_quality)
+                    delta_ms = round((int(latest["timestamp_ns"]) - timestamp_ns) / 1e6, 3)
+                    channels_payload[img_topic] = {
+                        "path": rel_path,
+                        "width": w,
+                        "height": h,
+                        "delta_ms": delta_ms,
+                    }
+                    if img_topic == primary_image_topic:
+                        primary_path = rel_path
+                        primary_width = w
+                        primary_height = h
+
+                if not primary_path:
+                    primary_slug = topic_slugs[primary_image_topic]
+                    primary_path = f"frames/{primary_slug}/{filename}"
+                    w, h = _write_jpeg(
+                        frames_dir / primary_slug / filename,
+                        image,
+                        options.jpeg_quality,
+                    )
+                    primary_width, primary_height = w, h
+
+                frames.append(
+                    {
+                        **common,
+                        "path": primary_path,
+                        "width": primary_width,
+                        "height": primary_height,
+                        "channels": channels_payload,
+                    }
+                )
+                last_frame_timestamp_ns = timestamp_ns
         if options.control_topic and topic == options.control_topic:
             controls.append({**common, **_control_payload(message)})
         if options.mode_topic and topic == options.mode_topic:
@@ -1232,32 +1305,16 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
                 "modes": len(modes),
                 "speeds": len(speeds),
                 "trajectory": len(trajectory),
-            "read_messages": read_count,
-            "image_decode_errors": image_decode_errors,
-        },
+            },
             "warnings": warnings,
             "timeline": "timeline.json",
         }
 
     manifest = _update_json_object(manifest_path, build_manifest)
-    progress.update("complete", 1.0, "解析用データの準備が完了しました。", status="completed")
-    return manifest
-
-
-def _png_chunk(kind: bytes, data: bytes) -> bytes:
-    return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
-
-
-def _solid_png(width: int, height: int, color: tuple[int, int, int]) -> bytes:
-    header = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
-    row = bytes(color) * width
-    pixels = b"".join(b"\x00" + row for _ in range(height))
-    return (
-        b"\x89PNG\r\n\x1a\n"
-        + _png_chunk(b"IHDR", header)
-        + _png_chunk(b"IDAT", zlib.compress(pixels, 6))
-        + _png_chunk(b"IEND", b"")
+    progress.update(
+        "complete", 1.0, "分析用artifactの生成が完了しました。", status="completed"
     )
+    return manifest
 
 
 def write_demo_analysis(analysis_dir: Path) -> dict[str, object]:
@@ -1348,6 +1405,8 @@ def write_demo_analysis(analysis_dir: Path) -> dict[str, object]:
             "rosbag": {"path": "/demo/jetpilot.db3", "name": "Demo run", "fingerprint": "demo"},
             "topics": {
                 "image": "/camera/image_raw",
+                "image_topics": ["/camera/image_raw"],
+                "primary_image_topic": "/camera/image_raw",
                 "control": "/vehicle/control_cmd",
                 "mode": "/operation_mode/state",
                 "pose": "/visual_slam/tracking/odometry",
@@ -1378,6 +1437,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--rosbag", default="")
     parser.add_argument("--analysis-dir", required=True)
     parser.add_argument("--image-topic", default="")
+    parser.add_argument("--image-topics", action="append", default=[])
+    parser.add_argument("--primary-image-topic", default="")
     parser.add_argument("--control-topic", default="")
     parser.add_argument("--mode-topic", default="")
     parser.add_argument("--pose-topic", default="")
@@ -1423,11 +1484,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:
             if not args.rosbag:
                 raise ValueError("--rosbag is required unless --demo is used")
+            image_topics: list[str] = []
+            for item in args.image_topics:
+                for part in str(item).split(","):
+                    val = part.strip()
+                    if val and val not in image_topics:
+                        image_topics.append(val)
             extract_analysis(
                 AnalysisOptions(
                     rosbag=Path(args.rosbag),
                     analysis_dir=analysis_dir,
                     image_topic=args.image_topic,
+                    image_topics=image_topics,
+                    primary_image_topic=args.primary_image_topic,
                     control_topic=args.control_topic,
                     mode_topic=args.mode_topic,
                     pose_topic=args.pose_topic,

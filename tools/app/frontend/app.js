@@ -1836,11 +1836,17 @@ function analysisTopicOptions(kind, selected, optional = true) {
 }
 
 function analysisPreflightPayload() {
+  const primary = state.analysis.imageTopic;
+  const secondary = state.analysis.secondaryImageTopic;
+  const topics = [primary, secondary].filter(Boolean);
+  const uniqueTopics = [...new Set(topics)];
   return {
     rosbag: state.analysis.selectedBagPath,
     map_dir: state.analysis.selectedMapPath,
     topic_config: state.analysis.topicConfigPath,
-    image_topic: state.analysis.imageTopic,
+    image_topic: primary,
+    image_topics: uniqueTopics,
+    primary_image_topic: primary,
     control_topic: state.analysis.controlTopic,
     mode_topic: state.analysis.modeTopic,
     pose_topic: state.analysis.poseTopic,
@@ -1913,8 +1919,12 @@ function renderAnalysisForm() {
         <div class="field-hint">Used only when Auto falls back to Offline or Offline is selected.</div>
       </div>
       <div class="field">
-        <label for="analysis-image-topic">Image topic</label>
+        <label for="analysis-image-topic">Primary image topic (Timing Master)</label>
         <select id="analysis-image-topic" onchange="updateAnalysisOption('imageTopic', this.value)">${analysisTopicOptions("image", analysis.imageTopic, false)}</select>
+      </div>
+      <div class="field">
+        <label for="analysis-secondary-image-topic">Secondary image topic (Optional 2nd Camera)</label>
+        <select id="analysis-secondary-image-topic" onchange="updateAnalysisOption('secondaryImageTopic', this.value)">${analysisTopicOptions("image", analysis.secondaryImageTopic, true)}</select>
       </div>
       <div class="field">
         <label for="analysis-control-topic">Applied control topic</label>
@@ -2089,6 +2099,7 @@ function renderAnalysisViewer() {
       ${renderAnalysisSources()}
       <div class="analysis-media-grid">
         <div class="analysis-image-panel">
+          ${renderAnalysisCameraSelector(frames[0])}
           <div class="analysis-image-stage">
             <img id="analysis-frame-image" alt="Selected rosbag image frame" decoding="async" />
             <div id="analysis-frame-empty" class="analysis-frame-empty">${frames.length ? "Loading frame..." : "No image frames were extracted."}</div>
@@ -2665,8 +2676,34 @@ function stepAnalysisFrame(direction) {
   seekAnalysisTime(frames[index].t);
 }
 
-function analysisAssetUrl(frame) {
-  const path = String(frame?.path || "");
+function renderAnalysisCameraSelector(frameSample) {
+  const frame = frameSample || (state.analysis.timeline?.frames?.[0]);
+  const channels = frame?.channels ? Object.keys(frame.channels) : [];
+  if (channels.length <= 1) return "";
+  const currentChannel = state.analysis.selectedChannel || channels[0];
+  const primaryTopic = state.analysis.detail?.topics?.primary_image_topic || channels[0];
+  return `
+    <div class="analysis-camera-selector" style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.5rem; background:rgba(255,255,255,0.03); padding:0.4rem 0.6rem; border-radius:6px;">
+      <span style="font-size:0.8rem; font-weight:600; color:#8a99a8;">Camera Channel:</span>
+      <select onchange="selectAnalysisCameraChannel(this.value)" style="padding:0.2rem 0.5rem; font-size:0.82rem; background:#182026; color:#fff; border:1px solid #303b44; border-radius:4px;">
+        ${channels.map((ch) => `<option value="${esc(ch)}" ${ch === currentChannel ? "selected" : ""}>${esc(ch)}${ch === primaryTopic ? " (Primary)" : ""}</option>`).join("")}
+      </select>
+    </div>
+  `;
+}
+
+function selectAnalysisCameraChannel(channel) {
+  state.analysis.selectedChannel = channel;
+  state.analysis.renderedFrameIndex = -1;
+  state.analysis.renderedChannel = "";
+  updateAnalysisFrame(state.analysis.currentTime);
+}
+
+function analysisAssetUrl(frame, channelTopic = null) {
+  let path = String(frame?.path || "");
+  if (channelTopic && frame?.channels && frame.channels[channelTopic]?.path) {
+    path = String(frame.channels[channelTopic].path);
+  }
   if (!path) return "";
   const relative = path.replace(/^\/+/, "").replace(/^frames\//, "");
   return `/api/analyses/${encodeURIComponent(state.analysis.selectedId)}/frames/${relative.split("/").map(encodeURIComponent).join("/")}`;
@@ -2684,10 +2721,15 @@ function updateAnalysisFrame(time) {
     empty.textContent = frames.length ? "Waiting for the first image frame..." : "No image frames were extracted.";
     empty.classList.add("visible");
     state.analysis.renderedFrameIndex = -1;
+    state.analysis.renderedChannel = "";
     return;
   }
-  if (index !== state.analysis.renderedFrameIndex) {
-    const url = analysisAssetUrl(frames[index]);
+
+  const firstFrameChannels = frames[0]?.channels ? Object.keys(frames[0].channels) : [];
+  const selectedChannel = state.analysis.selectedChannel || firstFrameChannels[0] || null;
+
+  if (index !== state.analysis.renderedFrameIndex || state.analysis.renderedChannel !== selectedChannel) {
+    const url = analysisAssetUrl(frames[index], selectedChannel);
     image.onload = () => {
       const stage = image.closest(".analysis-image-stage");
       if (stage) {
@@ -2707,14 +2749,23 @@ function updateAnalysisFrame(time) {
     };
     image.src = url;
     state.analysis.renderedFrameIndex = index;
+    state.analysis.renderedChannel = selectedChannel;
     const next = frames[index + 1];
     if (next) {
       const preload = new Image();
-      preload.src = analysisAssetUrl(next);
+      preload.src = analysisAssetUrl(next, selectedChannel);
     }
   }
+
+  const channelInfo = selectedChannel && frames[index]?.channels?.[selectedChannel];
+  const deltaStr = channelInfo && Number.isFinite(channelInfo.delta_ms) && channelInfo.delta_ms !== 0
+    ? ` (${channelInfo.delta_ms >= 0 ? "+" : ""}${channelInfo.delta_ms}ms)`
+    : "";
+
   const frameTime = $("analysis-frame-time");
-  if (frameTime) frameTime.textContent = `${formatAnalysisClock(time)} / frame ${index + 1} of ${frames.length}`;
+  if (frameTime) {
+    frameTime.textContent = `${formatAnalysisClock(time)} / frame ${index + 1} of ${frames.length}${deltaStr}`;
+  }
 }
 
 function analysisModeLabel(record) {

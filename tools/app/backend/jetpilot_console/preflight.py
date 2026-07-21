@@ -454,17 +454,53 @@ def _analyze_rosbag_preflight(
     if not isinstance(topics, Mapping):
         topics = {}
 
-    image_topic = _analysis_topic(
-        topics,
-        report,
-        check_id="analysis.image_topic",
-        label="Image topic",
-        raw_value=payload.get("image_topic"),
-        required=True,
-        expected_types={"sensor_msgs/msg/Image", "sensor_msgs/msg/CompressedImage"},
-    )
-    if image_topic:
-        report.resolved["image_topic"] = image_topic
+    raw_image_topics = payload.get("image_topics")
+    raw_primary = payload.get("primary_image_topic")
+    raw_single_image = payload.get("image_topic")
+
+    image_topic_candidates: list[str] = []
+    if isinstance(raw_image_topics, list):
+        for item in raw_image_topics:
+            val = str(item or "").strip()
+            if val and val not in image_topic_candidates:
+                image_topic_candidates.append(val)
+    elif isinstance(raw_image_topics, str) and raw_image_topics.strip():
+        for part in raw_image_topics.split(","):
+            val = part.strip()
+            if val and val not in image_topic_candidates:
+                image_topic_candidates.append(val)
+
+    if not image_topic_candidates and raw_single_image:
+        val = str(raw_single_image).strip()
+        if val:
+            image_topic_candidates.append(val)
+
+    resolved_image_topics: list[str] = []
+    for idx, candidate in enumerate(image_topic_candidates):
+        resolved_t = _analysis_topic(
+            topics,
+            report,
+            check_id=f"analysis.image_topic_{idx}" if idx > 0 else "analysis.image_topic",
+            label=f"Image topic #{idx + 1}" if len(image_topic_candidates) > 1 else "Image topic",
+            raw_value=candidate,
+            required=idx == 0,
+            expected_types={"sensor_msgs/msg/Image", "sensor_msgs/msg/CompressedImage"},
+        )
+        if resolved_t and resolved_t not in resolved_image_topics:
+            resolved_image_topics.append(resolved_t)
+
+    primary_topic = str(raw_primary or "").strip()
+    if primary_topic and primary_topic in resolved_image_topics:
+        primary_image_topic = primary_topic
+    elif resolved_image_topics:
+        primary_image_topic = resolved_image_topics[0]
+    else:
+        primary_image_topic = ""
+
+    if resolved_image_topics:
+        report.resolved["image_topics"] = resolved_image_topics
+        report.resolved["primary_image_topic"] = primary_image_topic
+        report.resolved["image_topic"] = primary_image_topic
 
     control_topic = _analysis_topic(
         topics,
