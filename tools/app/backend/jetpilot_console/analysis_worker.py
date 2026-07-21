@@ -458,8 +458,8 @@ def _encoding_layout(encoding: str):
     return layouts[encoding]
 
 
-# Global state for thermal / 16-bit image contrast smoothing (topic -> (moving_low, moving_high))
-_THERMAL_SMOOTHING_STATE: dict[str, tuple[float, float]] = {}
+# Global state for thermal / 16-bit image contrast smoothing (topic -> (moving_low, moving_high, prev_gray_mean))
+_THERMAL_SMOOTHING_STATE: dict[str, tuple[float, float, float]] = {}
 
 
 def _decode_image(message: Any, topic: str = ""):
@@ -500,26 +500,28 @@ def _decode_image(message: Any, topic: str = ""):
     if bool(getattr(message, "is_bigendian", False)) and dtype.itemsize > 1:
         array = array.byteswap()
 
+    is_flir = "flir" in str(topic).lower() or "thermal" in str(topic).lower() or "infra" in str(topic).lower()
+    topic_key = topic or "default"
+
     if array.dtype in {np.dtype(np.uint16), np.dtype(np.int16), np.dtype(np.float32)}:
         finite = np.isfinite(array)
         if not finite.any():
             array = np.zeros(array.shape, dtype=np.uint8)
         else:
             valid = array[finite]
-            raw_low, raw_high = np.percentile(valid, (1.0, 99.0))
+            raw_low, raw_high = np.percentile(valid, (0.5, 99.5))
             if raw_high <= raw_low:
                 raw_high = raw_low + 1.0
 
-            # Smooth contrast min/max over time using Exponential Moving Average (EMA) to prevent flicker
-            topic_key = topic or "default"
+            # Smooth contrast min/max over time using Exponential Moving Average (EMA)
             if topic_key in _THERMAL_SMOOTHING_STATE:
-                prev_low, prev_high = _THERMAL_SMOOTHING_STATE[topic_key]
-                alpha = 0.08  # Smoothing factor (lower = smoother transitions)
+                prev_low, prev_high, prev_mean = _THERMAL_SMOOTHING_STATE[topic_key]
+                alpha = 0.03  # Stronger smoothing (0.03) to eliminate flicker
                 low = prev_low * (1.0 - alpha) + raw_low * alpha
                 high = prev_high * (1.0 - alpha) + raw_high * alpha
             else:
-                low, high = raw_low, raw_high
-            _THERMAL_SMOOTHING_STATE[topic_key] = (low, high)
+                low, high, prev_mean = raw_low, raw_high, -1.0
+            _THERMAL_SMOOTHING_STATE[topic_key] = (low, high, prev_mean)
 
             if high <= low:
                 array = np.zeros(array.shape, dtype=np.uint8)
@@ -527,6 +529,7 @@ def _decode_image(message: Any, topic: str = ""):
                 array = np.clip((array - low) * (255.0 / (high - low)), 0, 255)
                 array[~finite] = 0
                 array = array.astype(np.uint8)
+
     bayer_codes = {
         "bayer_rggb8": cv2.COLOR_BAYER_RG2BGR,
         "bayer_bggr8": cv2.COLOR_BAYER_BG2BGR,
@@ -538,19 +541,39 @@ def _decode_image(message: Any, topic: str = ""):
         "bayer_grbg16": cv2.COLOR_BAYER_GR2BGR,
     }
     if encoding in bayer_codes:
-        return cv2.cvtColor(array, bayer_codes[encoding])
-    if encoding in {"yuv422", "yuv422_yuy2"}:
-        return cv2.cvtColor(array, cv2.COLOR_YUV2BGR_YUY2)
-    if encoding == "uyvy":
-        return cv2.cvtColor(array, cv2.COLOR_YUV2BGR_UYVY)
-    if encoding in {"rgb8", "rgb16"}:
-        return cv2.cvtColor(array, cv2.COLOR_RGB2BGR)
-    if encoding in {"rgba8", "rgba16"}:
-        return cv2.cvtColor(array, cv2.COLOR_RGBA2BGR)
-    if encoding in {"bgra8", "bgra16"}:
-        return cv2.cvtColor(array, cv2.COLOR_BGRA2BGR)
-    if channels == 1:
-        return cv2.cvtColor(array, cv2.COLOR_GRAY2BGR)
+        array = cv2.cvtColor(array, bayer_codes[encoding])
+    elif encoding in {"yuv422", "yuv422_yuy2"}:
+        array = cv2.cvtColor(array, cv2.COLOR_YUV2BGR_YUY2)
+    elif encoding == "uyvy":
+        array = cv2.cvtColor(array, cv2.COLOR_YUV2BGR_UYVY)
+    elif encoding in {"rgb8", "rgb16"}:
+        array = cv2.cvtColor(array, cv2.COLOR_RGB2BGR)
+    elif encoding in {"rgba8", "rgba16"}:
+        array = cv2.cvtColor(array, cv2.COLOR_RGBA2BGR)
+    elif encoding in {"bgra8", "bgra16"}:
+        array = cv2.cvtColor(array, cv2.COLOR_BGRA2BGR)
+    elif len(array.shape) == 2 or channels == 1:
+        # Monochrome / Thermal processing (Apply CLAHE and Luminance Stabilization for FLIR)
+        if is_flir:
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+            array = clahe.apply(array)
+
+            # Global luminance stabilization (Suppress single-frame auto-exposure / shutter spikes)
+            current_mean = float(np.mean(array))
+            if topic_key in _THERMAL_SMOOTHING_STATE:
+                prev_low, prev_high, prev_mean = _THERMAL_SMOOTHING_STATE[topic_key]
+                if prev_mean >= 0 and abs(current_mean - prev_mean) > 25.0:  # Sudden brightness jump
+                    # Blend towards previous mean
+                    target_ratio = prev_mean / max(1.0, current_mean)
+                    array = np.clip(array.astype(np.float32) * target_ratio, 0, 255).astype(np.uint8)
+                    current_mean = float(np.mean(array))
+                new_mean = prev_mean * 0.8 + current_mean * 0.2 if prev_mean >= 0 else current_mean
+                _THERMAL_SMOOTHING_STATE[topic_key] = (prev_low, prev_high, new_mean)
+            else:
+                _THERMAL_SMOOTHING_STATE[topic_key] = (0.0, 255.0, current_mean)
+
+        array = cv2.cvtColor(array, cv2.COLOR_GRAY2BGR)
+
     return array
 
 
