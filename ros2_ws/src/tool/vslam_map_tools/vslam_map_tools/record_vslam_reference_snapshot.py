@@ -106,6 +106,7 @@ class VslamReferenceSnapshotRecorder(Node):
                 self.on_localization_state,
                 status_qos,
             )
+        if self.require_localized_map or getattr(args, 'landmarks_topic', None):
             self.create_subscription(TFMessage, args.tf_topic, self.on_tf, best_effort_qos)
         if args.write_interval_sec > 0.0:
             self.create_timer(args.write_interval_sec, self.flush_if_dirty)
