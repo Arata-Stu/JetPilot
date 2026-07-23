@@ -127,7 +127,12 @@ const state = {
     rafId: 0,
     lastTickMs: 0,
     renderedFrameIndex: -1,
+    renderedFrameKey: "",
     lastVisualUpdateMs: 0,
+    renderedChannel: "",
+    activeBufferImg: "",
+    pendingFrameKey: "",
+    frameRequestSerial: 0,
   },
 };
 
@@ -2243,9 +2248,9 @@ function renderAnalysisViewer() {
         <div class="analysis-image-panel">
           ${renderAnalysisCameraSelector()}
           <div class="analysis-image-stage">
-            <img id="analysis-frame-image-a" class="visible" alt="Selected rosbag image frame A" decoding="async" />
+            <img id="analysis-frame-image-a" alt="Selected rosbag image frame A" decoding="async" />
             <img id="analysis-frame-image-b" alt="Selected rosbag image frame B" decoding="async" />
-            <div id="analysis-frame-empty" class="analysis-frame-empty">${frames.length ? "Loading frame..." : "No image frames were extracted."}</div>
+            <div id="analysis-frame-empty" class="analysis-frame-empty visible">${frames.length ? "Loading frame..." : "No image frames were extracted."}</div>
             <span id="analysis-frame-time" class="analysis-frame-time">${formatAnalysisClock(analysis.currentTime)}</span>
           </div>
           <div class="analysis-playback-controls">
@@ -2463,7 +2468,7 @@ async function startBagAnalysis() {
       state.analysis.timeline = null;
       state.analysis.mapDetail = null;
       state.analysis.currentTime = 0;
-      state.analysis.renderedFrameIndex = -1;
+      resetAnalysisFrameRenderState();
     }
     updateAnalysisListDom();
     const viewer = $("analysis-viewer-body");
@@ -2497,7 +2502,7 @@ async function openAnalysisResult(id) {
   state.analysis.timeline = null;
   state.analysis.mapDetail = null;
   state.analysis.currentTime = 0;
-  state.analysis.renderedFrameIndex = -1;
+  resetAnalysisFrameRenderState();
   if (state.tab !== "bag-analysis") state.tab = "bag-analysis";
   render();
   try {
@@ -2727,7 +2732,7 @@ function stopAnalysisAnimationFrame() {
 
 function mountAnalysisViewer() {
   if (!state.analysis.timeline || !$("analysis-viewer-body")) return;
-  state.analysis.renderedFrameIndex = -1;
+  resetAnalysisFrameRenderState();
   updateAnalysisPlaybackDom(true);
   if (state.analysis.playing) startAnalysisAnimationFrame();
 }
@@ -2864,8 +2869,7 @@ function renderAnalysisCameraSelector() {
 
 function selectAnalysisCameraChannel(channel) {
   state.analysis.selectedChannel = channel;
-  state.analysis.renderedFrameIndex = -1;
-  state.analysis.renderedChannel = "";
+  resetAnalysisFrameRenderState();
   updateAnalysisFrame(state.analysis.currentTime);
 }
 
@@ -2877,6 +2881,21 @@ function analysisAssetUrl(frame, channelTopic = null) {
   if (!path) return "";
   const relative = path.replace(/^\/+/, "").replace(/^frames\//, "");
   return `/api/analyses/${encodeURIComponent(state.analysis.selectedId)}/frames/${relative.split("/").map(encodeURIComponent).join("/")}`;
+}
+
+function resetAnalysisFrameRenderState() {
+  state.analysis.renderedFrameIndex = -1;
+  state.analysis.renderedFrameKey = "";
+  state.analysis.renderedChannel = "";
+  state.analysis.activeBufferImg = "";
+  state.analysis.pendingFrameKey = "";
+  state.analysis.frameRequestSerial += 1;
+}
+
+function visibleAnalysisImage(imgA, imgB) {
+  if (imgA?.classList.contains("visible")) return imgA;
+  if (imgB?.classList.contains("visible")) return imgB;
+  return null;
 }
 
 function updateAnalysisFrame(time) {
@@ -2893,7 +2912,9 @@ function updateAnalysisFrame(time) {
     empty.textContent = frames.length ? "Waiting for the first image frame..." : "No image frames were extracted.";
     empty.classList.add("visible");
     state.analysis.renderedFrameIndex = -1;
+    state.analysis.renderedFrameKey = "";
     state.analysis.renderedChannel = "";
+    state.analysis.pendingFrameKey = "";
     return;
   }
 
@@ -2911,6 +2932,7 @@ function updateAnalysisFrame(time) {
   if (selectedChannel && !hasChannel) {
     // Keep current image visible to prevent blackout; update frame timestamp info
     state.analysis.renderedFrameIndex = index;
+    state.analysis.renderedFrameKey = `${index}|${selectedChannel}|missing`;
     state.analysis.renderedChannel = selectedChannel;
     const frameTime = $("analysis-frame-time");
     if (frameTime) {
@@ -2919,38 +2941,61 @@ function updateAnalysisFrame(time) {
     return;
   }
 
-  if (index !== state.analysis.renderedFrameIndex || state.analysis.renderedChannel !== selectedChannel) {
-    const url = analysisAssetUrl(currentFrame, selectedChannel);
+  const url = analysisAssetUrl(currentFrame, selectedChannel);
+  const frameKey = `${index}|${selectedChannel || ""}|${url}`;
+  if (
+    url
+    && frameKey !== state.analysis.renderedFrameKey
+    && frameKey !== state.analysis.pendingFrameKey
+  ) {
+    const requestSerial = (state.analysis.frameRequestSerial || 0) + 1;
+    state.analysis.frameRequestSerial = requestSerial;
+    state.analysis.pendingFrameKey = frameKey;
 
-    // Double buffering: swap between imgA and imgB without unmounting
-    const activeImg = state.analysis.activeBufferImg === "b" ? imgB : imgA;
-    const targetImg = state.analysis.activeBufferImg === "b" ? imgA : imgB;
+    const activeImg = visibleAnalysisImage(imgA, imgB);
+    const targetImg = activeImg === imgB ? imgA : imgB;
 
     if (targetImg) {
-      targetImg.onload = () => {
+      const loader = new Image();
+      loader.decoding = "async";
+      loader.onload = async () => {
+        try {
+          if (typeof loader.decode === "function") await loader.decode();
+        } catch {
+          // Some browsers resolve onload after enough decode work; keep the loaded image.
+        }
+        if (requestSerial !== state.analysis.frameRequestSerial) return;
+        if (frameKey !== state.analysis.pendingFrameKey) return;
+        targetImg.onload = null;
+        targetImg.onerror = null;
+        targetImg.src = url;
         targetImg.classList.add("visible");
         if (activeImg && activeImg !== targetImg) {
           activeImg.classList.remove("visible");
         }
         empty.classList.remove("visible");
-        state.analysis.activeBufferImg = state.analysis.activeBufferImg === "b" ? "a" : "b";
+        state.analysis.activeBufferImg = targetImg === imgB ? "b" : "a";
+        state.analysis.renderedFrameIndex = index;
+        state.analysis.renderedFrameKey = frameKey;
+        state.analysis.renderedChannel = selectedChannel;
+        state.analysis.pendingFrameKey = "";
 
         const stage = targetImg.closest(".analysis-image-stage");
         if (stage) {
-          stage.dataset.frameSize = `${targetImg.naturalWidth}×${targetImg.naturalHeight}`;
+          stage.dataset.frameSize = `${loader.naturalWidth}×${loader.naturalHeight}`;
         }
       };
-      targetImg.onerror = () => {
-        if (!activeImg || !activeImg.classList.contains("visible")) {
+      loader.onerror = () => {
+        if (requestSerial !== state.analysis.frameRequestSerial) return;
+        if (frameKey !== state.analysis.pendingFrameKey) return;
+        state.analysis.pendingFrameKey = "";
+        if (!visibleAnalysisImage(imgA, imgB)) {
           empty.textContent = "This frame could not be loaded.";
           empty.classList.add("visible");
         }
       };
-      targetImg.src = url;
+      loader.src = url;
     }
-
-    state.analysis.renderedFrameIndex = index;
-    state.analysis.renderedChannel = selectedChannel;
 
     // Preload next & previous 4 frames for zero-latency frame-by-frame stepping
     for (let offset = -2; offset <= 5; offset++) {
