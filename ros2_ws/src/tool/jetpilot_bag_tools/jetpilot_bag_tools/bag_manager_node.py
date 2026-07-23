@@ -48,6 +48,7 @@ DEFAULT_TOPICS = [
     "/event_camera/events",
     "/event_camera/events_raw",
     "/event_camera/event_image",
+    "/event_camera/raw_recording/request",
     "/event_camera/diagnostics",
     # FLIR Boson thermal camera. Keep raw mono16 for offline analysis.
     "/flir/camera_info",

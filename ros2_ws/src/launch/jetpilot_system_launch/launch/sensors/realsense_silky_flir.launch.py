@@ -50,6 +50,16 @@ def launch_sensor_kit(args: lu.ArgumentContainer) -> list[lut.Action]:
                     'serial': args.silky_evcam_serial,
                     'device_format': args.silky_evcam_device_format,
                     'frame_id': args.silky_evcam_frame_id,
+                    'raw_recording_enabled': str(
+                        lu.is_true(args.silky_evcam_raw_recording_enabled)).lower(),
+                    'raw_recording_request_topic':
+                        args.silky_evcam_raw_recording_request_topic,
+                    'raw_recording_auto_start': str(
+                        lu.is_true(args.silky_evcam_raw_recording_auto_start)).lower(),
+                    'raw_recording_dir': args.silky_evcam_raw_recording_dir,
+                    'raw_recording_basename': args.silky_evcam_raw_recording_basename,
+                    'raw_recording_split_duration_s':
+                        args.silky_evcam_raw_recording_split_duration_s,
                     'packet_duration_us': args.silky_evcam_packet_duration_us,
                     'statistics_interval_s': args.silky_evcam_statistics_interval_s,
                     'debug': str(lu.is_true(args.silky_evcam_debug)).lower(),
@@ -127,6 +137,13 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('silky_evcam_serial', '')
     args.add_arg('silky_evcam_device_format', '')
     args.add_arg('silky_evcam_frame_id', 'event_camera')
+    args.add_arg('silky_evcam_raw_recording_enabled', False)
+    args.add_arg(
+        'silky_evcam_raw_recording_request_topic', '/event_camera/raw_recording/request')
+    args.add_arg('silky_evcam_raw_recording_auto_start', True)
+    args.add_arg('silky_evcam_raw_recording_dir', '/workspaces/record/openeb_raw')
+    args.add_arg('silky_evcam_raw_recording_basename', 'openeb')
+    args.add_arg('silky_evcam_raw_recording_split_duration_s', '0.0')
     args.add_arg('silky_evcam_packet_duration_us', '1000')
     args.add_arg('silky_evcam_statistics_interval_s', '1.0')
     args.add_arg('silky_evcam_debug', False)

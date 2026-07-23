@@ -47,5 +47,5 @@ repositories:
   ros2_ws/src/sensing/openeb_ros2:
     type: git
     url: https://github.com/carbuncle01/openeb_ros2.git
-    version: main
+    version: jetpilot-v1.0.0
 

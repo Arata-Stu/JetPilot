@@ -40,6 +40,16 @@ def add_sensor_interface(args: lu.ArgumentContainer):
         'flir_image_height': args.flir_image_height,
         'flir_framerate': args.flir_framerate,
         'flir_io_method': args.flir_io_method,
+        'silky_evcam_raw_recording_enabled': str(
+            lu.is_true(args.silky_evcam_raw_recording_enabled)).lower(),
+        'silky_evcam_raw_recording_request_topic':
+            args.silky_evcam_raw_recording_request_topic,
+        'silky_evcam_raw_recording_auto_start': str(
+            lu.is_true(args.silky_evcam_raw_recording_auto_start)).lower(),
+        'silky_evcam_raw_recording_dir': args.silky_evcam_raw_recording_dir,
+        'silky_evcam_raw_recording_basename': args.silky_evcam_raw_recording_basename,
+        'silky_evcam_raw_recording_split_duration_s':
+            args.silky_evcam_raw_recording_split_duration_s,
         'use_sim_time': str(lu.is_true(args.use_sim_time)).lower(),
     }
 
@@ -95,6 +105,16 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('flir_image_height', '512', cli=True)
     args.add_arg('flir_framerate', '60.0', cli=True)
     args.add_arg('flir_io_method', 'mmap', cli=True)
+    args.add_arg('silky_evcam_raw_recording_enabled', False, cli=True)
+    args.add_arg(
+        'silky_evcam_raw_recording_request_topic',
+        '/event_camera/raw_recording/request',
+        cli=True)
+    args.add_arg('silky_evcam_raw_recording_auto_start', True, cli=True)
+    args.add_arg(
+        'silky_evcam_raw_recording_dir', '/workspaces/record/openeb_raw', cli=True)
+    args.add_arg('silky_evcam_raw_recording_basename', 'openeb', cli=True)
+    args.add_arg('silky_evcam_raw_recording_split_duration_s', '0.0', cli=True)
     args.add_arg('use_sim_time', False, cli=True)
 
     args.add_opaque_function(add_sensor_interface)

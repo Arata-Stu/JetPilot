@@ -26,6 +26,8 @@ JetPilot 全体の bringup をまとめる launch package です。tool、operat
 
 FLIR の既定 topic は `/flir/camera_info` と `/flir/image_raw`、既定 frame は `boson_optical_frame` です。デバイスや format は `sensor_kit_flir_video_device:=/dev/video0`、`sensor_kit_flir_pixel_format:=mono16` のように bringup 引数で上書きできます。
 
+SilkyEvCam/OpenEB の RAW 記録は `sensor_kit_silky_evcam_raw_recording_enabled:=true` で有効化します。JetPilot からの開始・停止要求は既定で `/event_camera/raw_recording/request` に `jetpilot_msgs/msg/BagRequest` を publish します。
+
 ## Topic flow
 
 標準的な自律走行の制御 topic は次の流れです。

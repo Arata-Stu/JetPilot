@@ -277,6 +277,19 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('sensor_kit_flir_image_height', '512', cli=True)
     args.add_arg('sensor_kit_flir_framerate', '60.0', cli=True)
     args.add_arg('sensor_kit_flir_io_method', 'mmap', cli=True)
+    args.add_arg('sensor_kit_silky_evcam_raw_recording_enabled', False, cli=True)
+    args.add_arg(
+        'sensor_kit_silky_evcam_raw_recording_request_topic',
+        '/event_camera/raw_recording/request',
+        cli=True)
+    args.add_arg('sensor_kit_silky_evcam_raw_recording_auto_start', True, cli=True)
+    args.add_arg(
+        'sensor_kit_silky_evcam_raw_recording_dir',
+        '/workspaces/record/openeb_raw',
+        cli=True)
+    args.add_arg('sensor_kit_silky_evcam_raw_recording_basename', 'openeb', cli=True)
+    args.add_arg(
+        'sensor_kit_silky_evcam_raw_recording_split_duration_s', '0.0', cli=True)
 
     args.add_arg('enable_localization', False, cli=True)
     args.add_arg('localization_camera_name', 'realsense', cli=True)
@@ -544,6 +557,18 @@ def generate_launch_description() -> lut.LaunchDescription:
                 'flir_image_height': args.sensor_kit_flir_image_height,
                 'flir_framerate': args.sensor_kit_flir_framerate,
                 'flir_io_method': args.sensor_kit_flir_io_method,
+                'silky_evcam_raw_recording_enabled':
+                    args.sensor_kit_silky_evcam_raw_recording_enabled,
+                'silky_evcam_raw_recording_request_topic':
+                    args.sensor_kit_silky_evcam_raw_recording_request_topic,
+                'silky_evcam_raw_recording_auto_start':
+                    args.sensor_kit_silky_evcam_raw_recording_auto_start,
+                'silky_evcam_raw_recording_dir':
+                    args.sensor_kit_silky_evcam_raw_recording_dir,
+                'silky_evcam_raw_recording_basename':
+                    args.sensor_kit_silky_evcam_raw_recording_basename,
+                'silky_evcam_raw_recording_split_duration_s':
+                    args.sensor_kit_silky_evcam_raw_recording_split_duration_s,
                 'use_sim_time': args.use_sim_time,
             },
             condition=IfCondition(args.enable_sensor_kit),
