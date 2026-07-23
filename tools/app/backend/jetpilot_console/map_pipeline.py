@@ -326,6 +326,8 @@ ros2 run vslam_map_tools export_aligned_landmarks_offline.py \\
   --output-image "$map_dir/vslam_landmarks.png" \\
   --output-yaml "$map_dir/vslam_landmarks.yaml" \\
   --no-path \\
+  --auto-crop-percentile 99.0 \\
+  --auto-crop-min-retained-ratio 0.75 \\
   --require-landmarks
 """
 

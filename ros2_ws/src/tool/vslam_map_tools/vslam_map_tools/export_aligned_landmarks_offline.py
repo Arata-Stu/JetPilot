@@ -187,6 +187,55 @@ def auto_raster_geometry(
     )
 
 
+def central_percentile_mask(points_xy: np.ndarray, percentile: float) -> np.ndarray:
+    if points_xy.size == 0:
+        return np.zeros((0,), dtype=bool)
+    percentile = float(percentile)
+    if percentile >= 100.0:
+        return np.ones((points_xy.shape[0],), dtype=bool)
+    if percentile <= 0.0:
+        raise ValueError("auto crop percentile must be greater than 0")
+
+    tail = (100.0 - percentile) * 0.5
+    lower_x, upper_x = np.percentile(points_xy[:, 0], [tail, 100.0 - tail])
+    lower_y, upper_y = np.percentile(points_xy[:, 1], [tail, 100.0 - tail])
+    return (
+        (points_xy[:, 0] >= lower_x)
+        & (points_xy[:, 0] <= upper_x)
+        & (points_xy[:, 1] >= lower_y)
+        & (points_xy[:, 1] <= upper_y)
+    )
+
+
+def crop_landmark_outliers(
+    landmark_points: np.ndarray,
+    percentile: float,
+    min_retained_ratio: float,
+) -> np.ndarray:
+    if landmark_points.size == 0 or percentile >= 100.0:
+        return landmark_points
+    mask = central_percentile_mask(landmark_points[:, :2], percentile)
+    retained = landmark_points[mask]
+    min_retained_ratio = max(0.0, min(1.0, float(min_retained_ratio)))
+    if retained.shape[0] < 2:
+        print("Auto-crop skipped: fewer than 2 landmarks would remain.")
+        return landmark_points
+    retained_ratio = retained.shape[0] / max(1, landmark_points.shape[0])
+    if retained_ratio < min_retained_ratio:
+        print(
+            "Auto-crop skipped: retained "
+            f"{retained.shape[0]}/{landmark_points.shape[0]} landmarks "
+            f"({retained_ratio:.1%}), below minimum {min_retained_ratio:.1%}."
+        )
+        return landmark_points
+    print(
+        "Auto-cropped landmark outliers: "
+        f"{landmark_points.shape[0]} -> {retained.shape[0]} "
+        f"(central {percentile:.3g}%)."
+    )
+    return retained
+
+
 def reference_raster_geometry(reference_path: Path) -> tuple[RasterGeometry, MapYamlTemplate, Optional[np.ndarray]]:
     ref_data = parse_simple_yaml(reference_path)
     ref_image_value = str(ref_data["image"]).strip().strip('"').strip("'")
@@ -317,6 +366,21 @@ def main() -> None:
     parser.add_argument("--max-z", type=float, default=None)
     parser.add_argument("--landmark-downsample-m", type=float, default=0.1, help="Spatial downsampling cell size in meters (0 to disable)")
     parser.add_argument(
+        "--auto-crop-percentile",
+        type=float,
+        default=100.0,
+        help=(
+            "Use only the central percentile of landmark XY points for automatic raster bounds "
+            "and drawing. 100 disables cropping."
+        ),
+    )
+    parser.add_argument(
+        "--auto-crop-min-retained-ratio",
+        type=float,
+        default=0.75,
+        help="Skip auto-crop when it would retain less than this fraction of landmarks.",
+    )
+    parser.add_argument(
         "--require-landmarks",
         action="store_true",
         help="Fail when the snapshot does not contain a landmarks PointCloud2 message.",
@@ -376,6 +440,11 @@ def main() -> None:
             original_count = landmark_points.shape[0]
             landmark_points = downsample_points_spatial(landmark_points, args.landmark_downsample_m)
             print(f"Downsampled landmarks: {original_count} -> {landmark_points.shape[0]} (cell: {args.landmark_downsample_m}m)")
+        landmark_points = crop_landmark_outliers(
+            landmark_points,
+            args.auto_crop_percentile,
+            args.auto_crop_min_retained_ratio,
+        )
     else:
         landmark_points = np.empty((0, 3), dtype=np.float64)
 
