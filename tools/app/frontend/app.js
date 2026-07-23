@@ -5,6 +5,8 @@ const DEFAULT_RACELINE_MIN_SPEED_MPS = 0.8;
 const DEFAULT_RACELINE_LATERAL_ACCEL_LIMIT_MPS2 = 2.5;
 const DEFAULT_RACELINE_ACCEL_LIMIT_MPS2 = 1.5;
 const DEFAULT_RACELINE_DECEL_LIMIT_MPS2 = 2.5;
+const DEFAULT_HD_RASTER_AUTO_CROP_PERCENTILE = 99.0;
+const DEFAULT_HD_RASTER_AUTO_CROP_MIN_RETAINED_RATIO = 0.75;
 const PREFLIGHT_CACHE_MS = 15_000;
 
 const state = {
@@ -57,6 +59,10 @@ const state = {
     lateralAccelLimitMps2: DEFAULT_RACELINE_LATERAL_ACCEL_LIMIT_MPS2,
     accelLimitMps2: DEFAULT_RACELINE_ACCEL_LIMIT_MPS2,
     decelLimitMps2: DEFAULT_RACELINE_DECEL_LIMIT_MPS2,
+  },
+  hdRasterGeneration: {
+    autoCropPercentile: DEFAULT_HD_RASTER_AUTO_CROP_PERCENTILE,
+    autoCropMinRetainedRatio: DEFAULT_HD_RASTER_AUTO_CROP_MIN_RETAINED_RATIO,
   },
   simulation: {
     source: "raceline",
@@ -1307,6 +1313,10 @@ function initialMapBuildPreflightPayload(defaultMapBase, recommendedTopicConfig)
 
 function mapStagePreflightPayload(stage, mapDir) {
   const payload = { map_dir: mapDir };
+  if (stage === "prepare-hd-raster") {
+    payload.auto_crop_percentile = state.hdRasterGeneration.autoCropPercentile;
+    payload.auto_crop_min_retained_ratio = state.hdRasterGeneration.autoCropMinRetainedRatio;
+  }
   if (stage === "generate-raceline") {
     payload.vehicle_width_m = state.racelineGeneration.vehicleWidthM;
     payload.safety_margin_m = state.racelineGeneration.safetyMarginM;
@@ -3831,6 +3841,7 @@ function renderMapWorkspace() {
           ></canvas>
         </div>
         <aside class="map-side-panel">
+          ${renderHdRasterOptions(detail)}
           ${renderHdMapEditor(detail)}
           ${renderRacelineClearance(detail)}
           ${renderSectionGateEditor(detail)}
@@ -3841,6 +3852,60 @@ function renderMapWorkspace() {
       ${renderSimulationPanel(detail)}
     </div>
   `;
+}
+
+function renderHdRasterOptions(detail) {
+  const options = state.hdRasterGeneration;
+  const snapshotReady = Boolean(detail.map?.artifacts?.snapshot?.exists);
+  const cropChoices = [
+    [99.5, "Light crop / 99.5%"],
+    [99.0, "Balanced / 99%"],
+    [98.0, "Strong crop / 98%"],
+    [100.0, "Off / 100%"],
+  ];
+  return `
+    <div class="inspector-block hd-raster-block">
+      <div class="inspector-title-row">
+        <h4>HD Raster</h4>
+        <span class="${snapshotReady ? "ok" : "warn"}">${snapshotReady ? "Ready" : "Need snapshot"}</span>
+      </div>
+      <div class="form-grid">
+        <div class="field full">
+          <label for="hd-raster-auto-crop">Point cloud crop</label>
+          <select id="hd-raster-auto-crop" onchange="updateHdRasterAutoCrop(this.value)">
+            ${cropChoices
+              .map(([value, label]) => `<option value="${value}" ${Math.abs(options.autoCropPercentile - value) < 1e-9 ? "selected" : ""}>${esc(label)}</option>`)
+              .join("")}
+          </select>
+        </div>
+        <div class="field-hint full">
+          ${options.autoCropPercentile >= 100
+            ? "Raster bounds use all landmark points."
+            : `Raster bounds use the central ${options.autoCropPercentile}% of landmark points.`}
+        </div>
+        <div class="actions full">
+          ${renderMapStageButton("prepare-hd-raster", detail.map.path, "Generate Raster", { className: "primary" })}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function updateHdRasterAutoCrop(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 100) return;
+  state.hdRasterGeneration.autoCropPercentile = parsed;
+  if (state.selectedMapDetail?.map?.path) {
+    invalidateMapPreflights(state.selectedMapDetail.map.path);
+    render();
+  }
+}
+
+function hdRasterGenerationPayload() {
+  return {
+    auto_crop_percentile: state.hdRasterGeneration.autoCropPercentile,
+    auto_crop_min_retained_ratio: state.hdRasterGeneration.autoCropMinRetainedRatio,
+  };
 }
 
 function renderSimulationPanel(detail) {
@@ -6606,6 +6671,9 @@ async function saveHdMapFromEditor() {
 async function runMapStage(stage, mapDir) {
   const endpoint = `/api/maps/${stage}`;
   const body = { map_dir: mapDir };
+  if (stage === "prepare-hd-raster") {
+    Object.assign(body, hdRasterGenerationPayload());
+  }
   if (stage === "generate-raceline") {
     try {
       Object.assign(body, racelineGenerationPayload());
@@ -7597,6 +7665,7 @@ window.retryPreflightToken = retryPreflightToken;
 window.startMapBuild = startMapBuild;
 window.copyMapBuildCommand = copyMapBuildCommand;
 window.runMapStage = runMapStage;
+window.updateHdRasterAutoCrop = updateHdRasterAutoCrop;
 window.updateRacelineGeneration = updateRacelineGeneration;
 window.toggleSimulationPlayback = toggleSimulationPlayback;
 window.stepSimulationOnce = stepSimulationOnce;

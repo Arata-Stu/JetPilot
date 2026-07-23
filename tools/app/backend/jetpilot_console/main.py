@@ -40,6 +40,8 @@ from .map_pipeline import (
     DEFAULT_RACELINE_MIN_SPEED_MPS,
     DEFAULT_RACELINE_SAFETY_MARGIN_M,
     DEFAULT_RACELINE_VEHICLE_WIDTH_M,
+    DEFAULT_HD_RASTER_AUTO_CROP_MIN_RETAINED_RATIO,
+    DEFAULT_HD_RASTER_AUTO_CROP_PERCENTILE,
     build_vgl_vslam_script,
     default_topic_config,
     generate_preview_script,
@@ -1279,7 +1281,28 @@ find {shlex.quote(record_root)} -name metadata.yaml -printf '%TY-%Tm-%Td %TH:%TM
             self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
             return
         if stage == "prepare-hd-raster":
-            script = prepare_hd_raster_script(config, map_dir)
+            auto_crop_percentile = body.get(
+                "auto_crop_percentile",
+                DEFAULT_HD_RASTER_AUTO_CROP_PERCENTILE,
+            )
+            auto_crop_min_retained_ratio = body.get(
+                "auto_crop_min_retained_ratio",
+                DEFAULT_HD_RASTER_AUTO_CROP_MIN_RETAINED_RATIO,
+            )
+            if auto_crop_percentile is None:
+                auto_crop_percentile = DEFAULT_HD_RASTER_AUTO_CROP_PERCENTILE
+            if auto_crop_min_retained_ratio is None:
+                auto_crop_min_retained_ratio = DEFAULT_HD_RASTER_AUTO_CROP_MIN_RETAINED_RATIO
+            try:
+                script = prepare_hd_raster_script(
+                    config,
+                    map_dir,
+                    auto_crop_percentile=auto_crop_percentile,
+                    auto_crop_min_retained_ratio=auto_crop_min_retained_ratio,
+                )
+            except (TypeError, ValueError) as exc:
+                self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                return
             title = "Prepare HD map raster"
         elif stage == "generate-raceline":
             vehicle_width_m = body.get(

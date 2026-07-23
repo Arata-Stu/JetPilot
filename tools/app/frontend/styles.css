@@ -1351,6 +1351,10 @@ tr:last-child td {
   background: #12181b;
 }
 
+.hd-raster-block {
+  background: #11171c;
+}
+
 .section-editor-block {
   background: #10171a;
 }

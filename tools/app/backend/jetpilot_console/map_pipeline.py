@@ -14,6 +14,8 @@ DEFAULT_RACELINE_MIN_SPEED_MPS = 0.8
 DEFAULT_RACELINE_LATERAL_ACCEL_LIMIT_MPS2 = 2.5
 DEFAULT_RACELINE_ACCEL_LIMIT_MPS2 = 1.5
 DEFAULT_RACELINE_DECEL_LIMIT_MPS2 = 2.5
+DEFAULT_HD_RASTER_AUTO_CROP_PERCENTILE = 99.0
+DEFAULT_HD_RASTER_AUTO_CROP_MIN_RETAINED_RATIO = 0.75
 
 
 def _q(value: str | Path) -> str:
@@ -35,6 +37,15 @@ def _positive_finite(value: float, label: str) -> float:
     parsed = float(value)
     if not math.isfinite(parsed) or parsed <= 0.0:
         raise ValueError(f"{label} must be a finite value greater than 0")
+    return parsed
+
+
+def _bounded_finite(value: float, label: str, minimum: float, maximum: float) -> float:
+    if isinstance(value, bool):
+        raise ValueError(f"{label} must be a finite value in [{minimum}, {maximum}]")
+    parsed = float(value)
+    if not math.isfinite(parsed) or parsed < minimum or parsed > maximum:
+        raise ValueError(f"{label} must be a finite value in [{minimum}, {maximum}]")
     return parsed
 
 
@@ -310,8 +321,26 @@ trap - EXIT
 """
 
 
-def prepare_hd_raster_script(config: ConsoleConfig, map_dir: str) -> str:
+def prepare_hd_raster_script(
+    config: ConsoleConfig,
+    map_dir: str,
+    *,
+    auto_crop_percentile: float = DEFAULT_HD_RASTER_AUTO_CROP_PERCENTILE,
+    auto_crop_min_retained_ratio: float = DEFAULT_HD_RASTER_AUTO_CROP_MIN_RETAINED_RATIO,
+) -> str:
     map_path = Path(map_dir)
+    crop_percentile = _bounded_finite(
+        auto_crop_percentile,
+        "auto_crop_percentile",
+        0.001,
+        100.0,
+    )
+    crop_min_retained = _bounded_finite(
+        auto_crop_min_retained_ratio,
+        "auto_crop_min_retained_ratio",
+        0.0,
+        1.0,
+    )
     return f"""set -euo pipefail
 {_source_ros_setup(config)}
 map_dir={_q(map_path)}
@@ -326,8 +355,8 @@ ros2 run vslam_map_tools export_aligned_landmarks_offline.py \\
   --output-image "$map_dir/vslam_landmarks.png" \\
   --output-yaml "$map_dir/vslam_landmarks.yaml" \\
   --no-path \\
-  --auto-crop-percentile 99.0 \\
-  --auto-crop-min-retained-ratio 0.75 \\
+  --auto-crop-percentile {crop_percentile:.9g} \\
+  --auto-crop-min-retained-ratio {crop_min_retained:.9g} \\
   --require-landmarks
 """
 
