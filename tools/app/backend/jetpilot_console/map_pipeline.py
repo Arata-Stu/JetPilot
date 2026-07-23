@@ -16,6 +16,8 @@ DEFAULT_RACELINE_ACCEL_LIMIT_MPS2 = 1.5
 DEFAULT_RACELINE_DECEL_LIMIT_MPS2 = 2.5
 DEFAULT_HD_RASTER_AUTO_CROP_PERCENTILE = 99.0
 DEFAULT_HD_RASTER_AUTO_CROP_MIN_RETAINED_RATIO = 0.75
+DEFAULT_HD_RASTER_PATH_CROP_DISTANCE_M = 0.0
+DEFAULT_HD_RASTER_PATH_CROP_MIN_RETAINED_RATIO = 0.2
 
 
 def _q(value: str | Path) -> str:
@@ -327,6 +329,8 @@ def prepare_hd_raster_script(
     *,
     auto_crop_percentile: float = DEFAULT_HD_RASTER_AUTO_CROP_PERCENTILE,
     auto_crop_min_retained_ratio: float = DEFAULT_HD_RASTER_AUTO_CROP_MIN_RETAINED_RATIO,
+    path_crop_distance_m: float = DEFAULT_HD_RASTER_PATH_CROP_DISTANCE_M,
+    path_crop_min_retained_ratio: float = DEFAULT_HD_RASTER_PATH_CROP_MIN_RETAINED_RATIO,
 ) -> str:
     map_path = Path(map_dir)
     crop_percentile = _bounded_finite(
@@ -338,6 +342,18 @@ def prepare_hd_raster_script(
     crop_min_retained = _bounded_finite(
         auto_crop_min_retained_ratio,
         "auto_crop_min_retained_ratio",
+        0.0,
+        1.0,
+    )
+    path_crop_distance = _bounded_finite(
+        path_crop_distance_m,
+        "path_crop_distance_m",
+        0.0,
+        1000.0,
+    )
+    path_crop_min_retained = _bounded_finite(
+        path_crop_min_retained_ratio,
+        "path_crop_min_retained_ratio",
         0.0,
         1.0,
     )
@@ -357,6 +373,8 @@ ros2 run vslam_map_tools export_aligned_landmarks_offline.py \\
   --no-path \\
   --auto-crop-percentile {crop_percentile:.9g} \\
   --auto-crop-min-retained-ratio {crop_min_retained:.9g} \\
+  --path-crop-distance-m {path_crop_distance:.9g} \\
+  --path-crop-min-retained-ratio {path_crop_min_retained:.9g} \\
   --require-landmarks
 """
 

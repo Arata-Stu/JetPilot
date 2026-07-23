@@ -236,6 +236,64 @@ def crop_landmark_outliers(
     return retained
 
 
+def point_distances_to_polyline(points_xy: np.ndarray, path_xy: np.ndarray) -> np.ndarray:
+    if points_xy.size == 0:
+        return np.zeros((0,), dtype=np.float64)
+    if path_xy.shape[0] == 0:
+        return np.full((points_xy.shape[0],), np.inf, dtype=np.float64)
+    if path_xy.shape[0] == 1:
+        return np.linalg.norm(points_xy - path_xy[0], axis=1)
+
+    distances = np.full((points_xy.shape[0],), np.inf, dtype=np.float64)
+    for index in range(path_xy.shape[0] - 1):
+        start = path_xy[index]
+        end = path_xy[index + 1]
+        segment = end - start
+        denom = float(np.dot(segment, segment))
+        if denom <= 1.0e-12:
+            candidate = np.linalg.norm(points_xy - start, axis=1)
+        else:
+            t = np.clip(((points_xy - start) @ segment) / denom, 0.0, 1.0)
+            closest = start + t[:, None] * segment
+            candidate = np.linalg.norm(points_xy - closest, axis=1)
+        distances = np.minimum(distances, candidate)
+    return distances
+
+
+def crop_landmarks_near_path(
+    landmark_points_map: np.ndarray,
+    path_points_map: np.ndarray,
+    max_distance_m: float,
+    min_retained_ratio: float,
+) -> np.ndarray:
+    if landmark_points_map.size == 0 or max_distance_m <= 0.0:
+        return landmark_points_map
+    if path_points_map.shape[0] < 2:
+        print("Path-crop skipped: snapshot path has fewer than 2 points.")
+        return landmark_points_map
+
+    distances = point_distances_to_polyline(landmark_points_map[:, :2], path_points_map[:, :2])
+    retained = landmark_points_map[distances <= max_distance_m]
+    min_retained_ratio = max(0.0, min(1.0, float(min_retained_ratio)))
+    if retained.shape[0] < 2:
+        print("Path-crop skipped: fewer than 2 landmarks would remain.")
+        return landmark_points_map
+    retained_ratio = retained.shape[0] / max(1, landmark_points_map.shape[0])
+    if retained_ratio < min_retained_ratio:
+        print(
+            "Path-crop skipped: retained "
+            f"{retained.shape[0]}/{landmark_points_map.shape[0]} landmarks "
+            f"({retained_ratio:.1%}), below minimum {min_retained_ratio:.1%}."
+        )
+        return landmark_points_map
+    print(
+        "Path-cropped landmark outliers: "
+        f"{landmark_points_map.shape[0]} -> {retained.shape[0]} "
+        f"(within {max_distance_m:.3g}m of VSLAM path)."
+    )
+    return retained
+
+
 def reference_raster_geometry(reference_path: Path) -> tuple[RasterGeometry, MapYamlTemplate, Optional[np.ndarray]]:
     ref_data = parse_simple_yaml(reference_path)
     ref_image_value = str(ref_data["image"]).strip().strip('"').strip("'")
@@ -381,6 +439,18 @@ def main() -> None:
         help="Skip auto-crop when it would retain less than this fraction of landmarks.",
     )
     parser.add_argument(
+        "--path-crop-distance-m",
+        type=float,
+        default=0.0,
+        help="Keep only landmarks within this distance from the VSLAM path after alignment. 0 disables path crop.",
+    )
+    parser.add_argument(
+        "--path-crop-min-retained-ratio",
+        type=float,
+        default=0.2,
+        help="Skip path-crop when it would retain less than this fraction of landmarks.",
+    )
+    parser.add_argument(
         "--require-landmarks",
         action="store_true",
         help="Fail when the snapshot does not contain a landmarks PointCloud2 message.",
@@ -462,6 +532,12 @@ def main() -> None:
     # Transform to map frame
     landmark_points_map = transform_points(landmark_points, rot, trans)
     path_points_map = transform_points(path_points, rot, trans)
+    landmark_points_map = crop_landmarks_near_path(
+        landmark_points_map,
+        path_points_map,
+        max(0.0, float(args.path_crop_distance_m)),
+        args.path_crop_min_retained_ratio,
+    )
 
     landmark_xy = landmark_points_map[:, :2] if landmark_points_map.size > 0 else np.empty((0, 2))
     path_xy = path_points_map[:, :2] if path_points_map.size > 0 else np.empty((0, 2))

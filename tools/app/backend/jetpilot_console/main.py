@@ -42,6 +42,8 @@ from .map_pipeline import (
     DEFAULT_RACELINE_VEHICLE_WIDTH_M,
     DEFAULT_HD_RASTER_AUTO_CROP_MIN_RETAINED_RATIO,
     DEFAULT_HD_RASTER_AUTO_CROP_PERCENTILE,
+    DEFAULT_HD_RASTER_PATH_CROP_DISTANCE_M,
+    DEFAULT_HD_RASTER_PATH_CROP_MIN_RETAINED_RATIO,
     build_vgl_vslam_script,
     default_topic_config,
     generate_preview_script,
@@ -1289,16 +1291,30 @@ find {shlex.quote(record_root)} -name metadata.yaml -printf '%TY-%Tm-%Td %TH:%TM
                 "auto_crop_min_retained_ratio",
                 DEFAULT_HD_RASTER_AUTO_CROP_MIN_RETAINED_RATIO,
             )
+            path_crop_distance_m = body.get(
+                "path_crop_distance_m",
+                DEFAULT_HD_RASTER_PATH_CROP_DISTANCE_M,
+            )
+            path_crop_min_retained_ratio = body.get(
+                "path_crop_min_retained_ratio",
+                DEFAULT_HD_RASTER_PATH_CROP_MIN_RETAINED_RATIO,
+            )
             if auto_crop_percentile is None:
                 auto_crop_percentile = DEFAULT_HD_RASTER_AUTO_CROP_PERCENTILE
             if auto_crop_min_retained_ratio is None:
                 auto_crop_min_retained_ratio = DEFAULT_HD_RASTER_AUTO_CROP_MIN_RETAINED_RATIO
+            if path_crop_distance_m is None:
+                path_crop_distance_m = DEFAULT_HD_RASTER_PATH_CROP_DISTANCE_M
+            if path_crop_min_retained_ratio is None:
+                path_crop_min_retained_ratio = DEFAULT_HD_RASTER_PATH_CROP_MIN_RETAINED_RATIO
             try:
                 script = prepare_hd_raster_script(
                     config,
                     map_dir,
                     auto_crop_percentile=auto_crop_percentile,
                     auto_crop_min_retained_ratio=auto_crop_min_retained_ratio,
+                    path_crop_distance_m=path_crop_distance_m,
+                    path_crop_min_retained_ratio=path_crop_min_retained_ratio,
                 )
             except (TypeError, ValueError) as exc:
                 self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)

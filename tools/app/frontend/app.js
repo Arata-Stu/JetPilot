@@ -7,6 +7,8 @@ const DEFAULT_RACELINE_ACCEL_LIMIT_MPS2 = 1.5;
 const DEFAULT_RACELINE_DECEL_LIMIT_MPS2 = 2.5;
 const DEFAULT_HD_RASTER_AUTO_CROP_PERCENTILE = 99.0;
 const DEFAULT_HD_RASTER_AUTO_CROP_MIN_RETAINED_RATIO = 0.75;
+const DEFAULT_HD_RASTER_PATH_CROP_DISTANCE_M = 0.0;
+const DEFAULT_HD_RASTER_PATH_CROP_MIN_RETAINED_RATIO = 0.2;
 const PREFLIGHT_CACHE_MS = 15_000;
 
 const state = {
@@ -63,6 +65,8 @@ const state = {
   hdRasterGeneration: {
     autoCropPercentile: DEFAULT_HD_RASTER_AUTO_CROP_PERCENTILE,
     autoCropMinRetainedRatio: DEFAULT_HD_RASTER_AUTO_CROP_MIN_RETAINED_RATIO,
+    pathCropDistanceM: DEFAULT_HD_RASTER_PATH_CROP_DISTANCE_M,
+    pathCropMinRetainedRatio: DEFAULT_HD_RASTER_PATH_CROP_MIN_RETAINED_RATIO,
   },
   simulation: {
     source: "raceline",
@@ -1316,6 +1320,8 @@ function mapStagePreflightPayload(stage, mapDir) {
   if (stage === "prepare-hd-raster") {
     payload.auto_crop_percentile = state.hdRasterGeneration.autoCropPercentile;
     payload.auto_crop_min_retained_ratio = state.hdRasterGeneration.autoCropMinRetainedRatio;
+    payload.path_crop_distance_m = state.hdRasterGeneration.pathCropDistanceM;
+    payload.path_crop_min_retained_ratio = state.hdRasterGeneration.pathCropMinRetainedRatio;
   }
   if (stage === "generate-raceline") {
     payload.vehicle_width_m = state.racelineGeneration.vehicleWidthM;
@@ -3858,11 +3864,16 @@ function renderHdRasterOptions(detail) {
   const options = state.hdRasterGeneration;
   const snapshotReady = Boolean(detail.map?.artifacts?.snapshot?.exists);
   const cropChoices = [
-    [99.5, "Light crop / 99.5%"],
-    [99.0, "Balanced / 99%"],
-    [98.0, "Strong crop / 98%"],
-    [100.0, "Off / 100%"],
+    ["path:0.8", "Track focus / 0.8 m"],
+    ["path:1.5", "Track focus / 1.5 m"],
+    ["path:3.0", "Track focus / 3.0 m"],
+    ["percent:98", "Percentile / 98%"],
+    ["percent:99", "Percentile / 99%"],
+    ["percent:100", "Off / 100%"],
   ];
+  const selectedCrop = options.pathCropDistanceM > 0
+    ? `path:${options.pathCropDistanceM.toFixed(1)}`
+    : `percent:${Number(options.autoCropPercentile).toFixed(0)}`;
   return `
     <div class="inspector-block hd-raster-block">
       <div class="inspector-title-row">
@@ -3874,12 +3885,14 @@ function renderHdRasterOptions(detail) {
           <label for="hd-raster-auto-crop">Point cloud crop</label>
           <select id="hd-raster-auto-crop" onchange="updateHdRasterAutoCrop(this.value)">
             ${cropChoices
-              .map(([value, label]) => `<option value="${value}" ${Math.abs(options.autoCropPercentile - value) < 1e-9 ? "selected" : ""}>${esc(label)}</option>`)
+              .map(([value, label]) => `<option value="${value}" ${selectedCrop === value ? "selected" : ""}>${esc(label)}</option>`)
               .join("")}
           </select>
         </div>
         <div class="field-hint full">
-          ${options.autoCropPercentile >= 100
+          ${options.pathCropDistanceM > 0
+            ? `Raster keeps landmarks within ${options.pathCropDistanceM} m of the VSLAM path.`
+            : options.autoCropPercentile >= 100
             ? "Raster bounds use all landmark points."
             : `Raster bounds use the central ${options.autoCropPercentile}% of landmark points.`}
         </div>
@@ -3892,9 +3905,16 @@ function renderHdRasterOptions(detail) {
 }
 
 function updateHdRasterAutoCrop(value) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 100) return;
-  state.hdRasterGeneration.autoCropPercentile = parsed;
+  const [mode, rawValue] = String(value || "").split(":");
+  const parsed = Number(rawValue);
+  if (!Number.isFinite(parsed)) return;
+  if (mode === "path") {
+    state.hdRasterGeneration.pathCropDistanceM = Math.max(0, parsed);
+    state.hdRasterGeneration.autoCropPercentile = 100.0;
+  } else {
+    state.hdRasterGeneration.pathCropDistanceM = 0.0;
+    state.hdRasterGeneration.autoCropPercentile = Math.max(0.001, Math.min(100, parsed));
+  }
   if (state.selectedMapDetail?.map?.path) {
     invalidateMapPreflights(state.selectedMapDetail.map.path);
     render();
@@ -3905,6 +3925,8 @@ function hdRasterGenerationPayload() {
   return {
     auto_crop_percentile: state.hdRasterGeneration.autoCropPercentile,
     auto_crop_min_retained_ratio: state.hdRasterGeneration.autoCropMinRetainedRatio,
+    path_crop_distance_m: state.hdRasterGeneration.pathCropDistanceM,
+    path_crop_min_retained_ratio: state.hdRasterGeneration.pathCropMinRetainedRatio,
   };
 }
 
