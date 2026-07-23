@@ -248,14 +248,16 @@ for offline_attempt in $(seq 1 180); do
   fi
   offline_nodes="$(ros2 node list 2>/dev/null || true)"
   offline_resume_type="$(ros2 service type /rosbag2_player/resume 2>/dev/null || true)"
-  if [[ "$offline_nodes" == *visual_slam_node* ]] && [[ "$offline_nodes" == *vslam_reference_snapshot_recorder* ]] && [[ "$offline_resume_type" == *rosbag2_interfaces/srv/Resume* ]] && [ "$(offline_topic_publishers /visual_slam/tracking/slam_path)" -gt 0 ] && [ "$(offline_topic_publishers /visual_slam/tracking/odometry)" -gt 0 ] && [ "$(offline_topic_publishers /visual_slam/vis/landmarks_cloud)" -gt 0 ]; then
+  if [[ "$offline_nodes" == *visual_slam_node* ]] && [[ "$offline_nodes" == *vslam_reference_snapshot_recorder* ]] && [[ "$offline_resume_type" == *rosbag2_interfaces/srv/Resume* ]]; then
     offline_ready=1
     break
   fi
   sleep 1
 done
 if [ "$offline_ready" -ne 1 ]; then
-  echo "offline eval readiness timed out after 180 seconds; VSLAM publishers did not become available"
+  echo "offline eval readiness timed out after 180 seconds; launch graph or rosbag player did not become available"
+  echo "[debug] nodes: $(ros2 node list 2>/dev/null | tr '\n' ' ' || true)"
+  echo "[debug] /rosbag2_player/resume type: $(ros2 service type /rosbag2_player/resume 2>/dev/null || true)"
   offline_stop_launch TERM || true
   exit 23
 fi
@@ -276,12 +278,15 @@ else
   sleep 5
   ros2 service call /rosbag2_player/resume rosbag2_interfaces/srv/Resume '{{}}'
 fi
-for offline_attempt in $(seq 1 15); do
+for offline_attempt in $(seq 1 120); do
   if [ -s "$snapshot" ]; then
     break
   fi
   if ! kill -0 "$offline_launch_pid" 2>/dev/null; then
     break
+  fi
+  if [ "$offline_attempt" = "15" ] || [ "$offline_attempt" = "60" ]; then
+    echo "[debug] waiting for snapshot: publishers path=$(offline_topic_publishers /visual_slam/tracking/slam_path), odom=$(offline_topic_publishers /visual_slam/tracking/odometry), landmarks=$(offline_topic_publishers /visual_slam/vis/landmarks_cloud)"
   fi
   sleep 1
 done
