@@ -129,10 +129,12 @@ const state = {
     renderedFrameIndex: -1,
     renderedFrameKey: "",
     lastVisualUpdateMs: 0,
+    imageViewMode: "single",
     renderedChannel: "",
     activeBufferImg: "",
     pendingFrameKey: "",
     frameRequestSerial: 0,
+    channelRender: {},
   },
 };
 
@@ -2250,6 +2252,7 @@ function renderAnalysisViewer() {
           <div class="analysis-image-stage">
             <img id="analysis-frame-image-a" alt="Selected rosbag image frame A" decoding="async" />
             <img id="analysis-frame-image-b" alt="Selected rosbag image frame B" decoding="async" />
+            <div id="analysis-multi-image-grid" class="analysis-multi-image-grid"></div>
             <div id="analysis-frame-empty" class="analysis-frame-empty visible">${frames.length ? "Loading frame..." : "No image frames were extracted."}</div>
             <span id="analysis-frame-time" class="analysis-frame-time">${formatAnalysisClock(analysis.currentTime)}</span>
           </div>
@@ -2828,7 +2831,7 @@ function stepAnalysisFrame(direction) {
   seekAnalysisTime(frames[index].t);
 }
 
-function renderAnalysisCameraSelector() {
+function analysisImageChannels() {
   const detailTopics = state.analysis.detail?.topics || {};
   const manifestImageTopics = Array.isArray(detailTopics.image_topics) ? detailTopics.image_topics : [];
   const channelSet = new Set(manifestImageTopics);
@@ -2842,35 +2845,68 @@ function renderAnalysisCameraSelector() {
   if (detailTopics.image) channelSet.add(detailTopics.image);
   if (detailTopics.primary_image_topic) channelSet.add(detailTopics.primary_image_topic);
 
-  const channels = [...channelSet].filter(Boolean);
+  return [...channelSet].filter(Boolean);
+}
+
+function analysisPrimaryImageTopic(channels = analysisImageChannels()) {
+  const detailTopics = state.analysis.detail?.topics || {};
+  return detailTopics.primary_image_topic || detailTopics.image || channels[0] || "";
+}
+
+function renderAnalysisCameraSelector() {
+  const channels = analysisImageChannels();
   if (!channels.length) return "";
 
-  const primaryTopic = detailTopics.primary_image_topic || detailTopics.image || channels[0];
+  const primaryTopic = analysisPrimaryImageTopic(channels);
   const currentChannel = state.analysis.selectedChannel || primaryTopic || channels[0];
-
-  if (channels.length === 1) {
-    return `
-      <div class="analysis-camera-selector" style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.5rem; background:rgba(255,255,255,0.03); padding:0.4rem 0.6rem; border-radius:6px;">
-        <span style="font-size:0.8rem; font-weight:600; color:#8a99a8;">Camera Channel:</span>
-        <strong style="font-size:0.82rem; color:#5aa8ff; background:#182026; padding:0.2rem 0.6rem; border-radius:4px; border:1px solid #28333e;">${esc(channels[0])}</strong>
-      </div>
-    `;
-  }
+  const viewMode = channels.length === 1 ? "single" : (state.analysis.imageViewMode || "single");
 
   return `
-    <div class="analysis-camera-selector" style="display:flex; align-items:center; gap:0.5rem; margin-bottom:0.5rem; background:rgba(255,255,255,0.03); padding:0.4rem 0.6rem; border-radius:6px;">
-      <span style="font-size:0.8rem; font-weight:600; color:#8a99a8;">Camera Channel:</span>
-      <select onchange="selectAnalysisCameraChannel(this.value)" style="padding:0.2rem 0.5rem; font-size:0.82rem; background:#182026; color:#fff; border:1px solid #303b44; border-radius:4px;">
-        ${channels.map((ch) => `<option value="${esc(ch)}" ${ch === currentChannel ? "selected" : ""}>${esc(ch)}${ch === primaryTopic ? " (Primary Clock)" : ""}</option>`).join("")}
-      </select>
+    <div class="analysis-camera-selector">
+      <div class="analysis-camera-mode" role="group" aria-label="Image layout">
+        ${[
+          ["single", "Single"],
+          ["strip", "Primary"],
+          ["grid", "Grid"],
+        ].map(([mode, label]) => `
+          <button
+            class="${viewMode === mode ? "active" : ""}"
+            ${channels.length === 1 && mode !== "single" ? "disabled" : ""}
+            onclick="setAnalysisImageViewMode(${js(mode)})"
+          >${esc(label)}</button>
+        `).join("")}
+      </div>
+      <label>
+        <span>${viewMode === "single" ? "Channel" : "Primary"}</span>
+        <select onchange="selectAnalysisCameraChannel(this.value)">
+          ${channels.map((ch) => `<option value="${esc(ch)}" ${ch === currentChannel ? "selected" : ""}>${esc(ch)}${ch === primaryTopic ? " (clock)" : ""}</option>`).join("")}
+        </select>
+      </label>
     </div>
   `;
+}
+
+function setAnalysisImageViewMode(mode) {
+  const normalized = ["single", "strip", "grid"].includes(mode) ? mode : "single";
+  state.analysis.imageViewMode = normalized;
+  resetAnalysisFrameRenderState();
+  const viewer = $("analysis-viewer-body");
+  if (viewer) {
+    viewer.innerHTML = renderAnalysisViewer();
+    mountAnalysisViewer();
+  }
 }
 
 function selectAnalysisCameraChannel(channel) {
   state.analysis.selectedChannel = channel;
   resetAnalysisFrameRenderState();
-  updateAnalysisFrame(state.analysis.currentTime);
+  const viewer = $("analysis-viewer-body");
+  if (viewer) {
+    viewer.innerHTML = renderAnalysisViewer();
+    mountAnalysisViewer();
+  } else {
+    updateAnalysisFrame(state.analysis.currentTime);
+  }
 }
 
 function analysisAssetUrl(frame, channelTopic = null) {
@@ -2890,6 +2926,7 @@ function resetAnalysisFrameRenderState() {
   state.analysis.activeBufferImg = "";
   state.analysis.pendingFrameKey = "";
   state.analysis.frameRequestSerial += 1;
+  state.analysis.channelRender = {};
 }
 
 function visibleAnalysisImage(imgA, imgB) {
@@ -2898,17 +2935,173 @@ function visibleAnalysisImage(imgA, imgB) {
   return null;
 }
 
+function analysisChannelPayloadAt(frames, index, channel, primaryTopic) {
+  for (let cursor = index; cursor >= 0; cursor -= 1) {
+    const frame = frames[cursor];
+    if (!frame) continue;
+    const channelPayload = frame.channels?.[channel];
+    if (channelPayload?.path) {
+      return {
+        ...channelPayload,
+        frameIndex: cursor,
+        frameTime: Number(frame.t || 0),
+        path: channelPayload.path,
+        stale: cursor !== index,
+      };
+    }
+    if (channel === primaryTopic && frame.path) {
+      return {
+        path: frame.path,
+        width: frame.width,
+        height: frame.height,
+        delta_ms: 0,
+        frameIndex: cursor,
+        frameTime: Number(frame.t || 0),
+        stale: cursor !== index,
+      };
+    }
+  }
+  return null;
+}
+
+function renderAnalysisMultiTiles(grid, channels, selectedChannel, primaryTopic, mode) {
+  const ordered = [
+    selectedChannel,
+    ...channels.filter((channel) => channel !== selectedChannel),
+  ].filter(Boolean);
+  const layoutKey = `${mode}|${ordered.join("\n")}`;
+  grid.className = `analysis-multi-image-grid ${mode === "strip" ? "strip" : "grid"}`;
+  if (grid.dataset.layoutKey === layoutKey) return ordered;
+  grid.dataset.layoutKey = layoutKey;
+  grid.innerHTML = ordered.map((channel) => `
+    <div class="analysis-channel-tile ${channel === selectedChannel ? "primary" : ""}" data-channel="${esc(channel)}">
+      <div class="analysis-channel-images">
+        <img data-buffer="a" alt="${esc(channel)} frame A" decoding="async" />
+        <img data-buffer="b" alt="${esc(channel)} frame B" decoding="async" />
+        <div class="analysis-channel-empty visible">Waiting for frame...</div>
+      </div>
+      <div class="analysis-channel-caption">
+        <strong>${esc(channel)}</strong>
+        <span>${channel === primaryTopic ? "clock" : ""}</span>
+      </div>
+    </div>
+  `).join("");
+  return ordered;
+}
+
+function updateAnalysisMultiFrame(frames, index, time, channels, selectedChannel, primaryTopic) {
+  const grid = $("analysis-multi-image-grid");
+  const imgA = $("analysis-frame-image-a");
+  const imgB = $("analysis-frame-image-b");
+  const empty = $("analysis-frame-empty");
+  if (!grid || !empty) return;
+
+  if (imgA) imgA.classList.remove("visible");
+  if (imgB) imgB.classList.remove("visible");
+  empty.classList.remove("visible");
+  grid.classList.add("visible");
+
+  const mode = state.analysis.imageViewMode === "grid" ? "grid" : "strip";
+  const visibleChannels = renderAnalysisMultiTiles(
+    grid,
+    channels,
+    selectedChannel || primaryTopic || channels[0],
+    primaryTopic,
+    mode,
+  );
+
+  visibleChannels.forEach((channel) => {
+    const tile = [...grid.querySelectorAll(".analysis-channel-tile")]
+      .find((element) => element.dataset.channel === channel);
+    if (!tile) return;
+    const payload = analysisChannelPayloadAt(frames, index, channel, primaryTopic);
+    const emptyTile = tile.querySelector(".analysis-channel-empty");
+    const captionMeta = tile.querySelector(".analysis-channel-caption span");
+    const activeImg = tile.querySelector("img.visible");
+    const targetImg = activeImg?.dataset.buffer === "b"
+      ? tile.querySelector('img[data-buffer="a"]')
+      : tile.querySelector('img[data-buffer="b"]');
+
+    if (!payload) {
+      if (!activeImg && emptyTile) emptyTile.classList.add("visible");
+      if (captionMeta) captionMeta.textContent = channel === primaryTopic ? "clock" : "waiting";
+      return;
+    }
+
+    const url = analysisAssetUrl({ path: payload.path });
+    const renderState = state.analysis.channelRender[channel] || { serial: 0, key: "", pendingKey: "" };
+    const key = `${payload.frameIndex}|${channel}|${url}`;
+    if (captionMeta) {
+      const age = Math.max(0, time - Number(payload.frameTime || 0));
+      const delta = Number(payload.delta_ms || 0);
+      const parts = [];
+      if (channel === primaryTopic) parts.push("clock");
+      if (payload.stale && age > 0.001) parts.push(`hold ${age.toFixed(2)}s`);
+      else if (delta) parts.push(`${delta >= 0 ? "+" : ""}${delta}ms`);
+      captionMeta.textContent = parts.join(" / ");
+    }
+    if (!targetImg || key === renderState.key || key === renderState.pendingKey) {
+      state.analysis.channelRender[channel] = renderState;
+      return;
+    }
+
+    renderState.serial = Number(renderState.serial || 0) + 1;
+    renderState.pendingKey = key;
+    state.analysis.channelRender[channel] = renderState;
+    const requestSerial = renderState.serial;
+    const loader = new Image();
+    loader.decoding = "async";
+    loader.onload = async () => {
+      try {
+        if (typeof loader.decode === "function") await loader.decode();
+      } catch {
+        // onload is enough on browsers that do not expose decode consistently.
+      }
+      const latest = state.analysis.channelRender[channel];
+      if (!latest || latest.serial !== requestSerial || latest.pendingKey !== key) return;
+      targetImg.src = url;
+      targetImg.classList.add("visible");
+      if (activeImg && activeImg !== targetImg) activeImg.classList.remove("visible");
+      if (emptyTile) emptyTile.classList.remove("visible");
+      latest.key = key;
+      latest.pendingKey = "";
+      latest.active = targetImg.dataset.buffer || "a";
+    };
+    loader.onerror = () => {
+      const latest = state.analysis.channelRender[channel];
+      if (!latest || latest.serial !== requestSerial || latest.pendingKey !== key) return;
+      latest.pendingKey = "";
+      if (!tile.querySelector("img.visible") && emptyTile) {
+        emptyTile.textContent = "Frame unavailable";
+        emptyTile.classList.add("visible");
+      }
+    };
+    loader.src = url;
+  });
+
+  state.analysis.renderedFrameIndex = index;
+  state.analysis.renderedFrameKey = `multi|${state.analysis.imageViewMode}|${index}`;
+  state.analysis.renderedChannel = selectedChannel || "";
+
+  const frameTime = $("analysis-frame-time");
+  if (frameTime) {
+    frameTime.textContent = `${formatAnalysisClock(time)} / frame ${index + 1} of ${frames.length}`;
+  }
+}
+
 function updateAnalysisFrame(time) {
   const frames = analysisFrames();
   const imgA = $("analysis-frame-image-a");
   const imgB = $("analysis-frame-image-b");
   const empty = $("analysis-frame-empty");
+  const grid = $("analysis-multi-image-grid");
   if (!empty) return;
 
   const index = timedRecordIndex(frames, time);
   if (index < 0) {
     if (imgA) imgA.classList.remove("visible");
     if (imgB) imgB.classList.remove("visible");
+    if (grid) grid.classList.remove("visible");
     empty.textContent = frames.length ? "Waiting for the first image frame..." : "No image frames were extracted.";
     empty.classList.add("visible");
     state.analysis.renderedFrameIndex = -1;
@@ -2919,9 +3112,18 @@ function updateAnalysisFrame(time) {
   }
 
   const detailTopics = state.analysis.detail?.topics || {};
-  const primaryTopic = detailTopics.primary_image_topic || detailTopics.image || "";
+  const channels = analysisImageChannels();
+  const primaryTopic = analysisPrimaryImageTopic(channels);
   const firstFrameChannels = frames[0]?.channels ? Object.keys(frames[0].channels) : [];
   const selectedChannel = state.analysis.selectedChannel || primaryTopic || firstFrameChannels[0] || null;
+  const viewMode = channels.length > 1 ? (state.analysis.imageViewMode || "single") : "single";
+
+  if (viewMode !== "single") {
+    updateAnalysisMultiFrame(frames, index, time, channels, selectedChannel, primaryTopic);
+    return;
+  }
+
+  if (grid) grid.classList.remove("visible");
 
   const currentFrame = frames[index];
   const hasChannel = selectedChannel && (
@@ -6746,6 +6948,8 @@ window.toggleAnalysisPlayback = toggleAnalysisPlayback;
 window.seekAnalysisTime = seekAnalysisTime;
 window.seekAnalysisRelative = seekAnalysisRelative;
 window.setAnalysisPlaybackRate = setAnalysisPlaybackRate;
+window.setAnalysisImageViewMode = setAnalysisImageViewMode;
+window.selectAnalysisCameraChannel = selectAnalysisCameraChannel;
 window.stepAnalysisFrame = stepAnalysisFrame;
 window.seekAnalysisFromTimeline = seekAnalysisFromTimeline;
 window.selectedCameraTopicConfig = selectedCameraTopicConfig;
