@@ -124,7 +124,7 @@ public:
       "selected_lane_topic", "/planning/selected_lane");
     const auto ready_topic = declare_parameter<std::string>("ready_topic", "/planning/ready");
     const auto diagnostics_topic = declare_parameter<std::string>(
-      "diagnostics_topic", "/diagnostics");
+      "diagnostics_topic", "/planning/diagnostics");
 
     publish_rate_hz_ = declare_parameter<double>("publish_rate_hz", 10.0);
     path_timeout_sec_ = declare_parameter<double>("path_timeout_sec", 0.0);

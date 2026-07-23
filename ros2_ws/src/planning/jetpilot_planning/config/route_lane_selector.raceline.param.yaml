@@ -13,7 +13,7 @@
     target_speed_topic: /planning/target_speed
     selected_lane_topic: /planning/selected_lane
     ready_topic: /planning/ready
-    diagnostics_topic: /diagnostics
+    diagnostics_topic: /planning/diagnostics
 
     publish_rate_hz: 10.0
     path_timeout_sec: 0.0

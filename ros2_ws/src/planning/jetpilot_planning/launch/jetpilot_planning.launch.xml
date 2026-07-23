@@ -6,6 +6,7 @@
   <arg name="raceline_root" default=""/>
   <arg name="raceline_csv" default=""/>
   <arg name="raceline_path_topic" default="/planning/raceline_path"/>
+  <arg name="diagnostics_topic" default="/planning/diagnostics"/>
 
   <node pkg="jetpilot_planning" exec="raceline_path_publisher_node"
         name="raceline_path_publisher" output="screen"
@@ -20,6 +21,7 @@
   <node pkg="jetpilot_planning" exec="route_lane_selector_node"
         name="route_lane_selector" output="screen">
     <param from="$(var config_file)"/>
+    <param name="diagnostics_topic" value="$(var diagnostics_topic)"/>
     <param name="use_sim_time" value="$(var use_sim_time)"/>
   </node>
 </launch>

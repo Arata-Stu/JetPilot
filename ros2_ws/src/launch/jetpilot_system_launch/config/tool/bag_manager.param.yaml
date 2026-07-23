@@ -46,7 +46,10 @@ bag_manager_node:
       - /localization/pose_hint_state
       - /localization/pose_hint_required
       - /localization/current_section
-      - /diagnostics
+      - /localization/diagnostics
+      - /planning/diagnostics
+      - /controller/diagnostics
+      - /jetson/diagnostics
 
       ## SilkyEvCam event camera.
       - /event_camera/camera_info

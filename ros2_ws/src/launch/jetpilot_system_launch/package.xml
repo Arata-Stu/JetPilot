@@ -26,6 +26,7 @@
   <exec_depend>rc_serial_reader</exec_depend>
   <exec_depend>jetpilot_vesc_interface</exec_depend>
   <exec_depend>isaac_ros_launch_utils</exec_depend>
+  <exec_depend>isaac_ros_jetson_stats</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>rosbag2</exec_depend>

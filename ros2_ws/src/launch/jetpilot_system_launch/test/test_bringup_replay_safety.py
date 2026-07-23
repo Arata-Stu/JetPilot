@@ -44,6 +44,7 @@ class ReplaySafetyTest(unittest.TestCase):
             "/visual_localization/trigger_localization",
             "/visual_localization/pose",
             "/diagnostics",
+            "/localization/diagnostics",
             "/localization/pose_hint_required",
             "/localization/pose_hint_state",
             "/tf",
@@ -64,6 +65,8 @@ class ReplaySafetyTest(unittest.TestCase):
             "/controller/ready",
             "/controller/lookahead_point",
             "/localization/current_section",
+            "/planning/diagnostics",
+            "/controller/diagnostics",
         }
 
         self.assertTrue(

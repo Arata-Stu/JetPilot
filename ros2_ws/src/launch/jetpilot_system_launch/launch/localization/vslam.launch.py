@@ -174,7 +174,7 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('vslam_enable_request_hint', True)
     args.add_arg('vslam_initial_pose_topic', '/localization/pose_hint')
     args.add_arg('vslam_trigger_hint_topic', '/visual_slam/trigger_hint')
-    args.add_arg('vslam_diagnostics_topic', '/diagnostics')
+    args.add_arg('vslam_diagnostics_topic', '/localization/diagnostics')
     args.add_arg('vslam_use_rectified_images', False)
     args.add_arg('vslam_enable_ground_constraint_in_odometry', False)
     args.add_arg('vslam_enable_ground_constraint_in_slam', False)

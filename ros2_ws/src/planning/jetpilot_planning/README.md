@@ -14,7 +14,7 @@ JetPilotの経路選択を担当する、C++ / `ament_cmake_auto` の最小plann
 | output | `/planning/target_speed` | `std_msgs/msg/Float32` | 選択laneの目標速度（m/s） |
 | output | `/planning/selected_lane` | `std_msgs/msg/String` | 選択中lane ID。未ready時は空文字 |
 | output | `/planning/ready` | `std_msgs/msg/Bool` | controllerの実行可否 |
-| output | `/diagnostics` | `diagnostic_msgs/msg/DiagnosticArray` | 選択理由・不足path |
+| output | `/planning/diagnostics` | `diagnostic_msgs/msg/DiagnosticArray` | 選択理由・不足path |
 
 入力pathと出力trajectoryはreliable + transient-localです。出力は入力pathのframe（通常`map`）を維持し、各Poseのframeとstampを揃えます。選択可能なpathが無い場合は、古いlatched trajectoryを無効化するため空の`Path`、`target_speed=0`、`ready=false`をpublishします。controllerはこの状態で停止する必要があります。
 

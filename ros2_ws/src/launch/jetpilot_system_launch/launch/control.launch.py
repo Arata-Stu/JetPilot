@@ -11,6 +11,7 @@ def generate_launch_description() -> lut.LaunchDescription:
         'control_param',
         lu.get_path('jetpilot_controller', 'config/controller.param.yaml'),
         cli=True)
+    args.add_arg('diagnostics_topic', '/controller/diagnostics', cli=True)
     args.add_arg('use_sim_time', False, cli=True)
 
     actions = args.get_launch_actions()
@@ -20,6 +21,7 @@ def generate_launch_description() -> lut.LaunchDescription:
             'launch/jetpilot_controller.launch.xml',
             launch_arguments={
                 'config_file': args.control_param,
+                'diagnostics_topic': args.diagnostics_topic,
                 'use_sim_time': args.use_sim_time,
             },
         ))

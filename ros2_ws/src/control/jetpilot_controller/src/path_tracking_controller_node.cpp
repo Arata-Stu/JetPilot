@@ -93,6 +93,8 @@ private:
     odometry_topic_ = declare_parameter<std::string>(
       "odometry_topic", "/visual_slam/tracking/odometry");
     command_topic_ = declare_parameter<std::string>("command_topic", "/auto/control_cmd");
+    diagnostics_topic_ =
+      declare_parameter<std::string>("diagnostics_topic", "/controller/diagnostics");
 
     control_rate_hz_ = declare_parameter<double>("control_rate_hz", 30.0);
     trajectory_timeout_s_ = declare_parameter<double>("trajectory_timeout_s", 0.5);
@@ -245,7 +247,7 @@ private:
     lookahead_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>(
       "/controller/lookahead_point", command_qos);
     diagnostics_pub_ = create_publisher<diagnostic_msgs::msg::DiagnosticArray>(
-      "/diagnostics", 10);
+      diagnostics_topic_, 10);
   }
 
   bool transform_trajectory(
@@ -534,6 +536,7 @@ private:
   std::string localization_state_topic_;
   std::string odometry_topic_;
   std::string command_topic_;
+  std::string diagnostics_topic_;
 
   double control_rate_hz_{30.0};
   double trajectory_timeout_s_{0.5};

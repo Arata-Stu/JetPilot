@@ -351,7 +351,7 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('vgl_pose_topic', '/visual_localization/pose', cli=True)
     args.add_arg('localization_trigger_topic', '/localization/trigger', cli=True)
     args.add_arg('localization_trigger_service', '/localization/relocalize', cli=True)
-    args.add_arg('localization_diagnostics_topic', '/diagnostics', cli=True)
+    args.add_arg('localization_diagnostics_topic', '/localization/diagnostics', cli=True)
     args.add_arg(
         'pose_hint_required_topic', '/localization/pose_hint_required', cli=True)
     args.add_arg('pose_hint_state_topic', '/localization/pose_hint_state', cli=True)

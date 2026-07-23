@@ -53,6 +53,10 @@ _REPLAY_ISOLATED_TOPICS = (
     '/visual_slam/tracking/odometry',
     '/visual_slam/tracking/slam_path',
     '/diagnostics',
+    '/localization/diagnostics',
+    '/planning/diagnostics',
+    '/controller/diagnostics',
+    '/jetson/diagnostics',
     '/localization/pose_hint_required',
     '/localization/pose_hint_state',
     '/localization/current_section',
@@ -188,6 +192,9 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('enable_joy', True, cli=True)
     args.add_arg('enable_teleop', True, cli=True)
     args.add_arg('enable_rc_serial', False, cli=True)
+    args.add_arg('enable_jetson_stats', False, cli=True)
+    args.add_arg('jetson_stats_diagnostics_topic', '/jetson/diagnostics', cli=True)
+    args.add_arg('jetson_stats_interval', '0.5', cli=True)
     args.add_arg('control_authority', 'hardware_mux', cli=True)
     args.add_arg(
         'bag_manager_param',
@@ -232,6 +239,7 @@ def generate_launch_description() -> lut.LaunchDescription:
         'control_param',
         lu.get_path('jetpilot_controller', 'config/controller.param.yaml'),
         cli=True)
+    args.add_arg('controller_diagnostics_topic', '/controller/diagnostics', cli=True)
 
     args.add_arg('enable_planning', False, cli=True)
     args.add_arg(
@@ -246,6 +254,7 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('raceline_root', '', cli=True)
     args.add_arg('raceline_csv', '', cli=True)
     args.add_arg('raceline_path_topic', '/planning/raceline_path', cli=True)
+    args.add_arg('planning_diagnostics_topic', '/planning/diagnostics', cli=True)
 
     args.add_arg('enable_sensor_kit', False, cli=True)
     args.add_arg('sensor_kit_interface_pkg', 'jetpilot_system_launch', cli=True)
@@ -312,7 +321,7 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('vgl_pose_topic', '/visual_localization/pose', cli=True)
     args.add_arg('localization_trigger_topic', '/localization/trigger', cli=True)
     args.add_arg('localization_trigger_service', '/localization/relocalize', cli=True)
-    args.add_arg('localization_diagnostics_topic', '/diagnostics', cli=True)
+    args.add_arg('localization_diagnostics_topic', '/localization/diagnostics', cli=True)
     args.add_arg(
         'pose_hint_required_topic', '/localization/pose_hint_required', cli=True)
     args.add_arg('pose_hint_state_topic', '/localization/pose_hint_state', cli=True)
@@ -417,6 +426,9 @@ def generate_launch_description() -> lut.LaunchDescription:
                     args.vgl_pose_topic,
                     args.localization_trigger_topic,
                     args.localization_diagnostics_topic,
+                    args.planning_diagnostics_topic,
+                    args.controller_diagnostics_topic,
+                    args.jetson_stats_diagnostics_topic,
                     args.pose_hint_required_topic,
                     args.pose_hint_state_topic,
                 ),
@@ -450,6 +462,7 @@ def generate_launch_description() -> lut.LaunchDescription:
                 'raceline_root': args.raceline_root,
                 'raceline_csv': args.raceline_csv,
                 'raceline_path_topic': args.raceline_path_topic,
+                'diagnostics_topic': args.planning_diagnostics_topic,
                 'use_sim_time': args.use_sim_time,
             },
             condition=IfCondition(args.enable_planning),
@@ -471,6 +484,9 @@ def generate_launch_description() -> lut.LaunchDescription:
                     lu.is_true(args.enable_teleop), actuation_nodes_allowed),
                 'enable_rc_serial': lut.AndSubstitution(
                     lu.is_true(args.enable_rc_serial), actuation_nodes_allowed),
+                'enable_jetson_stats': args.enable_jetson_stats,
+                'jetson_stats_diagnostics_topic': args.jetson_stats_diagnostics_topic,
+                'jetson_stats_interval': args.jetson_stats_interval,
                 'control_authority': args.control_authority,
                 'rc_channels_topic': args.rc_channels_topic,
                 'propo_control_topic': args.propo_control_topic,
@@ -517,6 +533,7 @@ def generate_launch_description() -> lut.LaunchDescription:
             'launch/control.launch.py',
             launch_arguments={
                 'control_param': args.control_param,
+                'diagnostics_topic': args.controller_diagnostics_topic,
                 'use_sim_time': args.use_sim_time,
             },
             condition=IfCondition(lut.AndSubstitution(

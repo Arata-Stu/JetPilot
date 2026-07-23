@@ -32,7 +32,7 @@
     localization_trigger_topic: "/localization/trigger"
     localization_trigger_service: "/localization/relocalize"
 
-    diagnostics_topic: "/diagnostics"
+    diagnostics_topic: "/localization/diagnostics"
     vslam_diagnostics_hardware_id: "visual_slam"
     vslam_localized_key: "localized_in_exist_map"
 

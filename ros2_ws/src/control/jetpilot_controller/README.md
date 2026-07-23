@@ -15,7 +15,7 @@ operation command muxを通してPCA9685/VESCのどちらにも同じ正規化�
 | output | `/auto/control_cmd` | `jetpilot_msgs/msg/ControlCommand` | 正規化steer/throttle/brake |
 | output | `/controller/ready` | `std_msgs/msg/Bool` | 走行指令を生成できているか |
 | output | `/controller/lookahead_point` | `geometry_msgs/msg/PoseStamped` | `base_link`上の追従点 |
-| output | `/diagnostics` | `diagnostic_msgs/msg/DiagnosticArray` | 停止理由と制御値 |
+| output | `/controller/diagnostics` | `diagnostic_msgs/msg/DiagnosticArray` | 停止理由と制御値 |
 
 plannerのPath frameから`base_link`へのTFが必要です。通常はlocalizationが`map -> odom`、
 VSLAMが`odom -> base_link`を供給します。

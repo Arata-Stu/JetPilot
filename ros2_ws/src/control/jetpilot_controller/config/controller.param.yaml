@@ -10,6 +10,7 @@ path_tracking_controller_node:
     localization_state_topic: /localization/pose_hint_state
     odometry_topic: /visual_slam/tracking/odometry
     command_topic: /auto/control_cmd
+    diagnostics_topic: /controller/diagnostics
 
     # Every required input has a steady-clock watchdog. A timeout produces a stop.
     control_rate_hz: 30.0

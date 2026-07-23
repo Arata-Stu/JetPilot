@@ -42,7 +42,10 @@ DEFAULT_TOPICS = [
     "/visual_slam/tracking/odometry",
     "/localization/pose_hint_state",
     "/localization/pose_hint_required",
-    "/diagnostics",
+    "/localization/diagnostics",
+    "/planning/diagnostics",
+    "/controller/diagnostics",
+    "/jetson/diagnostics",
     # SilkyEvCam event camera.
     "/event_camera/camera_info",
     "/event_camera/events",

@@ -4,6 +4,8 @@ import os
 
 import isaac_ros_launch_utils as lu
 import isaac_ros_launch_utils.all_types as lut
+from launch.actions import GroupAction
+from launch_ros.actions import SetRemap
 
 
 def workspace_param_path(filename: str, fallback_package: str, fallback_package_path: str) -> str:
@@ -86,6 +88,18 @@ def add_nodes(args: lu.ArgumentContainer):
             ],
         ))
 
+    if lu.is_true(args.enable_jetson_stats):
+        actions.append(GroupAction([
+            SetRemap(src='/diagnostics', dst=args.jetson_stats_diagnostics_topic),
+            lu.include(
+                'isaac_ros_jetson_stats',
+                'launch/jtop.launch.py',
+                launch_arguments={
+                    'interval': args.jetson_stats_interval,
+                },
+            ),
+        ]))
+
     if lu.is_true(args.enable_vslam_snapshot):
         actions.append(lu.Node(
             package='vslam_map_tools',
@@ -143,6 +157,9 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('enable_joy', False, cli=True)
     args.add_arg('enable_teleop', False, cli=True)
     args.add_arg('enable_rc_serial', False, cli=True)
+    args.add_arg('enable_jetson_stats', False, cli=True)
+    args.add_arg('jetson_stats_diagnostics_topic', '/jetson/diagnostics', cli=True)
+    args.add_arg('jetson_stats_interval', '0.5', cli=True)
     args.add_arg('control_authority', 'hardware_mux', cli=True)
     args.add_arg('rc_channels_topic', '/rc/channels', cli=True)
     args.add_arg('propo_control_topic', '/propo/control_cmd', cli=True)
