@@ -33,6 +33,11 @@ from .map_detail import (
     save_section_gates,
 )
 from .map_pipeline import (
+    DEFAULT_RACELINE_ACCEL_LIMIT_MPS2,
+    DEFAULT_RACELINE_DECEL_LIMIT_MPS2,
+    DEFAULT_RACELINE_LATERAL_ACCEL_LIMIT_MPS2,
+    DEFAULT_RACELINE_MAX_SPEED_MPS,
+    DEFAULT_RACELINE_MIN_SPEED_MPS,
     DEFAULT_RACELINE_SAFETY_MARGIN_M,
     DEFAULT_RACELINE_VEHICLE_WIDTH_M,
     build_vgl_vslam_script,
@@ -1285,16 +1290,39 @@ find {shlex.quote(record_root)} -name metadata.yaml -printf '%TY-%Tm-%Td %TH:%TM
                 "safety_margin_m",
                 DEFAULT_RACELINE_SAFETY_MARGIN_M,
             )
+            max_speed_mps = body.get("max_speed_mps", DEFAULT_RACELINE_MAX_SPEED_MPS)
+            min_speed_mps = body.get("min_speed_mps", DEFAULT_RACELINE_MIN_SPEED_MPS)
+            lateral_accel_limit_mps2 = body.get(
+                "lateral_accel_limit_mps2",
+                DEFAULT_RACELINE_LATERAL_ACCEL_LIMIT_MPS2,
+            )
+            accel_limit_mps2 = body.get("accel_limit_mps2", DEFAULT_RACELINE_ACCEL_LIMIT_MPS2)
+            decel_limit_mps2 = body.get("decel_limit_mps2", DEFAULT_RACELINE_DECEL_LIMIT_MPS2)
             if vehicle_width_m is None:
                 vehicle_width_m = DEFAULT_RACELINE_VEHICLE_WIDTH_M
             if safety_margin_m is None:
                 safety_margin_m = DEFAULT_RACELINE_SAFETY_MARGIN_M
+            if max_speed_mps is None:
+                max_speed_mps = DEFAULT_RACELINE_MAX_SPEED_MPS
+            if min_speed_mps is None:
+                min_speed_mps = DEFAULT_RACELINE_MIN_SPEED_MPS
+            if lateral_accel_limit_mps2 is None:
+                lateral_accel_limit_mps2 = DEFAULT_RACELINE_LATERAL_ACCEL_LIMIT_MPS2
+            if accel_limit_mps2 is None:
+                accel_limit_mps2 = DEFAULT_RACELINE_ACCEL_LIMIT_MPS2
+            if decel_limit_mps2 is None:
+                decel_limit_mps2 = DEFAULT_RACELINE_DECEL_LIMIT_MPS2
             try:
                 script = generate_raceline_script(
                     config,
                     map_dir,
                     vehicle_width_m=vehicle_width_m,
                     safety_margin_m=safety_margin_m,
+                    max_speed_mps=max_speed_mps,
+                    min_speed_mps=min_speed_mps,
+                    lateral_accel_limit_mps2=lateral_accel_limit_mps2,
+                    accel_limit_mps2=accel_limit_mps2,
+                    decel_limit_mps2=decel_limit_mps2,
                 )
             except (TypeError, ValueError) as exc:
                 self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)

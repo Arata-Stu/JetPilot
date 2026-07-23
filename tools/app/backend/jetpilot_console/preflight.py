@@ -13,6 +13,11 @@ from typing import Any, Mapping
 from .config import ConsoleConfig
 from .map_detail import load_yaml
 from .map_pipeline import (
+    DEFAULT_RACELINE_ACCEL_LIMIT_MPS2,
+    DEFAULT_RACELINE_DECEL_LIMIT_MPS2,
+    DEFAULT_RACELINE_LATERAL_ACCEL_LIMIT_MPS2,
+    DEFAULT_RACELINE_MAX_SPEED_MPS,
+    DEFAULT_RACELINE_MIN_SPEED_MPS,
     DEFAULT_RACELINE_SAFETY_MARGIN_M,
     DEFAULT_RACELINE_VEHICLE_WIDTH_M,
     default_topic_config,
@@ -1765,6 +1770,7 @@ def _generate_raceline_preflight(
         else None
     )
     clearance = _inspect_clearance_parameters(payload, report)
+    _inspect_speed_profile_parameters(payload, report)
     if centerline is not None and clearance is not None:
         vehicle_width, safety_margin = clearance
         required_width = vehicle_width + 2.0 * safety_margin
@@ -1918,6 +1924,89 @@ def _inspect_clearance_parameters(
         },
     )
     return vehicle_width, safety_margin
+
+
+def _inspect_speed_profile_parameters(
+    payload: Mapping[str, Any],
+    report: _Report,
+) -> tuple[float, float, float, float, float] | None:
+    raw_values = {
+        "max_speed_mps": payload.get("max_speed_mps", DEFAULT_RACELINE_MAX_SPEED_MPS),
+        "min_speed_mps": payload.get("min_speed_mps", DEFAULT_RACELINE_MIN_SPEED_MPS),
+        "lateral_accel_limit_mps2": payload.get(
+            "lateral_accel_limit_mps2",
+            DEFAULT_RACELINE_LATERAL_ACCEL_LIMIT_MPS2,
+        ),
+        "accel_limit_mps2": payload.get("accel_limit_mps2", DEFAULT_RACELINE_ACCEL_LIMIT_MPS2),
+        "decel_limit_mps2": payload.get("decel_limit_mps2", DEFAULT_RACELINE_DECEL_LIMIT_MPS2),
+    }
+    for key, value in list(raw_values.items()):
+        if value is None:
+            defaults = {
+                "max_speed_mps": DEFAULT_RACELINE_MAX_SPEED_MPS,
+                "min_speed_mps": DEFAULT_RACELINE_MIN_SPEED_MPS,
+                "lateral_accel_limit_mps2": DEFAULT_RACELINE_LATERAL_ACCEL_LIMIT_MPS2,
+                "accel_limit_mps2": DEFAULT_RACELINE_ACCEL_LIMIT_MPS2,
+                "decel_limit_mps2": DEFAULT_RACELINE_DECEL_LIMIT_MPS2,
+            }
+            raw_values[key] = defaults[key]
+
+    try:
+        if any(isinstance(value, bool) for value in raw_values.values()):
+            raise ValueError
+        max_speed = float(raw_values["max_speed_mps"])
+        min_speed = float(raw_values["min_speed_mps"])
+        lateral_accel = float(raw_values["lateral_accel_limit_mps2"])
+        accel_limit = float(raw_values["accel_limit_mps2"])
+        decel_limit = float(raw_values["decel_limit_mps2"])
+        if (
+            not math.isfinite(max_speed)
+            or not math.isfinite(min_speed)
+            or not math.isfinite(lateral_accel)
+            or not math.isfinite(accel_limit)
+            or not math.isfinite(decel_limit)
+            or max_speed <= 0.0
+            or min_speed < 0.0
+            or lateral_accel <= 0.0
+            or accel_limit <= 0.0
+            or decel_limit <= 0.0
+            or min_speed > max_speed
+        ):
+            raise ValueError
+    except (TypeError, ValueError):
+        report.add(
+            "raceline.speed_profile",
+            "Speed profile",
+            BLOCKED,
+            "Speed profile values must be finite and physically usable.",
+            remediation="Use max speed > 0, min speed >= 0, min <= max, and positive acceleration limits.",
+            details=raw_values,
+        )
+        return None
+
+    report.resolved.update(
+        {
+            "max_speed_mps": max_speed,
+            "min_speed_mps": min_speed,
+            "lateral_accel_limit_mps2": lateral_accel,
+            "accel_limit_mps2": accel_limit,
+            "decel_limit_mps2": decel_limit,
+        }
+    )
+    report.add(
+        "raceline.speed_profile",
+        "Speed profile",
+        PASS,
+        "Speed, lateral acceleration, and acceleration limits are valid.",
+        details={
+            "max_speed_mps": max_speed,
+            "min_speed_mps": min_speed,
+            "lateral_accel_limit_mps2": lateral_accel,
+            "accel_limit_mps2": accel_limit,
+            "decel_limit_mps2": decel_limit,
+        },
+    )
+    return max_speed, min_speed, lateral_accel, accel_limit, decel_limit
 
 
 def _numeric_csv_rows(

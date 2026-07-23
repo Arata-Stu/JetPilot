@@ -25,12 +25,24 @@ VALID_DIRECTIONS = ("forward", "reverse", "both")
 VALID_PRESETS = ("default", "race-stacks", "f110", "fullscale")
 DEFAULT_VEHICLE_WIDTH_M = 0.25
 DEFAULT_SAFETY_MARGIN_M = 0.05
+DEFAULT_MAX_SPEED_MPS = 3.0
+DEFAULT_MIN_SPEED_MPS = 0.8
+DEFAULT_LATERAL_ACCEL_LIMIT_MPS2 = 2.5
+DEFAULT_ACCEL_LIMIT_MPS2 = 1.5
+DEFAULT_DECEL_LIMIT_MPS2 = 2.5
 
 
 def nonnegative_finite_float(value: str) -> float:
     parsed = float(value)
     if not math.isfinite(parsed) or parsed < 0.0:
         raise argparse.ArgumentTypeError("must be a finite value greater than or equal to 0")
+    return parsed
+
+
+def positive_finite_float(value: str) -> float:
+    parsed = float(value)
+    if not math.isfinite(parsed) or parsed <= 0.0:
+        raise argparse.ArgumentTypeError("must be a finite value greater than 0")
     return parsed
 
 
@@ -98,6 +110,37 @@ def validate_track_clearance(
         )
 
     return required_width
+
+
+def validate_speed_profile(
+    max_speed: float,
+    min_speed: float,
+    lateral_accel_limit: float,
+    accel_limit: float,
+    decel_limit: float,
+) -> None:
+    values = {
+        "max speed": max_speed,
+        "min speed": min_speed,
+        "lateral acceleration limit": lateral_accel_limit,
+        "acceleration limit": accel_limit,
+        "deceleration limit": decel_limit,
+    }
+    for label, value in values.items():
+        if not math.isfinite(value):
+            raise RuntimeError(f"{label} must be finite.")
+    if max_speed <= 0.0:
+        raise RuntimeError("max speed must be greater than 0 m/s.")
+    if min_speed < 0.0:
+        raise RuntimeError("min speed must be greater than or equal to 0 m/s.")
+    if min_speed > max_speed:
+        raise RuntimeError("min speed must be less than or equal to max speed.")
+    if lateral_accel_limit <= 0.0:
+        raise RuntimeError("lateral acceleration limit must be greater than 0 m/s^2.")
+    if accel_limit <= 0.0:
+        raise RuntimeError("acceleration limit must be greater than 0 m/s^2.")
+    if decel_limit <= 0.0:
+        raise RuntimeError("deceleration limit must be greater than 0 m/s^2.")
 
 
 def remove_duplicate_points(points: np.ndarray, *extra_columns: np.ndarray) -> Tuple[np.ndarray, ...]:
@@ -171,6 +214,11 @@ def write_raceline_metadata(
     widths: np.ndarray,
     point_count: int,
     track_length: float,
+    max_speed: float = DEFAULT_MAX_SPEED_MPS,
+    min_speed: float = DEFAULT_MIN_SPEED_MPS,
+    lateral_accel_limit: float = DEFAULT_LATERAL_ACCEL_LIMIT_MPS2,
+    accel_limit: float = DEFAULT_ACCEL_LIMIT_MPS2,
+    decel_limit: float = DEFAULT_DECEL_LIMIT_MPS2,
     opt_params: dict | None = None,
 ) -> str:
     metadata_path = metadata_path_for_output(output_path)
@@ -189,6 +237,13 @@ def write_raceline_metadata(
                 effective_vehicle_envelope_width(vehicle_width, safety_margin)
             ),
             "min_available_track_width_m": float(np.min(np.sum(widths, axis=1))),
+        },
+        "speed_profile": {
+            "max_speed_mps": float(max_speed),
+            "min_speed_mps": float(min_speed),
+            "lateral_accel_limit_mps2": float(lateral_accel_limit),
+            "accel_limit_mps2": float(accel_limit),
+            "decel_limit_mps2": float(decel_limit),
         },
         "result": {
             "point_count": int(point_count),
@@ -553,6 +608,14 @@ def generate_global_opt_raceline(
     if opt_type not in {"shortest_path", "mincurv", "mincurv_iqp"}:
         raise RuntimeError("global-opt backend supports shortest_path, mincurv, and mincurv_iqp.")
 
+    validate_speed_profile(
+        max_speed=max_speed,
+        min_speed=min_speed,
+        lateral_accel_limit=lateral_accel_limit,
+        accel_limit=accel_limit,
+        decel_limit=decel_limit,
+    )
+
     width_opt = validate_track_clearance(
         widths,
         vehicle_width,
@@ -829,6 +892,11 @@ def run(args: argparse.Namespace) -> None:
             widths=widths,
             point_count=len(raceline),
             track_length=closed_length,
+            max_speed=args.max_speed,
+            min_speed=args.min_speed,
+            lateral_accel_limit=args.lateral_accel_limit,
+            accel_limit=args.accel_limit,
+            decel_limit=args.decel_limit,
             opt_params=opt_params,
         )
         print(f"Track length: {closed_length:.3f} m")
@@ -920,11 +988,15 @@ def build_arg_parser(preset: str = "race-stacks") -> argparse.ArgumentParser:
         help="Generate raceline for forward, reverse, or both directions.",
     )
 
-    p.add_argument("--max-speed", type=float, default=3.0)
-    p.add_argument("--min-speed", type=float, default=0.8)
-    p.add_argument("--lateral-accel-limit", type=float, default=2.5)
-    p.add_argument("--accel-limit", type=float, default=1.5)
-    p.add_argument("--decel-limit", type=float, default=2.5)
+    p.add_argument("--max-speed", type=positive_finite_float, default=DEFAULT_MAX_SPEED_MPS)
+    p.add_argument("--min-speed", type=nonnegative_finite_float, default=DEFAULT_MIN_SPEED_MPS)
+    p.add_argument(
+        "--lateral-accel-limit",
+        type=positive_finite_float,
+        default=DEFAULT_LATERAL_ACCEL_LIMIT_MPS2,
+    )
+    p.add_argument("--accel-limit", type=positive_finite_float, default=DEFAULT_ACCEL_LIMIT_MPS2)
+    p.add_argument("--decel-limit", type=positive_finite_float, default=DEFAULT_DECEL_LIMIT_MPS2)
 
     return p
 

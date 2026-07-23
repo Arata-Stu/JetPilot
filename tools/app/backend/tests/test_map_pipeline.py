@@ -63,6 +63,11 @@ class GenerateRacelineScriptTest(unittest.TestCase):
 
         self.assertIn("--vehicle-width-m 0.25", script)
         self.assertIn("--safety-margin-m 0.05", script)
+        self.assertIn("--max-speed 3", script)
+        self.assertIn("--min-speed 0.8", script)
+        self.assertIn("--lateral-accel-limit 2.5", script)
+        self.assertIn("--accel-limit 1.5", script)
+        self.assertIn("--decel-limit 2.5", script)
 
     def test_passes_custom_vehicle_clearance(self) -> None:
         script = generate_raceline_script(
@@ -75,6 +80,23 @@ class GenerateRacelineScriptTest(unittest.TestCase):
         self.assertIn("--vehicle-width-m 0.187", script)
         self.assertIn("--safety-margin-m 0.02", script)
 
+    def test_passes_custom_speed_profile(self) -> None:
+        script = generate_raceline_script(
+            self.config,
+            "/workspaces/map/course_a",
+            max_speed_mps=4.2,
+            min_speed_mps=1.1,
+            lateral_accel_limit_mps2=3.4,
+            accel_limit_mps2=2.2,
+            decel_limit_mps2=3.1,
+        )
+
+        self.assertIn("--max-speed 4.2", script)
+        self.assertIn("--min-speed 1.1", script)
+        self.assertIn("--lateral-accel-limit 3.4", script)
+        self.assertIn("--accel-limit 2.2", script)
+        self.assertIn("--decel-limit 3.1", script)
+
     def test_rejects_invalid_vehicle_clearance(self) -> None:
         for value in (-0.01, math.inf, math.nan, True):
             with self.subTest(value=value):
@@ -84,6 +106,20 @@ class GenerateRacelineScriptTest(unittest.TestCase):
                         "/workspaces/map/course_a",
                         vehicle_width_m=value,
                     )
+
+    def test_rejects_invalid_speed_profile(self) -> None:
+        cases = (
+            {"max_speed_mps": 0.0},
+            {"min_speed_mps": -0.1},
+            {"min_speed_mps": 4.0, "max_speed_mps": 3.0},
+            {"lateral_accel_limit_mps2": 0.0},
+            {"accel_limit_mps2": math.inf},
+            {"decel_limit_mps2": True},
+        )
+        for kwargs in cases:
+            with self.subTest(kwargs=kwargs):
+                with self.assertRaisesRegex(ValueError, "finite value|less than or equal"):
+                    generate_raceline_script(self.config, "/workspaces/map/course_a", **kwargs)
 
 
 if __name__ == "__main__":

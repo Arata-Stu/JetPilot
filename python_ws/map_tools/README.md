@@ -88,7 +88,12 @@ python3 python_ws/map_tools/generate_raceline.py \
   --centerline /path/to/course_hd_map_centerline.csv \
   --output /path/to/course_raceline.csv \
   --vehicle-width-m 0.25 \
-  --safety-margin-m 0.05
+  --safety-margin-m 0.05 \
+  --max-speed 3.0 \
+  --min-speed 0.8 \
+  --lateral-accel-limit 2.5 \
+  --accel-limit 1.5 \
+  --decel-limit 2.5
 ```
 
 The defaults remain `0.25 m` and `0.05 m` for compatibility. The older
@@ -106,8 +111,9 @@ The CSV stays in the existing seven-column format. Generation also writes a
 non-breaking JSON sidecar next to it (for example,
 `course_raceline.meta.json`). The sidecar records the source centerline,
 direction, optimizer mode, physical width, per-side margin, effective envelope,
-minimum available track width, and result size/length. A `both` direction run
-writes separate metadata for the forward and reverse outputs.
+minimum available track width, speed profile limits, and result size/length. A
+`both` direction run writes separate metadata for the forward and reverse
+outputs.
 
 ## Section gate editor
 

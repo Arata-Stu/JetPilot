@@ -1,5 +1,10 @@
 const DEFAULT_RACELINE_VEHICLE_WIDTH_M = 0.25;
 const DEFAULT_RACELINE_SAFETY_MARGIN_M = 0.05;
+const DEFAULT_RACELINE_MAX_SPEED_MPS = 3.0;
+const DEFAULT_RACELINE_MIN_SPEED_MPS = 0.8;
+const DEFAULT_RACELINE_LATERAL_ACCEL_LIMIT_MPS2 = 2.5;
+const DEFAULT_RACELINE_ACCEL_LIMIT_MPS2 = 1.5;
+const DEFAULT_RACELINE_DECEL_LIMIT_MPS2 = 2.5;
 const PREFLIGHT_CACHE_MS = 15_000;
 
 const state = {
@@ -47,6 +52,11 @@ const state = {
   racelineGeneration: {
     vehicleWidthM: DEFAULT_RACELINE_VEHICLE_WIDTH_M,
     safetyMarginM: DEFAULT_RACELINE_SAFETY_MARGIN_M,
+    maxSpeedMps: DEFAULT_RACELINE_MAX_SPEED_MPS,
+    minSpeedMps: DEFAULT_RACELINE_MIN_SPEED_MPS,
+    lateralAccelLimitMps2: DEFAULT_RACELINE_LATERAL_ACCEL_LIMIT_MPS2,
+    accelLimitMps2: DEFAULT_RACELINE_ACCEL_LIMIT_MPS2,
+    decelLimitMps2: DEFAULT_RACELINE_DECEL_LIMIT_MPS2,
   },
   selectedTaskId: null,
   fpv: {
@@ -1262,6 +1272,11 @@ function mapStagePreflightPayload(stage, mapDir) {
   if (stage === "generate-raceline") {
     payload.vehicle_width_m = state.racelineGeneration.vehicleWidthM;
     payload.safety_margin_m = state.racelineGeneration.safetyMarginM;
+    payload.max_speed_mps = state.racelineGeneration.maxSpeedMps;
+    payload.min_speed_mps = state.racelineGeneration.minSpeedMps;
+    payload.lateral_accel_limit_mps2 = state.racelineGeneration.lateralAccelLimitMps2;
+    payload.accel_limit_mps2 = state.racelineGeneration.accelLimitMps2;
+    payload.decel_limit_mps2 = state.racelineGeneration.decelLimitMps2;
   }
   return payload;
 }
@@ -3828,6 +3843,61 @@ function renderRacelineClearance(detail) {
         <div id="raceline-envelope" class="field-hint raceline-envelope-hint full">
           Effective optimizer envelope: ${esc(racelineEnvelopeLabel(options.vehicleWidthM, options.safetyMarginM))}
         </div>
+        <div class="field">
+          <label for="raceline-max-speed">Max speed (m/s)</label>
+          <input
+            id="raceline-max-speed"
+            type="number"
+            min="0.001"
+            step="0.1"
+            value="${esc(options.maxSpeedMps)}"
+            oninput="updateRacelineGeneration('maxSpeedMps', this)"
+          />
+        </div>
+        <div class="field">
+          <label for="raceline-min-speed">Min speed (m/s)</label>
+          <input
+            id="raceline-min-speed"
+            type="number"
+            min="0"
+            step="0.1"
+            value="${esc(options.minSpeedMps)}"
+            oninput="updateRacelineGeneration('minSpeedMps', this)"
+          />
+        </div>
+        <div class="field">
+          <label for="raceline-lateral-accel">Lateral accel limit (m/s^2)</label>
+          <input
+            id="raceline-lateral-accel"
+            type="number"
+            min="0.001"
+            step="0.1"
+            value="${esc(options.lateralAccelLimitMps2)}"
+            oninput="updateRacelineGeneration('lateralAccelLimitMps2', this)"
+          />
+        </div>
+        <div class="field">
+          <label for="raceline-accel-limit">Accel limit (m/s^2)</label>
+          <input
+            id="raceline-accel-limit"
+            type="number"
+            min="0.001"
+            step="0.1"
+            value="${esc(options.accelLimitMps2)}"
+            oninput="updateRacelineGeneration('accelLimitMps2', this)"
+          />
+        </div>
+        <div class="field">
+          <label for="raceline-decel-limit">Decel limit (m/s^2)</label>
+          <input
+            id="raceline-decel-limit"
+            type="number"
+            min="0.001"
+            step="0.1"
+            value="${esc(options.decelLimitMps2)}"
+            oninput="updateRacelineGeneration('decelLimitMps2', this)"
+          />
+        </div>
         <div class="actions full">
           ${renderMapStageButton("generate-raceline", detail.map.path, "Generate Raceline", { className: "primary" })}
         </div>
@@ -3837,33 +3907,74 @@ function renderRacelineClearance(detail) {
 }
 
 function updateRacelineGeneration(field, input) {
-  if (!["vehicleWidthM", "safetyMarginM"].includes(field)) return;
+  const allowed = [
+    "vehicleWidthM",
+    "safetyMarginM",
+    "maxSpeedMps",
+    "minSpeedMps",
+    "lateralAccelLimitMps2",
+    "accelLimitMps2",
+    "decelLimitMps2",
+  ];
+  if (!allowed.includes(field)) return;
   const raw = String(input?.value ?? "").trim();
   const value = Number(raw);
-  const valid = raw !== "" && Number.isFinite(value) && value >= 0;
-  input?.setCustomValidity(valid ? "" : "Enter a finite value greater than or equal to 0");
+  const mustBePositive = ["maxSpeedMps", "lateralAccelLimitMps2", "accelLimitMps2", "decelLimitMps2"].includes(field);
+  const valid = raw !== "" && Number.isFinite(value) && (mustBePositive ? value > 0 : value >= 0);
+  input?.setCustomValidity(valid ? "" : mustBePositive ? "Enter a finite value greater than 0" : "Enter a finite value greater than or equal to 0");
   if (valid) state.racelineGeneration[field] = value;
 
   const vehicleInput = $("raceline-vehicle-width");
   const marginInput = $("raceline-safety-margin");
+  const maxSpeedInput = $("raceline-max-speed");
+  const minSpeedInput = $("raceline-min-speed");
+  const lateralAccelInput = $("raceline-lateral-accel");
+  const accelLimitInput = $("raceline-accel-limit");
+  const decelLimitInput = $("raceline-decel-limit");
   const vehicleWidthM = Number(vehicleInput?.value);
   const safetyMarginM = Number(marginInput?.value);
+  const maxSpeedMps = Number(maxSpeedInput?.value);
+  const minSpeedMps = Number(minSpeedInput?.value);
+  const lateralAccelLimitMps2 = Number(lateralAccelInput?.value);
+  const accelLimitMps2 = Number(accelLimitInput?.value);
+  const decelLimitMps2 = Number(decelLimitInput?.value);
   const inputsValid =
     String(vehicleInput?.value ?? "").trim() !== "" &&
     String(marginInput?.value ?? "").trim() !== "" &&
+    String(maxSpeedInput?.value ?? "").trim() !== "" &&
+    String(minSpeedInput?.value ?? "").trim() !== "" &&
+    String(lateralAccelInput?.value ?? "").trim() !== "" &&
+    String(accelLimitInput?.value ?? "").trim() !== "" &&
+    String(decelLimitInput?.value ?? "").trim() !== "" &&
     Number.isFinite(vehicleWidthM) &&
     Number.isFinite(safetyMarginM) &&
+    Number.isFinite(maxSpeedMps) &&
+    Number.isFinite(minSpeedMps) &&
+    Number.isFinite(lateralAccelLimitMps2) &&
+    Number.isFinite(accelLimitMps2) &&
+    Number.isFinite(decelLimitMps2) &&
     vehicleWidthM >= 0 &&
-    safetyMarginM >= 0;
+    safetyMarginM >= 0 &&
+    maxSpeedMps > 0 &&
+    minSpeedMps >= 0 &&
+    minSpeedMps <= maxSpeedMps &&
+    lateralAccelLimitMps2 > 0 &&
+    accelLimitMps2 > 0 &&
+    decelLimitMps2 > 0;
   const envelope = $("raceline-envelope");
   if (envelope) {
     envelope.textContent = inputsValid
       ? `Effective optimizer envelope: ${racelineEnvelopeLabel(vehicleWidthM, safetyMarginM)}`
-      : "Vehicle width and per-side margin must both be non-negative numbers.";
+      : "Raceline dimensions and speed profile must be finite and physically usable.";
   }
   if (inputsValid && state.selectedMapDetail?.map?.path) {
     state.racelineGeneration.vehicleWidthM = vehicleWidthM;
     state.racelineGeneration.safetyMarginM = safetyMarginM;
+    state.racelineGeneration.maxSpeedMps = maxSpeedMps;
+    state.racelineGeneration.minSpeedMps = minSpeedMps;
+    state.racelineGeneration.lateralAccelLimitMps2 = lateralAccelLimitMps2;
+    state.racelineGeneration.accelLimitMps2 = accelLimitMps2;
+    state.racelineGeneration.decelLimitMps2 = decelLimitMps2;
     scheduleRacelinePreflight(state.selectedMapDetail.map.path);
   }
 }
@@ -3871,29 +3982,72 @@ function updateRacelineGeneration(field, input) {
 function racelineGenerationPayload() {
   const vehicleInput = $("raceline-vehicle-width");
   const marginInput = $("raceline-safety-margin");
+  const maxSpeedInput = $("raceline-max-speed");
+  const minSpeedInput = $("raceline-min-speed");
+  const lateralAccelInput = $("raceline-lateral-accel");
+  const accelLimitInput = $("raceline-accel-limit");
+  const decelLimitInput = $("raceline-decel-limit");
   const rawVehicleWidth = vehicleInput
     ? String(vehicleInput.value).trim()
     : state.racelineGeneration.vehicleWidthM;
   const rawSafetyMargin = marginInput
     ? String(marginInput.value).trim()
     : state.racelineGeneration.safetyMarginM;
+  const rawMaxSpeed = maxSpeedInput ? String(maxSpeedInput.value).trim() : state.racelineGeneration.maxSpeedMps;
+  const rawMinSpeed = minSpeedInput ? String(minSpeedInput.value).trim() : state.racelineGeneration.minSpeedMps;
+  const rawLateralAccel = lateralAccelInput
+    ? String(lateralAccelInput.value).trim()
+    : state.racelineGeneration.lateralAccelLimitMps2;
+  const rawAccelLimit = accelLimitInput ? String(accelLimitInput.value).trim() : state.racelineGeneration.accelLimitMps2;
+  const rawDecelLimit = decelLimitInput ? String(decelLimitInput.value).trim() : state.racelineGeneration.decelLimitMps2;
   const vehicleWidthM = Number(rawVehicleWidth);
   const safetyMarginM = Number(rawSafetyMargin);
+  const maxSpeedMps = Number(rawMaxSpeed);
+  const minSpeedMps = Number(rawMinSpeed);
+  const lateralAccelLimitMps2 = Number(rawLateralAccel);
+  const accelLimitMps2 = Number(rawAccelLimit);
+  const decelLimitMps2 = Number(rawDecelLimit);
   if (
     rawVehicleWidth === "" ||
     rawSafetyMargin === "" ||
+    rawMaxSpeed === "" ||
+    rawMinSpeed === "" ||
+    rawLateralAccel === "" ||
+    rawAccelLimit === "" ||
+    rawDecelLimit === "" ||
     !Number.isFinite(vehicleWidthM) ||
     !Number.isFinite(safetyMarginM) ||
+    !Number.isFinite(maxSpeedMps) ||
+    !Number.isFinite(minSpeedMps) ||
+    !Number.isFinite(lateralAccelLimitMps2) ||
+    !Number.isFinite(accelLimitMps2) ||
+    !Number.isFinite(decelLimitMps2) ||
     vehicleWidthM < 0 ||
-    safetyMarginM < 0
+    safetyMarginM < 0 ||
+    maxSpeedMps <= 0 ||
+    minSpeedMps < 0 ||
+    minSpeedMps > maxSpeedMps ||
+    lateralAccelLimitMps2 <= 0 ||
+    accelLimitMps2 <= 0 ||
+    decelLimitMps2 <= 0
   ) {
-    throw new Error("Vehicle width and boundary margin must be finite, non-negative numbers.");
+    throw new Error("Raceline dimensions and speed profile must be finite and physically usable.");
   }
   state.racelineGeneration.vehicleWidthM = vehicleWidthM;
   state.racelineGeneration.safetyMarginM = safetyMarginM;
+  state.racelineGeneration.maxSpeedMps = maxSpeedMps;
+  state.racelineGeneration.minSpeedMps = minSpeedMps;
+  state.racelineGeneration.lateralAccelLimitMps2 = lateralAccelLimitMps2;
+  state.racelineGeneration.accelLimitMps2 = accelLimitMps2;
+  state.racelineGeneration.decelLimitMps2 = decelLimitMps2;
   return {
     vehicle_width_m: vehicleWidthM,
     safety_margin_m: safetyMarginM,
+    max_speed_mps: maxSpeedMps,
+    min_speed_mps: minSpeedMps,
+    lateral_accel_limit_mps2: lateralAccelLimitMps2,
+    accel_limit_mps2: accelLimitMps2,
+    decel_limit_mps2: decelLimitMps2,
   };
 }
 

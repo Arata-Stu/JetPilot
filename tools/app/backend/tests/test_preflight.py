@@ -500,6 +500,27 @@ lanes:
                     self.check(result, "raceline.parameters")["status"], BLOCKED
                 )
 
+    def test_raceline_blocks_invalid_speed_profile(self) -> None:
+        path = self.ready_map()
+        cases = (
+            {"max_speed_mps": 0.0},
+            {"min_speed_mps": -0.1},
+            {"min_speed_mps": 4.0, "max_speed_mps": 3.0},
+            {"lateral_accel_limit_mps2": 0.0},
+            {"accel_limit_mps2": math.inf},
+            {"decel_limit_mps2": True},
+        )
+        for payload in cases:
+            with self.subTest(payload=payload):
+                result = evaluate_preflight(
+                    self.config,
+                    "generate-raceline",
+                    {"map_dir": str(path), **payload},
+                )
+                self.assertEqual(
+                    self.check(result, "raceline.speed_profile")["status"], BLOCKED
+                )
+
     def test_raceline_rejects_symlink_input_and_non_regular_output(self) -> None:
         path = self.ready_map()
         outside = Path(self.temporary_directory.name) / "outside.csv"

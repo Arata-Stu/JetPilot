@@ -9,6 +9,11 @@ from .config import ConsoleConfig
 
 DEFAULT_RACELINE_VEHICLE_WIDTH_M = 0.25
 DEFAULT_RACELINE_SAFETY_MARGIN_M = 0.05
+DEFAULT_RACELINE_MAX_SPEED_MPS = 3.0
+DEFAULT_RACELINE_MIN_SPEED_MPS = 0.8
+DEFAULT_RACELINE_LATERAL_ACCEL_LIMIT_MPS2 = 2.5
+DEFAULT_RACELINE_ACCEL_LIMIT_MPS2 = 1.5
+DEFAULT_RACELINE_DECEL_LIMIT_MPS2 = 2.5
 
 
 def _q(value: str | Path) -> str:
@@ -21,6 +26,15 @@ def _nonnegative_finite(value: float, label: str) -> float:
     parsed = float(value)
     if not math.isfinite(parsed) or parsed < 0.0:
         raise ValueError(f"{label} must be a finite value greater than or equal to 0")
+    return parsed
+
+
+def _positive_finite(value: float, label: str) -> float:
+    if isinstance(value, bool):
+        raise ValueError(f"{label} must be a finite value greater than 0")
+    parsed = float(value)
+    if not math.isfinite(parsed) or parsed <= 0.0:
+        raise ValueError(f"{label} must be a finite value greater than 0")
     return parsed
 
 
@@ -322,12 +336,24 @@ def generate_raceline_script(
     *,
     vehicle_width_m: float = DEFAULT_RACELINE_VEHICLE_WIDTH_M,
     safety_margin_m: float = DEFAULT_RACELINE_SAFETY_MARGIN_M,
+    max_speed_mps: float = DEFAULT_RACELINE_MAX_SPEED_MPS,
+    min_speed_mps: float = DEFAULT_RACELINE_MIN_SPEED_MPS,
+    lateral_accel_limit_mps2: float = DEFAULT_RACELINE_LATERAL_ACCEL_LIMIT_MPS2,
+    accel_limit_mps2: float = DEFAULT_RACELINE_ACCEL_LIMIT_MPS2,
+    decel_limit_mps2: float = DEFAULT_RACELINE_DECEL_LIMIT_MPS2,
     preset: str | None = None,
 ) -> str:
     map_path = Path(map_dir)
     name = map_path.name
     vehicle_width = _nonnegative_finite(vehicle_width_m, "vehicle_width_m")
     safety_margin = _nonnegative_finite(safety_margin_m, "safety_margin_m")
+    max_speed = _positive_finite(max_speed_mps, "max_speed_mps")
+    min_speed = _nonnegative_finite(min_speed_mps, "min_speed_mps")
+    if min_speed > max_speed:
+        raise ValueError("min_speed_mps must be less than or equal to max_speed_mps")
+    lateral_accel = _positive_finite(lateral_accel_limit_mps2, "lateral_accel_limit_mps2")
+    accel_limit = _positive_finite(accel_limit_mps2, "accel_limit_mps2")
+    decel_limit = _positive_finite(decel_limit_mps2, "decel_limit_mps2")
     selected_preset = preset if preset else ("f110" if vehicle_width <= 0.6 else "race-stacks")
     return f"""set -euo pipefail
 {_q(config.python_bin)} {_q(config.python_ws / "map_tools" / "generate_raceline.py")} \\
@@ -335,6 +361,11 @@ def generate_raceline_script(
   --output {_q(map_path / f"{name}_raceline.csv")} \\
   --vehicle-width-m {vehicle_width:.9g} \\
   --safety-margin-m {safety_margin:.9g} \\
+  --max-speed {max_speed:.9g} \\
+  --min-speed {min_speed:.9g} \\
+  --lateral-accel-limit {lateral_accel:.9g} \\
+  --accel-limit {accel_limit:.9g} \\
+  --decel-limit {decel_limit:.9g} \\
   --preset {selected_preset} \\
   --show-progress
 """

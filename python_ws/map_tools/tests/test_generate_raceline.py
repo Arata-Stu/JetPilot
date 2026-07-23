@@ -59,9 +59,32 @@ class RacelineClearanceTest(unittest.TestCase):
                 metadata["vehicle_clearance"]["min_available_track_width_m"],
                 0.4,
             )
+            self.assertAlmostEqual(metadata["speed_profile"]["max_speed_mps"], 3.0)
+            self.assertAlmostEqual(metadata["speed_profile"]["min_speed_mps"], 0.8)
 
     def test_effective_width_adds_margin_on_both_sides(self) -> None:
         self.assertAlmostEqual(raceline.effective_vehicle_envelope_width(0.25, 0.05), 0.35)
+
+    def test_speed_profile_rejects_invalid_limits(self) -> None:
+        cases = (
+            {"max_speed": 0.0},
+            {"min_speed": -0.1},
+            {"min_speed": 4.0, "max_speed": 3.0},
+            {"lateral_accel_limit": 0.0},
+            {"accel_limit": 0.0},
+            {"decel_limit": 0.0},
+        )
+        defaults = {
+            "max_speed": 3.0,
+            "min_speed": 0.8,
+            "lateral_accel_limit": 2.5,
+            "accel_limit": 1.5,
+            "decel_limit": 2.5,
+        }
+        for override in cases:
+            with self.subTest(override=override):
+                with self.assertRaises(RuntimeError):
+                    raceline.validate_speed_profile(**{**defaults, **override})
 
     def test_validation_does_not_modify_track_widths(self) -> None:
         widths = np.asarray([[0.20, 0.20], [0.18, 0.22]], dtype=np.float64)
