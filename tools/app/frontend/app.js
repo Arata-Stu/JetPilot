@@ -63,9 +63,10 @@ const state = {
     decelLimitMps2: DEFAULT_RACELINE_DECEL_LIMIT_MPS2,
   },
   hdRasterGeneration: {
+    cropMode: "path",
     autoCropPercentile: DEFAULT_HD_RASTER_AUTO_CROP_PERCENTILE,
     autoCropMinRetainedRatio: DEFAULT_HD_RASTER_AUTO_CROP_MIN_RETAINED_RATIO,
-    pathCropDistanceM: DEFAULT_HD_RASTER_PATH_CROP_DISTANCE_M,
+    pathCropDistanceM: 1.5,
     pathCropMinRetainedRatio: DEFAULT_HD_RASTER_PATH_CROP_MIN_RETAINED_RATIO,
   },
   simulation: {
@@ -3863,17 +3864,7 @@ function renderMapWorkspace() {
 function renderHdRasterOptions(detail) {
   const options = state.hdRasterGeneration;
   const snapshotReady = Boolean(detail.map?.artifacts?.snapshot?.exists);
-  const cropChoices = [
-    ["path:0.8", "Track focus / 0.8 m"],
-    ["path:1.5", "Track focus / 1.5 m"],
-    ["path:3.0", "Track focus / 3.0 m"],
-    ["percent:98", "Percentile / 98%"],
-    ["percent:99", "Percentile / 99%"],
-    ["percent:100", "Off / 100%"],
-  ];
-  const selectedCrop = options.pathCropDistanceM > 0
-    ? `path:${options.pathCropDistanceM.toFixed(1)}`
-    : `percent:${Number(options.autoCropPercentile).toFixed(0)}`;
+  const mode = options.cropMode || (options.pathCropDistanceM > 0 ? "path" : "percent");
   return `
     <div class="inspector-block hd-raster-block">
       <div class="inspector-title-row">
@@ -3881,18 +3872,50 @@ function renderHdRasterOptions(detail) {
         <span class="${snapshotReady ? "ok" : "warn"}">${snapshotReady ? "Ready" : "Need snapshot"}</span>
       </div>
       <div class="form-grid">
-        <div class="field full">
-          <label for="hd-raster-auto-crop">Point cloud crop</label>
-          <select id="hd-raster-auto-crop" onchange="updateHdRasterAutoCrop(this.value)">
-            ${cropChoices
-              .map(([value, label]) => `<option value="${value}" ${selectedCrop === value ? "selected" : ""}>${esc(label)}</option>`)
-              .join("")}
+        <div class="field">
+          <label for="hd-raster-crop-mode">Crop mode</label>
+          <select id="hd-raster-crop-mode" onchange="updateHdRasterCropMode(this.value)">
+            <option value="path" ${mode === "path" ? "selected" : ""}>Track focus</option>
+            <option value="percent" ${mode === "percent" ? "selected" : ""}>Percentile</option>
+            <option value="off" ${mode === "off" ? "selected" : ""}>Off</option>
           </select>
         </div>
+        ${mode === "path"
+          ? `
+            <div class="field">
+              <label for="hd-raster-path-crop-distance">Distance from path (m)</label>
+              <input
+                id="hd-raster-path-crop-distance"
+                type="number"
+                min="0.01"
+                step="0.1"
+                value="${esc(options.pathCropDistanceM)}"
+                oninput="updateHdRasterNumber('pathCropDistanceM', this)"
+              />
+            </div>`
+          : mode === "percent"
+          ? `
+            <div class="field">
+              <label for="hd-raster-auto-crop-percentile">Central percentile (%)</label>
+              <input
+                id="hd-raster-auto-crop-percentile"
+                type="number"
+                min="0.001"
+                max="100"
+                step="0.1"
+                value="${esc(options.autoCropPercentile)}"
+                oninput="updateHdRasterNumber('autoCropPercentile', this)"
+              />
+            </div>`
+          : `
+            <div class="field">
+              <label>Crop value</label>
+              <input value="All points" disabled />
+            </div>`}
         <div class="field-hint full">
-          ${options.pathCropDistanceM > 0
+          ${mode === "path"
             ? `Raster keeps landmarks within ${options.pathCropDistanceM} m of the VSLAM path.`
-            : options.autoCropPercentile >= 100
+            : mode === "off" || options.autoCropPercentile >= 100
             ? "Raster bounds use all landmark points."
             : `Raster bounds use the central ${options.autoCropPercentile}% of landmark points.`}
         </div>
@@ -3904,28 +3927,59 @@ function renderHdRasterOptions(detail) {
   `;
 }
 
-function updateHdRasterAutoCrop(value) {
-  const [mode, rawValue] = String(value || "").split(":");
-  const parsed = Number(rawValue);
-  if (!Number.isFinite(parsed)) return;
-  if (mode === "path") {
-    state.hdRasterGeneration.pathCropDistanceM = Math.max(0, parsed);
+function updateHdRasterCropMode(mode) {
+  const normalized = ["path", "percent", "off"].includes(mode) ? mode : "path";
+  state.hdRasterGeneration.cropMode = normalized;
+  if (normalized === "off") {
+    state.hdRasterGeneration.pathCropDistanceM = 0.0;
+    state.hdRasterGeneration.autoCropPercentile = 100.0;
+  } else if (normalized === "path") {
+    state.hdRasterGeneration.pathCropDistanceM = state.hdRasterGeneration.pathCropDistanceM > 0
+      ? state.hdRasterGeneration.pathCropDistanceM
+      : 1.5;
     state.hdRasterGeneration.autoCropPercentile = 100.0;
   } else {
     state.hdRasterGeneration.pathCropDistanceM = 0.0;
-    state.hdRasterGeneration.autoCropPercentile = Math.max(0.001, Math.min(100, parsed));
+    state.hdRasterGeneration.autoCropPercentile = state.hdRasterGeneration.autoCropPercentile < 100
+      ? state.hdRasterGeneration.autoCropPercentile
+      : 99.0;
   }
+  refreshHdRasterOptions();
+}
+
+function updateHdRasterNumber(field, input) {
+  const value = Number(String(input?.value ?? "").trim());
+  const min = Number(input?.min || 0);
+  const max = input?.max === "" || input?.max == null ? Infinity : Number(input.max);
+  const valid = Number.isFinite(value) && value >= min && value <= max;
+  input?.setCustomValidity(valid ? "" : "Enter a finite value in range");
+  if (!valid) return;
+  if (field === "pathCropDistanceM") {
+    state.hdRasterGeneration.cropMode = "path";
+    state.hdRasterGeneration.pathCropDistanceM = value;
+    state.hdRasterGeneration.autoCropPercentile = 100.0;
+  } else if (field === "autoCropPercentile") {
+    state.hdRasterGeneration.cropMode = "percent";
+    state.hdRasterGeneration.pathCropDistanceM = 0.0;
+    state.hdRasterGeneration.autoCropPercentile = value;
+  }
+  refreshHdRasterOptions({ renderAfter: false });
+}
+
+function refreshHdRasterOptions(options = {}) {
   if (state.selectedMapDetail?.map?.path) {
     invalidateMapPreflights(state.selectedMapDetail.map.path);
-    render();
+    if (options.renderAfter === false) scheduleVisiblePreflights({ force: true });
+    else render();
   }
 }
 
 function hdRasterGenerationPayload() {
+  const mode = state.hdRasterGeneration.cropMode || "path";
   return {
-    auto_crop_percentile: state.hdRasterGeneration.autoCropPercentile,
+    auto_crop_percentile: mode === "percent" ? state.hdRasterGeneration.autoCropPercentile : 100.0,
     auto_crop_min_retained_ratio: state.hdRasterGeneration.autoCropMinRetainedRatio,
-    path_crop_distance_m: state.hdRasterGeneration.pathCropDistanceM,
+    path_crop_distance_m: mode === "path" ? state.hdRasterGeneration.pathCropDistanceM : 0.0,
     path_crop_min_retained_ratio: state.hdRasterGeneration.pathCropMinRetainedRatio,
   };
 }
@@ -7687,7 +7741,8 @@ window.retryPreflightToken = retryPreflightToken;
 window.startMapBuild = startMapBuild;
 window.copyMapBuildCommand = copyMapBuildCommand;
 window.runMapStage = runMapStage;
-window.updateHdRasterAutoCrop = updateHdRasterAutoCrop;
+window.updateHdRasterCropMode = updateHdRasterCropMode;
+window.updateHdRasterNumber = updateHdRasterNumber;
 window.updateRacelineGeneration = updateRacelineGeneration;
 window.toggleSimulationPlayback = toggleSimulationPlayback;
 window.stepSimulationOnce = stepSimulationOnce;

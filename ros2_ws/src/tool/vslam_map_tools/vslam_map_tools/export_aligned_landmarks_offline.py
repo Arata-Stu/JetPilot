@@ -116,6 +116,64 @@ def transform_points(points: np.ndarray, rot: np.ndarray, trans: np.ndarray) -> 
     return translated
 
 
+def normalized_frame(value: object) -> str:
+    return str(value or "").strip().lstrip("/")
+
+
+def transform_dict_to_matrix(transform: dict[str, object]) -> tuple[np.ndarray, np.ndarray]:
+    translation = transform.get("translation") if isinstance(transform.get("translation"), dict) else {}
+    rotation = transform.get("rotation") if isinstance(transform.get("rotation"), dict) else {}
+    rot = quaternion_to_rotation_matrix(
+        float(rotation.get("x", 0.0)),
+        float(rotation.get("y", 0.0)),
+        float(rotation.get("z", 0.0)),
+        float(rotation.get("w", 1.0)),
+    )
+    trans = np.array(
+        [
+            float(translation.get("x", 0.0)),
+            float(translation.get("y", 0.0)),
+            float(translation.get("z", 0.0)),
+        ],
+        dtype=np.float64,
+    )
+    return rot, trans
+
+
+def landmark_frame_id(landmarks_data: dict | None) -> str:
+    if not isinstance(landmarks_data, dict):
+        return ""
+    header = landmarks_data.get("header") if isinstance(landmarks_data.get("header"), dict) else {}
+    return normalized_frame(header.get("frame_id"))
+
+
+def transform_landmarks_to_map_frame(
+    landmark_points: np.ndarray,
+    landmarks_data: dict | None,
+    snapshot: dict[str, object],
+) -> np.ndarray:
+    if landmark_points.size == 0:
+        return landmark_points
+    localization = snapshot.get("localization") if isinstance(snapshot.get("localization"), dict) else {}
+    map_frame = normalized_frame(localization.get("map_frame") or "map")
+    source_frame = landmark_frame_id(landmarks_data)
+    if not source_frame or source_frame == map_frame:
+        return landmark_points
+
+    transforms = localization.get("map_from_frame") if isinstance(localization.get("map_from_frame"), dict) else {}
+    transform = transforms.get(source_frame) if isinstance(transforms, dict) else None
+    if not isinstance(transform, dict):
+        print(
+            "Warning: landmark frame differs from map frame but no saved TF was available: "
+            f"landmarks={source_frame}, map={map_frame}. Raster may not align with odometry."
+        )
+        return landmark_points
+
+    rot, trans = transform_dict_to_matrix(transform)
+    print(f"Transforming landmarks from {source_frame} to {map_frame} before raster export.")
+    return transform_points(landmark_points, rot, trans)
+
+
 def points_to_pixels(points_xy: np.ndarray, geometry: RasterGeometry) -> np.ndarray:
     dx = points_xy[:, 0] - geometry.origin_x
     dy = points_xy[:, 1] - geometry.origin_y
@@ -530,6 +588,11 @@ def main() -> None:
         path_points = np.empty((0, 3), dtype=np.float64)
 
     # Transform to map frame
+    landmark_points = transform_landmarks_to_map_frame(
+        landmark_points,
+        landmarks_data,
+        snapshot,
+    )
     landmark_points_map = transform_points(landmark_points, rot, trans)
     path_points_map = transform_points(path_points, rot, trans)
     landmark_points_map = crop_landmarks_near_path(

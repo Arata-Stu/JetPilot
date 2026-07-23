@@ -233,6 +233,8 @@ ros2 launch {_q(config.launch_package)} bringup.launch.py \\
   enable_vslam_snapshot:=true \\
   vslam_snapshot_output:="$snapshot" \\
   vslam_snapshot_landmarks_topic:=/visual_slam/vis/landmarks_cloud \\
+  vslam_snapshot_require_localized_map:=true \\
+  vslam_snapshot_map_frame:=map \\
   vslam_snapshot_write_interval_s:=5.0 \\
   rosbag:={_q(rosbag)} \\
   map_dir:="$generated_map_dir" &

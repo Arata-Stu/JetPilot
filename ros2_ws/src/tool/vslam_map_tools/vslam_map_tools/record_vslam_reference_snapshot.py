@@ -261,6 +261,7 @@ class VslamReferenceSnapshotRecorder(Node):
                 "last_state": self.localization_state,
                 "map_frame": self.map_frame,
                 "map_transform_seen": bool(self.map_from_frame),
+                "map_from_frame": self.map_from_frame,
                 "raw_odometry_samples": self.raw_odom_count,
                 "accepted_odometry_samples": self.accepted_odom_count,
                 "minimum_required_odometry_samples":
