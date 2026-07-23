@@ -1,9 +1,11 @@
 #include "jetpilot_rtp_tools/image_rtp_sender_component.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <chrono>
 #include <cinttypes>
+#include <cmath>
 #include <cstring>
 #include <sstream>
 #include <stdexcept>
@@ -50,6 +52,14 @@ bool is_loopback_host(const std::string & value)
 int positive_or_default(const int value, const int default_value)
 {
   return value > 0 ? value : default_value;
+}
+
+std::uint16_t read_u16_pixel(const std::uint8_t * data, const bool is_bigendian)
+{
+  if (is_bigendian) {
+    return static_cast<std::uint16_t>((static_cast<std::uint16_t>(data[0]) << 8) | data[1]);
+  }
+  return static_cast<std::uint16_t>((static_cast<std::uint16_t>(data[1]) << 8) | data[0]);
 }
 }  // namespace
 
@@ -121,19 +131,25 @@ ImageRtpSenderComponent::ImageFormat ImageRtpSenderComponent::image_format_from_
   namespace enc = sensor_msgs::image_encodings;
 
   if (encoding == enc::RGB8) {
-    return {"RGB", 3};
+    return {"RGB", 3, 3};
   }
   if (encoding == enc::BGR8) {
-    return {"BGR", 3};
+    return {"BGR", 3, 3};
   }
   if (encoding == enc::RGBA8) {
-    return {"RGBA", 4};
+    return {"RGBA", 4, 4};
   }
   if (encoding == enc::BGRA8) {
-    return {"BGRA", 4};
+    return {"BGRA", 4, 4};
   }
   if (encoding == enc::MONO8) {
-    return {"GRAY8", 1};
+    return {"GRAY8", 1, 1};
+  }
+  if (encoding == enc::MONO16 || encoding == enc::TYPE_16UC1) {
+    return {"GRAY8", 2, 1, true};
+  }
+  if (encoding == "16uc1") {
+    return {"GRAY8", 2, 1, true};
   }
 
   throw std::invalid_argument("unsupported image encoding: " + encoding);
@@ -408,6 +424,9 @@ bool ImageRtpSenderComponent::start_pipeline(
   udp_sink_pad_ = udp_sink_pad;
   udp_sink_probe_id_ = udp_sink_probe_id;
   pipeline_started_ = true;
+  thermal_range_initialized_ = false;
+  thermal_low_ = 0.0;
+  thermal_high_ = 65535.0;
   frame_index_ = 0;
   pushed_frames_ = 0;
   dropped_frames_ = 0;
@@ -600,11 +619,14 @@ void ImageRtpSenderComponent::status_callback()
 bool ImageRtpSenderComponent::copy_image_to_buffer(
   const sensor_msgs::msg::Image & msg,
   const ImageFormat & format,
-  GstBuffer * buffer) const
+  GstBuffer * buffer)
 {
-  const std::size_t packed_step = static_cast<std::size_t>(msg.width) * format.bytes_per_pixel;
-  const std::size_t packed_size = packed_step * static_cast<std::size_t>(msg.height);
-  if (msg.step < packed_step) {
+  const std::size_t source_packed_step =
+    static_cast<std::size_t>(msg.width) * format.source_bytes_per_pixel;
+  const std::size_t gst_packed_step =
+    static_cast<std::size_t>(msg.width) * format.gst_bytes_per_pixel;
+  const std::size_t gst_packed_size = gst_packed_step * static_cast<std::size_t>(msg.height);
+  if (msg.step < source_packed_step) {
     return false;
   }
   if (msg.data.size() < static_cast<std::size_t>(msg.step) * static_cast<std::size_t>(msg.height)) {
@@ -616,18 +638,82 @@ bool ImageRtpSenderComponent::copy_image_to_buffer(
     return false;
   }
 
-  if (map_info.size < packed_size) {
+  if (map_info.size < gst_packed_size) {
     gst_buffer_unmap(buffer, &map_info);
     return false;
   }
 
-  if (msg.step == packed_step) {
-    std::memcpy(map_info.data, msg.data.data(), packed_size);
+  if (format.normalize_to_gray8) {
+    std::array<std::uint32_t, 65536> histogram{};
+    std::uint64_t valid_pixels = 0;
+    for (std::uint32_t row = 0; row < msg.height; ++row) {
+      const auto * src = msg.data.data() + static_cast<std::size_t>(row) * msg.step;
+      for (std::uint32_t column = 0; column < msg.width; ++column) {
+        const auto value =
+          read_u16_pixel(src + static_cast<std::size_t>(column) * 2, msg.is_bigendian);
+        ++histogram[value];
+        ++valid_pixels;
+      }
+    }
+
+    if (valid_pixels == 0) {
+      gst_buffer_unmap(buffer, &map_info);
+      return false;
+    }
+
+    const auto percentile_value = [&](const double percentile) {
+      const auto target = static_cast<std::uint64_t>(
+        std::floor(
+          std::max(0.0, std::min(1.0, percentile)) *
+          static_cast<double>(valid_pixels - 1)));
+      std::uint64_t cumulative = 0;
+      for (std::size_t value = 0; value < histogram.size(); ++value) {
+        cumulative += histogram[value];
+        if (cumulative > target) {
+          return static_cast<double>(value);
+        }
+      }
+      return 65535.0;
+    };
+
+    double low = percentile_value(0.005);
+    double high = percentile_value(0.995);
+    if (high <= low + 1.0) {
+      if (thermal_range_initialized_ && thermal_high_ > thermal_low_ + 1.0) {
+        low = thermal_low_;
+        high = thermal_high_;
+      } else {
+        std::memset(map_info.data, 127, gst_packed_size);
+        gst_buffer_unmap(buffer, &map_info);
+        return true;
+      }
+    } else if (thermal_range_initialized_) {
+      constexpr double alpha = 0.08;
+      low = thermal_low_ * (1.0 - alpha) + low * alpha;
+      high = thermal_high_ * (1.0 - alpha) + high * alpha;
+    }
+    thermal_low_ = low;
+    thermal_high_ = high;
+    thermal_range_initialized_ = true;
+
+    const double scale = 255.0 / std::max(1.0, high - low);
+    for (std::uint32_t row = 0; row < msg.height; ++row) {
+      const auto * src = msg.data.data() + static_cast<std::size_t>(row) * msg.step;
+      auto * dst = map_info.data + static_cast<std::size_t>(row) * gst_packed_step;
+      for (std::uint32_t column = 0; column < msg.width; ++column) {
+        const auto value = static_cast<double>(
+          read_u16_pixel(src + static_cast<std::size_t>(column) * 2, msg.is_bigendian));
+        const auto normalized = std::clamp((value - low) * scale, 0.0, 255.0);
+        dst[column] = static_cast<std::uint8_t>(std::lround(normalized));
+      }
+    }
+  } else if (msg.step == gst_packed_step) {
+    std::memcpy(map_info.data, msg.data.data(), gst_packed_size);
   } else {
     for (std::uint32_t row = 0; row < msg.height; ++row) {
       const auto * src = msg.data.data() + static_cast<std::size_t>(row) * msg.step;
-      auto * dst = map_info.data + static_cast<std::size_t>(row) * packed_step;
-      std::memcpy(dst, src, packed_step);
+      auto * dst = map_info.data + static_cast<std::size_t>(row) * gst_packed_step;
+      std::memcpy(dst, src, gst_packed_step);
     }
   }
 
@@ -652,7 +738,7 @@ void ImageRtpSenderComponent::image_callback(const sensor_msgs::msg::Image::Cons
     return;
   }
 
-  const std::size_t packed_step = static_cast<std::size_t>(msg->width) * format.bytes_per_pixel;
+  const std::size_t packed_step = static_cast<std::size_t>(msg->width) * format.gst_bytes_per_pixel;
   const std::size_t packed_size = packed_step * static_cast<std::size_t>(msg->height);
   GstBuffer * buffer = gst_buffer_new_allocate(nullptr, packed_size, nullptr);
   if (buffer == nullptr) {

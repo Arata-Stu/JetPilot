@@ -29,7 +29,9 @@ private:
   struct ImageFormat
   {
     std::string gst_format;
-    std::size_t bytes_per_pixel;
+    std::size_t source_bytes_per_pixel;
+    std::size_t gst_bytes_per_pixel;
+    bool normalize_to_gray8{false};
   };
 
   struct UdpSinkStats
@@ -55,7 +57,7 @@ private:
   bool copy_image_to_buffer(
     const sensor_msgs::msg::Image & msg,
     const ImageFormat & format,
-    GstBuffer * buffer) const;
+    GstBuffer * buffer);
   void stop_pipeline();
 
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr image_sub_;
@@ -75,6 +77,9 @@ private:
   std::atomic<std::uint64_t> sink_packets_{0};
   std::atomic<std::uint64_t> sink_bytes_{0};
   bool pipeline_started_{false};
+  bool thermal_range_initialized_{false};
+  double thermal_low_{0.0};
+  double thermal_high_{65535.0};
   GstFlowReturn last_flow_return_{GST_FLOW_OK};
 
   std::string image_topic_;

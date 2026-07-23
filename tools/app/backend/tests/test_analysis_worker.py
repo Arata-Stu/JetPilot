@@ -9,9 +9,11 @@ from types import SimpleNamespace
 from jetpilot_console.analysis_worker import (
     AnalysisOptions,
     _file_fingerprint,
+    _decode_image,
     _explicit_speed,
     Progress,
     _snapshot_samples,
+    _THERMAL_SMOOTHING_STATE,
     _transform_recorded_trajectory,
     extract_analysis,
     trajectory_map_consistency,
@@ -28,6 +30,33 @@ class SnapshotTrajectoryTests(unittest.TestCase):
             angular=SimpleNamespace(x=0.0, y=0.0, z=0.0),
         )
         self.assertEqual(_explicit_speed(twist), 5.0)
+
+    def test_flir_mono16_decodes_to_visible_stable_8bit_image(self) -> None:
+        try:
+            import cv2  # noqa: F401
+            import numpy as np
+        except ImportError:
+            self.skipTest("OpenCV or NumPy is unavailable")
+
+        _THERMAL_SMOOTHING_STATE.clear()
+        values = np.array(
+            [[10000, 12000, 14000, 16000], [18000, 20000, 22000, 24000]],
+            dtype=np.uint16,
+        )
+        message = SimpleNamespace(
+            encoding="mono16",
+            height=2,
+            width=4,
+            step=8,
+            is_bigendian=False,
+            data=values.tobytes(),
+        )
+
+        decoded = _decode_image(message, "/flir/image_raw")
+
+        self.assertEqual(decoded.shape, (2, 4, 3))
+        self.assertGreater(int(decoded.max()), int(decoded.min()))
+        self.assertGreater(int(decoded.mean()), 5)
 
     def test_reads_timed_odometry_samples(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

@@ -623,6 +623,41 @@ exit 1
             )
             self.assertTrue((analysis_dir / "localization/vslam_snapshot.json").is_file())
 
+    def test_worker_accepts_multiple_image_topics_and_primary_topic(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            config = SimpleNamespace(
+                ros2_ws=root / "ros2_ws",
+                python_bin="/opt/env/bin/python",
+                launch_package="jetpilot_system_launch",
+                analysis_ros_domain_id=92,
+            )
+
+            script = build_analysis_script(
+                config,
+                analysis_dir=root / "analysis",
+                rosbag=root / "record/run",
+                image_topic="/realsense/color/image_raw",
+                image_topics=[
+                    "/realsense/color/image_raw",
+                    "/realsense/infra1/image_rect_raw",
+                    "/flir/image_raw",
+                ],
+                primary_image_topic="/flir/image_raw",
+                control_topic="",
+                mode_topic="",
+                pose_topic="",
+                speed_topic="",
+                map_dir=None,
+                trajectory_mode="recorded",
+                max_fps=15.0,
+            )
+
+            self.assertIn("--image-topics /realsense/color/image_raw", script)
+            self.assertIn("--image-topics /realsense/infra1/image_rect_raw", script)
+            self.assertIn("--image-topics /flir/image_raw", script)
+            self.assertIn("--primary-image-topic /flir/image_raw", script)
+
 
 class _StartedTask:
     def __init__(self, task_id: str = "analysis-test") -> None:

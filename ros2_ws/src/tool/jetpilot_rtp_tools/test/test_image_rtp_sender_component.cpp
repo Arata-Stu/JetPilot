@@ -24,7 +24,22 @@ public:
   static bool start_raw_pipeline(
     ImageRtpSenderComponent & node, const sensor_msgs::msg::Image & image)
   {
-    return node.start_pipeline(image, {"RGB", 3});
+    return node.start_pipeline(image, {"RGB", 3, 3});
+  }
+
+  static ImageRtpSenderComponent::ImageFormat image_format_from_encoding(
+    const std::string & encoding)
+  {
+    return ImageRtpSenderComponent::image_format_from_encoding(encoding);
+  }
+
+  static bool copy_image_to_buffer(
+    ImageRtpSenderComponent & node,
+    const sensor_msgs::msg::Image & image,
+    const ImageRtpSenderComponent::ImageFormat & format,
+    GstBuffer * buffer)
+  {
+    return node.copy_image_to_buffer(image, format, buffer);
   }
 
   static GstElement * udp_sink(const ImageRtpSenderComponent & node)
@@ -157,6 +172,44 @@ TEST_F(ImageRtpSenderComponentTest, ConfiguresUnquotedUdpDestinationAfterParsing
   EXPECT_TRUE(ImageRtpSenderComponentTestAccess::udp_stats_available(*node));
   g_free(actual_host);
   g_free(clients);
+}
+
+TEST_F(ImageRtpSenderComponentTest, NormalizesMono16ThermalFramesToGray8)
+{
+  auto node = std::make_shared<ImageRtpSenderComponent>(
+    options_with_destination("127.0.0.1", 5004));
+  const auto format = ImageRtpSenderComponentTestAccess::image_format_from_encoding("mono16");
+  EXPECT_EQ(format.gst_format, "GRAY8");
+  EXPECT_EQ(format.source_bytes_per_pixel, 2U);
+  EXPECT_EQ(format.gst_bytes_per_pixel, 1U);
+  EXPECT_TRUE(format.normalize_to_gray8);
+
+  sensor_msgs::msg::Image image;
+  image.width = 4;
+  image.height = 1;
+  image.step = 8;
+  image.encoding = "mono16";
+  image.data = {
+    0x10, 0x27,  // 10000
+    0x20, 0x4e,  // 20000
+    0x30, 0x75,  // 30000
+    0x40, 0x9c,  // 40000
+  };
+
+  GstBuffer * buffer = gst_buffer_new_allocate(nullptr, 4, nullptr);
+  ASSERT_NE(buffer, nullptr);
+  ASSERT_TRUE(ImageRtpSenderComponentTestAccess::copy_image_to_buffer(
+    *node, image, format, buffer));
+
+  GstMapInfo map_info;
+  ASSERT_TRUE(gst_buffer_map(buffer, &map_info, GST_MAP_READ));
+  ASSERT_EQ(map_info.size, 4U);
+  EXPECT_LE(map_info.data[0], 2);
+  EXPECT_GT(map_info.data[1], map_info.data[0]);
+  EXPECT_GT(map_info.data[2], map_info.data[1]);
+  EXPECT_GE(map_info.data[3], 253);
+  gst_buffer_unmap(buffer, &map_info);
+  gst_buffer_unref(buffer);
 }
 
 }  // namespace

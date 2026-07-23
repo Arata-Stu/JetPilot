@@ -1332,6 +1332,8 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
             },
             "topics": {
                 "image": options.image_topic,
+                "image_topics": image_topics,
+                "primary_image_topic": primary_image_topic,
                 "control": options.control_topic,
                 "mode": options.mode_topic,
                 "pose": options.pose_topic,
