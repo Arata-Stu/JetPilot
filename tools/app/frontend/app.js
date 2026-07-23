@@ -58,6 +58,42 @@ const state = {
     accelLimitMps2: DEFAULT_RACELINE_ACCEL_LIMIT_MPS2,
     decelLimitMps2: DEFAULT_RACELINE_DECEL_LIMIT_MPS2,
   },
+  simulation: {
+    source: "raceline",
+    playing: false,
+    mapPath: "",
+    rafId: 0,
+    lastTickMs: 0,
+    x: 0,
+    y: 0,
+    yaw: 0,
+    speed: 0,
+    time: 0,
+    distance: 0,
+    lapCount: 0,
+    lastProgress: 0,
+    nearestIndex: 0,
+    targetIndex: 0,
+    targetPoint: null,
+    steeringRad: 0,
+    throttle: 0,
+    brake: 0,
+    crossTrackErrorM: 0,
+    maxCrossTrackErrorM: 0,
+    trajectory: [],
+    settings: {
+      targetSpeedMps: 2.0,
+      wheelbaseM: 0.26,
+      minLookaheadM: 0.45,
+      maxLookaheadM: 1.8,
+      lookaheadGainS: 0.35,
+      maxSteeringRad: 0.45,
+      maxAccelMps2: 1.4,
+      maxDecelMps2: 2.3,
+      dragPerS: 0.04,
+      dtS: 0.02,
+    },
+  },
   selectedTaskId: null,
   fpv: {
     host: "",
@@ -845,6 +881,7 @@ async function refreshAll() {
 
 function setTab(tab) {
   if (state.tab === "bag-analysis" && tab !== "bag-analysis") pauseAnalysisPlayback();
+  if (state.tab === "maps" && tab !== "maps") stopSimulationLoop();
   if (
     state.tab === "fpv"
     && tab !== "fpv"
@@ -891,6 +928,7 @@ function render() {
   forceVisiblePreflightOnce = false;
   requestAnimationFrame(() => {
     drawMapPreview();
+    drawSimulationPreview();
     if (state.tab === "bag-analysis") mountAnalysisViewer();
     scheduleVisiblePreflights({ force: forcePreflight });
   });
@@ -3800,7 +3838,90 @@ function renderMapWorkspace() {
           ${renderMapInspector(detail)}
         </aside>
       </div>
+      ${renderSimulationPanel(detail)}
     </div>
+  `;
+}
+
+function renderSimulationPanel(detail) {
+  ensureSimulationState(detail);
+  const sim = state.simulation;
+  const path = simulationPathPoints(detail);
+  const ready = path.length >= 2;
+  const status = !ready ? "Need path" : sim.playing ? "Running" : sim.time > 0 ? "Paused" : "Ready";
+  const sourceOptions = [
+    ["raceline", "Raceline"],
+    ["centerline", "Centerline"],
+  ];
+  return `
+    <section class="simulation-panel">
+      <div class="simulation-header">
+        <div>
+          <h4>Simulation</h4>
+          <span id="simulation-status" class="${ready ? (sim.playing ? "running" : "ok") : "warn"}">${esc(status)}</span>
+        </div>
+        <div class="simulation-actions">
+          <button id="simulation-run-button" class="primary" onclick="toggleSimulationPlayback()" ${ready ? "" : "disabled"}>${sim.playing ? "Pause" : "Run"}</button>
+          <button onclick="stepSimulationOnce()" ${ready ? "" : "disabled"}>Step</button>
+          <button onclick="resetSimulation()">Reset</button>
+        </div>
+      </div>
+      <div class="simulation-body">
+        <div class="simulation-stage">
+          <canvas id="simulation-canvas" width="920" height="520"></canvas>
+        </div>
+        <aside class="simulation-controls">
+          <div class="simulation-control-grid">
+            <div class="field full">
+              <label for="simulation-source">Path source</label>
+              <select id="simulation-source" onchange="setSimulationSource(this.value)">
+                ${sourceOptions.map(([value, label]) => `<option value="${value}" ${sim.source === value ? "selected" : ""}>${esc(label)}</option>`).join("")}
+              </select>
+            </div>
+            ${simulationNumberInput("targetSpeedMps", "Target speed (m/s)", 0, 0.1)}
+            ${simulationNumberInput("wheelbaseM", "Wheelbase (m)", 0.01, 0.01)}
+            ${simulationNumberInput("minLookaheadM", "Min lookahead (m)", 0.01, 0.05)}
+            ${simulationNumberInput("maxLookaheadM", "Max lookahead (m)", 0.01, 0.05)}
+            ${simulationNumberInput("lookaheadGainS", "Lookahead gain (s)", 0, 0.05)}
+            ${simulationNumberInput("maxSteeringRad", "Max steering (rad)", 0.01, 0.01)}
+            ${simulationNumberInput("maxAccelMps2", "Max accel (m/s^2)", 0.01, 0.1)}
+            ${simulationNumberInput("maxDecelMps2", "Max decel (m/s^2)", 0.01, 0.1)}
+          </div>
+          <div class="simulation-metrics" id="simulation-metrics">
+            ${renderSimulationMetrics()}
+          </div>
+        </aside>
+      </div>
+    </section>
+  `;
+}
+
+function simulationNumberInput(key, label, min, step) {
+  const value = state.simulation.settings[key];
+  return `
+    <div class="field">
+      <label for="simulation-${esc(key)}">${esc(label)}</label>
+      <input
+        id="simulation-${esc(key)}"
+        type="number"
+        min="${esc(min)}"
+        step="${esc(step)}"
+        value="${esc(value)}"
+        oninput="updateSimulationSetting(${js(key)}, this)"
+      />
+    </div>
+  `;
+}
+
+function renderSimulationMetrics() {
+  const sim = state.simulation;
+  return `
+    ${statTile("time", `${sim.time.toFixed(2)} s`)}
+    ${statTile("speed", `${sim.speed.toFixed(2)} m/s`)}
+    ${statTile("steer", `${sim.steeringRad.toFixed(3)} rad`)}
+    ${statTile("error", `${sim.crossTrackErrorM.toFixed(3)} m`)}
+    ${statTile("max error", `${sim.maxCrossTrackErrorM.toFixed(3)} m`)}
+    ${statTile("distance", `${sim.distance.toFixed(1)} m`)}
   `;
 }
 
@@ -6795,6 +6916,366 @@ function collectMapPoints(detail) {
   return points.filter((point) => Array.isArray(point) && point.length >= 2);
 }
 
+function finitePoint(point) {
+  if (Array.isArray(point) && point.length >= 2) {
+    const x = Number(point[0]);
+    const y = Number(point[1]);
+    if (Number.isFinite(x) && Number.isFinite(y)) return { x, y };
+  }
+  if (point && typeof point === "object") {
+    const x = Number(point.x);
+    const y = Number(point.y);
+    if (Number.isFinite(x) && Number.isFinite(y)) return { x, y };
+  }
+  return null;
+}
+
+function normalizePoints(points = []) {
+  return points.map(finitePoint).filter(Boolean);
+}
+
+function primaryLane(detail) {
+  const lanes = detail?.hd_map?.lanes || [];
+  return lanes.find((lane) => lane.primary) || lanes[0] || null;
+}
+
+function simulationPathPoints(detail = state.selectedMapDetail) {
+  if (!detail) return [];
+  if (state.simulation.source === "raceline") {
+    const raceline = normalizePoints(detail.raceline_csv?.points || []);
+    if (raceline.length >= 2) return raceline;
+  }
+  const laneCenterline = normalizePoints(primaryLane(detail)?.centerline || []);
+  if (laneCenterline.length >= 2) return laneCenterline;
+  return normalizePoints(detail.centerline_csv?.points || []);
+}
+
+function simulationPathClosed(points) {
+  if (!points || points.length < 3) return false;
+  const first = points[0];
+  const last = points[points.length - 1];
+  return Math.hypot(first.x - last.x, first.y - last.y) <= 0.35;
+}
+
+function ensureSimulationState(detail = state.selectedMapDetail, options = {}) {
+  const sim = state.simulation;
+  const mapPath = detail?.map?.path || "";
+  const needsReset = options.force || sim.mapPath !== mapPath;
+  if (needsReset) {
+    sim.mapPath = mapPath;
+    resetSimulationStateFromPath(detail);
+  }
+}
+
+function resetSimulationStateFromPath(detail = state.selectedMapDetail) {
+  const sim = state.simulation;
+  stopSimulationLoop();
+  const path = simulationPathPoints(detail);
+  sim.playing = false;
+  sim.rafId = 0;
+  sim.lastTickMs = 0;
+  sim.time = 0;
+  sim.distance = 0;
+  sim.lapCount = 0;
+  sim.lastProgress = 0;
+  sim.nearestIndex = 0;
+  sim.targetIndex = 0;
+  sim.targetPoint = null;
+  sim.steeringRad = 0;
+  sim.throttle = 0;
+  sim.brake = 0;
+  sim.crossTrackErrorM = 0;
+  sim.maxCrossTrackErrorM = 0;
+  sim.trajectory = [];
+  sim.speed = 0;
+  if (path.length >= 2) {
+    sim.x = path[0].x;
+    sim.y = path[0].y;
+    sim.yaw = Math.atan2(path[1].y - path[0].y, path[1].x - path[0].x);
+    sim.trajectory.push({ x: sim.x, y: sim.y });
+  } else {
+    sim.x = 0;
+    sim.y = 0;
+    sim.yaw = 0;
+  }
+}
+
+function resetSimulation() {
+  ensureSimulationState(state.selectedMapDetail, { force: true });
+  updateSimulationChrome();
+  drawSimulationPreview();
+}
+
+function stopSimulationLoop() {
+  if (state.simulation.rafId) cancelAnimationFrame(state.simulation.rafId);
+  state.simulation.rafId = 0;
+  state.simulation.playing = false;
+  state.simulation.lastTickMs = 0;
+}
+
+function toggleSimulationPlayback() {
+  const path = simulationPathPoints();
+  if (path.length < 2) return;
+  state.simulation.playing = !state.simulation.playing;
+  state.simulation.lastTickMs = 0;
+  updateSimulationChrome();
+  if (state.simulation.playing) {
+    state.simulation.rafId = requestAnimationFrame(simulationPlaybackTick);
+  } else {
+    stopSimulationLoop();
+    updateSimulationChrome();
+  }
+}
+
+function simulationPlaybackTick(timestampMs) {
+  const sim = state.simulation;
+  if (!sim.playing) return;
+  if (!sim.lastTickMs) sim.lastTickMs = timestampMs;
+  const elapsedS = Math.min(0.08, Math.max(0, (timestampMs - sim.lastTickMs) / 1000));
+  sim.lastTickMs = timestampMs;
+  const dt = Math.max(0.005, Math.min(sim.settings.dtS, elapsedS || sim.settings.dtS));
+  const steps = Math.max(1, Math.ceil(elapsedS / dt));
+  const stepDt = elapsedS > 0 ? elapsedS / steps : dt;
+  for (let index = 0; index < steps; index += 1) stepSimulation(stepDt);
+  drawSimulationPreview();
+  updateSimulationMetricsDom();
+  sim.rafId = requestAnimationFrame(simulationPlaybackTick);
+}
+
+function stepSimulationOnce() {
+  if (state.simulation.playing) return;
+  stepSimulation(0.1);
+  drawSimulationPreview();
+  updateSimulationChrome();
+}
+
+function updateSimulationSetting(key, input) {
+  if (!Object.prototype.hasOwnProperty.call(state.simulation.settings, key)) return;
+  const value = Number(String(input?.value ?? "").trim());
+  const valid = Number.isFinite(value) && value >= Number(input?.min || 0);
+  input?.setCustomValidity(valid ? "" : "Enter a finite value in range");
+  if (!valid) return;
+  state.simulation.settings[key] = value;
+  if (key === "minLookaheadM" && state.simulation.settings.maxLookaheadM < value) {
+    state.simulation.settings.maxLookaheadM = value;
+    const maxInput = $("simulation-maxLookaheadM");
+    if (maxInput) maxInput.value = value;
+  }
+  if (key === "maxLookaheadM" && value < state.simulation.settings.minLookaheadM) {
+    state.simulation.settings.minLookaheadM = value;
+    const minInput = $("simulation-minLookaheadM");
+    if (minInput) minInput.value = value;
+  }
+}
+
+function setSimulationSource(source) {
+  state.simulation.source = source === "centerline" ? "centerline" : "raceline";
+  resetSimulation();
+}
+
+function stepSimulation(dt) {
+  const detail = state.selectedMapDetail;
+  const path = simulationPathPoints(detail);
+  const sim = state.simulation;
+  const settings = sim.settings;
+  if (path.length < 2 || !Number.isFinite(dt) || dt <= 0) return;
+
+  const tracking = computePurePursuitTarget(path, {
+    x: sim.x,
+    y: sim.y,
+    yaw: sim.yaw,
+    speed: sim.speed,
+    settings,
+  });
+  if (!tracking) return;
+
+  const speedError = settings.targetSpeedMps - sim.speed;
+  const accelCommand = speedError >= 0
+    ? Math.min(settings.maxAccelMps2, speedError * 1.8)
+    : Math.max(-settings.maxDecelMps2, speedError * 2.4);
+  const drag = settings.dragPerS * sim.speed;
+  const accel = accelCommand - drag;
+  const previousSpeed = sim.speed;
+  sim.speed = Math.max(0, sim.speed + accel * dt);
+  sim.steeringRad = tracking.steeringRad;
+  sim.throttle = Math.max(0, accelCommand / Math.max(1e-6, settings.maxAccelMps2));
+  sim.brake = Math.max(0, -accelCommand / Math.max(1e-6, settings.maxDecelMps2));
+
+  const averageSpeed = (previousSpeed + sim.speed) * 0.5;
+  sim.x += averageSpeed * Math.cos(sim.yaw) * dt;
+  sim.y += averageSpeed * Math.sin(sim.yaw) * dt;
+  sim.yaw = normalizeAngle(sim.yaw + (averageSpeed / Math.max(1e-6, settings.wheelbaseM)) * Math.tan(sim.steeringRad) * dt);
+  sim.time += dt;
+  sim.distance += Math.max(0, averageSpeed * dt);
+  sim.nearestIndex = tracking.nearestIndex;
+  sim.targetIndex = tracking.targetIndex;
+  sim.targetPoint = tracking.targetPoint;
+  sim.crossTrackErrorM = tracking.crossTrackErrorM;
+  sim.maxCrossTrackErrorM = Math.max(sim.maxCrossTrackErrorM, tracking.crossTrackErrorM);
+  if (tracking.progress < sim.lastProgress - 0.55 && simulationPathClosed(path)) sim.lapCount += 1;
+  sim.lastProgress = tracking.progress;
+
+  const previous = sim.trajectory[sim.trajectory.length - 1];
+  if (!previous || Math.hypot(previous.x - sim.x, previous.y - sim.y) > 0.03) {
+    sim.trajectory.push({ x: sim.x, y: sim.y });
+    if (sim.trajectory.length > 3000) sim.trajectory.shift();
+  }
+}
+
+function computePurePursuitTarget(path, input) {
+  const { x, y, yaw, speed, settings } = input;
+  let nearestIndex = 0;
+  let nearestDistance = Infinity;
+  let progressDistance = 0;
+  let progressAtNearest = 0;
+  for (let index = 0; index < path.length; index += 1) {
+    const distance = Math.hypot(path[index].x - x, path[index].y - y);
+    if (distance < nearestDistance) {
+      nearestDistance = distance;
+      nearestIndex = index;
+      progressAtNearest = progressDistance;
+    }
+    if (index + 1 < path.length) {
+      progressDistance += Math.hypot(path[index + 1].x - path[index].x, path[index + 1].y - path[index].y);
+    }
+  }
+  const totalLength = Math.max(progressDistance, 1e-6);
+  const closed = simulationPathClosed(path);
+  const lookahead = Math.max(
+    settings.minLookaheadM,
+    Math.min(settings.maxLookaheadM, settings.minLookaheadM + Math.abs(speed) * settings.lookaheadGainS),
+  );
+  let targetIndex = nearestIndex;
+  let travelled = 0;
+  const maximumSegments = closed ? path.length : Math.max(1, path.length - 1 - nearestIndex);
+  for (let count = 0; count < maximumSegments; count += 1) {
+    const current = targetIndex;
+    let next = current + 1;
+    if (next >= path.length) next = closed ? 0 : path.length - 1;
+    travelled += Math.hypot(path[next].x - path[current].x, path[next].y - path[current].y);
+    targetIndex = next;
+    if (travelled >= lookahead || (!closed && targetIndex >= path.length - 1)) break;
+  }
+  const targetPoint = path[targetIndex];
+  const dx = targetPoint.x - x;
+  const dy = targetPoint.y - y;
+  const localX = Math.cos(yaw) * dx + Math.sin(yaw) * dy;
+  const localY = -Math.sin(yaw) * dx + Math.cos(yaw) * dy;
+  const denominator = Math.max(1e-6, localX * localX + localY * localY);
+  const curvature = 2 * localY / denominator;
+  const steeringRad = Math.max(
+    -settings.maxSteeringRad,
+    Math.min(settings.maxSteeringRad, Math.atan(settings.wheelbaseM * curvature)),
+  );
+  return {
+    nearestIndex,
+    targetIndex,
+    targetPoint,
+    steeringRad,
+    crossTrackErrorM: nearestDistance,
+    progress: progressAtNearest / totalLength,
+  };
+}
+
+function normalizeAngle(angle) {
+  let output = angle;
+  while (output > Math.PI) output -= Math.PI * 2;
+  while (output < -Math.PI) output += Math.PI * 2;
+  return output;
+}
+
+function updateSimulationChrome() {
+  const ready = simulationPathPoints(state.selectedMapDetail).length >= 2;
+  const sim = state.simulation;
+  const status = !ready ? "Need path" : sim.playing ? "Running" : sim.time > 0 ? "Paused" : "Ready";
+  const statusEl = $("simulation-status");
+  if (statusEl) {
+    statusEl.textContent = status;
+    statusEl.className = ready ? (sim.playing ? "running" : "ok") : "warn";
+  }
+  const runButton = $("simulation-run-button");
+  if (runButton) {
+    runButton.textContent = sim.playing ? "Pause" : "Run";
+    runButton.disabled = !ready;
+  }
+  updateSimulationMetricsDom();
+}
+
+function updateSimulationMetricsDom() {
+  const metrics = $("simulation-metrics");
+  if (metrics) metrics.innerHTML = renderSimulationMetrics();
+}
+
+function drawSimulationPreview() {
+  const canvas = $("simulation-canvas");
+  const detail = state.selectedMapDetail;
+  if (!canvas || !detail) return;
+  ensureSimulationState(detail);
+  const ctx = canvas.getContext("2d");
+  const width = canvas.width || 920;
+  const height = canvas.height || 520;
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = "#080a0d";
+  ctx.fillRect(0, 0, width, height);
+  drawGrid(ctx, width, height);
+  const toPixel = mapPointProjector(detail, width, height);
+  const lanes = detail.hd_map?.lanes || [];
+  for (const lane of lanes) {
+    drawPolyline(ctx, normalizePoints(lane.left_bound || []).map((point) => toPixel([point.x, point.y])), "rgba(69,196,120,0.65)", 2, lane.closed_loop);
+    drawPolyline(ctx, normalizePoints(lane.right_bound || []).map((point) => toPixel([point.x, point.y])), "rgba(216,120,216,0.65)", 2, lane.closed_loop);
+    drawPolyline(ctx, normalizePoints(lane.centerline || []).map((point) => toPixel([point.x, point.y])), "rgba(231,200,75,0.72)", lane.primary ? 3 : 1.5, lane.closed_loop);
+  }
+  drawPolyline(ctx, normalizePoints(detail.centerline_csv?.points || []).map((point) => toPixel([point.x, point.y])), "rgba(90,168,255,0.72)", 2, false);
+  drawPolyline(ctx, normalizePoints(detail.raceline_csv?.points || []).map((point) => toPixel([point.x, point.y])), "rgba(255,109,109,0.9)", 3, false);
+
+  const sim = state.simulation;
+  drawPolyline(ctx, sim.trajectory.map((point) => toPixel([point.x, point.y])), "#ffffff", 2.5, false);
+  if (sim.targetPoint) {
+    const [tx, ty] = toPixel([sim.targetPoint.x, sim.targetPoint.y]);
+    ctx.save();
+    ctx.strokeStyle = "#57c7c2";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(tx, ty, 8, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+  drawSimulationVehicle(ctx, detail, toPixel);
+
+  const path = simulationPathPoints(detail);
+  if (path.length < 2) {
+    ctx.save();
+    ctx.fillStyle = "#f2c94c";
+    ctx.font = "14px ui-sans-serif, system-ui";
+    ctx.fillText("Generate or edit a centerline/raceline before simulation.", 18, 28);
+    ctx.restore();
+  }
+}
+
+function drawSimulationVehicle(ctx, detail, toPixel) {
+  const sim = state.simulation;
+  const [x, y] = toPixel([sim.x, sim.y]);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+  const rasterYaw = detail?.raster?.resolution_m_per_px
+    ? Number(detail.raster.origin_xy_yaw?.[2] || 0)
+    : 0;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(rasterYaw - sim.yaw);
+  ctx.fillStyle = "#f2f5f8";
+  ctx.strokeStyle = "#050709";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(16, 0);
+  ctx.lineTo(-10, -8);
+  ctx.lineTo(-6, 0);
+  ctx.lineTo(-10, 8);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  ctx.restore();
+}
+
 function fillTransferLocal(path) {
   state.tab = "jetson";
   render();
@@ -7117,6 +7598,11 @@ window.startMapBuild = startMapBuild;
 window.copyMapBuildCommand = copyMapBuildCommand;
 window.runMapStage = runMapStage;
 window.updateRacelineGeneration = updateRacelineGeneration;
+window.toggleSimulationPlayback = toggleSimulationPlayback;
+window.stepSimulationOnce = stepSimulationOnce;
+window.resetSimulation = resetSimulation;
+window.updateSimulationSetting = updateSimulationSetting;
+window.setSimulationSource = setSimulationSource;
 window.openMapWorkspace = openMapWorkspace;
 window.refreshSelectedMap = refreshSelectedMap;
 window.toggleMapLayer = toggleMapLayer;

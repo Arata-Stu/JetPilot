@@ -1187,6 +1187,110 @@ tr:last-child td {
   border-radius: 6px;
 }
 
+.simulation-panel {
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #12161a;
+  padding: 12px;
+}
+
+.simulation-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.simulation-header > div:first-child {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.simulation-header h4 {
+  margin: 0;
+  color: var(--soft);
+  font-size: 13px;
+  text-transform: uppercase;
+}
+
+.simulation-header span {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 3px 8px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.simulation-header span.ok {
+  border-color: #2a6d48;
+  color: var(--green);
+}
+
+.simulation-header span.running {
+  border-color: #73642c;
+  color: var(--amber);
+}
+
+.simulation-header span.warn {
+  border-color: #754146;
+  color: #ffb7be;
+}
+
+.simulation-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.simulation-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 12px;
+  align-items: start;
+}
+
+.simulation-stage {
+  min-width: 0;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #080a0d;
+  padding: 10px;
+}
+
+#simulation-canvas {
+  display: block;
+  width: 100%;
+  min-width: 620px;
+  height: auto;
+  border-radius: 6px;
+}
+
+.simulation-controls {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.simulation-control-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.simulation-control-grid .full {
+  grid-column: 1 / -1;
+}
+
+.simulation-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
 .map-side-panel {
   display: grid;
   gap: 12px;
