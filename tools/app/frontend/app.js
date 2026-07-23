@@ -2970,7 +2970,7 @@ function renderAnalysisMultiTiles(grid, channels, selectedChannel, primaryTopic,
     ...channels.filter((channel) => channel !== selectedChannel),
   ].filter(Boolean);
   const layoutKey = `${mode}|${ordered.join("\n")}`;
-  grid.className = `analysis-multi-image-grid ${mode === "strip" ? "strip" : "grid"}`;
+  grid.className = `analysis-multi-image-grid visible ${mode === "strip" ? "strip" : "grid"}`;
   if (grid.dataset.layoutKey === layoutKey) return ordered;
   grid.dataset.layoutKey = layoutKey;
   grid.innerHTML = ordered.map((channel) => `
