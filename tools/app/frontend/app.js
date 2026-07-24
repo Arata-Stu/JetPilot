@@ -10,6 +10,13 @@ const DEFAULT_HD_RASTER_AUTO_CROP_MIN_RETAINED_RATIO = 0.75;
 const DEFAULT_HD_RASTER_PATH_CROP_DISTANCE_M = 0.0;
 const DEFAULT_HD_RASTER_PATH_CROP_MIN_RETAINED_RATIO = 0.2;
 const PREFLIGHT_CACHE_MS = 15_000;
+const LIVE_LOG_INITIAL_TAIL_LINES = 400;
+const MAX_LIVE_LOG_CHARS = 400_000;
+const LIVE_LOG_TRUNCATION_NOTICE = "[Showing the latest live log only. Use Copy Log for the full log.]\n...\n";
+const DEFAULT_MAP_EDITOR_ASSIST_RANGE_POINTS = 4;
+const DEFAULT_MAP_EDITOR_ASSIST_SPACING_M = 0.08;
+const MAX_MAP_EDITOR_ASSIST_RANGE_POINTS = 30;
+const MAX_MAP_EDITOR_ASSIST_RESAMPLE_POINTS = 1200;
 
 const state = {
   tab: "dashboard",
@@ -45,6 +52,8 @@ const state = {
     undoStack: [],
     redoStack: [],
     dragSnapshot: null,
+    assistRangePoints: DEFAULT_MAP_EDITOR_ASSIST_RANGE_POINTS,
+    assistSpacingM: DEFAULT_MAP_EDITOR_ASSIST_SPACING_M,
   },
   sectionEditor: {
     enabled: false,
@@ -948,6 +957,14 @@ function render() {
 
 function isEditingField() {
   return ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName || "");
+}
+
+function appendLiveLog(chunk = "") {
+  if (!chunk) return;
+  state.logText += chunk;
+  if (state.logText.length > MAX_LIVE_LOG_CHARS) {
+    state.logText = LIVE_LOG_TRUNCATION_NOTICE + state.logText.slice(-MAX_LIVE_LOG_CHARS);
+  }
 }
 
 function updateLogOnly(chunk = "", append = false) {
@@ -4589,6 +4606,8 @@ function renderHdMapEditor(detail) {
   const rasterReady = mapEditorRasterReady(detail);
   const issue = editorLaneIssue(lane);
   const selected = Boolean(editor.selected);
+  const assist = normalizedMapEditorAssistSettings();
+  const canSmooth = canSmoothSelectedEditorRange();
   const status = !rasterReady ? "Raster required" : issue || (editor.dirty ? "Unsaved" : "Ready");
   const canSave = editor.enabled && rasterReady && !issue;
   return `
@@ -4607,6 +4626,36 @@ function renderHdMapEditor(detail) {
       <div class="editor-field-row">
         ${editorFieldButton("left_bound", "Left boundary")}
         ${editorFieldButton("right_bound", "Right boundary")}
+      </div>
+      <div class="editor-assist-grid">
+        <div class="field">
+          <label for="map-editor-assist-range">Assist range (pts)</label>
+          <input
+            id="map-editor-assist-range"
+            type="number"
+            min="1"
+            max="${MAX_MAP_EDITOR_ASSIST_RANGE_POINTS}"
+            step="1"
+            value="${esc(assist.rangePoints)}"
+            oninput="updateMapEditorAssistNumber('rangePoints', this)"
+            ${editor.enabled ? "" : "disabled"}
+          />
+        </div>
+        <div class="field">
+          <label for="map-editor-assist-spacing">Point spacing (m)</label>
+          <input
+            id="map-editor-assist-spacing"
+            type="number"
+            min="0.02"
+            max="1"
+            step="0.01"
+            value="${esc(assist.spacingM)}"
+            oninput="updateMapEditorAssistNumber('spacingM', this)"
+            ${editor.enabled ? "" : "disabled"}
+          />
+        </div>
+        <button id="map-editor-smooth" class="primary full" onclick="smoothSelectedEditorRange()" ${canSmooth ? "" : "disabled"}>Smooth Area</button>
+        <div id="map-editor-assist-hint" class="field-hint full">${esc(mapEditorAssistHint())}</div>
       </div>
       <div class="editor-zoom-row">
         <button onclick="zoomMapEditor(0.75)">-</button>
@@ -5047,10 +5096,6 @@ function selectedTask() {
 
 function updateLogElement(element, chunk = "", append = false) {
   if (!element) return;
-  if (chunk && append) {
-    element.textContent += chunk;
-    return;
-  }
   element.textContent = state.logText || "Select a task to view logs.";
 }
 
@@ -5110,12 +5155,12 @@ async function selectTask(taskId, options = {}) {
   }
   state.terminalCollapsed = false;
   if (options.openDialog) state.logDialogOpen = true;
-  state.stream = new EventSource(`/api/tasks/${encodeURIComponent(taskId)}/stream?tail=1000`);
+  state.stream = new EventSource(`/api/tasks/${encodeURIComponent(taskId)}/stream?tail=${LIVE_LOG_INITIAL_TAIL_LINES}`);
   state.stream.onmessage = (event) => {
     const payload = JSON.parse(event.data);
     const chunk = payload.chunk || "";
     const append = Boolean(state.logText && chunk);
-    if (chunk) state.logText += chunk;
+    appendLiveLog(chunk);
     if (payload.task) {
       const index = state.tasks.findIndex((item) => item.task_id === payload.task.task_id);
       const previous = index >= 0 ? state.tasks[index] : null;
@@ -5149,9 +5194,7 @@ function copyTaskCommand(taskId) {
 
 async function copyTaskLog(taskId) {
   try {
-    const text = taskId === state.selectedTaskId && state.logText
-      ? state.logText
-      : await apiText(`/api/tasks/${encodeURIComponent(taskId)}/log`);
+    const text = await apiText(`/api/tasks/${encodeURIComponent(taskId)}/log`);
     await copyText(text, "Log copied");
   } catch (error) {
     toast(`Copy failed: ${error.message}`, "error");
@@ -6402,6 +6445,58 @@ function editorLaneIssue(lane) {
   return "";
 }
 
+function normalizedMapEditorAssistSettings() {
+  const rangePoints = Math.max(
+    1,
+    Math.min(MAX_MAP_EDITOR_ASSIST_RANGE_POINTS, Math.round(Number(state.mapEditor.assistRangePoints) || DEFAULT_MAP_EDITOR_ASSIST_RANGE_POINTS)),
+  );
+  const spacingM = Math.max(
+    0.02,
+    Math.min(1, Number(state.mapEditor.assistSpacingM) || DEFAULT_MAP_EDITOR_ASSIST_SPACING_M),
+  );
+  state.mapEditor.assistRangePoints = rangePoints;
+  state.mapEditor.assistSpacingM = spacingM;
+  return { rangePoints, spacingM };
+}
+
+function mapEditorAssistHint() {
+  const selected = state.mapEditor.selected;
+  const lane = activeEditorLane();
+  if (!state.mapEditor.enabled) return "Enable editing, then select a boundary point.";
+  if (!selected) return "Select a boundary point near the curve to smooth.";
+  const count = lane[selected.field]?.length || 0;
+  const label = selected.field === "left_bound" ? "left" : "right";
+  return `${label} point ${selected.index + 1}/${count}: smoothing uses neighboring points and keeps Undo available.`;
+}
+
+function canSmoothSelectedEditorRange() {
+  const detail = state.selectedMapDetail;
+  const selected = state.mapEditor.selected;
+  if (!detail || !state.mapEditor.enabled || state.mapEditor.mapPath !== detail.map?.path || !selected) return false;
+  if (!["left_bound", "right_bound"].includes(selected.field)) return false;
+  const lane = activeEditorLane();
+  const points = lane[selected.field] || [];
+  if (!points[selected.index]) return false;
+  if (points.length < (lane.closed_loop ? 4 : 3)) return false;
+  const assist = normalizedMapEditorAssistSettings();
+  const range = selectedEditorRange(points, selected.index, assist.rangePoints, lane.closed_loop);
+  return range.segment.length >= (range.closedWhole && lane.closed_loop ? 4 : 3);
+}
+
+function updateMapEditorAssistNumber(field, input) {
+  const raw = String(input?.value ?? "").trim();
+  const value = Number(raw);
+  const isRange = field === "rangePoints";
+  const min = isRange ? 1 : 0.02;
+  const max = isRange ? MAX_MAP_EDITOR_ASSIST_RANGE_POINTS : 1;
+  const valid = raw !== "" && Number.isFinite(value) && value >= min && value <= max;
+  input?.setCustomValidity(valid ? "" : `Enter a value from ${min} to ${max}`);
+  if (!valid) return;
+  if (isRange) state.mapEditor.assistRangePoints = Math.round(value);
+  else if (field === "spacingM") state.mapEditor.assistSpacingM = value;
+  updateMapEditorChrome();
+}
+
 function setMapEditorField(field) {
   if (!["left_bound", "right_bound"].includes(field)) return;
   state.mapEditor.activeField = field;
@@ -6464,6 +6559,21 @@ function updateMapEditorChrome() {
   if (undo) undo.disabled = !(state.mapEditor.enabled && state.mapEditor.undoStack.length);
   const redo = $("map-editor-redo");
   if (redo) redo.disabled = !(state.mapEditor.enabled && state.mapEditor.redoStack.length);
+  const smooth = $("map-editor-smooth");
+  if (smooth) smooth.disabled = !canSmoothSelectedEditorRange();
+  const assist = normalizedMapEditorAssistSettings();
+  const assistRange = $("map-editor-assist-range");
+  if (assistRange) {
+    assistRange.disabled = !state.mapEditor.enabled;
+    assistRange.value = String(assist.rangePoints);
+  }
+  const assistSpacing = $("map-editor-assist-spacing");
+  if (assistSpacing) {
+    assistSpacing.disabled = !state.mapEditor.enabled;
+    assistSpacing.value = String(assist.spacingM);
+  }
+  const assistHint = $("map-editor-assist-hint");
+  if (assistHint) assistHint.textContent = mapEditorAssistHint();
   for (const field of ["left_bound", "right_bound"]) {
     const button = $(`map-editor-field-${field}`);
     if (button) {
@@ -6678,6 +6788,133 @@ function resamplePolyline(points, count, closedLoop) {
     return Array.from({ length: safeCount }, (_, index) => samplePolylineAt(points, index / safeCount, true));
   }
   return Array.from({ length: safeCount }, (_, index) => samplePolylineAt(points, index / Math.max(1, safeCount - 1), false));
+}
+
+function interpolateMapPoint(a, b, ratio) {
+  return [
+    Number(a[0]) + (Number(b[0]) - Number(a[0])) * ratio,
+    Number(a[1]) + (Number(b[1]) - Number(a[1])) * ratio,
+  ];
+}
+
+function chaikinSmoothOpenPolyline(points, iterations = 2) {
+  let result = cloneMapPolyline(points);
+  for (let pass = 0; pass < iterations; pass += 1) {
+    if (result.length < 3) return result;
+    const next = [cloneMapPoint(result[0])];
+    for (let index = 0; index < result.length - 1; index += 1) {
+      const start = result[index];
+      const end = result[index + 1];
+      next.push(interpolateMapPoint(start, end, 0.25));
+      next.push(interpolateMapPoint(start, end, 0.75));
+    }
+    next.push(cloneMapPoint(result[result.length - 1]));
+    result = dedupePolyline(next);
+  }
+  return result;
+}
+
+function chaikinSmoothClosedPolyline(points, iterations = 2) {
+  let result = cloneMapPolyline(points);
+  for (let pass = 0; pass < iterations; pass += 1) {
+    if (result.length < 4) return result;
+    const next = [];
+    for (let index = 0; index < result.length; index += 1) {
+      const start = result[index];
+      const end = result[(index + 1) % result.length];
+      next.push(interpolateMapPoint(start, end, 0.25));
+      next.push(interpolateMapPoint(start, end, 0.75));
+    }
+    result = dedupePolyline(next);
+  }
+  return result;
+}
+
+function resamplePolylineBySpacing(points, spacingM, closedLoop) {
+  const clean = dedupePolyline(cloneMapPolyline(points));
+  const minimum = closedLoop ? 3 : 2;
+  if (clean.length < minimum) return clean;
+  const length = polylineWorldLength(clean, closedLoop);
+  if (length <= 1.0e-9) return clean;
+  const targetCount = Math.max(
+    minimum,
+    clean.length,
+    Math.ceil(length / Math.max(0.02, spacingM)) + (closedLoop ? 0 : 1),
+  );
+  return dedupePolyline(resamplePolyline(clean, Math.min(MAX_MAP_EDITOR_ASSIST_RESAMPLE_POINTS, targetCount), closedLoop));
+}
+
+function smoothEditorPolylineForAssist(points, spacingM, closedLoop) {
+  const smoothed = closedLoop
+    ? chaikinSmoothClosedPolyline(points, 2)
+    : chaikinSmoothOpenPolyline(points, 2);
+  return resamplePolylineBySpacing(smoothed, spacingM, closedLoop);
+}
+
+function wrapPolylineIndex(index, length) {
+  return ((index % length) + length) % length;
+}
+
+function selectedEditorRange(points, selectedIndex, rangePoints, closedLoop) {
+  const count = points.length;
+  if (closedLoop) {
+    const rangeCount = Math.min(count, rangePoints * 2 + 1);
+    if (rangeCount >= count) {
+      return {
+        closedWhole: true,
+        startIndex: 0,
+        count,
+        segment: cloneMapPolyline(points),
+      };
+    }
+    const startIndex = wrapPolylineIndex(selectedIndex - rangePoints, count);
+    return {
+      closedWhole: false,
+      startIndex,
+      count: rangeCount,
+      segment: Array.from({ length: rangeCount }, (_, offset) => cloneMapPoint(points[(startIndex + offset) % count])),
+    };
+  }
+
+  const startIndex = Math.max(0, selectedIndex - rangePoints);
+  const endIndex = Math.min(count - 1, selectedIndex + rangePoints);
+  return {
+    closedWhole: false,
+    startIndex,
+    endIndex,
+    count: endIndex - startIndex + 1,
+    segment: points.slice(startIndex, endIndex + 1).map(cloneMapPoint),
+  };
+}
+
+function replaceEditorRange(points, range, replacement, closedLoop) {
+  const cleanReplacement = dedupePolyline(cloneMapPolyline(replacement));
+  if (range.closedWhole) return cleanReplacement;
+  if (!closedLoop) {
+    return [
+      ...points.slice(0, range.startIndex).map(cloneMapPoint),
+      ...cleanReplacement,
+      ...points.slice(range.endIndex + 1).map(cloneMapPoint),
+    ];
+  }
+  const rest = [];
+  for (let offset = range.count; offset < points.length; offset += 1) {
+    rest.push(cloneMapPoint(points[(range.startIndex + offset) % points.length]));
+  }
+  return [...cleanReplacement, ...rest];
+}
+
+function nearestPolylineIndex(points, targetPoint) {
+  let bestIndex = 0;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (let index = 0; index < points.length; index += 1) {
+    const distance = pointDistance(points[index], targetPoint);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      bestIndex = index;
+    }
+  }
+  return bestIndex;
 }
 
 function dtwPointPairs(left, right) {
@@ -6912,6 +7149,48 @@ function deleteSelectedEditorPoint() {
     updateMapEditorChrome();
     drawMapPreview();
   }
+}
+
+function smoothSelectedEditorRange() {
+  const detail = state.selectedMapDetail;
+  if (!detail || !state.mapEditor.enabled || state.mapEditor.mapPath !== detail.map?.path) return;
+  if (!canSmoothSelectedEditorRange()) {
+    toast("Select a boundary point with enough neighbors first.", "error");
+    return;
+  }
+
+  const lane = activeEditorLane();
+  const selected = { ...state.mapEditor.selected };
+  const points = lane[selected.field] || [];
+  const selectedPoint = cloneMapPoint(points[selected.index]);
+  const assist = normalizedMapEditorAssistSettings();
+  const range = selectedEditorRange(points, selected.index, assist.rangePoints, lane.closed_loop);
+  const minimum = range.closedWhole ? (lane.closed_loop ? 4 : 3) : 3;
+  if (range.segment.length < minimum) {
+    toast("Selected area is too short to smooth.", "error");
+    return;
+  }
+
+  const smoothed = smoothEditorPolylineForAssist(range.segment, assist.spacingM, Boolean(range.closedWhole));
+  if (smoothed.length < minimum) {
+    toast("Smooth result was too short; try a larger range.", "error");
+    return;
+  }
+
+  rememberMapEditorState();
+  lane[selected.field] = replaceEditorRange(points, range, smoothed, lane.closed_loop);
+  state.mapEditor.selected = {
+    field: selected.field,
+    index: nearestPolylineIndex(lane[selected.field], selectedPoint),
+  };
+  state.mapEditor.activeField = selected.field;
+  state.mapEditor.dragging = null;
+  state.mapEditor.dragSnapshot = null;
+  regenerateEditorCenterline(lane);
+  markMapEditorDirty();
+  toast(`Smoothed ${range.segment.length} pts to ${smoothed.length} pts`);
+  updateMapEditorChrome();
+  drawMapPreview();
 }
 
 function deleteNearestEditorPoint(event) {
@@ -8001,6 +8280,8 @@ window.undoMapEditor = undoMapEditor;
 window.redoMapEditor = redoMapEditor;
 window.toggleEditorClosedLoop = toggleEditorClosedLoop;
 window.toggleEditorCenterline = toggleEditorCenterline;
+window.updateMapEditorAssistNumber = updateMapEditorAssistNumber;
+window.smoothSelectedEditorRange = smoothSelectedEditorRange;
 window.toggleSectionEditor = toggleSectionEditor;
 window.deleteSelectedSectionGate = deleteSelectedSectionGate;
 window.saveSectionGatesFromEditor = saveSectionGatesFromEditor;

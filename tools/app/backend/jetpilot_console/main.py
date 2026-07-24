@@ -74,6 +74,7 @@ JSIOCGAXES = 0x80016A11
 JSIOCGBUTTONS = 0x80016A12
 JSIOCGNAME = lambda length: 0x80006A13 + (length << 16)
 _MAP_BUILD_TOKEN = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$")
+TASK_STREAM_CHUNK_BYTES = 256 * 1024
 
 
 def local_ip_candidates() -> list[str]:
@@ -800,14 +801,18 @@ class Handler(BaseHTTPRequestHandler):
                     offset = path.stat().st_size
                     sent_initial_tail = True
                 else:
+                    size = path.stat().st_size
+                    if offset > size:
+                        offset = 0
                     with path.open("rb") as handle:
                         handle.seek(offset)
-                        data = handle.read()
+                        data = handle.read(TASK_STREAM_CHUNK_BYTES)
                         offset = handle.tell()
                     chunk = data.decode("utf-8", errors="replace")
             self._sse({"task": task.to_json(), "chunk": chunk})
             if task.status in {"success", "failed", "stopped", "lost"}:
-                idle_after_finish += 1
+                more_log_pending = path.exists() and offset < path.stat().st_size
+                idle_after_finish = 0 if more_log_pending else idle_after_finish + 1
                 if idle_after_finish >= 2:
                     return
             time.sleep(1)

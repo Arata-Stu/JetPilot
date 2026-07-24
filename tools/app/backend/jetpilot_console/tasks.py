@@ -8,6 +8,7 @@ import subprocess
 import threading
 import time
 import uuid
+from collections import deque
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -306,11 +307,13 @@ class TaskManager:
         path = Path(task.log_path)
         if not path.exists():
             return ""
-        text = path.read_text(encoding="utf-8", errors="replace")
         if tail is None:
-            return text
-        lines = text.splitlines()
-        return "\n".join(lines[-tail:])
+            return path.read_text(encoding="utf-8", errors="replace")
+        if tail <= 0:
+            return ""
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            lines = deque(handle, maxlen=tail)
+        return "".join(lines)
 
     @staticmethod
     def format_command(command: list[str]) -> str:
