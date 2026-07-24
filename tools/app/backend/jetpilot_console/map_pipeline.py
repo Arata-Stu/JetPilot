@@ -217,7 +217,7 @@ setsid ros2 launch {_q(config.launch_package)} bringup.launch.py \\
   publish_vehicle_description:=false \\
   enable_sensor_kit:=false \\
   enable_localization:=true \\
-  vslam_enable_slam:=true \\
+  vslam_enable_slam:=false \\
   vslam_enable_visualization:=true \\
   vslam_localize_on_startup:=true \\
   enable_vgl:=false \\
@@ -265,6 +265,18 @@ offline_nodes="$(ros2 node list 2>/dev/null || true)"
 if [[ "$offline_nodes" != *visual_slam_node* ]]; then
   echo "[debug] visual_slam_node is not listed before replay; continuing because it may be a composable node inside nova_container"
 fi
+echo "[stage] VGL is disabled; publishing identity map pose to /initialpose for saved-map VSLAM localization"
+for offline_hint_attempt in $(seq 1 3); do
+  if ros2 topic pub --once /initialpose geometry_msgs/msg/PoseWithCovarianceStamped '{{header: {{frame_id: map}}, pose: {{pose: {{orientation: {{w: 1.0}}}}}}}}'; then
+    break
+  fi
+  if [ "$offline_hint_attempt" = "3" ]; then
+    offline_stop_launch TERM 5 || true
+    echo "failed to publish identity pose hint to /initialpose"
+    exit 24
+  fi
+  sleep 1
+done
 offline_snapshot_seen=0
 for offline_attempt in $(seq 1 300); do
   if [ -s "$snapshot" ]; then
