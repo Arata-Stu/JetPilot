@@ -1,6 +1,8 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -28,8 +30,11 @@
 #include "tf2_ros/transform_listener.h"
 
 #include "jetpilot_controller/longitudinal_controller.hpp"
+#include "jetpilot_controller/kinematic_mpc.hpp"
+#include "jetpilot_controller/map_pursuit.hpp"
 #include "jetpilot_controller/path_tracking_controller.hpp"
 #include "jetpilot_controller/pure_pursuit.hpp"
+#include "jetpilot_controller/trailing_controller.hpp"
 
 namespace jetpilot_controller
 {
@@ -37,6 +42,12 @@ namespace
 {
 
 using SteadyTime = std::chrono::steady_clock::time_point;
+
+struct StationProjection
+{
+  bool valid{false};
+  double station_m{0.0};
+};
 
 double seconds_since(const SteadyTime & timestamp)
 {
@@ -49,6 +60,20 @@ diagnostic_msgs::msg::KeyValue diagnostic_value(std::string key, std::string val
   output.key = std::move(key);
   output.value = std::move(value);
   return output;
+}
+
+PathClosureMode parse_path_closure_mode(const std::string & mode)
+{
+  if (mode == "auto") {
+    return PathClosureMode::kAuto;
+  }
+  if (mode == "open") {
+    return PathClosureMode::kOpen;
+  }
+  if (mode == "closed") {
+    return PathClosureMode::kClosed;
+  }
+  throw std::invalid_argument("path_closure_mode must be auto, open, or closed");
 }
 
 }  // namespace
@@ -92,6 +117,8 @@ private:
       "localization_state_topic", "/localization/pose_hint_state");
     odometry_topic_ = declare_parameter<std::string>(
       "odometry_topic", "/visual_slam/tracking/odometry");
+    opponent_odometry_topic_ = declare_parameter<std::string>(
+      "opponent_odometry_topic", "/perception/opponent/odometry");
     command_topic_ = declare_parameter<std::string>("command_topic", "/auto/control_cmd");
     diagnostics_topic_ =
       declare_parameter<std::string>("diagnostics_topic", "/controller/diagnostics");
@@ -114,6 +141,7 @@ private:
     safety_brake_command_ = declare_parameter<double>("safety_brake_command", 0.0);
     max_steering_rate_per_s_ = declare_parameter<double>("max_steering_rate_per_s", 4.0);
     max_lateral_accel_mps2_ = declare_parameter<double>("max_lateral_accel_mps2", 2.0);
+    opponent_odometry_timeout_s_ = declare_parameter<double>("opponent_odometry_timeout_s", 0.3);
 
     pure_pursuit_params_.wheelbase_m = declare_parameter<double>("wheelbase_m", 0.26);
     pure_pursuit_params_.min_lookahead_m =
@@ -130,15 +158,52 @@ private:
       declare_parameter<double>("closed_path_tolerance_m", 0.3);
     const auto path_closure_mode =
       declare_parameter<std::string>("path_closure_mode", "auto");
-    if (path_closure_mode == "auto") {
-      pure_pursuit_params_.path_closure_mode = PathClosureMode::kAuto;
-    } else if (path_closure_mode == "open") {
-      pure_pursuit_params_.path_closure_mode = PathClosureMode::kOpen;
-    } else if (path_closure_mode == "closed") {
-      pure_pursuit_params_.path_closure_mode = PathClosureMode::kClosed;
-    } else {
-      throw std::invalid_argument("path_closure_mode must be auto, open, or closed");
-    }
+    pure_pursuit_params_.path_closure_mode = parse_path_closure_mode(path_closure_mode);
+
+    map_pursuit_params_.wheelbase_m = pure_pursuit_params_.wheelbase_m;
+    map_pursuit_params_.min_lookahead_m = pure_pursuit_params_.min_lookahead_m;
+    map_pursuit_params_.max_lookahead_m = pure_pursuit_params_.max_lookahead_m;
+    map_pursuit_params_.lookahead_speed_gain_s = pure_pursuit_params_.lookahead_speed_gain_s;
+    map_pursuit_params_.max_steering_angle_rad =
+      pure_pursuit_params_.max_steering_angle_rad;
+    map_pursuit_params_.max_steering_command = pure_pursuit_params_.max_steering_command;
+    map_pursuit_params_.closed_path_tolerance_m =
+      pure_pursuit_params_.closed_path_tolerance_m;
+    map_pursuit_params_.path_closure_mode = pure_pursuit_params_.path_closure_mode;
+    map_pursuit_params_.lateral_error_gain =
+      declare_parameter<double>("map_lateral_error_gain", 0.4);
+    map_pursuit_params_.speed_steering_downscale_start_mps =
+      declare_parameter<double>("map_speed_steering_downscale_start_mps", 1.5);
+    map_pursuit_params_.speed_steering_downscale_end_mps =
+      declare_parameter<double>("map_speed_steering_downscale_end_mps", 3.0);
+    map_pursuit_params_.speed_steering_downscale_factor =
+      declare_parameter<double>("map_speed_steering_downscale_factor", 0.25);
+
+    kinematic_mpc_params_.wheelbase_m = pure_pursuit_params_.wheelbase_m;
+    kinematic_mpc_params_.max_steering_angle_rad =
+      pure_pursuit_params_.max_steering_angle_rad;
+    kinematic_mpc_params_.max_steering_command =
+      pure_pursuit_params_.max_steering_command;
+    kinematic_mpc_params_.closed_path_tolerance_m =
+      pure_pursuit_params_.closed_path_tolerance_m;
+    kinematic_mpc_params_.path_closure_mode = pure_pursuit_params_.path_closure_mode;
+    const auto mpc_horizon_steps =
+      std::max<int64_t>(declare_parameter<int64_t>("mpc_horizon_steps", 12), 1);
+    const auto mpc_steering_samples =
+      std::max<int64_t>(declare_parameter<int64_t>("mpc_steering_samples", 15), 3);
+    kinematic_mpc_params_.horizon_steps = static_cast<std::size_t>(mpc_horizon_steps);
+    kinematic_mpc_params_.steering_samples = static_cast<std::size_t>(mpc_steering_samples);
+    kinematic_mpc_params_.time_step_s = declare_parameter<double>("mpc_time_step_s", 0.05);
+    kinematic_mpc_params_.min_prediction_speed_mps =
+      declare_parameter<double>("mpc_min_prediction_speed_mps", 0.2);
+    kinematic_mpc_params_.path_error_weight =
+      declare_parameter<double>("mpc_path_error_weight", 4.0);
+    kinematic_mpc_params_.heading_error_weight =
+      declare_parameter<double>("mpc_heading_error_weight", 0.8);
+    kinematic_mpc_params_.steering_weight =
+      declare_parameter<double>("mpc_steering_weight", 0.15);
+    kinematic_mpc_params_.terminal_path_error_weight =
+      declare_parameter<double>("mpc_terminal_path_error_weight", 2.0);
 
     LongitudinalParams longitudinal_params;
     longitudinal_params.throttle_kp = declare_parameter<double>("throttle_kp", 0.5);
@@ -153,12 +218,23 @@ private:
       declare_parameter<double>("max_brake_command", 0.3);
     longitudinal_controller_ = std::make_unique<LongitudinalController>(longitudinal_params);
 
+    TrailingParams trailing_params;
+    trailing_params.enabled = declare_parameter<bool>("trailing_enabled", false);
+    trailing_params.trailing_gap_m = declare_parameter<double>("trailing_gap_m", 1.5);
+    trailing_params.kp = declare_parameter<double>("trailing_kp", 0.5);
+    trailing_params.ki = declare_parameter<double>("trailing_ki", 0.001);
+    trailing_params.kd = declare_parameter<double>("trailing_kd", 0.2);
+    trailing_params.max_gap_m = declare_parameter<double>("trailing_max_gap_m", 8.0);
+    trailing_params.min_command_speed_mps =
+      declare_parameter<double>("trailing_min_command_speed_mps", 0.0);
+    trailing_controller_ = std::make_unique<TrailingController>(trailing_params);
+
     for (const double value : {
         control_rate_hz_, trajectory_timeout_s_, odometry_timeout_s_,
         target_speed_timeout_s_, transform_timeout_s_, transform_max_age_s_,
         localization_state_timeout_s_, fallback_target_speed_mps_,
         max_target_speed_mps_, goal_tolerance_m_, safety_brake_command_,
-        max_steering_rate_per_s_, max_lateral_accel_mps2_})
+        max_steering_rate_per_s_, max_lateral_accel_mps2_, opponent_odometry_timeout_s_})
     {
       if (!std::isfinite(value)) {
         throw std::invalid_argument("controller numeric parameters must be finite");
@@ -191,6 +267,9 @@ private:
     if (max_lateral_accel_mps2_ < 0.0) {
       throw std::invalid_argument("max_lateral_accel_mps2 must be >= 0");
     }
+    if (opponent_odometry_timeout_s_ <= 0.0) {
+      throw std::invalid_argument("opponent_odometry_timeout_s must be > 0");
+    }
   }
 
   void create_controller()
@@ -199,9 +278,17 @@ private:
       lateral_controller_ = std::make_unique<PurePursuit>(pure_pursuit_params_);
       return;
     }
+    if (algorithm_ == "map_pursuit" || algorithm_ == "map") {
+      lateral_controller_ = std::make_unique<MapPursuit>(map_pursuit_params_);
+      return;
+    }
+    if (algorithm_ == "kinematic_mpc" || algorithm_ == "mpc") {
+      lateral_controller_ = std::make_unique<KinematicMpc>(kinematic_mpc_params_);
+      return;
+    }
     throw std::invalid_argument(
-            "Unsupported controller algorithm '" + algorithm_ +
-            "'. Available algorithms: pure_pursuit");
+      "Unsupported controller algorithm '" + algorithm_ +
+      "'. Available algorithms: pure_pursuit, map_pursuit, kinematic_mpc");
   }
 
   void create_interfaces()
@@ -237,6 +324,12 @@ private:
       [this](const nav_msgs::msg::Odometry::SharedPtr message) {
         odometry_ = *message;
         odometry_received_at_ = std::chrono::steady_clock::now();
+      });
+    opponent_odometry_sub_ = create_subscription<nav_msgs::msg::Odometry>(
+      opponent_odometry_topic_, rclcpp::SensorDataQoS().keep_last(5),
+      [this](const nav_msgs::msg::Odometry::SharedPtr message) {
+        opponent_odometry_ = *message;
+        opponent_odometry_received_at_ = std::chrono::steady_clock::now();
       });
 
     const auto command_qos = rclcpp::QoS(rclcpp::KeepLast(1)).best_effort();
@@ -318,6 +411,95 @@ private:
       points.push_back({transformed.x(), transformed.y()});
     }
     return true;
+  }
+
+  bool transform_point_to_base(
+    const geometry_msgs::msg::Point & point, const std::string & source_frame,
+    Point2d & transformed_point, std::string & reason)
+  {
+    if (source_frame.empty()) {
+      reason = "point frame_id is empty";
+      return false;
+    }
+    if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z)) {
+      reason = "point contains a non-finite position";
+      return false;
+    }
+
+    tf2::Transform base_from_source;
+    base_from_source.setIdentity();
+    if (source_frame != base_frame_) {
+      try {
+        const auto transform = tf_buffer_.lookupTransform(
+          base_frame_, source_frame, tf2::TimePointZero,
+          tf2::durationFromSec(transform_timeout_s_));
+        const auto & rotation = transform.transform.rotation;
+        const auto & translation = transform.transform.translation;
+        base_from_source = tf2::Transform(
+          tf2::Quaternion(rotation.x, rotation.y, rotation.z, rotation.w),
+          tf2::Vector3(translation.x, translation.y, translation.z));
+      } catch (const tf2::TransformException & error) {
+        reason = "TF " + source_frame + " -> " + base_frame_ + " unavailable: " + error.what();
+        return false;
+      }
+    }
+
+    const auto transformed = base_from_source * tf2::Vector3(point.x, point.y, point.z);
+    transformed_point = {transformed.x(), transformed.y()};
+    return true;
+  }
+
+  StationProjection project_station(
+    const std::vector<Point2d> & path, const Point2d & point, bool path_closed) const
+  {
+    StationProjection projection;
+    if (path.size() < 2U) {
+      return projection;
+    }
+
+    double station_at_segment_start = 0.0;
+    double best_distance_sq = std::numeric_limits<double>::infinity();
+    const std::size_t segment_count = path_closed ? path.size() : path.size() - 1U;
+    for (std::size_t index = 0; index < segment_count; ++index) {
+      const auto & a = path[index];
+      const auto & b = path[(index + 1U) % path.size()];
+      const double dx = b.x - a.x;
+      const double dy = b.y - a.y;
+      const double length_sq = dx * dx + dy * dy;
+      if (length_sq <= 1.0e-12) {
+        continue;
+      }
+
+      const double t = std::clamp(
+        ((point.x - a.x) * dx + (point.y - a.y) * dy) / length_sq, 0.0, 1.0);
+      const double projected_x = a.x + t * dx;
+      const double projected_y = a.y + t * dy;
+      const double distance_sq =
+        (point.x - projected_x) * (point.x - projected_x) +
+        (point.y - projected_y) * (point.y - projected_y);
+      if (distance_sq < best_distance_sq) {
+        best_distance_sq = distance_sq;
+        projection.station_m = station_at_segment_start + t * std::sqrt(length_sq);
+        projection.valid = true;
+      }
+      station_at_segment_start += std::sqrt(length_sq);
+    }
+    return projection;
+  }
+
+  double path_length(const std::vector<Point2d> & path, bool path_closed) const
+  {
+    if (path.size() < 2U) {
+      return 0.0;
+    }
+    double length = 0.0;
+    const std::size_t segment_count = path_closed ? path.size() : path.size() - 1U;
+    for (std::size_t index = 0; index < segment_count; ++index) {
+      const auto & a = path[index];
+      const auto & b = path[(index + 1U) % path.size()];
+      length += std::hypot(b.x - a.x, b.y - a.y);
+    }
+    return length;
   }
 
   std::optional<double> current_speed(std::string & reason) const
@@ -450,6 +632,14 @@ private:
       const double curve_speed = std::sqrt(max_lateral_accel_mps2_ / std::abs(tracking.curvature));
       limited_target_speed = std::min(limited_target_speed, curve_speed);
     }
+
+    TrailingResult trailing;
+    trailing.target_speed_mps = limited_target_speed;
+    if (trailing_controller_->params().enabled) {
+      trailing = apply_trailing_limit(
+        limited_target_speed, *speed, input.path, tracking.path_closed);
+      limited_target_speed = trailing.target_speed_mps;
+    }
     const auto longitudinal = longitudinal_controller_->compute(limited_target_speed, *speed);
 
     jetpilot_msgs::msg::ControlCommand command;
@@ -470,7 +660,66 @@ private:
 
     publish_state(
       true, "tracking", *speed, limited_target_speed,
-      tracking.steering_command, tracking.curvature);
+      tracking.steering_command, tracking.curvature, trailing);
+  }
+
+  TrailingResult apply_trailing_limit(
+    double planned_speed_mps, double current_speed_mps, const std::vector<Point2d> & path,
+    bool path_closed)
+  {
+    TrailingResult result;
+    result.target_speed_mps = planned_speed_mps;
+    if (!opponent_odometry_ || !opponent_odometry_received_at_) {
+      result.reason = "waiting for opponent odometry";
+      trailing_controller_->reset();
+      return result;
+    }
+    if (seconds_since(*opponent_odometry_received_at_) > opponent_odometry_timeout_s_) {
+      result.reason = "opponent odometry is stale";
+      trailing_controller_->reset();
+      return result;
+    }
+
+    std::string reason;
+    Point2d opponent_position;
+    const std::string opponent_frame =
+      opponent_odometry_->header.frame_id.empty() ? base_frame_ :
+      opponent_odometry_->header.frame_id;
+    if (!transform_point_to_base(
+        opponent_odometry_->pose.pose.position, opponent_frame, opponent_position, reason))
+    {
+      result.reason = reason;
+      trailing_controller_->reset();
+      return result;
+    }
+
+    const auto ego_projection = project_station(path, Point2d{0.0, 0.0}, path_closed);
+    const auto opponent_projection = project_station(path, opponent_position, path_closed);
+    if (!ego_projection.valid || !opponent_projection.valid) {
+      result.reason = "could not project ego or opponent onto trajectory";
+      trailing_controller_->reset();
+      return result;
+    }
+
+    const auto & linear = opponent_odometry_->twist.twist.linear;
+    const double opponent_speed = std::hypot(linear.x, linear.y);
+    const auto now_steady = std::chrono::steady_clock::now();
+    double dt = 0.0;
+    if (last_trailing_update_at_) {
+      dt = std::chrono::duration<double>(now_steady - *last_trailing_update_at_).count();
+    }
+    last_trailing_update_at_ = now_steady;
+
+    TrailingInput input;
+    input.planned_speed_mps = planned_speed_mps;
+    input.ego_speed_mps = current_speed_mps;
+    input.ego_station_m = ego_projection.station_m;
+    input.opponent_station_m = opponent_projection.station_m;
+    input.opponent_speed_mps = opponent_speed;
+    input.track_length_m = path_length(path, path_closed);
+    input.path_closed = path_closed;
+    input.dt_s = dt;
+    return trailing_controller_->compute(input);
   }
 
   void publish_safety_stop(const std::string & reason)
@@ -488,12 +737,13 @@ private:
 
     RCLCPP_WARN_THROTTLE(
       get_logger(), *get_clock(), 2000, "Controller safety stop: %s", reason.c_str());
-    publish_state(false, reason, 0.0, 0.0, 0.0, 0.0);
+    publish_state(false, reason, 0.0, 0.0, 0.0, 0.0, TrailingResult{});
   }
 
   void publish_state(
     bool ready, const std::string & message, double current_speed_mps,
-    double target_speed_mps, double steering_command, double curvature)
+    double target_speed_mps, double steering_command, double curvature,
+    const TrailingResult & trailing)
   {
     std_msgs::msg::Bool ready_message;
     ready_message.data = ready;
@@ -524,6 +774,11 @@ private:
     status.values.push_back(diagnostic_value("target_speed_mps", std::to_string(target_speed_mps)));
     status.values.push_back(diagnostic_value("steering_command", std::to_string(steering_command)));
     status.values.push_back(diagnostic_value("curvature", std::to_string(curvature)));
+    status.values.push_back(diagnostic_value(
+      "trailing_enabled", trailing_controller_->params().enabled ? "true" : "false"));
+    status.values.push_back(diagnostic_value("trailing_active", trailing.active ? "true" : "false"));
+    status.values.push_back(diagnostic_value("trailing_gap_m", std::to_string(trailing.gap_m)));
+    status.values.push_back(diagnostic_value("trailing_reason", trailing.reason));
     array.status.push_back(std::move(status));
     diagnostics_pub_->publish(array);
   }
@@ -535,6 +790,7 @@ private:
   std::string planning_ready_topic_;
   std::string localization_state_topic_;
   std::string odometry_topic_;
+  std::string opponent_odometry_topic_;
   std::string command_topic_;
   std::string diagnostics_topic_;
 
@@ -555,17 +811,23 @@ private:
   double safety_brake_command_{0.0};
   double max_steering_rate_per_s_{4.0};
   double max_lateral_accel_mps2_{2.0};
+  double opponent_odometry_timeout_s_{0.3};
   PurePursuitParams pure_pursuit_params_;
+  MapPursuitParams map_pursuit_params_;
+  KinematicMpcParams kinematic_mpc_params_;
 
   std::unique_ptr<PathTrackingController> lateral_controller_;
   std::unique_ptr<LongitudinalController> longitudinal_controller_;
+  std::unique_ptr<TrailingController> trailing_controller_;
   tf2_ros::Buffer tf_buffer_;
   tf2_ros::TransformListener tf_listener_;
 
   std::optional<nav_msgs::msg::Path> trajectory_;
   std::optional<nav_msgs::msg::Odometry> odometry_;
+  std::optional<nav_msgs::msg::Odometry> opponent_odometry_;
   std::optional<SteadyTime> trajectory_received_at_;
   std::optional<SteadyTime> odometry_received_at_;
+  std::optional<SteadyTime> opponent_odometry_received_at_;
   std::optional<SteadyTime> target_speed_received_at_;
   std::optional<SteadyTime> localization_state_received_at_;
   bool planning_ready_{false};
@@ -574,6 +836,7 @@ private:
   double target_speed_mps_{0.0};
   double previous_steering_command_{0.0};
   std::optional<SteadyTime> last_control_at_;
+  std::optional<SteadyTime> last_trailing_update_at_;
   std::optional<SteadyTime> last_diagnostic_at_;
   std::string last_diagnostic_message_;
   bool last_ready_{false};
@@ -583,6 +846,7 @@ private:
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr planning_ready_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr localization_state_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odometry_sub_;
+  rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr opponent_odometry_sub_;
   rclcpp::Publisher<jetpilot_msgs::msg::ControlCommand>::SharedPtr command_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr ready_pub_;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr lookahead_pub_;

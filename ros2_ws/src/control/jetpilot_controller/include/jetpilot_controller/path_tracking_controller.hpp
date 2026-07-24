@@ -8,6 +8,13 @@
 namespace jetpilot_controller
 {
 
+enum class PathClosureMode
+{
+  kAuto,
+  kOpen,
+  kClosed,
+};
+
 struct Point2d
 {
   double x{0.0};

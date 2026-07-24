@@ -1,5 +1,6 @@
 path_tracking_controller_node:
   ros__parameters:
+    # Available: pure_pursuit, map_pursuit, kinematic_mpc.
     algorithm: pure_pursuit
 
     # ROS interfaces. planning publishes latched trajectory, speed and readiness.
@@ -9,6 +10,7 @@ path_tracking_controller_node:
     planning_ready_topic: /planning/ready
     localization_state_topic: /localization/pose_hint_state
     odometry_topic: /visual_slam/tracking/odometry
+    opponent_odometry_topic: /perception/opponent/odometry
     command_topic: /auto/control_cmd
     diagnostics_topic: /controller/diagnostics
 
@@ -17,6 +19,7 @@ path_tracking_controller_node:
     trajectory_timeout_s: 0.5
     odometry_timeout_s: 0.3
     target_speed_timeout_s: 0.5
+    opponent_odometry_timeout_s: 0.3
     transform_timeout_s: 0.05
     transform_max_age_s: 0.5
     require_planning_ready: true
@@ -44,6 +47,23 @@ path_tracking_controller_node:
     path_closure_mode: auto
     closed_path_tolerance_m: 0.3
 
+    # MAP-like pursuit adds lateral-error compensation and reduces steering at speed.
+    map_lateral_error_gain: 0.4
+    map_speed_steering_downscale_start_mps: 1.5
+    map_speed_steering_downscale_end_mps: 3.0
+    map_speed_steering_downscale_factor: 0.25
+
+    # Lightweight kinematic bicycle MPC. This optimizes steering only; longitudinal
+    # speed control, acceleration limits and trailing remain handled outside it.
+    mpc_horizon_steps: 12
+    mpc_time_step_s: 0.05
+    mpc_steering_samples: 15
+    mpc_min_prediction_speed_mps: 0.2
+    mpc_path_error_weight: 4.0
+    mpc_heading_error_weight: 0.8
+    mpc_steering_weight: 0.15
+    mpc_terminal_path_error_weight: 2.0
+
     # Simple bounded longitudinal controller. A lateral-acceleration limit reduces
     # target speed in tight curves before throttle/brake are calculated.
     throttle_kp: 0.5
@@ -53,3 +73,13 @@ path_tracking_controller_node:
     max_throttle_command: 0.35
     max_brake_command: 0.3
     max_lateral_accel_mps2: 2.0
+
+    # Optional opponent trailing. When enabled, opponent odometry is projected onto
+    # the active trajectory and target speed is reduced to keep this gap.
+    trailing_enabled: false
+    trailing_gap_m: 1.5
+    trailing_kp: 0.5
+    trailing_ki: 0.001
+    trailing_kd: 0.2
+    trailing_max_gap_m: 8.0
+    trailing_min_command_speed_mps: 0.0

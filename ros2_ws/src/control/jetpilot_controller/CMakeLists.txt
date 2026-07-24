@@ -9,8 +9,11 @@ find_package(ament_cmake_auto REQUIRED)
 ament_auto_find_build_dependencies()
 
 ament_auto_add_library(${PROJECT_NAME}_core SHARED
+  src/kinematic_mpc.cpp
   src/longitudinal_controller.cpp
+  src/map_pursuit.cpp
   src/pure_pursuit.cpp
+  src/trailing_controller.cpp
 )
 target_compile_features(${PROJECT_NAME}_core PUBLIC cxx_std_17)
 

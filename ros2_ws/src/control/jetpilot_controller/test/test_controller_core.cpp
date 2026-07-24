@@ -6,7 +6,10 @@
 #include "gtest/gtest.h"
 
 #include "jetpilot_controller/longitudinal_controller.hpp"
+#include "jetpilot_controller/kinematic_mpc.hpp"
+#include "jetpilot_controller/map_pursuit.hpp"
 #include "jetpilot_controller/pure_pursuit.hpp"
+#include "jetpilot_controller/trailing_controller.hpp"
 
 namespace jetpilot_controller
 {
@@ -107,6 +110,71 @@ TEST(PurePursuit, RejectsUnsafeInputs)
   EXPECT_THROW((void)PurePursuit{invalid_params}, std::invalid_argument);
 }
 
+TEST(MapPursuit, SteersTowardLeftAndRightPaths)
+{
+  MapPursuitParams params;
+  params.min_lookahead_m = 0.2;
+  params.lateral_error_gain = 0.4;
+  MapPursuit controller(params);
+
+  const auto left = controller.compute({{{0.0, 0.2}, {1.0, 0.2}, {2.0, 0.2}}, 0.0});
+  const auto right = controller.compute({{{0.0, -0.2}, {1.0, -0.2}, {2.0, -0.2}}, 0.0});
+
+  ASSERT_TRUE(left.valid) << left.reason;
+  ASSERT_TRUE(right.valid) << right.reason;
+  EXPECT_GT(left.steering_command, 0.0);
+  EXPECT_LT(right.steering_command, 0.0);
+}
+
+TEST(MapPursuit, DownscalesSteeringAtHighSpeed)
+{
+  MapPursuitParams params;
+  params.min_lookahead_m = 0.2;
+  params.lookahead_speed_gain_s = 0.0;
+  params.speed_steering_downscale_start_mps = 1.0;
+  params.speed_steering_downscale_end_mps = 2.0;
+  params.speed_steering_downscale_factor = 0.5;
+  MapPursuit controller(params);
+
+  const TrackingInput input{{{0.0, 0.2}, {1.0, 0.2}, {2.0, 0.2}}, 0.5};
+  auto fast_input = input;
+  fast_input.speed_mps = 3.0;
+
+  const auto slow = controller.compute(input);
+  const auto fast = controller.compute(fast_input);
+
+  ASSERT_TRUE(slow.valid) << slow.reason;
+  ASSERT_TRUE(fast.valid) << fast.reason;
+  EXPECT_LT(std::abs(fast.steering_command), std::abs(slow.steering_command));
+}
+
+TEST(KinematicMpc, TracksStraightPathWithoutSteering)
+{
+  KinematicMpcParams params;
+  params.steering_samples = 15;
+  KinematicMpc controller(params);
+
+  const auto result = controller.compute(straight_path());
+
+  ASSERT_TRUE(result.valid) << result.reason;
+  EXPECT_NEAR(result.steering_command, 0.0, 1.0e-9);
+}
+
+TEST(KinematicMpc, SteersTowardLeftAndRightPaths)
+{
+  KinematicMpcParams params;
+  params.steering_samples = 15;
+  KinematicMpc controller(params);
+
+  const auto left = controller.compute({{{0.0, 0.2}, {1.0, 0.2}, {2.0, 0.2}}, 1.0});
+  const auto right = controller.compute({{{0.0, -0.2}, {1.0, -0.2}, {2.0, -0.2}}, 1.0});
+
+  ASSERT_TRUE(left.valid) << left.reason;
+  ASSERT_TRUE(right.valid) << right.reason;
+  EXPECT_GT(left.steering_command, 0.0);
+  EXPECT_LT(right.steering_command, 0.0);
+}
+
 TEST(LongitudinalController, AcceleratesAndRespectsThrottleLimit)
 {
   LongitudinalParams params;
@@ -142,6 +210,81 @@ TEST(LongitudinalController, RejectsNonFiniteParameters)
   LongitudinalParams params;
   params.brake_kp = std::numeric_limits<double>::quiet_NaN();
   EXPECT_THROW((void)LongitudinalController{params}, std::invalid_argument);
+}
+
+TEST(TrailingController, LimitsSpeedToMaintainGap)
+{
+  TrailingParams params;
+  params.enabled = true;
+  params.trailing_gap_m = 1.5;
+  params.kp = 0.5;
+  params.ki = 0.0;
+  params.kd = 0.2;
+  TrailingController controller(params);
+
+  TrailingInput input;
+  input.planned_speed_mps = 3.0;
+  input.ego_speed_mps = 2.0;
+  input.ego_station_m = 10.0;
+  input.opponent_station_m = 11.0;
+  input.opponent_speed_mps = 1.0;
+  input.track_length_m = 20.0;
+  input.path_closed = true;
+  input.dt_s = 0.1;
+
+  const auto result = controller.compute(input);
+
+  EXPECT_TRUE(result.active);
+  EXPECT_NEAR(result.gap_m, 1.0, 1.0e-9);
+  EXPECT_LT(result.target_speed_mps, input.opponent_speed_mps);
+  EXPECT_GE(result.target_speed_mps, 0.0);
+}
+
+TEST(TrailingController, IgnoresOpponentBehindOnOpenPath)
+{
+  TrailingParams params;
+  params.enabled = true;
+  TrailingController controller(params);
+
+  TrailingInput input;
+  input.planned_speed_mps = 2.0;
+  input.ego_speed_mps = 1.0;
+  input.ego_station_m = 5.0;
+  input.opponent_station_m = 4.0;
+  input.opponent_speed_mps = 1.0;
+  input.track_length_m = 10.0;
+  input.path_closed = false;
+
+  const auto result = controller.compute(input);
+
+  EXPECT_FALSE(result.active);
+  EXPECT_DOUBLE_EQ(result.target_speed_mps, input.planned_speed_mps);
+}
+
+TEST(TrailingController, WrapsGapOnClosedPath)
+{
+  TrailingParams params;
+  params.enabled = true;
+  params.max_gap_m = 3.0;
+  params.trailing_gap_m = 1.5;
+  params.kp = 0.5;
+  params.ki = 0.0;
+  params.kd = 0.0;
+  TrailingController controller(params);
+
+  TrailingInput input;
+  input.planned_speed_mps = 2.0;
+  input.ego_speed_mps = 1.0;
+  input.ego_station_m = 9.0;
+  input.opponent_station_m = 0.5;
+  input.opponent_speed_mps = 1.0;
+  input.track_length_m = 10.0;
+  input.path_closed = true;
+
+  const auto result = controller.compute(input);
+
+  EXPECT_TRUE(result.active);
+  EXPECT_NEAR(result.gap_m, 1.5, 1.0e-9);
 }
 
 }  // namespace

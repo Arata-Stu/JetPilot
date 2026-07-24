@@ -90,10 +90,12 @@ controller は古い trajectory、frame 不一致、localization 不良、NaN/In
 `/planning/target_speed`を使い、曲率と横加速度上限から安全側へ制限します。点ごとの速度profile
 や横偏差に応じた減速は専用trajectory messageへ移行する段階で追加します。
 
-同じ入力・出力契約で MPC を後から追加します。controller 選択は launch parameter で
+同じ入力・出力契約で `map_pursuit` と軽量な `kinematic_mpc` を選択できます。現行の
+`kinematic_mpc` は動的タイヤモデルを使わず、kinematic bicycle model の操舵候補を
+rolloutして選ぶ lateral controller です。controller 選択は launch parameter で
 行い、実行中の無条件 hot swap は行いません。既存の固定値
 `autonomous_control_node` はsystem launchでは使用せず、`jetpilot_controller`の
-Pure Pursuitと入力watchdogを使用します。
+controller factoryと入力watchdogを使用します。
 
 ## Raceline and vehicle footprint
 
@@ -115,7 +117,7 @@ raceline を誤用しないようにします。実走行時の localization 誤
 2. **実装済み:** `jetpilot_controller`のPure Pursuit、localization/TF/input timeout時の停止を実装する。
 3. successor graph と shortcut / signal 条件を追加し、分岐 unit test を作る。
 4. obstacle input と local avoidance、走行不能時の停止を追加する。
-5. 同一 trajectory fixture で Pure Pursuit と MPC を比較できる形で MPC を追加する。
+5. **実装済み:** 同一trajectory fixtureでPure Pursuit、MAP-like pursuit、軽量Kinematic MPCを比較できるcontroller factoryを追加する。
 
 各段階で、狭い lane、分岐条件欠落、全候補閉鎖、古い localization、古い trajectory、
 逆向き経路、loop course を自動テストします。Linux Docker 上では `colcon test` に加え、

@@ -12,6 +12,7 @@ operation command muxを通してPCA9685/VESCのどちらにも同じ正規化�
 | input | `/planning/ready` | `std_msgs/msg/Bool` | plannerの経路選択が有効か |
 | input | `/localization/pose_hint_state` | `std_msgs/msg/String` | managerのconfirmed `localized`状態 |
 | input | `/visual_slam/tracking/odometry` | `nav_msgs/msg/Odometry` | 速度と自己位置系の生存確認 |
+| input | `/perception/opponent/odometry` | `nav_msgs/msg/Odometry` | 任意。trailing有効時の相手車両pose/速度 |
 | output | `/auto/control_cmd` | `jetpilot_msgs/msg/ControlCommand` | 正規化steer/throttle/brake |
 | output | `/controller/ready` | `std_msgs/msg/Bool` | 走行指令を生成できているか |
 | output | `/controller/lookahead_point` | `geometry_msgs/msg/PoseStamped` | `base_link`上の追従点 |
@@ -48,14 +49,35 @@ ros2 launch jetpilot_controller jetpilot_controller.launch.xml
 します。HD mapの閉路が先頭点を末尾へ複製しておらず点間隔も広い場合は、track用設定を
 `path_closure_mode: closed`にしてください。分岐後の開いたlaneでは`open`を指定できます。
 
-## Adding MPC
+## Controller selection
 
-制御計算は`PathTrackingController` interfaceからROS nodeを分離しています。将来は
-`MpcController`を同interfaceで実装し、nodeのfactoryに`algorithm: mpc`を追加します。
-ROS topic、watchdog、安全停止、command limitはそのまま共用できます。
+制御計算は`PathTrackingController` interfaceからROS nodeを分離しています。`algorithm`
+parameterで lateral controller を選択でき、ROS topic、watchdog、安全停止、command limitは
+そのまま共用できます。
+
+| algorithm | 概要 |
+| --- | --- |
+| `pure_pursuit` | 最小構成のPure Pursuit。基準controllerとして使います。 |
+| `map_pursuit` | Pure Pursuit系に横偏差補償と高速時の操舵downscaleを加えた実車調整向けcontrollerです。 |
+| `kinematic_mpc` | kinematic bicycle modelで複数の操舵候補を予測し、path/heading/steering costが最小の操舵を選びます。 |
+
+`kinematic_mpc`は動的タイヤモデルを使わず、現時点では操舵だけを最適化します。速度、加速度、
+trailing、横加速度上限、steering rate limitは既存node側で扱います。急加速で不安定になりやすい
+車両では、MPCモデルを複雑にする前に`max_target_speed_mps`、`max_lateral_accel_mps2`、
+`max_steering_rate_per_s`、throttle/brake gainを保守的に調整してください。
 
 ## Control algorithm
 
 Pure Pursuit は planner の `Path` を `base_link` 座標へ変換し、現在速度に応じた lookahead 距離で追従点を選びます。選ばれた点から曲率を計算し、wheelbase と最大舵角を使って正規化 steering command へ変換します。
 
 longitudinal 側は target speed と odometry speed の差を見て throttle/brake を出す単純な比例制御です。target speed が不正、未受信、timeout の場合は安全停止します。横加速度上限から速度も制限するため、小さい半径の path では target speed より低い速度指令になることがあります。
+
+## Opponent trailing
+
+`trailing_enabled: true`にすると、controllerは相手車両odometryを現在のtrajectory上へ射影し、
+経路に沿った前方距離を`trailing_gap_m`へ近づけるようにtarget speedを下げます。操舵はこれまで通り
+Pure Pursuitがtrajectoryを追従し、trailingは縦方向の速度上限だけを担当します。
+
+相手車両が自車より前方にいない、`trailing_max_gap_m`より遠い、またはodometryがtimeoutした場合は
+trailingを解除し、planningのtarget speedへ戻ります。閉路ではtrajectory長でgapをwrapします。
+相手odometryのframeは`base_frame`またはTFで`base_frame`へ変換できるframeにしてください。
