@@ -172,6 +172,13 @@ offline_stop_launch() {{
 offline_topic_publishers() {{
   ros2 topic info "$1" 2>/dev/null | awk '/Publisher count:/ {{print $3; found=1}} END {{if (!found) print 0}}'
 }}
+offline_topic_subscribers() {{
+  ros2 topic info "$1" 2>/dev/null | awk '/Subscription count:/ {{print $3; found=1}} END {{if (!found) print 0}}'
+}}
+offline_log_topic_counts() {{
+  echo "[debug] input topics: infra1 pubs=$(offline_topic_publishers /realsense/infra1/image_rect_raw), subs=$(offline_topic_subscribers /realsense/infra1/image_rect_raw); infra2 pubs=$(offline_topic_publishers /realsense/infra2/image_rect_raw), subs=$(offline_topic_subscribers /realsense/infra2/image_rect_raw); imu pubs=$(offline_topic_publishers /front_stereo_imu/imu), subs=$(offline_topic_subscribers /front_stereo_imu/imu)"
+  echo "[debug] output topics: path pubs=$(offline_topic_publishers /visual_slam/tracking/slam_path), subs=$(offline_topic_subscribers /visual_slam/tracking/slam_path); odom pubs=$(offline_topic_publishers /visual_slam/tracking/odometry), subs=$(offline_topic_subscribers /visual_slam/tracking/odometry); landmarks pubs=$(offline_topic_publishers /visual_slam/vis/landmarks_cloud), subs=$(offline_topic_subscribers /visual_slam/vis/landmarks_cloud)"
+}}
 trap 'offline_stop_launch TERM 5 || kill -KILL "-$offline_launch_pid" 2>/dev/null || kill -KILL "$offline_launch_pid" 2>/dev/null || true' EXIT
 export FOUNDATIONSTEREO_MODEL_RES={_q(fs_model_res)}
 echo "[stage] create cuVGL map"
@@ -277,6 +284,17 @@ for offline_hint_attempt in $(seq 1 3); do
   fi
   sleep 1
 done
+echo "[stage] Publishing identity map pose directly to /localization/pose_hint"
+for offline_hint_attempt in $(seq 1 3); do
+  if ros2 topic pub --once /localization/pose_hint geometry_msgs/msg/PoseWithCovarianceStamped '{{header: {{frame_id: map}}, pose: {{pose: {{orientation: {{w: 1.0}}}}}}}}'; then
+    break
+  fi
+  if [ "$offline_hint_attempt" = "3" ]; then
+    echo "[debug] direct /localization/pose_hint publish failed; continuing with /initialpose/localize_on_startup"
+    break
+  fi
+  sleep 1
+done
 offline_snapshot_seen=0
 for offline_attempt in $(seq 1 300); do
   if [ -s "$snapshot" ]; then
@@ -287,11 +305,13 @@ for offline_attempt in $(seq 1 300); do
     break
   fi
   if [ "$offline_attempt" = "30" ] || [ "$offline_attempt" = "120" ]; then
-    echo "[debug] waiting for snapshot: publishers path=$(offline_topic_publishers /visual_slam/tracking/slam_path), odom=$(offline_topic_publishers /visual_slam/tracking/odometry), landmarks=$(offline_topic_publishers /visual_slam/vis/landmarks_cloud)"
+    echo "[debug] waiting for snapshot after ${offline_attempt}s"
+    offline_log_topic_counts
   fi
   sleep 1
 done
 if [ "$offline_snapshot_seen" -ne 1 ]; then
+  offline_log_topic_counts
   offline_stop_launch TERM 5 || true
   echo "offline eval produced no VSLAM snapshot messages during live rosbag replay"
   exit 25
