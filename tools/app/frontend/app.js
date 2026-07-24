@@ -192,6 +192,7 @@ const state = {
     pendingFrameKey: "",
     frameRequestSerial: 0,
     channelRender: {},
+    jetsonSelectedSeries: [],
   },
 };
 
@@ -2355,6 +2356,7 @@ function renderAnalysisViewer() {
       <div class="analysis-chart-shell">
         <canvas id="analysis-timeline-canvas" class="analysis-timeline-canvas" onclick="seekAnalysisFromTimeline(event)"></canvas>
       </div>
+      ${renderJetsonStatsPanel()}
       ${issues.length ? `<div class="analysis-data-issues"><strong>Missing or degraded data</strong>${issues.map((issue) => `<span>${esc(issue)}</span>`).join("")}</div>` : ""}
     </div>
   `;
@@ -2362,6 +2364,44 @@ function renderAnalysisViewer() {
 
 function analysisSignalCard(label, id, value, labelId = "") {
   return `<div class="analysis-signal-card"><span ${labelId ? `id="${esc(labelId)}"` : ""}>${esc(label)}</span><strong id="${esc(id)}">${esc(value)}</strong></div>`;
+}
+
+function renderJetsonStatsPanel() {
+  const stats = state.analysis.timeline?.jetson_stats;
+  const series = stats?.series || [];
+  if (!series.length) return "";
+  const selected = new Set(analysisSelectedJetsonSeries().map((item) => item.id));
+  const groups = [...new Set(series.map((item) => item.group).filter(Boolean))];
+  return `
+    <div class="analysis-jetson-panel">
+      <div class="analysis-jetson-toolbar">
+        <div><strong>Jetson stats</strong><span>${esc((stats.topics || []).join(", ") || "diagnostics")}</span></div>
+        <div class="actions">
+          <button onclick="setJetsonStatsPreset('load')">Load</button>
+          <button onclick="setJetsonStatsPreset('thermal')">Thermal</button>
+          <button onclick="setJetsonStatsPreset('power')">Power</button>
+          <button onclick="setJetsonStatsPreset('clear')">Clear</button>
+        </div>
+      </div>
+      <div class="analysis-jetson-selector">
+        ${groups.map((group) => `
+          <div class="analysis-jetson-group">
+            <span>${esc(group)}</span>
+            ${series.filter((item) => item.group === group).map((item) => `
+              <label title="${esc(item.source || item.id)}">
+                <input type="checkbox" ${selected.has(item.id) ? "checked" : ""} onchange="toggleJetsonStatsSeries(${js(item.id)})" />
+                <i style="background:${esc(jetsonSeriesColor(item.id))}"></i>
+                ${esc(item.label)}${item.unit ? ` <em>${esc(item.unit)}</em>` : ""}
+              </label>
+            `).join("")}
+          </div>
+        `).join("")}
+      </div>
+      <div class="analysis-chart-shell">
+        <canvas id="analysis-jetson-canvas" class="analysis-jetson-canvas"></canvas>
+      </div>
+    </div>
+  `;
 }
 
 function renderAnalysisSources() {
@@ -2618,6 +2658,7 @@ function normalizeAnalysisTimeline(raw) {
   timeline.controls = normalizeTimedRecords(timeline.controls);
   timeline.modes = normalizeTimedRecords(timeline.modes);
   timeline.speeds = normalizeTimedRecords(timeline.speeds);
+  timeline.jetson_stats = normalizeJetsonStats(timeline.jetson_stats);
   const trajectory = timeline.trajectory && typeof timeline.trajectory === "object" ? timeline.trajectory : {};
   const trajectorySamples = normalizeTimedRecords(trajectory.samples || timeline.trajectory_samples);
   timeline.trajectory = {
@@ -2629,7 +2670,8 @@ function normalizeAnalysisTimeline(raw) {
       (sample) => Number.isFinite(Number(sample.x)) && Number.isFinite(Number(sample.y)),
     ),
   };
-  const series = [timeline.frames, timeline.controls, timeline.modes, timeline.speeds, trajectorySamples];
+  const jetsonSeriesSamples = timeline.jetson_stats.series.flatMap((series) => series.samples || []);
+  const series = [timeline.frames, timeline.controls, timeline.modes, timeline.speeds, trajectorySamples, jetsonSeriesSamples];
   const lastTimes = series
     .map((records) => Number(records[records.length - 1]?.t))
     .filter(Number.isFinite);
@@ -2662,7 +2704,58 @@ function normalizeAnalysisTimeline(raw) {
     { minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity },
   );
   timeline._normalized = true;
+  if (!state.analysis.jetsonSelectedSeries?.length) {
+    state.analysis.jetsonSelectedSeries = defaultJetsonSeriesSelection(timeline.jetson_stats.series);
+  }
   return timeline;
+}
+
+function normalizeJetsonStats(raw) {
+  const value = raw && typeof raw === "object" ? raw : {};
+  const series = (Array.isArray(value.series) ? value.series : [])
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const samples = normalizeTimedRecords(item.samples)
+        .map((sample) => ({ t: sample.t, value: Number(sample.value) }))
+        .filter((sample) => Number.isFinite(sample.value));
+      if (!samples.length) return null;
+      const values = samples.map((sample) => sample.value);
+      return {
+        id: String(item.id || item.label || ""),
+        label: String(item.label || item.id || ""),
+        group: String(item.group || ""),
+        unit: String(item.unit || ""),
+        source: String(item.source || ""),
+        key: String(item.key || ""),
+        order: Number(item.order) || 99,
+        min: Number.isFinite(Number(item.min)) ? Number(item.min) : Math.min(...values),
+        max: Number.isFinite(Number(item.max)) ? Number(item.max) : Math.max(...values),
+        samples,
+      };
+    })
+    .filter((item) => item && item.id);
+  series.sort((a, b) => (a.order - b.order) || a.label.localeCompare(b.label));
+  return {
+    topics: Array.isArray(value.topics) ? value.topics.map(String) : [],
+    series,
+  };
+}
+
+function defaultJetsonSeriesSelection(series) {
+  const preferred = [
+    "cpu/all/used",
+    "gpu/gpu/Used",
+    "mem/ram/Use",
+    "temp/cpu/message",
+    "temp/gpu/message",
+    "power/VDD_IN/Power",
+  ];
+  const ids = [];
+  preferred.forEach((id) => {
+    if (series.some((item) => item.id === id)) ids.push(id);
+  });
+  if (ids.length) return ids.slice(0, 6);
+  return series.slice(0, 4).map((item) => item.id);
 }
 
 function normalizeTimedRecords(raw) {
@@ -3346,6 +3439,7 @@ function updateAnalysisPlaybackDom(force = false) {
   const now = performance.now();
   if (force || now - state.analysis.lastVisualUpdateMs >= 32) {
     drawAnalysisTimeline();
+    drawJetsonStatsChart();
     drawAnalysisMap();
     state.analysis.lastVisualUpdateMs = now;
   }
@@ -3550,6 +3644,153 @@ function analysisSpeedMaximum() {
   const values = analysisSpeedSeries().map((item) => Number(item.value ?? item.speed_mps)).filter((value) => Number.isFinite(value) && value >= 0);
   if (!values.length) return 1;
   return Math.max(1, values.reduce((maximum, value) => Math.max(maximum, value), 0) * 1.08);
+}
+
+function analysisJetsonSeries() {
+  return state.analysis.timeline?.jetson_stats?.series || [];
+}
+
+function analysisSelectedJetsonSeries() {
+  const series = analysisJetsonSeries();
+  if (!series.length) return [];
+  const selectedIds = Array.isArray(state.analysis.jetsonSelectedSeries)
+    ? state.analysis.jetsonSelectedSeries
+    : [];
+  if (selectedIds.includes("__none__")) return [];
+  const selected = series.filter((item) => selectedIds.includes(item.id));
+  return selected.length ? selected : series.filter((item) => defaultJetsonSeriesSelection(series).includes(item.id));
+}
+
+function toggleJetsonStatsSeries(id) {
+  const current = Array.isArray(state.analysis.jetsonSelectedSeries)
+    ? state.analysis.jetsonSelectedSeries.filter((value) => value !== "__none__")
+    : defaultJetsonSeriesSelection(analysisJetsonSeries());
+  const index = current.indexOf(id);
+  if (index >= 0) current.splice(index, 1);
+  else current.push(id);
+  state.analysis.jetsonSelectedSeries = current;
+  const body = $("analysis-viewer-body");
+  if (body) {
+    body.innerHTML = renderAnalysisViewer();
+    mountAnalysisViewer();
+  }
+}
+
+function setJetsonStatsPreset(name) {
+  const series = analysisJetsonSeries();
+  const matches = {
+    load: (item) => item.id === "cpu/all/used" || item.id === "gpu/gpu/Used" || item.id === "mem/ram/Use" || item.id === "mem/emc/Bandwidth",
+    thermal: (item) => item.group === "temp" && /cpu|gpu|soc|tj/i.test(item.id),
+    power: (item) => item.group === "power" && /VDD_IN|CPU_GPU|SOC/i.test(item.id) && /Power|Average/.test(item.id),
+    clear: () => false,
+  }[name] || (() => false);
+  const selected = series.filter(matches).slice(0, 8).map((item) => item.id);
+  state.analysis.jetsonSelectedSeries = selected.length ? selected : ["__none__"];
+  const body = $("analysis-viewer-body");
+  if (body) {
+    body.innerHTML = renderAnalysisViewer();
+    mountAnalysisViewer();
+  }
+}
+
+function jetsonSeriesColor(id) {
+  const palette = ["#5aa8ff", "#45c478", "#e7b84b", "#f26d6d", "#a779e9", "#4fc3c7", "#ff9f43", "#b8d36d"];
+  let hash = 0;
+  String(id).split("").forEach((char) => { hash = ((hash << 5) - hash + char.charCodeAt(0)) | 0; });
+  return palette[Math.abs(hash) % palette.length];
+}
+
+function drawJetsonStatsChart() {
+  const canvas = $("analysis-jetson-canvas");
+  const prepared = analysisCanvasContext(canvas, 300);
+  if (!prepared || !state.analysis.timeline) return;
+  const { ctx, width, height } = prepared;
+  const selected = analysisSelectedJetsonSeries();
+  const duration = Math.max(0.001, analysisDuration());
+  const left = 76;
+  const right = 16;
+  const top = 16;
+  const bottom = 22;
+  const plotWidth = Math.max(1, width - left - right);
+  const groups = [...new Set(selected.map((item) => item.unit || item.group || "value"))];
+  const trackHeight = Math.max(54, (height - top - bottom) / Math.max(1, groups.length));
+  const toX = (time) => left + Math.max(0, Math.min(1, Number(time) / duration)) * plotWidth;
+
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = "#0a0d10";
+  ctx.fillRect(0, 0, width, height);
+  ctx.font = "11px ui-sans-serif, system-ui";
+  ctx.textBaseline = "middle";
+
+  if (!selected.length) {
+    ctx.fillStyle = "#8793a0";
+    ctx.textAlign = "center";
+    ctx.fillText("Select Jetson metrics to plot", width / 2, height / 2);
+    return;
+  }
+
+  const gridCount = Math.max(4, Math.min(12, Math.floor(plotWidth / 120)));
+  for (let index = 0; index <= gridCount; index += 1) {
+    const x = left + (index / gridCount) * plotWidth;
+    ctx.strokeStyle = "rgba(255,255,255,0.06)";
+    ctx.beginPath();
+    ctx.moveTo(x, top);
+    ctx.lineTo(x, height - bottom);
+    ctx.stroke();
+  }
+
+  groups.forEach((unit, index) => {
+    const trackSeries = selected.filter((item) => (item.unit || item.group || "value") === unit);
+    const y = top + index * trackHeight;
+    const innerTop = y + 8;
+    const innerHeight = Math.max(24, trackHeight - 18);
+    const values = trackSeries.flatMap((item) => item.samples.map((sample) => Number(sample.value))).filter(Number.isFinite);
+    let min = values.length ? Math.min(...values) : 0;
+    let max = values.length ? Math.max(...values) : 1;
+    if (unit === "%") {
+      min = 0;
+      max = Math.max(100, max);
+    } else if (max <= min) {
+      max = min + 1;
+    } else {
+      const pad = (max - min) * 0.08;
+      min -= pad;
+      max += pad;
+    }
+    ctx.fillStyle = index % 2 ? "#0d1115" : "#0f1418";
+    ctx.fillRect(left, y, plotWidth, trackHeight - 3);
+    ctx.strokeStyle = "rgba(255,255,255,0.08)";
+    ctx.beginPath();
+    ctx.moveTo(left, y + trackHeight / 2);
+    ctx.lineTo(width - right, y + trackHeight / 2);
+    ctx.stroke();
+    ctx.fillStyle = "#98a2ad";
+    ctx.textAlign = "right";
+    ctx.fillText(unit, left - 9, y + trackHeight / 2);
+    trackSeries.forEach((item) => {
+      drawAnalysisSeries(ctx, item.samples, (sample) => sample.value, jetsonSeriesColor(item.id), toX, innerTop, innerHeight, min, max, plotWidth);
+    });
+  });
+
+  const legendY = Math.max(12, height - 10);
+  let legendX = left;
+  selected.slice(0, 8).forEach((item) => {
+    ctx.fillStyle = jetsonSeriesColor(item.id);
+    ctx.fillRect(legendX, legendY - 5, 8, 8);
+    ctx.fillStyle = "#c7d0da";
+    ctx.textAlign = "left";
+    const text = item.label.length > 24 ? `${item.label.slice(0, 23)}...` : item.label;
+    ctx.fillText(text, legendX + 12, legendY);
+    legendX += Math.min(190, 42 + text.length * 7);
+  });
+
+  const cursorX = toX(state.analysis.currentTime);
+  ctx.strokeStyle = "rgba(255,255,255,0.9)";
+  ctx.lineWidth = 1.4;
+  ctx.beginPath();
+  ctx.moveTo(cursorX, top - 4);
+  ctx.lineTo(cursorX, height - bottom + 3);
+  ctx.stroke();
 }
 
 function analysisTrajectoryCanUseMap() {
@@ -7731,6 +7972,8 @@ window.setAnalysisImageViewMode = setAnalysisImageViewMode;
 window.selectAnalysisCameraChannel = selectAnalysisCameraChannel;
 window.stepAnalysisFrame = stepAnalysisFrame;
 window.seekAnalysisFromTimeline = seekAnalysisFromTimeline;
+window.toggleJetsonStatsSeries = toggleJetsonStatsSeries;
+window.setJetsonStatsPreset = setJetsonStatsPreset;
 window.selectedCameraTopicConfig = selectedCameraTopicConfig;
 window.applyCameraTopicConfig = applyCameraTopicConfig;
 window.copySelectedCameraTopicConfig = copySelectedCameraTopicConfig;

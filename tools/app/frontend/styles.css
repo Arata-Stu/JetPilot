@@ -2362,6 +2362,80 @@ tr:last-child td {
   cursor: crosshair;
 }
 
+.analysis-jetson-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.analysis-jetson-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.analysis-jetson-toolbar strong,
+.analysis-jetson-toolbar span {
+  display: block;
+}
+
+.analysis-jetson-toolbar span {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.analysis-jetson-selector {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 8px;
+}
+
+.analysis-jetson-group {
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #101419;
+  padding: 8px;
+}
+
+.analysis-jetson-group > span {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+
+.analysis-jetson-group label {
+  display: grid;
+  grid-template-columns: 16px 10px minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  color: #d6dde5;
+  font-size: 12px;
+}
+
+.analysis-jetson-group input {
+  margin: 0;
+}
+
+.analysis-jetson-group i {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+}
+
+.analysis-jetson-group em {
+  color: var(--muted);
+  font-style: normal;
+}
+
+.analysis-jetson-canvas {
+  height: 300px;
+  cursor: crosshair;
+}
+
 .analysis-data-issues {
   grid-template-columns: minmax(180px, auto) repeat(2, minmax(0, 1fr));
   align-items: start;

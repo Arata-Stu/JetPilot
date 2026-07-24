@@ -23,6 +23,28 @@ from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 SCHEMA_VERSION = 1
 MAX_EXTRACTED_FRAMES = 50_000
 MODE_LABELS = {1: "AUTO", 2: "MANUAL", 3: "STOP", 4: "PROPO"}
+JETSON_DIAGNOSTIC_TOPICS = (
+    "/jetson/diagnostics",
+    "/diagnostics",
+)
+JETSON_METRIC_ORDER = {
+    "cpu": 10,
+    "gpu": 20,
+    "mem": 30,
+    "temp": 40,
+    "power": 50,
+    "fan": 60,
+    "engine": 70,
+}
+JETSON_VALUE_KEYS = {
+    "cpu": {"message", "User", "System", "Freq"},
+    "gpu": {"message", "Used", "Freq"},
+    "mem": {"Use", "Total", "Bandwidth", "Freq"},
+    "temp": {"message"},
+    "power": {"Power", "Average"},
+    "fan": {"PWM 0", "RPM 0"},
+    "engine": None,
+}
 
 
 def _utc_now() -> str:
@@ -166,6 +188,123 @@ def _mode_payload(message: Any) -> dict[str, object]:
         "label": label,
         "source": str(_nested(message, "source", default="") or ""),
     }
+
+
+def _jetson_numeric_value(raw_value: Any) -> tuple[float, str] | None:
+    text = str(raw_value or "").strip()
+    if not text or text.lower() in {"offline", "disable", "disabled", "auto"}:
+        return None
+    match = re.search(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)", text)
+    if match is None:
+        return None
+    value = float(match.group(0))
+    lower = text.lower()
+    if "%" in text:
+        return value, "%"
+    if "rpm" in lower:
+        return value, "rpm"
+    if lower.endswith("c") or " c" in lower:
+        return value, "C"
+    if "ghz" in lower:
+        return value * 1000.0, "MHz"
+    if "mhz" in lower:
+        return value, "MHz"
+    if re.search(r"\bkhz\b", lower):
+        return value / 1000.0, "MHz"
+    if re.search(r"\bmw\b", lower):
+        return value / 1000.0, "W"
+    if re.search(r"\bw\b", lower):
+        return value, "W"
+    if lower.endswith("gib") or lower.endswith("gb") or lower.endswith("g"):
+        return value, "GB"
+    if lower.endswith("mib") or lower.endswith("mb") or lower.endswith("m"):
+        return value / 1024.0, "GB"
+    if lower.endswith("kib") or lower.endswith("kb") or lower.endswith("k"):
+        return value / (1024.0 * 1024.0), "GB"
+    return value, ""
+
+
+def _jetson_series_label(category: str, leaf: str, key: str) -> str:
+    if key == "message":
+        if category == "cpu":
+            return f"CPU {leaf} used"
+        if category == "temp":
+            return f"Temp {leaf}"
+        return leaf
+    if category == "engine":
+        return f"{leaf} freq"
+    if category == "mem" and leaf == "ram" and key in {"Use", "Total"}:
+        return f"RAM {key.lower()}"
+    if category == "gpu" and key == "Used":
+        return "GPU used"
+    return f"{leaf} {key}".strip()
+
+
+def _jetson_metric_samples(message: Any, bag_timestamp_ns: int) -> list[dict[str, object]]:
+    samples: list[dict[str, object]] = []
+    cpu_used_values: list[float] = []
+    for status in getattr(message, "status", ()):
+        name = str(getattr(status, "name", "") or "")
+        if not name.startswith("jetson_stats/"):
+            continue
+        parts = name.split("/")
+        if len(parts) < 3:
+            continue
+        category = parts[1]
+        leaf = "/".join(parts[2:])
+        if category not in JETSON_VALUE_KEYS:
+            continue
+        if category == "board":
+            continue
+
+        values: dict[str, str] = {}
+        for pair in getattr(status, "values", ()):
+            key = str(getattr(pair, "key", "") or "")
+            values[key] = str(getattr(pair, "value", "") or "")
+        if category in {"cpu", "gpu", "temp"}:
+            values.setdefault("message", str(getattr(status, "message", "") or ""))
+
+        allowed = JETSON_VALUE_KEYS[category]
+        for key, raw_value in values.items():
+            if allowed is not None and key not in allowed:
+                continue
+            parsed = _jetson_numeric_value(raw_value)
+            if parsed is None:
+                continue
+            value, unit = parsed
+            if category == "cpu" and key == "message" and unit == "%":
+                cpu_used_values.append(value)
+            metric_id = f"{category}/{leaf}/{key}".replace(" ", "_")
+            samples.append(
+                {
+                    "_timestamp_ns": int(bag_timestamp_ns),
+                    "_header_timestamp_ns": None,
+                    "id": metric_id,
+                    "label": _jetson_series_label(category, leaf, key),
+                    "group": category,
+                    "unit": unit,
+                    "value": round(value, 6),
+                    "source": name,
+                    "key": key,
+                    "order": JETSON_METRIC_ORDER.get(category, 99),
+                }
+            )
+    if cpu_used_values:
+        samples.append(
+            {
+                "_timestamp_ns": int(bag_timestamp_ns),
+                "_header_timestamp_ns": None,
+                "id": "cpu/all/used",
+                "label": "CPU avg used",
+                "group": "cpu",
+                "unit": "%",
+                "value": round(sum(cpu_used_values) / len(cpu_used_values), 6),
+                "source": "jetson_stats/cpu",
+                "key": "used",
+                "order": JETSON_METRIC_ORDER["cpu"] - 1,
+            }
+        )
+    return samples
 
 
 def _explicit_speed(message: Any) -> float | None:
@@ -1021,6 +1160,12 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
     ):
         if topic:
             requested.add(topic)
+    jetson_diagnostic_topics = [
+        topic
+        for topic in JETSON_DIAGNOSTIC_TOPICS
+        if topic in topic_types and topic_types[topic].endswith("DiagnosticArray")
+    ]
+    requested.update(jetson_diagnostic_topics)
 
     recorded_tf_topic = "/tf" if options.pose_topic and "/tf" in topic_types else ""
     if recorded_tf_topic:
@@ -1036,6 +1181,7 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
     modes: list[dict[str, object]] = []
     speeds: list[dict[str, object]] = []
     trajectory: list[dict[str, object]] = []
+    jetson_samples: list[dict[str, object]] = []
     recorded_map_transforms: list[dict[str, object]] = []
     timestamps: list[int] = []
     last_frame_timestamp_ns: int | None = None
@@ -1163,6 +1309,8 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
         if options.pose_topic and topic == options.pose_topic:
             for sample in _pose_samples(message, timestamp_ns):
                 trajectory.append(sample)
+        if topic in jetson_diagnostic_topics:
+            jetson_samples.extend(_jetson_metric_samples(message, timestamp_ns))
 
         if selected_count % 1000 == 0:
             phase = (
@@ -1214,7 +1362,7 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
             for sample in trajectory
         ]
 
-    all_groups = [frames, controls, modes, speeds, trajectory]
+    all_groups = [frames, controls, modes, speeds, trajectory, jetson_samples]
     timestamp_values = [
         int(sample["_timestamp_ns"])
         for group in all_groups
@@ -1231,6 +1379,51 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
     controls = _downsample(controls)
     modes = _downsample(modes)
     speeds = _downsample(speeds)
+    jetson_series_by_id: dict[str, dict[str, object]] = {}
+    for sample in jetson_samples:
+        metric_id = str(sample.get("id") or "")
+        if not metric_id:
+            continue
+        series = jetson_series_by_id.setdefault(
+            metric_id,
+            {
+                "id": metric_id,
+                "label": str(sample.get("label") or metric_id),
+                "group": str(sample.get("group") or ""),
+                "unit": str(sample.get("unit") or ""),
+                "source": str(sample.get("source") or ""),
+                "key": str(sample.get("key") or ""),
+                "order": int(sample.get("order") or 99),
+                "samples": [],
+            },
+        )
+        series_samples = series["samples"]
+        if isinstance(series_samples, list):
+            series_samples.append({"t": sample["t"], "value": sample["value"]})
+    jetson_series = []
+    for series in jetson_series_by_id.values():
+        series_samples = series.get("samples")
+        if not isinstance(series_samples, list) or not series_samples:
+            continue
+        series_samples.sort(key=lambda item: float(item.get("t") or 0.0))
+        values = [
+            _finite(sample.get("value"))
+            for sample in series_samples
+            if math.isfinite(_finite(sample.get("value")))
+        ]
+        if not values:
+            continue
+        series["samples"] = _downsample(series_samples)
+        series["min"] = round(min(values), 6)
+        series["max"] = round(max(values), 6)
+        jetson_series.append(series)
+    jetson_series.sort(
+        key=lambda item: (
+            int(item.get("order") or 99),
+            str(item.get("group") or ""),
+            str(item.get("label") or ""),
+        )
+    )
     duration_s = max(0.0, (end_ns - start_ns) / 1e9)
     frame_id = str(trajectory[-1].get("frame_id") or "") if trajectory else ""
     geometry = _map_geometry(options.map_dir) if options.map_dir else None
@@ -1281,6 +1474,8 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
         )
     if consistency.get("status") in {"warning", "mismatch", "unknown"}:
         warnings.append(str(consistency.get("message") or "Map整合性を確認してください。"))
+    if jetson_diagnostic_topics and not jetson_series:
+        warnings.append("Jetson diagnostics topicはありますが、plot可能なjtop数値は抽出されませんでした。")
     if offline_localization_method in {"vslam_identity", "vslam_identity_fallback"}:
         warnings.append(
             "VGLを使わず、保存cuVSLAM Mapの原点をidentity初期姿勢として自己位置を生成しました。"
@@ -1311,6 +1506,10 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
             "prelocalization_samples_dropped": recorded_dropped_count,
             "samples": trajectory,
         },
+        "jetson_stats": {
+            "topics": jetson_diagnostic_topics,
+            "series": jetson_series,
+        },
         "map": map_payload,
     }
     _atomic_json(analysis_dir / "timeline.json", timeline)
@@ -1338,6 +1537,7 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
                 "mode": options.mode_topic,
                 "pose": options.pose_topic,
                 "speed": options.speed_topic,
+                "jetson_stats": jetson_diagnostic_topics,
             },
             "map": map_payload,
             "offline_localization": (
@@ -1352,6 +1552,11 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
                 "modes": len(modes),
                 "speeds": len(speeds),
                 "trajectory": len(trajectory),
+                "jetson_stats": sum(
+                    len(series.get("samples", []))
+                    for series in jetson_series
+                    if isinstance(series, dict)
+                ),
             },
             "warnings": warnings,
             "timeline": "timeline.json",

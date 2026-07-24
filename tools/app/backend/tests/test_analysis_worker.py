@@ -11,6 +11,7 @@ from jetpilot_console.analysis_worker import (
     _file_fingerprint,
     _decode_image,
     _explicit_speed,
+    _jetson_metric_samples,
     Progress,
     _snapshot_samples,
     _THERMAL_SMOOTHING_STATE,
@@ -23,6 +24,49 @@ from jetpilot_console.map_detail import directory_fingerprint
 
 
 class SnapshotTrajectoryTests(unittest.TestCase):
+    def test_extracts_plot_friendly_jetson_metrics(self) -> None:
+        message = SimpleNamespace(
+            status=[
+                SimpleNamespace(
+                    name="jetson_stats/cpu/0",
+                    message=" 25.00%",
+                    values=[
+                        SimpleNamespace(key="Idle", value="75.00%"),
+                        SimpleNamespace(key="Freq", value="729MHz"),
+                    ],
+                ),
+                SimpleNamespace(
+                    name="jetson_stats/cpu/1",
+                    message=" 50.00%",
+                    values=[SimpleNamespace(key="Freq", value="1.2GHz")],
+                ),
+                SimpleNamespace(
+                    name="jetson_stats/gpu/gpu",
+                    message=" 10.00%",
+                    values=[SimpleNamespace(key="Used", value=" 10.00%")],
+                ),
+                SimpleNamespace(
+                    name="jetson_stats/board/Config",
+                    message="Jetpack 7.2 GA",
+                    values=[SimpleNamespace(key="Jetpack", value="7.2 GA")],
+                ),
+                SimpleNamespace(
+                    name="jetson_stats/board/Disk",
+                    message="272G/914G",
+                    values=[SimpleNamespace(key="Used", value="272G")],
+                ),
+            ]
+        )
+
+        samples = _jetson_metric_samples(message, 123)
+        by_id = {sample["id"]: sample for sample in samples}
+
+        self.assertEqual(by_id["cpu/all/used"]["value"], 37.5)
+        self.assertEqual(by_id["cpu/1/Freq"]["value"], 1200.0)
+        self.assertEqual(by_id["gpu/gpu/Used"]["unit"], "%")
+        self.assertNotIn("board/Config/Jetpack", by_id)
+        self.assertNotIn("board/Disk/Used", by_id)
+
     def test_invalid_speed_is_skipped_and_twist_is_supported(self) -> None:
         self.assertIsNone(_explicit_speed(SimpleNamespace(data="not-a-number")))
         twist = SimpleNamespace(
