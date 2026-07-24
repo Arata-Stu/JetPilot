@@ -305,7 +305,7 @@ for offline_attempt in $(seq 1 300); do
     break
   fi
   if [ "$offline_attempt" = "30" ] || [ "$offline_attempt" = "120" ]; then
-    echo "[debug] waiting for snapshot after ${offline_attempt}s"
+    echo "[debug] waiting for snapshot after $offline_attempt s"
     offline_log_topic_counts
   fi
   sleep 1
