@@ -1359,6 +1359,54 @@ tr:last-child td {
   background: #10171a;
 }
 
+.hd-version-block {
+  background: #13171d;
+}
+
+.version-save-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.version-list {
+  display: grid;
+  gap: 8px;
+}
+
+.version-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #111417;
+  padding: 8px;
+}
+
+.version-row.active {
+  border-color: #2a6d48;
+}
+
+.version-row strong,
+.version-row span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.version-row strong {
+  font-size: 13px;
+}
+
+.version-row span {
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+}
+
 .editor-actions,
 .editor-field-row,
 .editor-zoom-row,
@@ -1375,7 +1423,7 @@ tr:last-child td {
 }
 
 .editor-field-row {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .editor-field-row button {

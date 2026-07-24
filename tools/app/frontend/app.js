@@ -17,6 +17,7 @@ const DEFAULT_MAP_EDITOR_ASSIST_RANGE_POINTS = 4;
 const DEFAULT_MAP_EDITOR_ASSIST_SPACING_M = 0.08;
 const MAX_MAP_EDITOR_ASSIST_RANGE_POINTS = 30;
 const MAX_MAP_EDITOR_ASSIST_RESAMPLE_POINTS = 1200;
+const MAP_EDITOR_FIELDS = ["left_bound", "right_bound", "centerline"];
 
 const state = {
   tab: "dashboard",
@@ -4108,6 +4109,7 @@ function renderMapWorkspace() {
         <aside class="map-side-panel">
           ${renderHdRasterOptions(detail)}
           ${renderHdMapEditor(detail)}
+          ${renderHdMapVersions(detail)}
           ${renderRacelineClearance(detail)}
           ${renderSectionGateEditor(detail)}
           ${renderLayerToggles()}
@@ -4621,11 +4623,13 @@ function renderHdMapEditor(detail) {
         <button id="map-editor-undo" onclick="undoMapEditor()" ${editor.enabled && editor.undoStack.length ? "" : "disabled"}>Undo</button>
         <button id="map-editor-redo" onclick="redoMapEditor()" ${editor.enabled && editor.redoStack.length ? "" : "disabled"}>Redo</button>
         <button id="map-editor-save" onclick="saveHdMapFromEditor()" ${canSave ? "" : "disabled"}>Save</button>
+        <button id="map-editor-auto-center" onclick="regenerateEditorCenterlineFromBounds()" ${editor.enabled ? "" : "disabled"}>Auto Center</button>
         <button id="map-editor-delete" class="danger" onclick="deleteSelectedEditorPoint()" ${editor.enabled && selected ? "" : "disabled"}>Delete Pt</button>
       </div>
       <div class="editor-field-row">
         ${editorFieldButton("left_bound", "Left boundary")}
         ${editorFieldButton("right_bound", "Right boundary")}
+        ${editorFieldButton("centerline", "Centerline")}
       </div>
       <div class="editor-assist-grid">
         <div class="field">
@@ -4681,6 +4685,97 @@ function renderHdMapEditor(detail) {
 function editorFieldButton(field, label) {
   const active = state.mapEditor.activeField === field;
   return `<button id="map-editor-field-${esc(field)}" class="${active ? "active" : ""}" onclick="setMapEditorField(${js(field)})" ${state.mapEditor.enabled ? "" : "disabled"}>${esc(label)}</button>`;
+}
+
+function renderHdMapVersions(detail) {
+  const versions = detail.hd_map_versions?.versions || [];
+  const activeId = detail.hd_map_versions?.active_id || "";
+  const dirty = Boolean(detail.hd_map_versions?.working_copy_dirty);
+  const hdReady = Boolean(detail.hd_map?.exists && detail.map?.artifacts?.centerline_csv?.exists);
+  const status = dirty ? "Working copy" : activeId ? activeId : hdReady ? "Unsaved" : "Need HD map";
+  return `
+    <div class="inspector-block hd-version-block">
+      <div class="inspector-title-row">
+        <h4>HD Map Versions</h4>
+        <span class="${dirty ? "dirty" : activeId ? "ok" : "warn"}">${esc(status)}</span>
+      </div>
+      <div class="version-save-row">
+        <input id="hd-map-version-label" placeholder="optional label" ${hdReady ? "" : "disabled"} />
+        <button class="primary" onclick="saveHdMapVersion()" ${hdReady ? "" : "disabled"}>Save Ver</button>
+      </div>
+      <div class="version-list">
+        ${versions.length
+          ? versions.map((version) => renderHdMapVersionRow(version, detail.map.path)).join("")
+          : `<div class="field-hint">No saved HD map versions yet.</div>`}
+      </div>
+    </div>
+  `;
+}
+
+function renderHdMapVersionRow(version, mapPath) {
+  const hasRaceline = Boolean(version.artifacts?.raceline_csv?.exists);
+  const active = Boolean(version.active);
+  const matches = Boolean(version.matches_active_files);
+  const status = active ? (matches ? "active" : "edited") : hasRaceline ? "raceline" : "map only";
+  return `
+    <div class="version-row ${active ? "active" : ""}">
+      <div>
+        <strong>${esc(version.label || version.id)}</strong>
+        <span>${esc(version.id)} / ${esc(status)}</span>
+      </div>
+      <button onclick="activateHdMapVersion(${js(mapPath)}, ${js(version.id)})" ${active && matches ? "disabled" : ""}>Use</button>
+    </div>
+  `;
+}
+
+async function saveHdMapVersion() {
+  const detail = state.selectedMapDetail;
+  if (!detail?.map?.path) return;
+  const label = String($("hd-map-version-label")?.value || "").trim();
+  try {
+    const saved = await api("/api/maps/save-hd-map-version", {
+      method: "POST",
+      body: JSON.stringify({
+        map_dir: detail.map.path,
+        label,
+      }),
+    });
+    state.selectedMapDetail = saved;
+    state.selectedMapPath = saved.map.path;
+    const mapIndex = state.maps.findIndex((item) => item.path === saved.map.path);
+    if (mapIndex >= 0) state.maps[mapIndex] = saved.map;
+    ensureMapEditor(saved, { force: true });
+    state.mapEditor.enabled = false;
+    invalidateMapPreflights(saved.map.path);
+    toast("HD map version saved");
+    render();
+  } catch (error) {
+    toast(`Version save failed: ${error.message}`, "error");
+  }
+}
+
+async function activateHdMapVersion(mapPath, versionId) {
+  if (!mapPath || !versionId) return;
+  try {
+    const saved = await api("/api/maps/activate-hd-map-version", {
+      method: "POST",
+      body: JSON.stringify({
+        map_dir: mapPath,
+        version_id: versionId,
+      }),
+    });
+    state.selectedMapDetail = saved;
+    state.selectedMapPath = saved.map.path;
+    const mapIndex = state.maps.findIndex((item) => item.path === saved.map.path);
+    if (mapIndex >= 0) state.maps[mapIndex] = saved.map;
+    ensureMapEditor(saved, { force: true });
+    state.mapEditor.enabled = false;
+    invalidateMapPreflights(saved.map.path);
+    toast(`Activated ${versionId}`);
+    render();
+  } catch (error) {
+    toast(`Version activate failed: ${error.message}`, "error");
+  }
 }
 
 function renderEditorCounts(lane) {
@@ -6185,7 +6280,7 @@ function restoreMapEditorSnapshot(snapshot) {
   state.mapEditor.lanes = (snapshot.lanes || []).map(cloneEditorLane);
   if (!state.mapEditor.lanes.length) state.mapEditor.lanes = [defaultEditorLane()];
   state.mapEditor.primaryLaneId = snapshot.primaryLaneId || state.mapEditor.lanes[0].id;
-  state.mapEditor.activeField = ["left_bound", "right_bound"].includes(snapshot.activeField)
+  state.mapEditor.activeField = MAP_EDITOR_FIELDS.includes(snapshot.activeField)
     ? snapshot.activeField
     : "left_bound";
   state.mapEditor.selected = snapshot.selected ? { ...snapshot.selected } : null;
@@ -6463,9 +6558,9 @@ function mapEditorAssistHint() {
   const selected = state.mapEditor.selected;
   const lane = activeEditorLane();
   if (!state.mapEditor.enabled) return "Enable editing, then select a boundary point.";
-  if (!selected) return "Select a boundary point near the curve to smooth.";
+  if (!selected) return "Select a line point near the curve to smooth.";
   const count = lane[selected.field]?.length || 0;
-  const label = selected.field === "left_bound" ? "left" : "right";
+  const label = selected.field === "left_bound" ? "left" : selected.field === "right_bound" ? "right" : "center";
   return `${label} point ${selected.index + 1}/${count}: smoothing uses neighboring points and keeps Undo available.`;
 }
 
@@ -6473,7 +6568,7 @@ function canSmoothSelectedEditorRange() {
   const detail = state.selectedMapDetail;
   const selected = state.mapEditor.selected;
   if (!detail || !state.mapEditor.enabled || state.mapEditor.mapPath !== detail.map?.path || !selected) return false;
-  if (!["left_bound", "right_bound"].includes(selected.field)) return false;
+  if (!MAP_EDITOR_FIELDS.includes(selected.field)) return false;
   const lane = activeEditorLane();
   const points = lane[selected.field] || [];
   if (!points[selected.index]) return false;
@@ -6498,7 +6593,7 @@ function updateMapEditorAssistNumber(field, input) {
 }
 
 function setMapEditorField(field) {
-  if (!["left_bound", "right_bound"].includes(field)) return;
+  if (!MAP_EDITOR_FIELDS.includes(field)) return;
   state.mapEditor.activeField = field;
   updateMapEditorChrome();
 }
@@ -6559,6 +6654,8 @@ function updateMapEditorChrome() {
   if (undo) undo.disabled = !(state.mapEditor.enabled && state.mapEditor.undoStack.length);
   const redo = $("map-editor-redo");
   if (redo) redo.disabled = !(state.mapEditor.enabled && state.mapEditor.redoStack.length);
+  const autoCenter = $("map-editor-auto-center");
+  if (autoCenter) autoCenter.disabled = !(state.mapEditor.enabled && (lane.left_bound || []).length >= 2 && (lane.right_bound || []).length >= 2);
   const smooth = $("map-editor-smooth");
   if (smooth) smooth.disabled = !canSmoothSelectedEditorRange();
   const assist = normalizedMapEditorAssistSettings();
@@ -6574,7 +6671,7 @@ function updateMapEditorChrome() {
   }
   const assistHint = $("map-editor-assist-hint");
   if (assistHint) assistHint.textContent = mapEditorAssistHint();
-  for (const field of ["left_bound", "right_bound"]) {
+  for (const field of MAP_EDITOR_FIELDS) {
     const button = $(`map-editor-field-${field}`);
     if (button) {
       button.disabled = !state.mapEditor.enabled;
@@ -7047,7 +7144,7 @@ function nearestEditorPoint(detail, pixel, hitRadius) {
   if (!canvas) return null;
   const toPixel = mapPointProjector(detail, canvas.width, canvas.height);
   let best = null;
-  for (const field of ["left_bound", "right_bound"]) {
+  for (const field of MAP_EDITOR_FIELDS) {
     for (let index = 0; index < lane[field].length; index += 1) {
       const candidate = toPixel(lane[field][index]);
       const distance = pointDistance(candidate, pixel);
@@ -7057,6 +7154,47 @@ function nearestEditorPoint(detail, pixel, hitRadius) {
     }
   }
   return best ? { field: best.field, index: best.index } : null;
+}
+
+function pointSegmentDistance(point, start, end) {
+  const dx = Number(end[0]) - Number(start[0]);
+  const dy = Number(end[1]) - Number(start[1]);
+  const lengthSq = dx * dx + dy * dy;
+  if (lengthSq <= 1.0e-9) return pointDistance(point, start);
+  const t = Math.max(0, Math.min(1, ((point[0] - start[0]) * dx + (point[1] - start[1]) * dy) / lengthSq));
+  return pointDistance(point, [start[0] + dx * t, start[1] + dy * t]);
+}
+
+function nearestEditorSegment(detail, field, pixel) {
+  const lane = activeEditorLane();
+  const points = lane[field] || [];
+  const canvas = $("map-preview-canvas");
+  if (!canvas || points.length < 2) return null;
+  const toPixel = mapPointProjector(detail, canvas.width, canvas.height);
+  const segmentCount = lane.closed_loop && points.length >= 3 ? points.length : points.length - 1;
+  let best = null;
+  for (let index = 0; index < segmentCount; index += 1) {
+    const start = toPixel(points[index]);
+    const end = toPixel(points[(index + 1) % points.length]);
+    const distance = pointSegmentDistance(pixel, start, end);
+    if (!best || distance < best.distance) best = { index, distance };
+  }
+  return best;
+}
+
+function insertEditorPoint(lane, field, world, detail, pixel) {
+  if (!lane[field]) lane[field] = [];
+  const points = lane[field];
+  if (points.length < 2) {
+    points.push(world);
+    return points.length - 1;
+  }
+  const segment = nearestEditorSegment(detail, field, pixel);
+  const insertIndex = segment
+    ? (lane.closed_loop && segment.index === points.length - 1 ? points.length : segment.index + 1)
+    : points.length;
+  points.splice(insertIndex, 0, world);
+  return insertIndex;
 }
 
 function handleMapEditorPointerDown(event) {
@@ -7080,11 +7218,11 @@ function handleMapEditorPointerDown(event) {
     if (!world) return;
     rememberMapEditorState();
     const field = state.mapEditor.activeField;
-    lane[field].push(world);
-    state.mapEditor.selected = { field, index: lane[field].length - 1 };
+    const index = insertEditorPoint(lane, field, world, detail, point);
+    state.mapEditor.selected = { field, index };
     state.mapEditor.dragging = { ...state.mapEditor.selected };
     state.mapEditor.dragSnapshot = null;
-    regenerateEditorCenterline(lane);
+    if (field !== "centerline") regenerateEditorCenterline(lane);
     markMapEditorDirty();
   }
   if (canvas.setPointerCapture && event.pointerId != null) canvas.setPointerCapture(event.pointerId);
@@ -7109,7 +7247,7 @@ function handleMapEditorPointerMove(event) {
     state.mapEditor.dragSnapshot = null;
   }
   lane[drag.field][drag.index] = world;
-  regenerateEditorCenterline(lane);
+  if (drag.field !== "centerline") regenerateEditorCenterline(lane);
   markMapEditorDirty();
   drawMapPreview();
 }
@@ -7138,7 +7276,7 @@ function deleteEditorPoint(target) {
   lane[target.field].splice(target.index, 1);
   state.mapEditor.selected = null;
   state.mapEditor.dragging = null;
-  regenerateEditorCenterline(lane);
+  if (target.field !== "centerline") regenerateEditorCenterline(lane);
   markMapEditorDirty();
   return true;
 }
@@ -7186,9 +7324,28 @@ function smoothSelectedEditorRange() {
   state.mapEditor.activeField = selected.field;
   state.mapEditor.dragging = null;
   state.mapEditor.dragSnapshot = null;
-  regenerateEditorCenterline(lane);
+  if (selected.field !== "centerline") regenerateEditorCenterline(lane);
   markMapEditorDirty();
   toast(`Smoothed ${range.segment.length} pts to ${smoothed.length} pts`);
+  updateMapEditorChrome();
+  drawMapPreview();
+}
+
+function regenerateEditorCenterlineFromBounds() {
+  const detail = state.selectedMapDetail;
+  if (!detail || !state.mapEditor.enabled || state.mapEditor.mapPath !== detail.map?.path) return;
+  const lane = activeEditorLane();
+  const minimum = lane.closed_loop ? 3 : 2;
+  if ((lane.left_bound || []).length < minimum || (lane.right_bound || []).length < minimum) {
+    toast(`Left and right boundaries need at least ${minimum} points.`, "error");
+    return;
+  }
+  rememberMapEditorState();
+  regenerateEditorCenterline(lane);
+  state.mapEditor.selected = null;
+  state.mapEditor.dragging = null;
+  state.mapEditor.dragSnapshot = null;
+  markMapEditorDirty();
   updateMapEditorChrome();
   drawMapPreview();
 }
@@ -7485,6 +7642,7 @@ function drawEditorPointHandles(ctx, detail, toPixel) {
   const fields = [
     ["left_bound", "#45c478"],
     ["right_bound", "#d878d8"],
+    ["centerline", "#e7c84b"],
   ];
   ctx.save();
   for (const [field, color] of fields) {
@@ -8282,6 +8440,9 @@ window.toggleEditorClosedLoop = toggleEditorClosedLoop;
 window.toggleEditorCenterline = toggleEditorCenterline;
 window.updateMapEditorAssistNumber = updateMapEditorAssistNumber;
 window.smoothSelectedEditorRange = smoothSelectedEditorRange;
+window.regenerateEditorCenterlineFromBounds = regenerateEditorCenterlineFromBounds;
+window.saveHdMapVersion = saveHdMapVersion;
+window.activateHdMapVersion = activateHdMapVersion;
 window.toggleSectionEditor = toggleSectionEditor;
 window.deleteSelectedSectionGate = deleteSelectedSectionGate;
 window.saveSectionGatesFromEditor = saveSectionGatesFromEditor;

@@ -4,14 +4,20 @@ import csv
 import hashlib
 import json
 import math
+import shutil
 import struct
 from ast import literal_eval
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
 from .config import ConsoleConfig
 from .indexes import _artifact, _dir_size, _iso_mtime
+
+
+HD_MAP_VERSION_DIR = "hd_map_versions"
+HD_MAP_VERSION_ACTIVE_FILE = "active.json"
 
 
 def _is_relative_to(path: Path, root: Path) -> bool:
@@ -237,6 +243,31 @@ def _sanitize_id(value: str, fallback: str) -> str:
     allowed = [char for char in value.strip() if char.isalnum() or char in ("_", "-", ".")]
     result = "".join(allowed)
     return result or fallback
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as handle:
+            while True:
+                chunk = handle.read(1024 * 1024)
+                if not chunk:
+                    break
+                digest.update(chunk)
+    except OSError:
+        return ""
+    return digest.hexdigest()
+
+
+def _file_fingerprint(paths: list[Path]) -> str:
+    digest = hashlib.sha256()
+    for path in paths:
+        digest.update(_sha256_file(path).encode("ascii"))
+    return digest.hexdigest()
 
 
 def _payload_points(value: Any) -> list[list[float]]:
@@ -796,6 +827,114 @@ def directory_fingerprint(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _active_hd_artifact_paths(map_dir: Path) -> dict[str, Path]:
+    name = map_dir.name
+    return {
+        "hd_map": map_dir / f"{name}_hd_map.yaml",
+        "centerline_csv": map_dir / f"{name}_hd_map_centerline.csv",
+        "raceline_csv": map_dir / f"{name}_raceline.csv",
+        "raceline_meta": map_dir / f"{name}_raceline.meta.json",
+        "line_preview": map_dir / f"{name}_line_preview.png",
+    }
+
+
+def _version_root(map_dir: Path) -> Path:
+    return map_dir / HD_MAP_VERSION_DIR
+
+
+def _version_active_path(map_dir: Path) -> Path:
+    return _version_root(map_dir) / HD_MAP_VERSION_ACTIVE_FILE
+
+
+def _read_json_file(path: Path) -> dict[str, Any]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _write_json_file(path: Path, data: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = path.with_suffix(f"{path.suffix}.tmp")
+    temporary_path.write_text(json.dumps(data, ensure_ascii=True, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    temporary_path.replace(path)
+
+
+def _version_artifact_paths(version_dir: Path) -> dict[str, Path]:
+    return {
+        "hd_map": version_dir / "hd_map.yaml",
+        "centerline_csv": version_dir / "centerline.csv",
+        "raceline_csv": version_dir / "raceline.csv",
+        "raceline_meta": version_dir / "raceline.meta.json",
+        "line_preview": version_dir / "line_preview.png",
+    }
+
+
+def _next_hd_map_version_id(root: Path) -> str:
+    highest = 0
+    if root.exists():
+        for child in root.iterdir():
+            if not child.is_dir() or not child.name.startswith("ver_"):
+                continue
+            try:
+                highest = max(highest, int(child.name[4:]))
+            except ValueError:
+                continue
+    return f"ver_{highest + 1:03d}"
+
+
+def _active_hd_fingerprint(map_dir: Path) -> str:
+    artifacts = _active_hd_artifact_paths(map_dir)
+    paths = [artifacts["hd_map"], artifacts["centerline_csv"]]
+    return _file_fingerprint([path for path in paths if path.exists()])
+
+
+def _version_fingerprint(version_dir: Path) -> str:
+    artifacts = _version_artifact_paths(version_dir)
+    paths = [artifacts["hd_map"], artifacts["centerline_csv"]]
+    return _file_fingerprint([path for path in paths if path.exists()])
+
+
+def _read_hd_map_versions(map_dir: Path) -> dict[str, Any]:
+    root = _version_root(map_dir)
+    active = _read_json_file(_version_active_path(map_dir))
+    active_id = str(active.get("id") or "")
+    active_fingerprint = _active_hd_fingerprint(map_dir)
+    versions: list[dict[str, Any]] = []
+    if root.exists():
+        for version_dir in sorted(child for child in root.iterdir() if child.is_dir()):
+            if not version_dir.name.startswith("ver_"):
+                continue
+            manifest_path = version_dir / "manifest.json"
+            manifest = _read_json_file(manifest_path)
+            version_id = str(manifest.get("id") or version_dir.name)
+            artifacts = _version_artifact_paths(version_dir)
+            version_fingerprint = str(manifest.get("hd_fingerprint") or _version_fingerprint(version_dir))
+            versions.append(
+                {
+                    "id": version_id,
+                    "label": str(manifest.get("label") or version_id),
+                    "created_at": str(manifest.get("created_at") or _iso_mtime(version_dir)),
+                    "active": version_id == active_id,
+                    "matches_active_files": bool(version_fingerprint and version_fingerprint == active_fingerprint),
+                    "artifacts": {
+                        "hd_map": _artifact(artifacts["hd_map"]),
+                        "centerline_csv": _artifact(artifacts["centerline_csv"]),
+                        "raceline_csv": _artifact(artifacts["raceline_csv"]),
+                        "raceline_meta": _artifact(artifacts["raceline_meta"]),
+                        "line_preview": _artifact(artifacts["line_preview"]),
+                    },
+                }
+            )
+    versions.sort(key=lambda item: str(item.get("created_at") or item.get("id") or ""), reverse=True)
+    return {
+        "active_id": active_id,
+        "working_copy_dirty": bool(active_id and not any(item["active"] and item["matches_active_files"] for item in versions)),
+        "versions": versions,
+    }
+
+
 def _map_record(map_dir: Path, map_root: Path | None = None) -> dict[str, Any]:
     name = map_dir.name
     artifacts = {
@@ -861,6 +1000,7 @@ def build_map_detail(config: ConsoleConfig, map_dir_value: str) -> dict[str, Any
         "raster": raster,
         "preview_image_url": preview_image,
         "hd_map": hd_map,
+        "hd_map_versions": _read_hd_map_versions(map_dir),
         "centerline_csv": centerline,
         "raceline_csv": raceline,
         "odometry": odometry,
@@ -940,6 +1080,92 @@ def save_hd_map(config: ConsoleConfig, payload: dict[str, Any]) -> dict[str, Any
     hd_map_path.parent.mkdir(parents=True, exist_ok=True)
     _write_hd_map_yaml(hd_map_path, raster, lanes, primary_lane_id, centerline_path, previous_data)
     _write_centerline_csv(centerline_path, primary_lane)
+    return build_map_detail(config, str(map_dir))
+
+
+def save_hd_map_version(config: ConsoleConfig, payload: dict[str, Any]) -> dict[str, Any]:
+    map_dir_value = str(payload.get("map_dir") or "")
+    if not map_dir_value:
+        raise ValueError("map_dir is required")
+    map_dir = resolve_allowed_path(config, map_dir_value)
+    if not map_dir.exists() or not map_dir.is_dir():
+        raise FileNotFoundError(f"map folder not found: {map_dir}")
+
+    active_artifacts = _active_hd_artifact_paths(map_dir)
+    if not active_artifacts["hd_map"].exists() or not active_artifacts["centerline_csv"].exists():
+        raise FileNotFoundError("active HD map and centerline are required before saving a version")
+
+    root = _version_root(map_dir)
+    version_id = _next_hd_map_version_id(root)
+    version_dir = root / version_id
+    version_dir.mkdir(parents=True, exist_ok=False)
+    version_artifacts = _version_artifact_paths(version_dir)
+
+    copied: dict[str, str] = {}
+    for key, source_path in active_artifacts.items():
+        if not source_path.exists():
+            continue
+        target_path = version_artifacts[key]
+        shutil.copy2(source_path, target_path)
+        copied[key] = str(target_path)
+
+    label = str(payload.get("label") or "").strip()
+    if not label:
+        label = version_id
+    manifest = {
+        "format": "jetpilot_hd_map_version_v1",
+        "id": version_id,
+        "label": label,
+        "created_at": _now_iso(),
+        "map_dir": str(map_dir),
+        "hd_fingerprint": _version_fingerprint(version_dir),
+        "artifacts": copied,
+    }
+    _write_json_file(version_dir / "manifest.json", manifest)
+    _write_json_file(_version_active_path(map_dir), {"id": version_id, "activated_at": _now_iso()})
+    return build_map_detail(config, str(map_dir))
+
+
+def _archive_active_artifact(map_dir: Path, path: Path, archive_id: str) -> None:
+    if not path.exists():
+        return
+    archive_dir = _version_root(map_dir) / "activation_archive" / archive_id
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(path), str(archive_dir / path.name))
+
+
+def activate_hd_map_version(config: ConsoleConfig, payload: dict[str, Any]) -> dict[str, Any]:
+    map_dir_value = str(payload.get("map_dir") or "")
+    version_id = _sanitize_id(str(payload.get("version_id") or ""), "")
+    if not map_dir_value:
+        raise ValueError("map_dir is required")
+    if not version_id:
+        raise ValueError("version_id is required")
+    map_dir = resolve_allowed_path(config, map_dir_value)
+    if not map_dir.exists() or not map_dir.is_dir():
+        raise FileNotFoundError(f"map folder not found: {map_dir}")
+
+    root = _version_root(map_dir).resolve()
+    version_dir = (root / version_id).resolve()
+    if not _is_relative_to(version_dir, root) or not version_dir.exists() or not version_dir.is_dir():
+        raise FileNotFoundError(f"HD map version not found: {version_id}")
+
+    version_artifacts = _version_artifact_paths(version_dir)
+    if not version_artifacts["hd_map"].exists() or not version_artifacts["centerline_csv"].exists():
+        raise FileNotFoundError(f"HD map version {version_id} is incomplete")
+
+    active_artifacts = _active_hd_artifact_paths(map_dir)
+    for key in ("hd_map", "centerline_csv"):
+        shutil.copy2(version_artifacts[key], active_artifacts[key])
+
+    archive_id = datetime.now(timezone.utc).astimezone().strftime("%Y%m%d_%H%M%S")
+    for key in ("raceline_csv", "raceline_meta", "line_preview"):
+        if version_artifacts[key].exists():
+            shutil.copy2(version_artifacts[key], active_artifacts[key])
+        else:
+            _archive_active_artifact(map_dir, active_artifacts[key], archive_id)
+
+    _write_json_file(_version_active_path(map_dir), {"id": version_id, "activated_at": _now_iso()})
     return build_map_detail(config, str(map_dir))
 
 
