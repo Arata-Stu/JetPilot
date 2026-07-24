@@ -217,7 +217,7 @@ setsid ros2 launch {_q(config.launch_package)} bringup.launch.py \\
   publish_vehicle_description:=false \\
   enable_sensor_kit:=false \\
   enable_localization:=true \\
-  vslam_enable_slam:=false \\
+  vslam_enable_slam:=true \\
   vslam_enable_visualization:=true \\
   vslam_localize_on_startup:=true \\
   enable_vgl:=false \\
