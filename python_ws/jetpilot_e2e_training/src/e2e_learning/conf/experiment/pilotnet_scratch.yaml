@@ -1,0 +1,6 @@
+defaults:
+  - override /model: pilotnet
+  - override /train: default
+
+run:
+  name: pilotnet_scratch

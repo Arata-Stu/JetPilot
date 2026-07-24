@@ -1,0 +1,9 @@
+defaults:
+  - override /model: mobilenet_v3_small
+  - override /train: head_then_finetune
+
+run:
+  name: mobilenet_head_then_finetune
+
+model:
+  pretrained: true

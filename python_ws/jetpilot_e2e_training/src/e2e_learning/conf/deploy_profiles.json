@@ -1,0 +1,21 @@
+{
+  "default": "jetson",
+  "profiles": [
+    {
+      "id": "jetson",
+      "label": "Jetson",
+      "description": "Default Jetson target on the local network",
+      "user": "nvidia",
+      "host": "jetson.local",
+      "remote_root": "/opt/jetpilot/models/e2e"
+    },
+    {
+      "id": "usb",
+      "label": "Jetson USB",
+      "description": "Jetson target through USB gadget networking",
+      "user": "nvidia",
+      "host": "192.168.55.1",
+      "remote_root": "/opt/jetpilot/models/e2e"
+    }
+  ]
+}

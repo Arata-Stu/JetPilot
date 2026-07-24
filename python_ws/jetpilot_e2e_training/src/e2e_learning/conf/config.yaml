@@ -1,0 +1,23 @@
+defaults:
+  - data: rosbag
+  - model: pilotnet
+  - train: default
+  - export: onnx
+  - optional experiment: null
+  - _self_
+
+run:
+  name: pilotnet_dev
+  output_root: outputs/e2e
+
+checkpoint: outputs/e2e/pilotnet_dev/checkpoints/best.pt
+onnx_path: outputs/e2e/pilotnet_dev/model.onnx
+
+compare:
+  root: outputs/e2e
+
+hydra:
+  job:
+    chdir: false
+  run:
+    dir: outputs/hydra/${now:%Y%m%d_%H%M%S}

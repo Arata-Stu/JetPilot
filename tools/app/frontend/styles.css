@@ -676,6 +676,53 @@ button.preflight-unverified {
   margin: -4px 0 10px;
 }
 
+.list-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.list-controls input {
+  flex: 1 1 220px;
+}
+
+.list-controls select {
+  flex: 0 0 150px;
+}
+
+.date-group {
+  margin-bottom: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #111417;
+  overflow: hidden;
+}
+
+.date-group summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  padding: 9px 11px;
+  color: var(--soft);
+  font-weight: 700;
+}
+
+.date-group summary strong {
+  margin-left: auto;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
+.date-group > .analysis-list,
+.date-group > .map-list,
+.date-group > .table-wrap {
+  padding: 8px;
+}
+
 .mini-list {
   display: grid;
   gap: 8px;

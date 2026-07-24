@@ -1,0 +1,4 @@
+name: pilotnet
+input_channels: 3
+output_dim: 2
+outputs: [steering, throttle]

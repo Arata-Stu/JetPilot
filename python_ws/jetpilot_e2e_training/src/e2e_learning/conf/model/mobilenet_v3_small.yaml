@@ -1,0 +1,5 @@
+name: mobilenet_v3_small
+output_dim: 2
+outputs: [steering, throttle]
+pretrained: false
+weights_path: ""

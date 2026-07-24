@@ -1,0 +1,12 @@
+device: ""
+seed: 42
+batch_size: 64
+num_workers: 4
+val_fraction: 0.2
+weight_decay: 0.0001
+
+stages:
+  - name: head
+    freeze_encoder: true
+    epochs: 30
+    lr: 0.001

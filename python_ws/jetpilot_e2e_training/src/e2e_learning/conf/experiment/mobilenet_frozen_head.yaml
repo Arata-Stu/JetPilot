@@ -1,0 +1,9 @@
+defaults:
+  - override /model: mobilenet_v3_small
+  - override /train: frozen_head
+
+run:
+  name: mobilenet_frozen_head
+
+model:
+  pretrained: true

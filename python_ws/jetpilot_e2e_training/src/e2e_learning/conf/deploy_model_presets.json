@@ -1,0 +1,14 @@
+{
+  "default": "camera_control",
+  "presets": [
+    {
+      "id": "camera_control",
+      "label": "Camera Control",
+      "description": "Single image to steering/throttle",
+      "model_name": "camera_control",
+      "model_kind": "e2e_control",
+      "modality": "rgb",
+      "metadata_filename": "metadata.json"
+    }
+  ]
+}

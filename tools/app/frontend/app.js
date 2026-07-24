@@ -25,6 +25,11 @@ const state = {
   tasks: [],
   rosbags: [],
   maps: [],
+  listControls: {
+    rosbags: { query: "", sort: "newest", groupByDate: true, collapsedDays: {} },
+    maps: { query: "", sort: "newest", groupByDate: true, collapsedDays: {} },
+    analyses: { query: "", sort: "newest", groupByDate: true, collapsedDays: {} },
+  },
   cameraTopicConfigs: [],
   localIps: [],
   selectedMapPath: null,
@@ -834,6 +839,167 @@ function fmtTime(seconds) {
   return new Date(seconds * 1000).toLocaleString();
 }
 
+function timestampMs(value) {
+  if (value == null || value === "") return 0;
+  if (typeof value === "number") return value > 100000000000 ? value : value * 1000;
+  const text = String(value);
+  if (/^\d+(\.\d+)?$/.test(text)) {
+    const number = Number(text);
+    return number > 100000000000 ? number : number * 1000;
+  }
+  const parsed = Date.parse(text);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function itemModifiedMs(item, kind) {
+  if (kind === "analyses") {
+    const manifest = item?.manifest || {};
+    const status = item?.status || {};
+    return timestampMs(status.updated_at || manifest.created_at || item.updated_at || item.created_at || item.analysis_id);
+  }
+  return timestampMs(item?.modified_at);
+}
+
+function listControl(kind) {
+  if (!state.listControls[kind]) {
+    state.listControls[kind] = { query: "", sort: "newest", groupByDate: true, collapsedDays: {} };
+  }
+  return state.listControls[kind];
+}
+
+function itemSearchText(item, kind) {
+  if (kind === "analyses") {
+    const id = analysisRecordId(item);
+    const status = analysisRecordStatus(item);
+    const manifest = item?.manifest || {};
+    const request = manifest.request || {};
+    const resolved = manifest.resolved || {};
+    return [
+      id,
+      item.name,
+      item.label,
+      item.title,
+      manifest.label,
+      status,
+      request.rosbag,
+      resolved.rosbag,
+      request.map_dir,
+      resolved.map_dir,
+      item.rosbag,
+      item.bag_path,
+      item.map_dir,
+      item.map_path,
+    ].filter(Boolean).join(" ").toLowerCase();
+  }
+  if (kind === "maps") {
+    return [item.name, item.display_name, item.path, item.complete_runtime_bundle ? "runtime ready" : "incomplete"]
+      .filter(Boolean).join(" ").toLowerCase();
+  }
+  return [item.name, item.path, item.metadata_path, item.topic_count_hint]
+    .filter(Boolean).join(" ").toLowerCase();
+}
+
+function filteredSortedItems(items, kind) {
+  const control = listControl(kind);
+  const query = String(control.query || "").trim().toLowerCase();
+  return [...(items || [])]
+    .filter((item) => !query || itemSearchText(item, kind).includes(query))
+    .sort((a, b) => {
+      const delta = itemModifiedMs(b, kind) - itemModifiedMs(a, kind);
+      return control.sort === "oldest" ? -delta : delta;
+    });
+}
+
+function dateGroupKey(ms) {
+  if (!ms) return "unknown";
+  return new Date(ms).toISOString().slice(0, 10);
+}
+
+function dateGroupLabel(key) {
+  if (key === "unknown") return "Unknown date";
+  const date = new Date(`${key}T00:00:00`);
+  return date.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+}
+
+function groupItemsByDate(items, kind) {
+  const groups = [];
+  const byKey = new Map();
+  for (const item of items) {
+    const key = dateGroupKey(itemModifiedMs(item, kind));
+    if (!byKey.has(key)) {
+      const group = { key, items: [] };
+      byKey.set(key, group);
+      groups.push(group);
+    }
+    byKey.get(key).items.push(item);
+  }
+  return groups;
+}
+
+function renderListControls(kind, shown, total, placeholder = "Search") {
+  const control = listControl(kind);
+  return `
+    <div class="list-controls">
+      <input
+        id="list-filter-${esc(kind)}"
+        value="${esc(control.query || "")}"
+        placeholder="${esc(placeholder)}"
+        oninput="updateListControl(${js(kind)}, 'query', this.value)"
+      />
+      <select onchange="updateListControl(${js(kind)}, 'sort', this.value)">
+        <option value="newest" ${control.sort !== "oldest" ? "selected" : ""}>Newest first</option>
+        <option value="oldest" ${control.sort === "oldest" ? "selected" : ""}>Oldest first</option>
+      </select>
+      <label class="check-row">
+        <input type="checkbox" ${control.groupByDate ? "checked" : ""} onchange="updateListControl(${js(kind)}, 'groupByDate', this.checked)" />
+        <span>Group by date</span>
+      </label>
+      <span class="inline-status">${shown}/${total}</span>
+    </div>
+  `;
+}
+
+function renderDateGroupedList(kind, items, renderItems) {
+  const control = listControl(kind);
+  if (!control.groupByDate) return renderItems(items);
+  return groupItemsByDate(items, kind).map((group) => {
+    const collapsed = Boolean(control.collapsedDays?.[group.key]);
+    return `
+      <details class="date-group" ${collapsed ? "" : "open"} ontoggle="toggleDateGroup(${js(kind)}, ${js(group.key)}, this.open)">
+        <summary><span>${esc(dateGroupLabel(group.key))}</span><strong>${group.items.length}</strong></summary>
+        ${renderItems(group.items)}
+      </details>
+    `;
+  }).join("");
+}
+
+function updateListControl(kind, field, value) {
+  const control = listControl(kind);
+  const activeId = document.activeElement?.id || "";
+  const selectionStart = document.activeElement?.selectionStart;
+  const selectionEnd = document.activeElement?.selectionEnd;
+  if (field === "query") control.query = String(value || "");
+  else if (field === "sort") control.sort = value === "oldest" ? "oldest" : "newest";
+  else if (field === "groupByDate") control.groupByDate = Boolean(value);
+  render();
+  if (field === "query" && activeId === `list-filter-${kind}`) {
+    requestAnimationFrame(() => {
+      const input = $(activeId);
+      if (!input) return;
+      input.focus();
+      if (Number.isFinite(selectionStart) && Number.isFinite(selectionEnd) && input.setSelectionRange) {
+        input.setSelectionRange(selectionStart, selectionEnd);
+      }
+    });
+  }
+}
+
+function toggleDateGroup(kind, key, open) {
+  const control = listControl(kind);
+  control.collapsedDays = control.collapsedDays || {};
+  control.collapsedDays[key] = !open;
+}
+
 function commandText(task) {
   return (task?.command || []).map((part) => JSON.stringify(part)).join(" ");
 }
@@ -935,6 +1101,7 @@ function render() {
         </nav>
         <div class="top-actions">
           <button onclick="refreshAll()">Refresh</button>
+          <button class="ghost" onclick="clearWebCache()">Clear Cache</button>
           <button class="ghost" onclick="toggleTerminal()">${state.terminalCollapsed ? "Show Log" : "Hide Log"}</button>
         </div>
       </header>
@@ -958,6 +1125,24 @@ function render() {
 
 function isEditingField() {
   return ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName || "");
+}
+
+async function clearWebCache() {
+  try {
+    if (window.caches?.keys) {
+      const names = await window.caches.keys();
+      await Promise.all(names.map((name) => window.caches.delete(name)));
+    }
+    if (navigator.serviceWorker?.getRegistrations) {
+      const registrations = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(registrations.map((registration) => registration.unregister()));
+    }
+  } catch (error) {
+    console.warn("Web cache clear failed", error);
+  }
+  const nextUrl = new URL(window.location.href);
+  nextUrl.searchParams.set("ui_cache", String(Date.now()));
+  window.location.replace(nextUrl.toString());
 }
 
 function appendLiveLog(chunk = "") {
@@ -1765,39 +1950,48 @@ function renderMapBuildForm() {
 }
 
 function renderRosbags() {
+  const items = filteredSortedItems(state.rosbags, "rosbags");
   return `
     <div class="page">
       <section class="panel">
         <div class="panel-header"><h2>Local Rosbags</h2><span class="spacer"></span><button onclick="refreshAll()">Scan</button></div>
-        <div class="table-wrap">${state.rosbags.length ? rosbagTable() : `<div class="empty">No metadata.yaml files under ${esc(state.config?.record_root || "")}</div>`}</div>
+        <div class="panel-body">
+          ${renderListControls("rosbags", items.length, state.rosbags.length, "Search rosbag name or path")}
+          ${state.rosbags.length
+            ? (items.length ? renderDateGroupedList("rosbags", items, rosbagTable) : `<div class="empty">No rosbags match the current filter.</div>`)
+            : `<div class="empty">No metadata.yaml files under ${esc(state.config?.record_root || "")}</div>`}
+        </div>
       </section>
     </div>
   `;
 }
 
-function rosbagTable() {
+function rosbagTable(items = state.rosbags) {
   return `
-    <table>
-      <thead><tr><th>Name</th><th>Path</th><th>Size</th><th>Modified</th><th></th></tr></thead>
-      <tbody>
-        ${state.rosbags
-          .map(
-            (bag) => `
-              <tr>
-                <td>${esc(bag.name)}</td>
-                <td><div class="path" title="${esc(bag.path)}">${esc(bag.path)}</div></td>
-                <td>${fmtBytes(bag.size_bytes)}</td>
-                <td>${fmtTime(bag.modified_at)}</td>
-                <td class="actions">
-                  <button onclick="copyText(${js(bag.path)})">Copy</button>
-                  <button class="primary" onclick="openBagAnalysis(${js(bag.path)})">Analyze</button>
-                  <button onclick="useRosbag(${js(bag.path)})">Use</button>
-                </td>
-              </tr>`,
-          )
-          .join("")}
-      </tbody>
-    </table>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Name</th><th>Path</th><th>Size</th><th>Modified</th><th></th></tr></thead>
+        <tbody>
+          ${items
+            .map(
+              (bag) => `
+                <tr>
+                  <td>${esc(bag.name)}</td>
+                  <td><div class="path" title="${esc(bag.path)}">${esc(bag.path)}</div></td>
+                  <td>${fmtBytes(bag.size_bytes)}</td>
+                  <td>${fmtTime(bag.modified_at)}</td>
+                  <td class="actions">
+                    <button onclick="copyText(${js(bag.path)})">Copy</button>
+                    <button class="primary" onclick="openBagAnalysis(${js(bag.path)})">Analyze</button>
+                    <button onclick="useRosbag(${js(bag.path)})">Use</button>
+                    <button class="danger" onclick="deleteRosbag(${js(bag.path)})">Delete</button>
+                  </td>
+                </tr>`,
+            )
+            .join("")}
+        </tbody>
+      </table>
+    </div>
   `;
 }
 
@@ -2076,7 +2270,7 @@ function renderBagAnalysis() {
           <div class="panel-body">${renderAnalysisForm()}</div>
         </section>
         <section class="panel analysis-list-panel">
-          <div class="panel-header"><h2>Analysis Jobs</h2><span class="spacer"></span><span class="inline-status">${esc(state.analysis.analyses.length)} results</span></div>
+          <div class="panel-header"><h2>Analysis Jobs</h2><span class="spacer"></span></div>
           <div class="panel-body" id="analysis-job-list">${renderAnalysisList()}</div>
         </section>
       </div>
@@ -2237,7 +2431,17 @@ function renderAnalysisTopicCoverage() {
 
 function renderAnalysisList() {
   if (!state.analysis.analyses.length) return `<div class="empty">No analysis jobs yet. Select a bag and run the preprocessor.</div>`;
-  return `<div class="analysis-list">${state.analysis.analyses.map((item) => {
+  const items = filteredSortedItems(state.analysis.analyses, "analyses");
+  return `
+    ${renderListControls("analyses", items.length, state.analysis.analyses.length, "Search analysis, rosbag, map, status")}
+    ${items.length
+      ? renderDateGroupedList("analyses", items, renderAnalysisCards)
+      : `<div class="empty">No analyses match the current filter.</div>`}
+  `;
+}
+
+function renderAnalysisCards(items) {
+  return `<div class="analysis-list">${items.map((item) => {
     const id = analysisRecordId(item);
     const status = analysisRecordStatus(item);
     const progress = analysisRecordProgress(item);
@@ -2285,6 +2489,45 @@ async function deleteAnalysis(analysisId) {
     await refreshAnalysisData();
   } catch (err) {
     alert(`Delete error: ${err.message}`);
+  }
+}
+
+async function deleteRosbag(path) {
+  if (!path) return;
+  if (!confirm(`Delete rosbag "${shortName(path)}"?\n\nThis permanently removes the rosbag folder:\n${path}`)) return;
+  try {
+    const res = await fetch(`/api/rosbags/delete?path=${encodeURIComponent(path)}`, { method: "DELETE" });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `${res.status} ${res.statusText}`);
+    if (state.analysis.selectedBagPath === path) {
+      state.analysis.selectedBagPath = "";
+      state.analysis.bagDetail = null;
+    }
+    const buildRosbag = $("build-rosbag");
+    if (buildRosbag?.value === path) buildRosbag.value = "";
+    toast("Rosbag deleted");
+    await refreshAll();
+  } catch (error) {
+    toast(`Rosbag delete failed: ${error.message}`, "error");
+  }
+}
+
+async function deleteMapFolder(path) {
+  if (!path) return;
+  if (!confirm(`Delete map "${shortName(path)}"?\n\nThis permanently removes the map folder, including VSLAM maps, HD map versions, racelines, and previews:\n${path}`)) return;
+  try {
+    const res = await fetch(`/api/maps/delete?path=${encodeURIComponent(path)}`, { method: "DELETE" });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `${res.status} ${res.statusText}`);
+    if (state.selectedMapPath === path) {
+      state.selectedMapPath = null;
+      state.selectedMapDetail = null;
+    }
+    if (state.analysis.selectedMapPath === path) state.analysis.selectedMapPath = "";
+    toast("Map deleted");
+    await refreshAll();
+  } catch (error) {
+    toast(`Map delete failed: ${error.message}`, "error");
   }
 }
 
@@ -3985,12 +4228,18 @@ function drawAnalysisMapReference(ctx, detail, toPixel) {
 }
 
 function renderMaps() {
+  const items = filteredSortedItems(state.maps, "maps");
   return `
     <div class="page">
       <div class="map-workspace-layout">
         <section class="panel map-list-panel">
           <div class="panel-header"><h2>Local Maps</h2><span class="spacer"></span><button onclick="refreshAll()">Scan</button></div>
-          <div class="panel-body">${state.maps.length ? mapList() : `<div class="empty">No map folders under ${esc(state.config?.map_root || "")}</div>`}</div>
+          <div class="panel-body">
+            ${renderListControls("maps", items.length, state.maps.length, "Search map name or path")}
+            ${state.maps.length
+              ? (items.length ? renderDateGroupedList("maps", items, mapList) : `<div class="empty">No maps match the current filter.</div>`)
+              : `<div class="empty">No map folders under ${esc(state.config?.map_root || "")}</div>`}
+          </div>
         </section>
         <section class="panel map-workspace-panel">
           <div class="panel-header">
@@ -4005,10 +4254,10 @@ function renderMaps() {
   `;
 }
 
-function mapList() {
+function mapList(items = state.maps) {
   return `
     <div class="map-list">
-      ${state.maps
+      ${items
         .map((map) => {
           const selected = state.selectedMapPath === map.path;
           const artifactKeys = ["cuvgl_map", "cuvslam_map", "hd_map", "centerline_csv", "raceline_csv", "line_preview"];
@@ -4032,6 +4281,7 @@ function mapList() {
                 ${renderMapStageButton("generate-raceline", map.path, "Raceline")}
                 ${renderMapStageButton("generate-preview", map.path, "Preview")}
                 <button onclick="fillTransferLocal(${js(map.path)})">Transfer</button>
+                <button class="danger" onclick="deleteMapFolder(${js(map.path)})">Delete</button>
               </div>
               <div class="map-list-preflight-grid">
                 ${renderMapStageReadiness("prepare-hd-raster", map.path, "Raster", { micro: true })}
@@ -8367,6 +8617,9 @@ function sectionOutput(title, lines = []) {
 
 window.setTab = setTab;
 window.refreshAll = refreshAll;
+window.clearWebCache = clearWebCache;
+window.updateListControl = updateListControl;
+window.toggleDateGroup = toggleDateGroup;
 window.toggleTerminal = toggleTerminal;
 window.copyText = copyText;
 window.selectTask = selectTask;
@@ -8401,6 +8654,9 @@ window.refreshAnalysisData = refreshAnalysisData;
 window.startBagAnalysis = startBagAnalysis;
 window.openAnalysisResult = openAnalysisResult;
 window.reloadAnalysisResult = reloadAnalysisResult;
+window.deleteAnalysis = deleteAnalysis;
+window.deleteRosbag = deleteRosbag;
+window.deleteMapFolder = deleteMapFolder;
 window.toggleAnalysisPlayback = toggleAnalysisPlayback;
 window.seekAnalysisTime = seekAnalysisTime;
 window.seekAnalysisRelative = seekAnalysisRelative;

@@ -10,6 +10,7 @@ import os
 import re
 import select
 import shlex
+import shutil
 import socket
 import struct
 import subprocess
@@ -77,6 +78,15 @@ JSIOCGBUTTONS = 0x80016A12
 JSIOCGNAME = lambda length: 0x80006A13 + (length << 16)
 _MAP_BUILD_TOKEN = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$")
 TASK_STREAM_CHUNK_BYTES = 256 * 1024
+
+
+def _frontend_asset_version(frontend_root: Path) -> str:
+    mtimes = []
+    for name in ("index.html", "app.js", "styles.css"):
+        path = frontend_root / name
+        if path.exists():
+            mtimes.append(path.stat().st_mtime_ns)
+    return str(max(mtimes) if mtimes else int(time.time() * 1000))
 
 
 def local_ip_candidates() -> list[str]:
@@ -476,12 +486,20 @@ class Handler(BaseHTTPRequestHandler):
             return
         parsed = urlparse(self.path)
         path = parsed.path
+        query = parse_qs(parsed.query)
+
+        if path == "/api/rosbags/delete":
+            self._delete_rosbag(query)
+            return
+        if path == "/api/maps/delete":
+            self._delete_map(query)
+            return
 
         if path.startswith("/api/analyses/"):
             parts = path.strip("/").split("/")
             # DELETE /api/analyses/{analysis_id}
-            if len(parts) == 2:
-                analysis_id = unquote(parts[1])
+            if len(parts) == 3:
+                analysis_id = unquote(parts[2])
                 if self.server.state.analyses is None:
                     self._json({"error": "analyses not available"}, HTTPStatus.SERVICE_UNAVAILABLE)
                     return
@@ -497,6 +515,79 @@ class Handler(BaseHTTPRequestHandler):
                 return
 
         self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
+
+    def _delete_rosbag(self, query: dict[str, list[str]]) -> None:
+        raw_path = query.get("path", [""])[0]
+        if not raw_path:
+            self._json({"error": "path is required"}, HTTPStatus.BAD_REQUEST)
+            return
+        try:
+            bag_dir = resolve_under_root(
+                raw_path,
+                self.server.state.config.record_root,
+                label="rosbag",
+                require_exists=True,
+                require_directory=True,
+            )
+            if bag_dir == self.server.state.config.record_root.resolve():
+                raise ValueError("refusing to delete the record root")
+            metadata_path = bag_dir / "metadata.yaml"
+            if not metadata_path.is_file():
+                raise ValueError("only rosbag folders containing metadata.yaml can be deleted")
+            with self.server.state.tasks.guard_resources([f"rosbag-dir:{bag_dir}"]):
+                shutil.rmtree(bag_dir)
+            self._json({"ok": True, "path": str(bag_dir)})
+        except TaskResourceConflict as exc:
+            self._json(
+                {
+                    "error": "The rosbag is in use by an analysis task. Stop it or wait for it to finish.",
+                    "active_task": exc.active_task,
+                },
+                HTTPStatus.CONFLICT,
+            )
+        except FileNotFoundError as exc:
+            self._json({"error": str(exc)}, HTTPStatus.NOT_FOUND)
+        except ValueError as exc:
+            self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+        except OSError as exc:
+            self._json({"error": f"could not delete rosbag: {exc}"}, HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    def _delete_map(self, query: dict[str, list[str]]) -> None:
+        raw_path = query.get("path", [""])[0]
+        if not raw_path:
+            self._json({"error": "path is required"}, HTTPStatus.BAD_REQUEST)
+            return
+        try:
+            map_dir = resolve_allowed_path(self.server.state.config, raw_path)
+            if not map_dir.exists() or not map_dir.is_dir():
+                raise FileNotFoundError(f"map folder not found: {map_dir}")
+            if map_dir == self.server.state.config.map_root.resolve():
+                raise ValueError("refusing to delete the map root")
+            if not (
+                (map_dir / "cuvgl_map").exists()
+                or (map_dir / "cuvslam_map").exists()
+                or (map_dir / "vslam_reference_snapshot.json").exists()
+                or any(map_dir.glob("*_hd_map.yaml"))
+                or any(map_dir.glob("*_raceline.csv"))
+            ):
+                raise ValueError("selected folder does not look like a JetPilot map")
+            with self.server.state.tasks.guard_resources([f"map-dir:{map_dir}"]):
+                shutil.rmtree(map_dir)
+            self._json({"ok": True, "path": str(map_dir)})
+        except TaskResourceConflict as exc:
+            self._json(
+                {
+                    "error": "The Map is in use by an analysis or Map task. Stop it or wait for it to finish.",
+                    "active_task": exc.active_task,
+                },
+                HTTPStatus.CONFLICT,
+            )
+        except FileNotFoundError as exc:
+            self._json({"error": str(exc)}, HTTPStatus.NOT_FOUND)
+        except ValueError as exc:
+            self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+        except OSError as exc:
+            self._json({"error": f"could not delete map: {exc}"}, HTTPStatus.INTERNAL_SERVER_ERROR)
 
     def _read_json(self) -> dict[str, Any]:
         length = validate_json_request_headers(
@@ -570,10 +661,18 @@ class Handler(BaseHTTPRequestHandler):
         except OSError:
             self._json({"error": "static file unavailable"}, HTTPStatus.NOT_FOUND)
             return
+        if file_path.name == "index.html":
+            version = _frontend_asset_version(config.frontend_root)
+            text = payload.decode("utf-8", errors="replace")
+            text = text.replace('href="/styles.css"', f'href="/styles.css?v={version}"')
+            text = text.replace('src="/app.js"', f'src="/app.js?v={version}"')
+            payload = text.encode("utf-8")
         content_type = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(payload)))
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+        self.send_header("Pragma", "no-cache")
         self.end_headers()
         self.wfile.write(payload)
 
