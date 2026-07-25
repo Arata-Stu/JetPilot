@@ -10,7 +10,7 @@ keep_image="${DEFAULT_KEEP_IMAGE}"
 cache_until="${DEFAULT_CACHE_UNTIL}"
 cache_keep="${DEFAULT_CACHE_KEEP}"
 cache_builder="${DEFAULT_CACHE_BUILDER}"
-execute=false
+dry_run=false
 assume_yes=false
 prune_cache=true
 prune_all_cache=false
@@ -24,12 +24,13 @@ Keeps the current Isaac ROS image and removes older hashed final images from the
 same image family. Containers and images referenced by containers are never
 removed. Build cache is limited separately by age and retained size.
 
-The default mode is a dry run. No Docker data is changed unless --execute is
-specified.
+The default mode shows the cleanup plan and current storage, then asks for
+interactive confirmation before changing Docker data.
 
 Options:
-  --execute                 Perform the displayed cleanup.
-  --yes                     Do not ask for confirmation (requires --execute).
+  --dry-run                 Show the cleanup plan and exit without changing data.
+  --yes                     Perform the displayed cleanup without confirmation.
+  --execute                 Compatibility option; execution is now the default.
   --keep-image IMAGE        Image that defines the generation to keep.
                              Default: cached_isaac_run_dev_image_local:latest
   --cache-until DURATION    Remove eligible cache older than this duration.
@@ -44,15 +45,15 @@ Options:
   -h, --help                Show this help.
 
 Examples:
-  # Preview only
+  # Show the plan, then choose interactively whether to proceed
   ./scripts/cleanup_isaac_ros_docker.sh
 
-  # Keep the current image, remove old generations, and limit week-old cache
-  ./scripts/cleanup_isaac_ros_docker.sh --execute
+  # Preview only
+  ./scripts/cleanup_isaac_ros_docker.sh --dry-run
 
   # Non-interactive maintenance
   ./scripts/cleanup_isaac_ros_docker.sh \
-    --execute --yes --cache-until 336h --cache-keep 80GB
+    --yes --cache-until 336h --cache-keep 80GB
 EOF
 }
 
@@ -193,8 +194,12 @@ require_value() {
 
 while (($# > 0)); do
   case "$1" in
+    --dry-run)
+      dry_run=true
+      shift
+      ;;
     --execute)
-      execute=true
+      # Kept as a no-op for compatibility with earlier versions.
       shift
       ;;
     --yes)
@@ -239,8 +244,8 @@ while (($# > 0)); do
   esac
 done
 
-if "${assume_yes}" && ! "${execute}"; then
-  die "--yes may only be used with --execute."
+if "${assume_yes}" && "${dry_run}"; then
+  die "--yes and --dry-run cannot be used together."
 fi
 
 command -v docker >/dev/null 2>&1 || die "docker was not found."
@@ -385,16 +390,19 @@ echo
 print_storage_snapshot "Current Docker storage (reported by docker system df):" \
   "${storage_before}"
 
-if ! "${execute}"; then
+if "${dry_run}"; then
   echo
-  echo "Dry run only. Re-run with --execute to perform this cleanup."
+  echo "Dry run only. No Docker data was changed."
   exit 0
 fi
 
 if ! "${assume_yes}"; then
-  [[ -t 0 ]] || die "Interactive confirmation is unavailable; use --execute --yes."
+  if [[ ! -t 0 ]]; then
+    echo
+    die "Interactive confirmation is unavailable; use --yes to run or --dry-run to preview."
+  fi
   echo
-  read -r -p "Proceed with the cleanup shown above? [y/N] " answer
+  read -r -p "上記の削除を実行しますか？ [y/N] " answer
   case "${answer}" in
     y|Y|yes|YES)
       ;;

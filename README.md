@@ -13,26 +13,30 @@
 
 Dockerイメージを繰り返しビルドした後は、次のスクリプトで古い
 `additional_setting` イメージとBuildKitキャッシュを整理できます。
-既定ではプレビューのみで、Dockerのデータは変更しません。
+既定では削除予定と現在の使用量を表示した後、削除を実行するか対話形式で
+確認します。
 
 ```bash
 ./scripts/cleanup_isaac_ros_docker.sh
 ```
 
-表示内容を確認して実行します。現行の
+`y` または `yes` を入力した場合だけ削除を実行します。それ以外の入力と
+Enterのみの場合はキャンセルします。現行の
 `cached_isaac_run_dev_image_local:latest` と同じIMAGE ID、およびコンテナが
 参照しているイメージは削除されません。既定のキャッシュ設定は「7日より
 古いdangling cacheを対象、保持量50GB」です。
 
+表示だけ行い、確認プロンプトを出さずに終了する場合は `--dry-run` を使います。
+
 ```bash
-./scripts/cleanup_isaac_ros_docker.sh --execute
+./scripts/cleanup_isaac_ros_docker.sh --dry-run
 ```
 
 使用されていないキャッシュ全体を対象にする場合は、`--all-cache` を付けます。
 イメージは同じ保護条件のままです。
 
 ```bash
-./scripts/cleanup_isaac_ros_docker.sh --execute --all-cache
+./scripts/cleanup_isaac_ros_docker.sh --all-cache
 ```
 
 処理後は、`docker system df` が報告するカテゴリ別の変更前・変更後・削減量と、
@@ -51,6 +55,6 @@ CIや定期メンテナンスなど、確認プロンプトを出せない場合
 
 ```bash
 ./scripts/cleanup_isaac_ros_docker.sh \
-  --execute --yes --all-cache \
+  --yes --all-cache \
   --cache-builder default --cache-until 336h --cache-keep 80GB
 ```
