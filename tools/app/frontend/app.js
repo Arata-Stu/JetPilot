@@ -154,6 +154,10 @@ const state = {
       last_error: "",
     },
   },
+  ui: {
+    dashboardWorkflow: "overview",
+    pendingActions: {},
+  },
   terminalCollapsed: false,
   logDialogOpen: false,
   logStickToEnd: true,
@@ -822,6 +826,50 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function actionBusy(key) {
+  return Boolean(key && state.ui.pendingActions[key]);
+}
+
+function actionButtonAttrs(key, busyTitle = "Working...") {
+  if (!actionBusy(key)) return `data-action-key="${esc(key)}"`;
+  return `disabled data-action-key="${esc(key)}" data-action-busy="true" title="${esc(busyTitle)}"`;
+}
+
+function actionButtonLabel(key, label, busyLabel = "Working...") {
+  return actionBusy(key) ? busyLabel : label;
+}
+
+function beginAction(key, message = "") {
+  if (!key || actionBusy(key)) return false;
+  state.ui.pendingActions[key] = { message, startedAt: Date.now() };
+  render();
+  return true;
+}
+
+function endAction(key, options = {}) {
+  if (!key) return;
+  delete state.ui.pendingActions[key];
+  if (options.renderAfter !== false) render();
+}
+
+function confirmAction({ title, target = "", detail = "", destructive = false }) {
+  const lines = [
+    title || "Run this action?",
+    target ? `Target: ${target}` : "",
+    detail,
+    destructive ? "This can change or remove local/remote files." : "",
+  ].filter(Boolean);
+  return window.confirm(lines.join("\n\n"));
+}
+
+function runWorkflowAction(workflow) {
+  if (workflow === "map-build") setTab("map-builder");
+  else if (workflow === "bag-analysis") setTab("bag-analysis");
+  else if (workflow === "e2e") setTab("rosbags");
+  else if (workflow === "fpv") setTab("fpv");
+  else if (workflow === "jetson") setTab("jetson");
+}
+
 function fmtBytes(bytes) {
   const value = Number(bytes || 0);
   if (value < 1024) return `${value} B`;
@@ -1272,7 +1320,7 @@ function renderFpv() {
           <h2>RTP Receiver Settings</h2>
           <span class="spacer"></span>
           <button onclick="copyFpvReceiverCommand()">Copy Command</button>
-          <button onclick="startFpvViewer()" ${executionDisabledAttrs}>Open External Viewer</button>
+          <button class="${actionBusy("fpv:external") ? "is-busy" : ""}" onclick="startFpvViewer()" ${executionDisabledAttrs} ${actionButtonAttrs("fpv:external", "External viewer is starting...")}>${esc(actionButtonLabel("fpv:external", "Open External Viewer", "Starting..."))}</button>
         </div>
         <div class="panel-body">
           <div class="form-grid">
@@ -1337,10 +1385,10 @@ function renderFpv() {
             <div id="fpv-destination-notice" class="notice full" ${destinationIssue ? "" : "hidden"}>${esc(destinationIssue)}</div>
             <div class="actions full">
               <button class="primary" onclick="startBrowserFpv()" ${browserStartDisabled}>${startLabel}</button>
-              <button onclick="startFpvViewer()" ${executionDisabledAttrs}>Open External Viewer</button>
+              <button class="${actionBusy("fpv:external") ? "is-busy" : ""}" onclick="startFpvViewer()" ${executionDisabledAttrs} ${actionButtonAttrs("fpv:external", "External viewer is starting...")}>${esc(actionButtonLabel("fpv:external", "Open External Viewer", "Starting..."))}</button>
               <button onclick="copyFpvReceiverCommand()">Copy Command</button>
               <button onclick="copyFpvJetsonCommand()">Copy Jetson Command</button>
-              ${running.length ? `<button class="danger" onclick="stopTask(${js(running[0].task_id)})">Stop Running Viewer</button>` : ""}
+              ${running.length ? `<button class="danger ${actionBusy(`task:stop:${running[0].task_id}`) ? "is-busy" : ""}" onclick="stopTask(${js(running[0].task_id)})" ${actionButtonAttrs(`task:stop:${running[0].task_id}`, "Stop request is being sent...")}>${esc(actionButtonLabel(`task:stop:${running[0].task_id}`, "Stop Running Viewer", "Stopping Viewer..."))}</button>` : ""}
             </div>
             ${executionDisabled ? `<div class="notice full">Opening a separate desktop viewer is disabled by default. The embedded browser view remains available without enabling custom commands.</div>` : ""}
             ${webRtcUnavailable ? `<div class="notice full">WebRTC is unavailable: ${esc(browserStatus.webrtc?.error || "required GStreamer WebRTC components are missing")}. Select MJPEG compatibility mode or install the listed WebRTC packages.</div>` : ""}
@@ -1361,9 +1409,10 @@ function renderDashboard() {
   const completeMaps = state.maps.filter((item) => item.complete_runtime_bundle);
   const recentMaps = state.maps.slice(0, 3);
   const recentBags = state.rosbags.slice(0, 3);
+  const workflow = currentDashboardWorkflow();
   return `
     <div class="page">
-      ${renderAutonomyPipeline()}
+      ${renderWorkflowHome(workflow)}
       <div class="grid-3">
         ${metric("Running tasks", running.length, `${state.tasks.length} total task records`)}
         ${metric("Rosbags", state.rosbags.length, state.config ? state.config.record_root : "")}
@@ -1393,21 +1442,191 @@ function renderDashboard() {
   `;
 }
 
-function renderAutonomyPipeline() {
+function currentDashboardWorkflow() {
+  const valid = ["overview", "map-build", "bag-analysis", "e2e", "fpv", "jetson"];
+  return valid.includes(state.ui.dashboardWorkflow) ? state.ui.dashboardWorkflow : "overview";
+}
+
+function dashboardWorkflowItems() {
+  const runningKinds = new Set(
+    state.tasks
+      .filter((task) => ["queued", "running", "stopping"].includes(task.status))
+      .map((task) => task.kind),
+  );
+  const analysisReady = state.analysis.analyses.filter((item) => analysisRecordStatus(item) === "success").length;
+  const map = pipelineMap();
+  const mapSteps = map ? pipelineSteps(map) : [];
+  const mapDone = mapSteps.filter((step) => step.status === "done").length;
+  const mapTotal = mapSteps.length || 7;
+  return [
+    {
+      key: "overview",
+      title: "Overview",
+      detail: "Active tasks, recent assets, and the best next action across JetPilot.",
+      status: state.tasks.some(isActiveTask) ? "running" : "ready",
+      progress: state.tasks.length ? Math.min(100, Math.round((state.tasks.filter(isFinishedTask).length / state.tasks.length) * 100)) : 0,
+      action: "Review Tasks",
+      next: state.tasks.some(isActiveTask) ? "A task is running. Open the console if you need the live log." : "Choose a workflow below, then start from its next action.",
+    },
+    {
+      key: "map-build",
+      title: "Map Build",
+      detail: "Build VGL/VSLAM maps, edit HD lines, generate racelines, and prepare Jetson bundles.",
+      status: runningKinds.has("map-build") || runningKinds.has("prepare-hd-raster") || runningKinds.has("generate-raceline") || runningKinds.has("generate-preview") ? "running" : map?.complete_runtime_bundle ? "ready" : "waiting",
+      progress: Math.round((mapDone / mapTotal) * 100),
+      action: "Open Builder",
+      next: map ? (mapSteps.find((step) => step.status !== "done")?.next || "Selected map looks runtime-ready.") : "Select or pull a rosbag, then build a visual map.",
+    },
+    {
+      key: "bag-analysis",
+      title: "Bag Analysis",
+      detail: "Preprocess recorded drives into synchronized video, control, mode, speed, and trajectory views.",
+      status: runningKinds.has("analyze-rosbag") ? "running" : state.rosbags.length ? "ready" : "waiting",
+      progress: state.rosbags.length ? (analysisReady ? 100 : 35) : 0,
+      action: "New Analysis",
+      next: state.rosbags.length ? "Select a bag, inspect topics, and run the analysis preprocessor." : "Record or pull a rosbag before analysis.",
+    },
+    {
+      key: "e2e",
+      title: "E2E Training",
+      detail: "Prepare datasets, train models, compare runs, export ONNX, and deploy inference artifacts.",
+      status: "waiting",
+      progress: state.rosbags.length ? 20 : 0,
+      action: "Open Rosbags",
+      next: "This workflow is not first-class in the Console yet. It should get dataset, train, compare, export, and deploy steps.",
+    },
+    {
+      key: "fpv",
+      title: "FPV Check",
+      detail: "Start the browser RTP receiver, verify packets, and compare WebRTC/MJPEG behavior.",
+      status: state.fpv.browserStatus?.running ? "running" : "ready",
+      progress: state.fpv.browserStatus?.running ? 70 : 20,
+      action: "Open FPV",
+      next: state.fpv.browserStatus?.running ? fpvBrowserStatusText(state.fpv.browserStatus) : "Pick codec, host, and transport, then start the browser receiver.",
+    },
+    {
+      key: "jetson",
+      title: "Jetson Sync",
+      detail: "Inspect the Jetson, pull rosbags, and push runtime-ready map bundles.",
+      status: state.jetsonTransfer.running || state.jetsonInspectBusy ? "running" : state.jetsonInspect?.ok ? "ready" : "waiting",
+      progress: state.jetsonInspect?.ok ? 60 : 0,
+      action: "Open Jetson",
+      next: state.jetsonInspect?.ok ? "Choose a transfer direction and verify the target path before starting." : "Inspect Jetson before transfers.",
+    },
+  ];
+}
+
+function renderWorkflowHome(workflow) {
+  const items = dashboardWorkflowItems();
+  const selected = items.find((item) => item.key === workflow) || items[0];
+  return `
+    <section class="panel workflow-panel">
+      <div class="panel-header">
+        <h2>Workflow</h2>
+        <span class="workflow-target">${esc(selected.title)}</span>
+        <span class="spacer"></span>
+        <button class="primary" onclick="runWorkflowAction(${js(selected.key)})">${esc(selected.action)}</button>
+      </div>
+      <div class="panel-body">
+        <div class="workflow-switcher">
+          ${items.map((item) => renderWorkflowCard(item, item.key === selected.key)).join("")}
+        </div>
+        <div class="workflow-focus">
+          <div>
+            <span>Next action</span>
+            <strong>${esc(selected.title)}</strong>
+          </div>
+          <p>${esc(selected.next)}</p>
+          <button onclick="runWorkflowAction(${js(selected.key)})">${esc(selected.action)}</button>
+        </div>
+        ${workflow === "map-build" ? renderAutonomyPipeline({ embedded: true }) : renderWorkflowProgress(selected)}
+      </div>
+    </section>
+  `;
+}
+
+function renderWorkflowCard(item, selected) {
+  return `
+    <button class="workflow-card ${selected ? "active" : ""}" onclick="selectDashboardWorkflow(${js(item.key)})">
+      <span class="status ${pipelineStatusClass(item.status)}">${esc(pipelineStatusLabel(item.status))}</span>
+      <strong>${esc(item.title)}</strong>
+      <p>${esc(item.detail)}</p>
+      <div class="workflow-progress"><span style="width:${Math.max(0, Math.min(100, item.progress)).toFixed(0)}%"></span></div>
+    </button>
+  `;
+}
+
+function renderWorkflowProgress(item) {
+  const steps = {
+    overview: [
+      ["Watch running tasks", state.tasks.some(isActiveTask)],
+      ["Use recent assets", Boolean(state.rosbags.length || state.maps.length || state.analysis.analyses.length)],
+      ["Open the focused workflow", false],
+    ],
+    "bag-analysis": [
+      ["Select rosbag", Boolean(state.analysis.selectedBagPath || state.rosbags.length)],
+      ["Inspect topics", Boolean(state.analysis.bagDetail)],
+      ["Configure signals", Boolean(state.analysis.imageTopic || state.analysis.selectedImageTopics?.length)],
+      ["Run preprocessing", state.analysis.analyses.length > 0],
+      ["Review drive viewer", state.analysis.analyses.some((entry) => analysisRecordStatus(entry) === "success")],
+    ],
+    e2e: [
+      ["Select dataset", false],
+      ["Preprocess frames", false],
+      ["Train model", false],
+      ["Compare runs", false],
+      ["Export ONNX", false],
+      ["Deploy model", false],
+    ],
+    fpv: [
+      ["Set receiver IP", Boolean(state.fpv.host)],
+      ["Choose codec/transport", Boolean(state.fpv.codec && state.fpv.transport)],
+      ["Start receiver", Boolean(state.fpv.browserStatus?.running)],
+      ["Verify packets", Number(state.fpv.browserStatus?.rtp_packet_count || state.fpv.browserStatus?.frame_count || 0) > 0],
+    ],
+    jetson: [
+      ["Set SSH target", Boolean(jetsonTarget().host)],
+      ["Inspect remote state", Boolean(state.jetsonInspect)],
+      ["Choose transfer", Boolean(selectedJetsonPullPaths().length || $("push-local")?.value)],
+      ["Run sync task", state.tasks.some((task) => task.kind?.startsWith("transfer-") && isActiveTask(task))],
+    ],
+  }[item.key] || [];
+  return `
+    <div class="workflow-progress-list">
+      ${steps.map(([label, done], index) => `
+        <div class="workflow-step ${done ? "done" : ""}">
+          <span>${esc(index + 1)}</span>
+          <strong>${esc(label)}</strong>
+        </div>
+      `).join("")}
+    </div>
+  `;
+}
+
+function selectDashboardWorkflow(workflow) {
+  state.ui.dashboardWorkflow = workflow;
+  render();
+}
+
+function renderAutonomyPipeline(options = {}) {
   const map = pipelineMap();
   const steps = pipelineSteps(map);
   const nextStep = steps.find((step) => step.status !== "done");
   const mapName = map ? mapDisplayName(map) : "No map selected yet";
-  return `
-    <section class="panel pipeline-panel">
-      <div class="panel-header">
+  const tag = options.embedded ? "div" : "section";
+  const header = options.embedded
+    ? `<div class="pipeline-subheader"><h3>Map Build Progress</h3><span class="pipeline-target">${esc(mapName)}</span></div>`
+    : `<div class="panel-header">
         <h2>Autonomy Pipeline</h2>
         <span class="pipeline-target">${esc(mapName)}</span>
         <span class="spacer"></span>
         <button onclick="setTab('rosbags')">Rosbags</button>
         <button onclick="setTab('map-builder')">Map Builder</button>
         <button onclick="setTab('maps')">Maps</button>
-      </div>
+      </div>`;
+  return `
+    <${tag} class="${options.embedded ? "pipeline-embedded" : "panel"} pipeline-panel">
+      ${header}
       <div class="panel-body">
         ${renderPipelineMapChooser(map)}
         <div class="pipeline-next">
@@ -1421,7 +1640,7 @@ function renderAutonomyPipeline() {
           ${steps.map((step, index) => pipelineStep(step, index + 1)).join("")}
         </div>
       </div>
-    </section>
+    </${tag}>
   `;
 }
 
@@ -1546,8 +1765,10 @@ function mapStageDomToken(stage, mapDir) {
 
 function renderMapStageButton(stage, mapDir, label, options = {}) {
   const payload = mapStagePreflightPayload(stage, mapDir);
-  const classes = options.className ? ` class="${esc(options.className)}"` : "";
-  return `<button${classes} onclick="runMapStage('${esc(stage)}', ${js(mapDir)})" ${preflightButtonAttrs(stage, payload)} data-map-preflight-stage="${esc(stage)}" data-map-preflight-token="${esc(mapStageDomToken(stage, mapDir))}">${esc(label)}</button>`;
+  const actionKey = `map-stage:${stage}:${mapDir}`;
+  const classList = [options.className || "", actionBusy(actionKey) ? "is-busy" : ""].filter(Boolean).join(" ");
+  const classes = classList ? ` class="${esc(classList)}"` : "";
+  return `<button${classes} onclick="runMapStage('${esc(stage)}', ${js(mapDir)})" ${preflightButtonAttrs(stage, payload)} ${actionButtonAttrs(actionKey, "Map stage is starting...")} data-map-preflight-stage="${esc(stage)}" data-map-preflight-token="${esc(mapStageDomToken(stage, mapDir))}">${esc(actionButtonLabel(actionKey, label, "Starting..."))}</button>`;
 }
 
 function renderMapStageReadiness(stage, mapDir, title, options = {}) {
@@ -1939,7 +2160,7 @@ function renderMapBuildForm() {
         ${renderReadinessPanel("map-build", initialPreflightPayload, { title: "VGL / VSLAM build readiness" })}
       </div>
       <div class="actions full">
-        <button id="map-build-start" class="primary" onclick="startMapBuild()" ${preflightButtonAttrs("map-build", initialPreflightPayload)}>Start VGL/VSLAM Build</button>
+        <button id="map-build-start" class="primary ${actionBusy("map-build:start") ? "is-busy" : ""}" onclick="startMapBuild()" ${preflightButtonAttrs("map-build", initialPreflightPayload)} ${actionButtonAttrs("map-build:start", "Map build is starting...")}>${esc(actionButtonLabel("map-build:start", "Start VGL/VSLAM Build", "Starting Build..."))}</button>
         <button onclick="copyMapBuildCommand()">Copy Equivalent Command</button>
       </div>
       <div id="map-build-preflight-reason" class="full">
@@ -2325,7 +2546,7 @@ function renderAnalysisForm() {
       <!-- Action Button Area (Placed at the top for zero scrolling) -->
       <div class="field full" style="background:rgba(255,255,255,0.02); border:1px solid #28333e; border-radius:8px; padding:0.75rem 0.85rem; display:flex; align-items:center; justify-content:space-between; gap:1rem; margin:0.25rem 0;">
         <div>
-          <button id="analysis-start" class="primary" onclick="startBagAnalysis()" style="padding:0.55rem 1.4rem; font-size:0.95rem; font-weight:700;" ${preflightButtonAttrs("analyze-rosbag", payload)}>🚀 Start Analysis</button>
+          <button id="analysis-start" class="primary ${actionBusy("analysis:start") ? "is-busy" : ""}" onclick="startBagAnalysis()" style="padding:0.55rem 1.4rem; font-size:0.95rem; font-weight:700;" ${preflightButtonAttrs("analyze-rosbag", payload)} ${actionButtonAttrs("analysis:start", "Analysis is starting...")}>${esc(actionButtonLabel("analysis:start", "Start Analysis", "Starting..."))}</button>
           <button onclick="scheduleAnalysisPreflight({ immediate: true, force: true })" style="padding:0.55rem 0.8rem;">Recheck</button>
         </div>
         <div id="analysis-preflight-reason" style="font-size:0.8rem; color:#8a99a8; text-align:right;">${renderPreflightButtonReason("analyze-rosbag", payload)}</div>
@@ -2464,7 +2685,7 @@ function renderAnalysisCards(items) {
         ${missing.length ? `<div class="analysis-missing"><strong>Missing / degraded data</strong>${missing.slice(0, 4).map((message) => `<span>${esc(message)}</span>`).join("")}</div>` : ""}
         <div class="actions">
           <button class="${status === "success" ? "primary" : ""}" onclick="openAnalysisResult(${js(id)})" ${id && canOpen ? "" : "disabled"}>${selected && state.analysis.timeline ? "Viewing" : canOpen ? "Open" : "Processing"}</button>
-          ${taskId ? `<button onclick="openTaskLog(${js(taskId)})">Log</button><button class="danger" onclick="stopTask(${js(taskId)})" ${["running", "queued"].includes(status) ? "" : "disabled"}>Stop</button>` : ""}
+          ${taskId ? `<button onclick="openTaskLog(${js(taskId)})">Log</button><button class="danger ${actionBusy(`task:stop:${taskId}`) ? "is-busy" : ""}" onclick="stopTask(${js(taskId)})" ${["running", "queued"].includes(status) ? "" : "disabled"} ${actionButtonAttrs(`task:stop:${taskId}`, "Stop request is being sent...")}>${esc(actionButtonLabel(`task:stop:${taskId}`, "Stop", "Stopping..."))}</button>` : ""}
           <button class="danger" onclick="deleteAnalysis(${js(id)})" ${["running", "queued"].includes(status) ? "disabled" : ""} title="Delete this analysis and all its data">Delete</button>
         </div>
       </article>`;
@@ -2823,7 +3044,17 @@ function updateAnalysisListDom() {
 
 async function startBagAnalysis() {
   const payload = analysisPreflightPayload();
-  if (!acquirePreflightExecution("analyze-rosbag", payload)) return;
+  const topics = [payload.primary_image_topic, ...(payload.image_topics || [])].filter(Boolean);
+  if (!confirmAction({
+    title: "Start rosbag analysis?",
+    target: payload.rosbag || "No rosbag selected",
+    detail: `Mode: ${payload.preset || "telemetry"}\nImage topics: ${topics.length ? [...new Set(topics)].join(", ") : "not selected"}`,
+  })) return;
+  if (!beginAction("analysis:start", "Starting analysis")) return;
+  if (!acquirePreflightExecution("analyze-rosbag", payload)) {
+    endAction("analysis:start");
+    return;
+  }
   try {
     if (!(await confirmPreflight("analyze-rosbag", payload))) return;
     const result = await api("/api/analyses", { method: "POST", body: JSON.stringify(payload) });
@@ -2863,6 +3094,7 @@ async function startBagAnalysis() {
     toast(`Analysis start failed: ${error.message}`, "error");
   } finally {
     releasePreflightExecution("analyze-rosbag", payload);
+    endAction("analysis:start", { renderAfter: state.tab === "bag-analysis" });
   }
 }
 
@@ -4872,7 +5104,7 @@ function renderHdMapEditor(detail) {
         <button class="${editor.enabled ? "primary" : ""}" onclick="toggleHdMapEditor()">${editor.enabled ? "Editing" : "Edit"}</button>
         <button id="map-editor-undo" onclick="undoMapEditor()" ${editor.enabled && editor.undoStack.length ? "" : "disabled"}>Undo</button>
         <button id="map-editor-redo" onclick="redoMapEditor()" ${editor.enabled && editor.redoStack.length ? "" : "disabled"}>Redo</button>
-        <button id="map-editor-save" onclick="saveHdMapFromEditor()" ${canSave ? "" : "disabled"}>Save</button>
+        <button id="map-editor-save" class="${actionBusy("hd-map:save") ? "is-busy" : ""}" onclick="saveHdMapFromEditor()" ${canSave ? "" : "disabled"} ${actionButtonAttrs("hd-map:save", "HD map is saving...")}>${esc(actionButtonLabel("hd-map:save", "Save", "Saving..."))}</button>
         <button id="map-editor-auto-center" onclick="regenerateEditorCenterlineFromBounds()" ${editor.enabled ? "" : "disabled"}>Auto Center</button>
         <button id="map-editor-delete" class="danger" onclick="deleteSelectedEditorPoint()" ${editor.enabled && selected ? "" : "disabled"}>Delete Pt</button>
       </div>
@@ -4951,7 +5183,7 @@ function renderHdMapVersions(detail) {
       </div>
       <div class="version-save-row">
         <input id="hd-map-version-label" placeholder="optional label" ${hdReady ? "" : "disabled"} />
-        <button class="primary" onclick="saveHdMapVersion()" ${hdReady ? "" : "disabled"}>Save Ver</button>
+        <button class="primary ${actionBusy("hd-map-version:save") ? "is-busy" : ""}" onclick="saveHdMapVersion()" ${hdReady ? "" : "disabled"} ${actionButtonAttrs("hd-map-version:save", "HD map version is saving...")}>${esc(actionButtonLabel("hd-map-version:save", "Save Ver", "Saving..."))}</button>
       </div>
       <div class="version-list">
         ${versions.length
@@ -4982,6 +5214,12 @@ async function saveHdMapVersion() {
   const detail = state.selectedMapDetail;
   if (!detail?.map?.path) return;
   const label = String($("hd-map-version-label")?.value || "").trim();
+  if (!confirmAction({
+    title: "Save a new HD map version?",
+    target: detail.map.path,
+    detail: label ? `Label: ${label}` : "No label set.",
+  })) return;
+  if (!beginAction("hd-map-version:save", "Saving HD map version")) return;
   try {
     const saved = await api("/api/maps/save-hd-map-version", {
       method: "POST",
@@ -5001,11 +5239,18 @@ async function saveHdMapVersion() {
     render();
   } catch (error) {
     toast(`Version save failed: ${error.message}`, "error");
+  } finally {
+    endAction("hd-map-version:save", { renderAfter: state.tab === "maps" });
   }
 }
 
 async function activateHdMapVersion(mapPath, versionId) {
   if (!mapPath || !versionId) return;
+  if (!confirmAction({
+    title: "Activate this HD map version?",
+    target: mapPath,
+    detail: `Version: ${versionId}`,
+  })) return;
   try {
     const saved = await api("/api/maps/activate-hd-map-version", {
       method: "POST",
@@ -5050,7 +5295,7 @@ function renderSectionGateEditor(detail) {
       </div>
       <div class="editor-actions">
         <button class="${editor.enabled ? "primary" : ""}" onclick="toggleSectionEditor()" ${ready ? "" : "disabled"}>${editor.enabled ? "Editing" : "Edit"}</button>
-        <button id="section-editor-save" onclick="saveSectionGatesFromEditor()" ${editor.enabled && ready ? "" : "disabled"}>Save</button>
+        <button id="section-editor-save" class="${actionBusy("section-gates:save") ? "is-busy" : ""}" onclick="saveSectionGatesFromEditor()" ${editor.enabled && ready ? "" : "disabled"} ${actionButtonAttrs("section-gates:save", "Section gates are saving...")}>${esc(actionButtonLabel("section-gates:save", "Save", "Saving..."))}</button>
         <button id="section-editor-delete" class="danger" onclick="deleteSelectedSectionGate()" ${editor.enabled && selected ? "" : "disabled"}>Delete Gate</button>
       </div>
       <div id="section-editor-counts" class="editor-counts">${renderSectionEditorCounts(detail)}</div>
@@ -5261,7 +5506,7 @@ function renderJetsonTransfers() {
           </div>
           <div class="actions">
             <button onclick="useJetsonRosbag(${js(sequence.path)})">Use</button>
-            <button class="primary" onclick="pullJetsonRosbag(${js(sequence.path)})" ${queueRunning ? "disabled" : ""}>Pull</button>
+            <button class="primary ${actionBusy("jetson:pull") ? "is-busy" : ""}" onclick="pullJetsonRosbag(${js(sequence.path)})" ${queueRunning ? "disabled" : ""} ${actionButtonAttrs("jetson:pull", "Pull transfer is starting...")}>${esc(actionButtonLabel("jetson:pull", "Pull", "Starting..."))}</button>
           </div>
         </div>`,
     )
@@ -5287,7 +5532,7 @@ function renderJetsonTransfers() {
             <button onclick="clearJetsonPullSelection()" ${selectedPullPaths.length && !queueRunning ? "" : "disabled"}>Clear</button>
           </div>
           <div class="actions full">
-            <button class="primary" onclick="startJetsonPull()" ${queueRunning ? "disabled" : ""}>${selectedPullPaths.length > 1 ? "Pull Selected in Order" : "Pull Selected Sequence"}</button>
+            <button class="primary ${actionBusy("jetson:pull") ? "is-busy" : ""}" onclick="startJetsonPull()" ${queueRunning ? "disabled" : ""} ${actionButtonAttrs("jetson:pull", "Pull transfer is starting...")}>${esc(actionButtonLabel("jetson:pull", selectedPullPaths.length > 1 ? "Pull Selected in Order" : "Pull Selected Sequence", "Starting Pull..."))}</button>
             <button onclick="copyPullCommand()">Copy rsync Command</button>
           </div>
           ${
@@ -5303,7 +5548,7 @@ function renderJetsonTransfers() {
           <div class="field full"><label>From notebook</label><input id="push-local" value="" placeholder="${esc(config.map_root || "")}/course_a" /></div>
           <div class="field full"><label>To Jetson</label><input id="push-remote" value="${esc(config.jetson_map_root || "")}" /></div>
           <div class="actions full">
-            <button class="primary" onclick="startJetsonPush()">Start Push</button>
+            <button class="primary ${actionBusy("jetson:push") ? "is-busy" : ""}" onclick="startJetsonPush()" ${actionButtonAttrs("jetson:push", "Push transfer is starting...")}>${esc(actionButtonLabel("jetson:push", "Start Push", "Starting Push..."))}</button>
             <button onclick="copyPushCommand()">Copy Command</button>
           </div>
         </div>
@@ -5322,7 +5567,7 @@ function renderTerminalPage() {
             <div class="field"><label>Title</label><input id="custom-title" value="Custom command" /></div>
             <div class="field"><label>Working directory</label><input id="custom-cwd" value="${esc(state.config?.repo_root || "")}" /></div>
             <div class="field full"><label>Command</label><textarea id="custom-command" placeholder="echo hello"></textarea></div>
-            <div class="actions full"><button class="primary" onclick="runCustomCommand()">Run</button><button onclick="copyText($('custom-command').value)">Copy</button></div>
+            <div class="actions full"><button class="primary ${actionBusy("custom-command:run") ? "is-busy" : ""}" onclick="runCustomCommand()" ${actionButtonAttrs("custom-command:run", "Command is starting...")}>${esc(actionButtonLabel("custom-command:run", "Run", "Starting..."))}</button><button onclick="copyText($('custom-command').value)">Copy</button></div>
           </div>
         </div>
       </section>`
@@ -5362,7 +5607,7 @@ function renderTaskTable(tasks) {
                   <button onclick="openTaskLog(${js(task.task_id)})">Open Log</button>
                   <button onclick="copyTaskCommand(${js(task.task_id)})">Copy Command</button>
                   <button onclick="copyTaskLog(${js(task.task_id)})">Copy Log</button>
-                  <button class="danger" onclick="stopTask(${js(task.task_id)})" ${["running", "queued", "stopping"].includes(task.status) ? "" : "disabled"}>Stop</button>
+                  <button class="danger ${actionBusy(`task:stop:${task.task_id}`) ? "is-busy" : ""}" onclick="stopTask(${js(task.task_id)})" ${["running", "queued", "stopping"].includes(task.status) ? "" : "disabled"} ${actionButtonAttrs(`task:stop:${task.task_id}`, "Stop request is being sent...")}>${esc(actionButtonLabel(`task:stop:${task.task_id}`, "Stop", "Stopping..."))}</button>
                 </td>
               </tr>`,
           )
@@ -5384,7 +5629,7 @@ function renderTerminal() {
         <button onclick="openLogDialog()" ${task ? "" : "disabled"}>Open Console</button>
         <button onclick="copySelectedTaskCommand()" ${task ? "" : "disabled"}>Copy Command</button>
         <button onclick="copySelectedTaskLog()" ${task ? "" : "disabled"}>Copy Log</button>
-        <button class="danger" onclick="stopTask(${js(task?.task_id || "")})" ${task && ["running", "queued", "stopping"].includes(task.status) ? "" : "disabled"}>Stop</button>
+        <button class="danger ${actionBusy(`task:stop:${task?.task_id || ""}`) ? "is-busy" : ""}" onclick="stopTask(${js(task?.task_id || "")})" ${task && ["running", "queued", "stopping"].includes(task.status) ? "" : "disabled"} ${actionButtonAttrs(`task:stop:${task?.task_id || ""}`, "Stop request is being sent...")}>${esc(actionButtonLabel(`task:stop:${task?.task_id || ""}`, "Stop", "Stopping..."))}</button>
       </div>
       <div class="terminal-body">
         <div class="task-tabs">
@@ -5420,7 +5665,7 @@ function renderLogDialog() {
           <div class="dialog-actions">
             <button onclick="copySelectedTaskCommand()" ${task ? "" : "disabled"}>Copy Command</button>
             <button onclick="copySelectedTaskLog()" ${task ? "" : "disabled"}>Copy Log</button>
-            <button class="danger" onclick="stopTask(${js(task?.task_id || "")})" ${task && ["running", "queued", "stopping"].includes(task.status) ? "" : "disabled"}>Stop</button>
+            <button class="danger ${actionBusy(`task:stop:${task?.task_id || ""}`) ? "is-busy" : ""}" onclick="stopTask(${js(task?.task_id || "")})" ${task && ["running", "queued", "stopping"].includes(task.status) ? "" : "disabled"} ${actionButtonAttrs(`task:stop:${task?.task_id || ""}`, "Stop request is being sent...")}>${esc(actionButtonLabel(`task:stop:${task?.task_id || ""}`, "Stop", "Stopping..."))}</button>
             <button class="icon-button" onclick="closeLogDialog()" aria-label="Close console">x</button>
           </div>
         </div>
@@ -5558,8 +5803,24 @@ function copySelectedTaskLog() {
 
 async function stopTask(taskId) {
   if (!taskId) return;
-  await api(`/api/tasks/${encodeURIComponent(taskId)}/stop`, { method: "POST", body: "{}" });
-  await refreshAll();
+  const task = taskById(taskId);
+  if (!confirmAction({
+    title: "Stop this task?",
+    target: task?.title || taskId,
+    detail: "The Console will send a stop request to the task process group.",
+    destructive: true,
+  })) return;
+  const actionKey = `task:stop:${taskId}`;
+  if (!beginAction(actionKey, "Stopping task")) return;
+  try {
+    await api(`/api/tasks/${encodeURIComponent(taskId)}/stop`, { method: "POST", body: "{}" });
+    await refreshAll();
+    toast("Stop request sent");
+  } catch (error) {
+    toast(`Stop failed: ${error.message}`, "error");
+  } finally {
+    endAction(actionKey);
+  }
 }
 
 async function runCustomCommand() {
@@ -5573,9 +5834,23 @@ async function runCustomCommand() {
     cwd: $("custom-cwd").value,
     command: $("custom-command").value,
   };
-  const result = await api("/api/tasks/run", { method: "POST", body: JSON.stringify(payload) });
-  await refreshAll();
-  selectTask(result.task.task_id);
+  if (!confirmAction({
+    title: "Run this custom command?",
+    target: payload.cwd,
+    detail: payload.command,
+    destructive: true,
+  })) return;
+  const actionKey = "custom-command:run";
+  if (!beginAction(actionKey, "Starting command")) return;
+  try {
+    const result = await api("/api/tasks/run", { method: "POST", body: JSON.stringify(payload) });
+    await refreshAll();
+    selectTask(result.task.task_id);
+  } catch (error) {
+    toast(`Command failed: ${error.message}`, "error");
+  } finally {
+    endAction(actionKey);
+  }
 }
 
 function readNumberInput(id, fallback) {
@@ -5801,6 +6076,11 @@ async function startBrowserFpv() {
     return;
   }
   const fpv = readFpvForm();
+  if (!confirmAction({
+    title: `Start ${fpv.transport === "webrtc" ? "WebRTC" : "MJPEG"} browser receiver?`,
+    target: `UDP ${fpv.port} / ${fpv.codec} ${fpv.width}x${fpv.height}@${fpv.fps}`,
+    detail: "Keep other viewers stopped while the browser owns this RTP port.",
+  })) return;
   closeFpvPeerConnection();
   const lifecycleGeneration = fpvLifecycleGeneration;
   resetFpvWebRtcPlaybackState();
@@ -5847,6 +6127,11 @@ async function startBrowserFpv() {
 async function stopBrowserFpv({ silent = false, renderAfter = true } = {}) {
   const previousStatus = state.fpv.browserStatus || {};
   const sessionId = state.fpv.browserStatus?.session_id || "";
+  if (!silent && sessionId && !confirmAction({
+    title: "Stop browser RTP receiver?",
+    target: `UDP ${previousStatus.settings?.port || state.fpv.port}`,
+    detail: "The embedded FPV view will stop receiving frames.",
+  })) return;
   closeFpvPeerConnection();
   const lifecycleGeneration = fpvLifecycleGeneration;
   resetFpvWebRtcPlaybackState();
@@ -6266,18 +6551,30 @@ async function startFpvViewer() {
   }
   const fpv = readFpvForm();
   const command = buildFpvReceiverCommand(fpv);
-  const result = await api("/api/tasks/run", {
-    method: "POST",
-    body: JSON.stringify({
-      title: `FPV RTP Viewer ${fpv.codec} ${fpv.width}x${fpv.height}@${fpv.fps}`,
-      kind: "fpv-viewer",
-      command,
-      cwd: state.config?.repo_root || "",
-    }),
-  });
-  await refreshAll();
-  selectTask(result.task.task_id);
-  toast("FPV viewer started");
+  if (!confirmAction({
+    title: "Open external RTP viewer?",
+    target: `UDP ${fpv.port} / ${fpv.codec} ${fpv.width}x${fpv.height}@${fpv.fps}`,
+    detail: command,
+  })) return;
+  if (!beginAction("fpv:external", "Starting external viewer")) return;
+  try {
+    const result = await api("/api/tasks/run", {
+      method: "POST",
+      body: JSON.stringify({
+        title: `FPV RTP Viewer ${fpv.codec} ${fpv.width}x${fpv.height}@${fpv.fps}`,
+        kind: "fpv-viewer",
+        command,
+        cwd: state.config?.repo_root || "",
+      }),
+    });
+    await refreshAll();
+    selectTask(result.task.task_id);
+    toast("FPV viewer started");
+  } catch (error) {
+    toast(`FPV viewer failed: ${error.message}`, "error");
+  } finally {
+    endAction("fpv:external");
+  }
 }
 
 function copyFpvReceiverCommand() {
@@ -6392,7 +6689,16 @@ async function startMapBuild() {
     window.alert("Map name is required.");
     return;
   }
-  if (!acquirePreflightExecution("map-build", payload)) return;
+  if (!confirmAction({
+    title: "Start VGL/VSLAM map build?",
+    target: mapDir,
+    detail: `Rosbag: ${payload.rosbag || "not selected"}\nSteps: ${payload.steps || "default"}`,
+  })) return;
+  if (!beginAction("map-build:start", "Starting map build")) return;
+  if (!acquirePreflightExecution("map-build", payload)) {
+    endAction("map-build:start");
+    return;
+  }
   try {
     if (!(await confirmPreflight("map-build", payload))) return;
     const result = await api("/api/maps/build-vgl-vslam", { method: "POST", body: JSON.stringify(payload) });
@@ -6409,6 +6715,7 @@ async function startMapBuild() {
     toast(`Map build failed: ${error.message}`, "error");
   } finally {
     releasePreflightExecution("map-build", payload);
+    endAction("map-build:start", { renderAfter: state.tab === "map-builder" || state.tab === "dashboard" });
   }
 }
 
@@ -6742,6 +7049,12 @@ async function saveSectionGatesFromEditor() {
   const detail = state.selectedMapDetail;
   if (!detail) return;
   ensureSectionEditor(detail);
+  if (!confirmAction({
+    title: "Save section gates?",
+    target: detail.map.path,
+    detail: `${state.sectionEditor.gates.length} gate(s) will be written.`,
+  })) return;
+  if (!beginAction("section-gates:save", "Saving section gates")) return;
   try {
     const saved = await api("/api/maps/save-section-gates", {
       method: "POST",
@@ -6759,6 +7072,8 @@ async function saveSectionGatesFromEditor() {
     render();
   } catch (error) {
     toast(`Section gate save failed: ${error.message}`, "error");
+  } finally {
+    endAction("section-gates:save", { renderAfter: state.tab === "maps" });
   }
 }
 
@@ -7643,6 +7958,13 @@ async function saveHdMapFromEditor() {
     toast(issue, "error");
     return;
   }
+  if (!confirmAction({
+    title: "Save HD map lines?",
+    target: detail.map.path,
+    detail: `Lane: ${state.mapEditor.primaryLaneId}\nLeft/right bounds and centerline files will be updated.`,
+    destructive: true,
+  })) return;
+  if (!beginAction("hd-map:save", "Saving HD map")) return;
   const wasEnabled = state.mapEditor.enabled;
   try {
     const saved = await api("/api/maps/save-hd-map", {
@@ -7668,12 +7990,15 @@ async function saveHdMapFromEditor() {
     render();
   } catch (error) {
     toast(`HD map save failed: ${error.message}`, "error");
+  } finally {
+    endAction("hd-map:save", { renderAfter: state.tab === "maps" });
   }
 }
 
 async function runMapStage(stage, mapDir) {
   const endpoint = `/api/maps/${stage}`;
   const body = { map_dir: mapDir };
+  const actionKey = `map-stage:${stage}:${mapDir}`;
   if (stage === "prepare-hd-raster") {
     Object.assign(body, hdRasterGenerationPayload());
   }
@@ -7685,8 +8010,22 @@ async function runMapStage(stage, mapDir) {
       return;
     }
   }
+  const stageLabel = {
+    "prepare-hd-raster": "Generate HD raster?",
+    "generate-raceline": "Generate raceline?",
+    "generate-preview": "Generate preview?",
+  }[stage] || "Run map stage?";
+  if (!confirmAction({
+    title: stageLabel,
+    target: mapDir,
+    detail: "The Console will start a map task and lock this map folder while it runs.",
+  })) return;
+  if (!beginAction(actionKey, "Starting map stage")) return;
   bindMapStagePreflight(stage, mapDir, body);
-  if (!acquirePreflightExecution(stage, body)) return;
+  if (!acquirePreflightExecution(stage, body)) {
+    endAction(actionKey);
+    return;
+  }
   try {
     if (!(await confirmPreflight(stage, body))) return;
     const result = await api(endpoint, { method: "POST", body: JSON.stringify(body) });
@@ -7703,6 +8042,7 @@ async function runMapStage(stage, mapDir) {
     toast(`Map stage failed: ${error.message}`, "error");
   } finally {
     releasePreflightExecution(stage, body);
+    endAction(actionKey, { renderAfter: state.tab === "maps" || state.tab === "dashboard" });
   }
 }
 
@@ -8489,6 +8829,12 @@ async function startJetsonPull() {
     window.alert("Select or enter at least one Jetson rosbag sequence first.");
     return null;
   }
+  if (!confirmAction({
+    title: pullPaths.length > 1 ? "Pull selected rosbag sequences?" : "Pull this rosbag sequence?",
+    target: `${target.user}@${target.host}`,
+    detail: `From:\n${pullPaths.join("\n")}\n\nTo:\n${localPath}`,
+  })) return null;
+  if (!beginAction("jetson:pull", "Starting Jetson pull")) return null;
   state.jetsonTransfer.running = true;
   state.jetsonTransfer.currentIndex = 0;
   state.jetsonTransfer.total = pullPaths.length;
@@ -8520,15 +8866,30 @@ async function startJetsonPull() {
     state.jetsonTransfer.running = false;
     state.jetsonTransfer.currentIndex = 0;
     state.jetsonTransfer.total = 0;
+    endAction("jetson:pull", { renderAfter: false });
     render();
   }
 }
 
 function startJetsonPush() {
-  return startTransfer("local-to-jetson", {
+  const paths = {
     remote: $("push-remote").value,
     local: $("push-local").value,
-  });
+  };
+  const target = jetsonTarget();
+  if (!confirmAction({
+    title: "Push map bundle to Jetson?",
+    target: `${target.user}@${target.host}`,
+    detail: `From notebook:\n${paths.local || "not selected"}\n\nTo Jetson:\n${paths.remote || "not selected"}`,
+    destructive: true,
+  })) return null;
+  if (!beginAction("jetson:push", "Starting Jetson push")) return null;
+  return startTransfer("local-to-jetson", paths)
+    .catch((error) => {
+      toast(`Transfer failed: ${error.message}`, "error");
+      return null;
+    })
+    .finally(() => endAction("jetson:push"));
 }
 
 function copyPullCommand() {
@@ -8633,6 +8994,8 @@ window.copySelectedTaskCommand = copySelectedTaskCommand;
 window.copySelectedTaskLog = copySelectedTaskLog;
 window.stopTask = stopTask;
 window.runCustomCommand = runCustomCommand;
+window.selectDashboardWorkflow = selectDashboardWorkflow;
+window.runWorkflowAction = runWorkflowAction;
 window.selectPipelineMap = selectPipelineMap;
 window.startFpvViewer = startFpvViewer;
 window.startBrowserFpv = startBrowserFpv;
