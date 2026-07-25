@@ -25,7 +25,14 @@ from .bag_analysis import AnalysisRepository, build_analysis_script, rosbag_deta
 from .config import ConsoleConfig
 from .fpv_receiver import FpvReceiverManager
 from .fpv_stream import FpvStreamSettings
-from .indexes import scan_maps, scan_rosbags
+from .indexes import (
+    ROSBAG_METADATA_FILENAME,
+    ROSBAG_TRASH_DIRNAME,
+    scan_maps,
+    scan_rosbags,
+    scan_trashed_rosbags,
+    update_rosbag_metadata,
+)
 from .map_detail import (
     activate_hd_map_version,
     build_map_detail,
@@ -87,6 +94,20 @@ def _frontend_asset_version(frontend_root: Path) -> str:
         if path.exists():
             mtimes.append(path.stat().st_mtime_ns)
     return str(max(mtimes) if mtimes else int(time.time() * 1000))
+
+
+def _path_is_under(path: Path, root: Path) -> bool:
+    try:
+        path.resolve(strict=False).relative_to(root.resolve(strict=False))
+    except ValueError:
+        return False
+    return True
+
+
+def _json_bool(value: object) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
 
 
 def local_ip_candidates() -> list[str]:
@@ -278,6 +299,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/rosbags/local":
             self._json({"rosbags": scan_rosbags(self.server.state.config.record_root)})
             return
+        if path == "/api/rosbags/trash":
+            self._json({"rosbags": scan_trashed_rosbags(self.server.state.config.record_root)})
+            return
         if path == "/api/rosbags/detail":
             self._rosbag_detail(query)
             return
@@ -448,6 +472,15 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/transfers/local-to-jetson":
             self._start_transfer(body, direction="local-to-jetson")
             return
+        if path == "/api/rosbags/favorite":
+            self._favorite_rosbag(body)
+            return
+        if path == "/api/rosbags/rename":
+            self._rename_rosbag(body)
+            return
+        if path == "/api/rosbags/restore":
+            self._restore_rosbag(body)
+            return
         if path == "/api/jetson/inspect":
             self._json(self._inspect_jetson(body))
             return
@@ -491,6 +524,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/rosbags/delete":
             self._delete_rosbag(query)
             return
+        if path == "/api/rosbags/trash":
+            self._delete_trashed_rosbag(query)
+            return
         if path == "/api/maps/delete":
             self._delete_map(query)
             return
@@ -531,12 +567,37 @@ class Handler(BaseHTTPRequestHandler):
             )
             if bag_dir == self.server.state.config.record_root.resolve():
                 raise ValueError("refusing to delete the record root")
+            trash_root = (self.server.state.config.record_root / ROSBAG_TRASH_DIRNAME).resolve(strict=False)
+            if _path_is_under(bag_dir, trash_root):
+                raise ValueError("rosbag is already in Trash; delete it permanently from Trash")
             metadata_path = bag_dir / "metadata.yaml"
             if not metadata_path.is_file():
                 raise ValueError("only rosbag folders containing metadata.yaml can be deleted")
+            console_metadata = {}
+            console_metadata_path = bag_dir / ROSBAG_METADATA_FILENAME
+            if console_metadata_path.is_file():
+                try:
+                    console_metadata = json.loads(console_metadata_path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    console_metadata = {}
+            if isinstance(console_metadata, dict) and console_metadata.get("favorite"):
+                raise ValueError("favorite rosbags are protected; remove the star before moving to Trash")
             with self.server.state.tasks.guard_resources([f"rosbag-dir:{bag_dir}"]):
-                shutil.rmtree(bag_dir)
-            self._json({"ok": True, "path": str(bag_dir)})
+                trash_root.mkdir(parents=True, exist_ok=True)
+                stamp = time.strftime("%Y%m%d-%H%M%S")
+                base_name = f"{stamp}_{bag_dir.name}"
+                target = trash_root / base_name
+                suffix = 1
+                while target.exists():
+                    suffix += 1
+                    target = trash_root / f"{base_name}_{suffix}"
+                update_rosbag_metadata(
+                    bag_dir,
+                    original_path=str(bag_dir),
+                    trashed_at=time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                )
+                shutil.move(str(bag_dir), str(target))
+            self._json({"ok": True, "path": str(target), "original_path": str(bag_dir), "trashed": True})
         except TaskResourceConflict as exc:
             self._json(
                 {
@@ -550,7 +611,170 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError as exc:
             self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
         except OSError as exc:
-            self._json({"error": f"could not delete rosbag: {exc}"}, HTTPStatus.INTERNAL_SERVER_ERROR)
+            self._json({"error": f"could not move rosbag to Trash: {exc}"}, HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    def _delete_trashed_rosbag(self, query: dict[str, list[str]]) -> None:
+        raw_path = query.get("path", [""])[0]
+        if not raw_path:
+            self._json({"error": "path is required"}, HTTPStatus.BAD_REQUEST)
+            return
+        try:
+            trash_root = self.server.state.config.record_root / ROSBAG_TRASH_DIRNAME
+            bag_dir = resolve_under_root(
+                raw_path,
+                trash_root,
+                label="trashed rosbag",
+                require_exists=True,
+                require_directory=True,
+            )
+            if bag_dir == trash_root.resolve(strict=False):
+                raise ValueError("refusing to delete the Trash root")
+            if not (bag_dir / "metadata.yaml").is_file():
+                raise ValueError("only trashed rosbag folders containing metadata.yaml can be deleted")
+            shutil.rmtree(bag_dir)
+            self._json({"ok": True, "path": str(bag_dir), "permanent": True})
+        except FileNotFoundError as exc:
+            self._json({"error": str(exc)}, HTTPStatus.NOT_FOUND)
+        except ValueError as exc:
+            self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+        except OSError as exc:
+            self._json({"error": f"could not permanently delete rosbag: {exc}"}, HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    def _favorite_rosbag(self, body: dict[str, Any]) -> None:
+        raw_path = str(body.get("path") or "")
+        if not raw_path:
+            self._json({"error": "path is required"}, HTTPStatus.BAD_REQUEST)
+            return
+        try:
+            bag_dir = resolve_under_root(
+                raw_path,
+                self.server.state.config.record_root,
+                label="rosbag",
+                require_exists=True,
+                require_directory=True,
+            )
+            if not (bag_dir / "metadata.yaml").is_file():
+                raise ValueError("only rosbag folders containing metadata.yaml can be marked")
+            favorite = _json_bool(body.get("favorite"))
+            update_rosbag_metadata(bag_dir, favorite=favorite)
+            self._json({"ok": True, "path": str(bag_dir), "favorite": favorite})
+        except ValueError as exc:
+            self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+        except OSError as exc:
+            self._json({"error": f"could not update rosbag metadata: {exc}"}, HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    def _validate_rosbag_name(self, name: str) -> str:
+        clean = name.strip()
+        if not clean:
+            raise ValueError("new name is required")
+        if "/" in clean or "\\" in clean or clean in {".", ".."}:
+            raise ValueError("new name must be a single folder name")
+        if clean.startswith("."):
+            raise ValueError("new name must not start with '.'")
+        if not re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", clean):
+            raise ValueError("new name may contain only letters, numbers, _, ., and -")
+        return clean
+
+    def _rename_rosbag(self, body: dict[str, Any]) -> None:
+        raw_path = str(body.get("path") or "")
+        raw_name = str(body.get("name") or "")
+        if not raw_path:
+            self._json({"error": "path is required"}, HTTPStatus.BAD_REQUEST)
+            return
+        try:
+            bag_dir = resolve_under_root(
+                raw_path,
+                self.server.state.config.record_root,
+                label="rosbag",
+                require_exists=True,
+                require_directory=True,
+            )
+            if not (bag_dir / "metadata.yaml").is_file():
+                raise ValueError("only rosbag folders containing metadata.yaml can be renamed")
+            trash_root = (self.server.state.config.record_root / ROSBAG_TRASH_DIRNAME).resolve(strict=False)
+            if _path_is_under(bag_dir, trash_root):
+                raise ValueError("restore the rosbag before renaming it")
+            new_name = self._validate_rosbag_name(raw_name)
+            target = bag_dir.with_name(new_name)
+            target = resolve_under_root(
+                target,
+                self.server.state.config.record_root,
+                label="renamed rosbag",
+                require_directory=True,
+            )
+            if target == bag_dir:
+                self._json({"ok": True, "path": str(bag_dir), "name": bag_dir.name})
+                return
+            if target.exists():
+                raise ValueError(f"target rosbag already exists: {target}")
+            with self.server.state.tasks.guard_resources([f"rosbag-dir:{bag_dir}", f"rosbag-dir:{target}"]):
+                bag_dir.rename(target)
+            self._json({"ok": True, "path": str(target), "old_path": str(bag_dir), "name": target.name})
+        except TaskResourceConflict as exc:
+            self._json(
+                {
+                    "error": "The rosbag is in use by an analysis task. Stop it or wait for it to finish.",
+                    "active_task": exc.active_task,
+                },
+                HTTPStatus.CONFLICT,
+            )
+        except FileNotFoundError as exc:
+            self._json({"error": str(exc)}, HTTPStatus.NOT_FOUND)
+        except ValueError as exc:
+            self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+        except OSError as exc:
+            self._json({"error": f"could not rename rosbag: {exc}"}, HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    def _restore_rosbag(self, body: dict[str, Any]) -> None:
+        raw_path = str(body.get("path") or "")
+        if not raw_path:
+            self._json({"error": "path is required"}, HTTPStatus.BAD_REQUEST)
+            return
+        try:
+            record_root = self.server.state.config.record_root
+            trash_root = record_root / ROSBAG_TRASH_DIRNAME
+            bag_dir = resolve_under_root(
+                raw_path,
+                trash_root,
+                label="trashed rosbag",
+                require_exists=True,
+                require_directory=True,
+            )
+            if not (bag_dir / "metadata.yaml").is_file():
+                raise ValueError("only trashed rosbag folders containing metadata.yaml can be restored")
+            console_metadata = {}
+            console_metadata_path = bag_dir / ROSBAG_METADATA_FILENAME
+            if console_metadata_path.is_file():
+                try:
+                    console_metadata = json.loads(console_metadata_path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    console_metadata = {}
+            original_path = str(console_metadata.get("original_path") or "") if isinstance(console_metadata, dict) else ""
+            if original_path:
+                target = resolve_under_root(original_path, record_root, label="restore path", require_directory=True)
+            else:
+                target = record_root / bag_dir.name
+            if target.exists():
+                raise ValueError(f"restore target already exists: {target}")
+            with self.server.state.tasks.guard_resources([f"rosbag-dir:{target}"]):
+                target.parent.mkdir(parents=True, exist_ok=True)
+                update_rosbag_metadata(bag_dir, original_path=None, trashed_at=None)
+                shutil.move(str(bag_dir), str(target))
+            self._json({"ok": True, "path": str(target), "restored": True})
+        except TaskResourceConflict as exc:
+            self._json(
+                {
+                    "error": "The restore target is in use by a task. Stop it or wait for it to finish.",
+                    "active_task": exc.active_task,
+                },
+                HTTPStatus.CONFLICT,
+            )
+        except FileNotFoundError as exc:
+            self._json({"error": str(exc)}, HTTPStatus.NOT_FOUND)
+        except ValueError as exc:
+            self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+        except OSError as exc:
+            self._json({"error": f"could not restore rosbag: {exc}"}, HTTPStatus.INTERNAL_SERVER_ERROR)
 
     def _delete_map(self, query: dict[str, list[str]]) -> None:
         raw_path = query.get("path", [""])[0]

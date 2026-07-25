@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import os
+import json
 from pathlib import Path
 from typing import Iterable
+
+
+ROSBAG_METADATA_FILENAME = ".jetpilot_console.json"
+ROSBAG_TRASH_DIRNAME = ".jetpilot_trash"
 
 
 def _dir_size(path: Path) -> int:
@@ -25,7 +30,59 @@ def _iso_mtime(path: Path) -> float:
         return 0.0
 
 
-def scan_rosbags(record_root: Path) -> list[dict[str, object]]:
+def _read_rosbag_metadata(bag_dir: Path) -> dict[str, object]:
+    metadata_path = bag_dir / ROSBAG_METADATA_FILENAME
+    try:
+        value = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _write_rosbag_metadata(bag_dir: Path, metadata: dict[str, object]) -> None:
+    path = bag_dir / ROSBAG_METADATA_FILENAME
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(metadata, indent=2, ensure_ascii=True), encoding="utf-8")
+    tmp.replace(path)
+
+
+def update_rosbag_metadata(bag_dir: Path, **updates: object) -> dict[str, object]:
+    metadata = _read_rosbag_metadata(bag_dir)
+    for key, value in updates.items():
+        if value is None:
+            metadata.pop(key, None)
+        else:
+            metadata[key] = value
+    _write_rosbag_metadata(bag_dir, metadata)
+    return metadata
+
+
+def _rosbag_record(record_root: Path, metadata: Path, *, trashed: bool = False) -> dict[str, object]:
+    bag_dir = metadata.parent
+    topic_count = 0
+    try:
+        text = metadata.read_text(encoding="utf-8", errors="replace")
+        topic_count = text.count("topic_metadata:")
+    except OSError:
+        text = ""
+    console_metadata = _read_rosbag_metadata(bag_dir)
+    display_name = str(console_metadata.get("display_name") or bag_dir.name)
+    return {
+        "name": bag_dir.name,
+        "display_name": display_name,
+        "path": str(bag_dir),
+        "metadata_path": str(metadata),
+        "size_bytes": _dir_size(bag_dir),
+        "modified_at": _iso_mtime(bag_dir),
+        "topic_count_hint": topic_count,
+        "favorite": bool(console_metadata.get("favorite")),
+        "trashed": trashed,
+        "original_path": str(console_metadata.get("original_path") or ""),
+        "trashed_at": str(console_metadata.get("trashed_at") or ""),
+    }
+
+
+def scan_rosbags(record_root: Path, *, include_trash: bool = False) -> list[dict[str, object]]:
     if not record_root.exists():
         return []
 
@@ -35,26 +92,28 @@ def scan_rosbags(record_root: Path) -> list[dict[str, object]]:
             relative_parts = metadata.relative_to(record_root).parts
         except ValueError:
             continue
+        if not include_trash and relative_parts[:1] == (ROSBAG_TRASH_DIRNAME,):
+            continue
         if any(part.startswith(".") for part in relative_parts):
             continue
-        bag_dir = metadata.parent
-        topic_count = 0
-        try:
-            text = metadata.read_text(encoding="utf-8", errors="replace")
-            topic_count = text.count("topic_metadata:")
-        except OSError:
-            text = ""
+        bags.append(_rosbag_record(record_root, metadata))
+    return bags
 
-        bags.append(
-            {
-                "name": bag_dir.name,
-                "path": str(bag_dir),
-                "metadata_path": str(metadata),
-                "size_bytes": _dir_size(bag_dir),
-                "modified_at": _iso_mtime(bag_dir),
-                "topic_count_hint": topic_count,
-            }
-        )
+
+def scan_trashed_rosbags(record_root: Path) -> list[dict[str, object]]:
+    trash_root = record_root / ROSBAG_TRASH_DIRNAME
+    if not trash_root.exists():
+        return []
+
+    bags: list[dict[str, object]] = []
+    for metadata in sorted(trash_root.rglob("metadata.yaml")):
+        try:
+            relative_parts = metadata.relative_to(trash_root).parts
+        except ValueError:
+            continue
+        if any(part.startswith(".") for part in relative_parts):
+            continue
+        bags.append(_rosbag_record(record_root, metadata, trashed=True))
     return bags
 
 

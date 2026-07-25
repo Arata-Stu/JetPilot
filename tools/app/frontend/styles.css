@@ -78,6 +78,22 @@ button.danger {
   background: #6d2929;
 }
 
+button.icon-button {
+  display: inline-grid;
+  place-items: center;
+  width: 34px;
+  min-width: 34px;
+  padding: 0;
+  font-size: 17px;
+  line-height: 1;
+}
+
+button.icon-button.is-active {
+  border-color: #a9822a;
+  background: #3d321d;
+  color: #f5d37b;
+}
+
 button.ghost {
   background: transparent;
 }
@@ -708,6 +724,13 @@ button.preflight-unverified {
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
+}
+
+.name-cell {
+  display: flex;
+  align-items: center;
+  min-width: 180px;
+  gap: 10px;
 }
 
 .inline-status,
@@ -1976,13 +1999,6 @@ tr:last-child td {
   display: flex;
   align-items: center;
   gap: 8px;
-}
-
-.icon-button {
-  width: 34px;
-  min-width: 34px;
-  padding: 0;
-  font-size: 16px;
 }
 
 .dialog-log {

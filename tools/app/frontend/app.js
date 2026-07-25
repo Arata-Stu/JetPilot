@@ -24,9 +24,11 @@ const state = {
   config: null,
   tasks: [],
   rosbags: [],
+  rosbagTrash: [],
   maps: [],
   listControls: {
     rosbags: { query: "", sort: "newest", groupByDate: true, collapsedDays: {} },
+    rosbagTrash: { query: "", sort: "newest", groupByDate: true, collapsedDays: {} },
     maps: { query: "", sort: "newest", groupByDate: true, collapsedDays: {} },
     analyses: { query: "", sort: "newest", groupByDate: true, collapsedDays: {} },
   },
@@ -943,7 +945,7 @@ function itemSearchText(item, kind) {
     return [item.name, item.display_name, item.path, item.complete_runtime_bundle ? "runtime ready" : "incomplete"]
       .filter(Boolean).join(" ").toLowerCase();
   }
-  return [item.name, item.path, item.metadata_path, item.topic_count_hint]
+  return [item.name, item.display_name, item.path, item.metadata_path, item.original_path, item.favorite ? "favorite protected star" : "", item.trashed ? "trash deleted" : "", item.topic_count_hint]
     .filter(Boolean).join(" ").toLowerCase();
 }
 
@@ -1065,10 +1067,11 @@ function sh(value) {
 
 async function refreshAll() {
   const previousFpvSession = state.fpv.browserStatus?.session_id || "";
-  const [config, tasks, rosbags, maps, cameraTopicConfigs, localIps, analyses, fpvStatus] = await Promise.all([
+  const [config, tasks, rosbags, rosbagTrash, maps, cameraTopicConfigs, localIps, analyses, fpvStatus] = await Promise.all([
     api("/api/config"),
     api("/api/tasks"),
     api("/api/rosbags/local"),
+    api("/api/rosbags/trash").catch(() => ({ rosbags: [] })),
     api("/api/maps/local"),
     api("/api/map-builder/camera-topic-configs"),
     api("/api/network/local-ips").catch(() => ({ ips: [] })),
@@ -1078,6 +1081,7 @@ async function refreshAll() {
   state.config = config;
   state.tasks = tasks.tasks || [];
   state.rosbags = rosbags.rosbags || [];
+  state.rosbagTrash = rosbagTrash.rosbags || [];
   state.maps = maps.maps || [];
   state.cameraTopicConfigs = cameraTopicConfigs.configs || [];
   state.localIps = localIps.ips || [];
@@ -2052,7 +2056,7 @@ function renderCompactList(items, kind) {
           return `
             <div class="mini-row">
               <div>
-                <strong>${esc(item.name)}</strong>
+                <strong>${esc(item.display_name || item.name)}</strong>
                 <div class="path" title="${esc(item.path)}">${esc(item.path)}</div>
               </div>
               <div class="actions">
@@ -2121,7 +2125,7 @@ function renderMapBuildForm() {
         <label>Rosbag</label>
         <select id="build-rosbag" onchange="scheduleMapBuildPreflight()">
           <option value="">Select rosbag</option>
-          ${state.rosbags.map((bag) => `<option value="${esc(bag.path)}">${esc(bag.name)} - ${esc(bag.path)}</option>`).join("")}
+          ${state.rosbags.map((bag) => `<option value="${esc(bag.path)}">${esc(bag.display_name || bag.name)} - ${esc(bag.path)}</option>`).join("")}
         </select>
       </div>
       <div class="field">
@@ -2172,6 +2176,7 @@ function renderMapBuildForm() {
 
 function renderRosbags() {
   const items = filteredSortedItems(state.rosbags, "rosbags");
+  const trashItems = filteredSortedItems(state.rosbagTrash, "rosbagTrash");
   return `
     <div class="page">
       <section class="panel">
@@ -2183,31 +2188,59 @@ function renderRosbags() {
             : `<div class="empty">No metadata.yaml files under ${esc(state.config?.record_root || "")}</div>`}
         </div>
       </section>
+      <section class="panel">
+        <div class="panel-header">
+          <h2>Rosbag Trash</h2>
+          <span class="muted">${esc(state.config?.record_root ? `${state.config.record_root}/.jetpilot_trash` : "")}</span>
+          <span class="spacer"></span>
+          <button onclick="refreshAll()">Scan</button>
+        </div>
+        <div class="panel-body">
+          ${renderListControls("rosbagTrash", trashItems.length, state.rosbagTrash.length, "Search trashed rosbag name or path")}
+          ${state.rosbagTrash.length
+            ? (trashItems.length ? renderDateGroupedList("rosbagTrash", trashItems, (groupItems) => rosbagTable(groupItems, { trash: true })) : `<div class="empty">No trashed rosbags match the current filter.</div>`)
+            : `<div class="empty">Trash is empty. Moving a rosbag to Trash keeps the data here until you delete it forever.</div>`}
+        </div>
+      </section>
     </div>
   `;
 }
 
-function rosbagTable(items = state.rosbags) {
+function rosbagTable(items = state.rosbags, options = {}) {
+  const isTrash = Boolean(options.trash);
   return `
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Name</th><th>Path</th><th>Size</th><th>Modified</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th>Path</th>${isTrash ? "<th>Original</th>" : ""}<th>Size</th><th>Modified</th><th></th></tr></thead>
         <tbody>
           ${items
             .map(
-              (bag) => `
+              (bag) => {
+                const label = bag.display_name || bag.name;
+                const favoriteTitle = bag.favorite ? "Protected from Trash" : "Not protected";
+                return `
                 <tr>
-                  <td>${esc(bag.name)}</td>
+                  <td>
+                    <div class="name-cell">
+                      ${!isTrash ? `<button class="icon-button ${bag.favorite ? "is-active" : ""}" title="${esc(favoriteTitle)}" onclick="toggleRosbagFavorite(${js(bag.path)}, ${bag.favorite ? "false" : "true"})">${bag.favorite ? "★" : "☆"}</button>` : ""}
+                      <div>
+                        <strong>${esc(label)}</strong>
+                        ${label !== bag.name ? `<div class="muted">${esc(bag.name)}</div>` : ""}
+                      </div>
+                    </div>
+                  </td>
                   <td><div class="path" title="${esc(bag.path)}">${esc(bag.path)}</div></td>
+                  ${isTrash ? `<td><div class="path" title="${esc(bag.original_path || "")}">${esc(bag.original_path || "-")}</div></td>` : ""}
                   <td>${fmtBytes(bag.size_bytes)}</td>
                   <td>${fmtTime(bag.modified_at)}</td>
                   <td class="actions">
                     <button onclick="copyText(${js(bag.path)})">Copy</button>
-                    <button class="primary" onclick="openBagAnalysis(${js(bag.path)})">Analyze</button>
-                    <button onclick="useRosbag(${js(bag.path)})">Use</button>
-                    <button class="danger" onclick="deleteRosbag(${js(bag.path)})">Delete</button>
+                    ${isTrash
+                      ? `<button class="primary" onclick="restoreRosbag(${js(bag.path)})">Restore</button><button class="danger" onclick="deleteTrashedRosbag(${js(bag.path)})">Delete Forever</button>`
+                      : `<button class="primary" onclick="openBagAnalysis(${js(bag.path)})">Analyze</button><button onclick="useRosbag(${js(bag.path)})">Use</button><button onclick="renameRosbag(${js(bag.path)}, ${js(bag.name)})">Rename</button><button class="danger" onclick="deleteRosbag(${js(bag.path)})" ${bag.favorite ? "disabled title=\"Remove the star before moving to Trash\"" : ""}>Move to Trash</button>`}
                   </td>
-                </tr>`,
+                </tr>`;
+              },
             )
             .join("")}
         </tbody>
@@ -2523,7 +2556,7 @@ function renderAnalysisForm() {
         <label for="analysis-bag">1. Select Rosbag</label>
         <select id="analysis-bag" onchange="selectAnalysisBag(this.value)">
           <option value="">Select rosbag</option>
-          ${state.rosbags.map((item) => `<option value="${esc(item.path)}" ${item.path === analysis.selectedBagPath ? "selected" : ""}>${esc(item.name)} - ${esc(item.path)}</option>`).join("")}
+          ${state.rosbags.map((item) => `<option value="${esc(item.path)}" ${item.path === analysis.selectedBagPath ? "selected" : ""}>${esc(item.display_name || item.name)} - ${esc(item.path)}</option>`).join("")}
         </select>
         <div class="field-hint">${analysis.bagDetailLoading ? "Inspecting topics..." : bag ? `${esc(bag.path)}${duration > 0 ? ` / ${formatAnalysisClock(duration)}` : ""}` : "Choose a local rosbag to inspect its topics."}</div>
       </div>
@@ -2715,7 +2748,7 @@ async function deleteAnalysis(analysisId) {
 
 async function deleteRosbag(path) {
   if (!path) return;
-  if (!confirm(`Delete rosbag "${shortName(path)}"?\n\nThis permanently removes the rosbag folder:\n${path}`)) return;
+  if (!confirm(`Move rosbag "${shortName(path)}" to Trash?\n\nThe folder is kept under .jetpilot_trash and can be restored later:\n${path}`)) return;
   try {
     const res = await fetch(`/api/rosbags/delete?path=${encodeURIComponent(path)}`, { method: "DELETE" });
     const data = await res.json().catch(() => ({}));
@@ -2726,10 +2759,75 @@ async function deleteRosbag(path) {
     }
     const buildRosbag = $("build-rosbag");
     if (buildRosbag?.value === path) buildRosbag.value = "";
-    toast("Rosbag deleted");
+    toast("Rosbag moved to Trash");
     await refreshAll();
   } catch (error) {
-    toast(`Rosbag delete failed: ${error.message}`, "error");
+    toast(`Move to Trash failed: ${error.message}`, "error");
+  }
+}
+
+async function toggleRosbagFavorite(path, favorite) {
+  if (!path) return;
+  try {
+    await api("/api/rosbags/favorite", {
+      method: "POST",
+      body: JSON.stringify({ path, favorite }),
+    });
+    toast(favorite ? "Rosbag protected" : "Rosbag protection removed");
+    await refreshAll();
+  } catch (error) {
+    toast(`Could not update protection: ${error.message}`, "error");
+  }
+}
+
+async function renameRosbag(path, currentName) {
+  if (!path) return;
+  const nextName = window.prompt("New rosbag folder name\nUse letters, numbers, _, ., and - only.", currentName || shortName(path));
+  if (nextName === null) return;
+  const cleanName = nextName.trim();
+  if (!cleanName || cleanName === currentName) return;
+  try {
+    const result = await api("/api/rosbags/rename", {
+      method: "POST",
+      body: JSON.stringify({ path, name: cleanName }),
+    });
+    if (state.analysis.selectedBagPath === path) state.analysis.selectedBagPath = result.path || "";
+    const buildRosbag = $("build-rosbag");
+    if (buildRosbag?.value === path) buildRosbag.value = result.path || "";
+    toast("Rosbag renamed");
+    await refreshAll();
+  } catch (error) {
+    toast(`Rename failed: ${error.message}`, "error");
+  }
+}
+
+async function restoreRosbag(path) {
+  if (!path) return;
+  try {
+    await api("/api/rosbags/restore", {
+      method: "POST",
+      body: JSON.stringify({ path }),
+    });
+    toast("Rosbag restored");
+    await refreshAll();
+  } catch (error) {
+    toast(`Restore failed: ${error.message}`, "error");
+  }
+}
+
+async function deleteTrashedRosbag(path) {
+  if (!path) return;
+  const name = shortName(path);
+  const first = window.confirm(`Delete trashed rosbag "${name}" forever?\n\nThis permanently removes the folder and cannot be restored from the UI:\n${path}`);
+  if (!first) return;
+  const typed = window.prompt(`Type DELETE to permanently delete "${name}".`);
+  if (typed !== "DELETE") return;
+  try {
+    await api(`/api/rosbags/trash?path=${encodeURIComponent(path)}`, { method: "DELETE" });
+    toast("Rosbag permanently deleted");
+    await refreshAll();
+  } catch (error) {
+    toast(`Permanent delete failed: ${error.message}`, "error");
   }
 }
 
@@ -9019,6 +9117,10 @@ window.openAnalysisResult = openAnalysisResult;
 window.reloadAnalysisResult = reloadAnalysisResult;
 window.deleteAnalysis = deleteAnalysis;
 window.deleteRosbag = deleteRosbag;
+window.toggleRosbagFavorite = toggleRosbagFavorite;
+window.renameRosbag = renameRosbag;
+window.restoreRosbag = restoreRosbag;
+window.deleteTrashedRosbag = deleteTrashedRosbag;
 window.deleteMapFolder = deleteMapFolder;
 window.toggleAnalysisPlayback = toggleAnalysisPlayback;
 window.seekAnalysisTime = seekAnalysisTime;
