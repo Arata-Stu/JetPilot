@@ -108,7 +108,7 @@ def test_vehicle_description_can_start_without_hardware_interface() -> None:
     assert "'enable_vehicle_interface': vehicle_interface_enabled" in bringup_source
     assert "condition=IfCondition(vehicle_launch_enabled)" in bringup_source
     assert "args.add_arg('enable_vehicle_interface', True, cli=True)" in vehicle_source
-    assert "condition=IfCondition(args.enable_vehicle_interface)" in vehicle_source
+    assert "if lu.is_true(args.enable_vehicle_interface):" in vehicle_source
 
 
 def test_vehicle_description_exposes_optional_evs_and_thremo_frames() -> None:
@@ -121,3 +121,11 @@ def test_vehicle_description_exposes_optional_evs_and_thremo_frames() -> None:
         assert f"args.add_arg('publish_vehicle_{frame}_description'" in vehicle_source
         assert f"'publish_vehicle_{frame}_description':" in bringup_source
         assert f"args.publish_vehicle_{frame}_description" in bringup_source
+
+
+def test_vehicle_opaque_function_uses_python_conditionals() -> None:
+    vehicle_source = VEHICLE_LAUNCH_PATH.read_text(encoding="utf-8")
+
+    assert "AndSubstitution" not in vehicle_source
+    assert "IfCondition" not in vehicle_source
+    assert "if lu.is_true(args.enable_vehicle_interface):" in vehicle_source
