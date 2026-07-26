@@ -197,6 +197,8 @@ set_base_args() {
   set_arg enable_section_localizer false
   set_arg enable_vehicle false
   set_arg publish_vehicle_description false
+  set_arg publish_vehicle_evs_description false
+  set_arg publish_vehicle_thremo_description false
   set_arg enable_rviz false
 }
 
@@ -260,10 +262,15 @@ apply_vehicle() {
   case "$backend" in
     none)
       set_arg enable_vehicle false
+      set_arg publish_vehicle_description false
+      set_arg publish_vehicle_evs_description false
+      set_arg publish_vehicle_thremo_description false
       ;;
     pca)
       set_arg enable_vehicle true
       set_arg publish_vehicle_description true
+      set_arg publish_vehicle_evs_description false
+      set_arg publish_vehicle_thremo_description false
       set_arg vehicle_interface_pkg pca9685_rc_driver
       set_arg vehicle_interface_launch launch/pca9685_rc_interface.launch.xml
       set_arg vehicle_driver_param "$(pca_driver_param)"
@@ -271,6 +278,8 @@ apply_vehicle() {
     vesc)
       set_arg enable_vehicle true
       set_arg publish_vehicle_description true
+      set_arg publish_vehicle_evs_description true
+      set_arg publish_vehicle_thremo_description true
       set_arg vehicle_interface_pkg jetpilot_vesc_interface
       set_arg vehicle_interface_launch launch/vesc_interface.launch.xml
       set_arg vehicle_driver_param "$(vesc_driver_param)"

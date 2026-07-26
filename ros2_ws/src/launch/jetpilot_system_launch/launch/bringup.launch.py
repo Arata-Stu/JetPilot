@@ -371,6 +371,22 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('vehicle_description_camera_roll', '0.0', cli=True)
     args.add_arg('vehicle_description_camera_pitch', '0.0', cli=True)
     args.add_arg('vehicle_description_camera_yaw', '0.0', cli=True)
+    args.add_arg('publish_vehicle_evs_description', False, cli=True)
+    args.add_arg('vehicle_description_evs_frame', 'evs_link', cli=True)
+    args.add_arg('vehicle_description_evs_x', '0.0', cli=True)
+    args.add_arg('vehicle_description_evs_y', '0.0', cli=True)
+    args.add_arg('vehicle_description_evs_z', '0.0', cli=True)
+    args.add_arg('vehicle_description_evs_roll', '0.0', cli=True)
+    args.add_arg('vehicle_description_evs_pitch', '0.0', cli=True)
+    args.add_arg('vehicle_description_evs_yaw', '0.0', cli=True)
+    args.add_arg('publish_vehicle_thremo_description', False, cli=True)
+    args.add_arg('vehicle_description_thremo_frame', 'thremo_link', cli=True)
+    args.add_arg('vehicle_description_thremo_x', '0.0', cli=True)
+    args.add_arg('vehicle_description_thremo_y', '0.0', cli=True)
+    args.add_arg('vehicle_description_thremo_z', '0.0', cli=True)
+    args.add_arg('vehicle_description_thremo_roll', '0.0', cli=True)
+    args.add_arg('vehicle_description_thremo_pitch', '0.0', cli=True)
+    args.add_arg('vehicle_description_thremo_yaw', '0.0', cli=True)
 
     args.add_arg('enable_vslam_snapshot', False, cli=True)
     args.add_arg('vslam_snapshot_output', '/tmp/vslam_reference_snapshot.json', cli=True)
@@ -662,6 +678,27 @@ def generate_launch_description() -> lut.LaunchDescription:
                 'vehicle_description_camera_pitch':
                     args.vehicle_description_camera_pitch,
                 'vehicle_description_camera_yaw': args.vehicle_description_camera_yaw,
+                'publish_vehicle_evs_description':
+                    args.publish_vehicle_evs_description,
+                'vehicle_description_evs_frame': args.vehicle_description_evs_frame,
+                'vehicle_description_evs_x': args.vehicle_description_evs_x,
+                'vehicle_description_evs_y': args.vehicle_description_evs_y,
+                'vehicle_description_evs_z': args.vehicle_description_evs_z,
+                'vehicle_description_evs_roll': args.vehicle_description_evs_roll,
+                'vehicle_description_evs_pitch': args.vehicle_description_evs_pitch,
+                'vehicle_description_evs_yaw': args.vehicle_description_evs_yaw,
+                'publish_vehicle_thremo_description':
+                    args.publish_vehicle_thremo_description,
+                'vehicle_description_thremo_frame':
+                    args.vehicle_description_thremo_frame,
+                'vehicle_description_thremo_x': args.vehicle_description_thremo_x,
+                'vehicle_description_thremo_y': args.vehicle_description_thremo_y,
+                'vehicle_description_thremo_z': args.vehicle_description_thremo_z,
+                'vehicle_description_thremo_roll':
+                    args.vehicle_description_thremo_roll,
+                'vehicle_description_thremo_pitch':
+                    args.vehicle_description_thremo_pitch,
+                'vehicle_description_thremo_yaw': args.vehicle_description_thremo_yaw,
                 'use_sim_time': args.use_sim_time,
             },
             condition=IfCondition(vehicle_launch_enabled),

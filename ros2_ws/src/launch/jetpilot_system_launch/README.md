@@ -11,7 +11,7 @@ JetPilot 全体の bringup をまとめる launch package です。tool、operat
 | `control.launch.py` | `jetpilot_controller` を起動 |
 | `localization.launch.py` | Isaac ROS VSLAM/VGL、localization manager、HD map publisher |
 | `sensor_kit.launch.py` | camera launch と RTP stream をまとめる |
-| `vehicle.launch.py` | vehicle interface と camera static TF |
+| `vehicle.launch.py` | vehicle interface とcamera／EVS／thremoのstatic TF |
 
 ## Sensor kit variants
 

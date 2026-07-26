@@ -17,6 +17,12 @@ def workspace_param_path(filename: str, fallback_package: str, fallback_package_
 
 def add_vehicle(args: lu.ArgumentContainer):
     publish_description = str(lu.is_true(args.publish_vehicle_description)).lower()
+    publish_evs_description = lut.AndSubstitution(
+        lu.is_true(args.publish_vehicle_description),
+        lu.is_true(args.publish_vehicle_evs_description))
+    publish_thremo_description = lut.AndSubstitution(
+        lu.is_true(args.publish_vehicle_description),
+        lu.is_true(args.publish_vehicle_thremo_description))
     return [
         lu.Node(
             name='vehicle_camera_static_transform_publisher',
@@ -34,6 +40,40 @@ def add_vehicle(args: lu.ArgumentContainer):
             ],
             output='screen',
             condition=IfCondition(publish_description),
+        ),
+        lu.Node(
+            name='vehicle_evs_static_transform_publisher',
+            package='tf2_ros',
+            executable='static_transform_publisher',
+            arguments=[
+                '--x', str(args.vehicle_description_evs_x),
+                '--y', str(args.vehicle_description_evs_y),
+                '--z', str(args.vehicle_description_evs_z),
+                '--roll', str(args.vehicle_description_evs_roll),
+                '--pitch', str(args.vehicle_description_evs_pitch),
+                '--yaw', str(args.vehicle_description_evs_yaw),
+                '--frame-id', str(args.vehicle_description_base_frame),
+                '--child-frame-id', str(args.vehicle_description_evs_frame),
+            ],
+            output='screen',
+            condition=IfCondition(publish_evs_description),
+        ),
+        lu.Node(
+            name='vehicle_thremo_static_transform_publisher',
+            package='tf2_ros',
+            executable='static_transform_publisher',
+            arguments=[
+                '--x', str(args.vehicle_description_thremo_x),
+                '--y', str(args.vehicle_description_thremo_y),
+                '--z', str(args.vehicle_description_thremo_z),
+                '--roll', str(args.vehicle_description_thremo_roll),
+                '--pitch', str(args.vehicle_description_thremo_pitch),
+                '--yaw', str(args.vehicle_description_thremo_yaw),
+                '--frame-id', str(args.vehicle_description_base_frame),
+                '--child-frame-id', str(args.vehicle_description_thremo_frame),
+            ],
+            output='screen',
+            condition=IfCondition(publish_thremo_description),
         ),
         lu.include(
             args.vehicle_interface_pkg,
@@ -68,6 +108,18 @@ def add_vehicle(args: lu.ArgumentContainer):
             ' -> ',
             args.vehicle_description_camera_frame,
         ], condition=IfCondition(publish_description)),
+        lu.log_info([
+            'Vehicle EVS TF: ',
+            args.vehicle_description_base_frame,
+            ' -> ',
+            args.vehicle_description_evs_frame,
+        ], condition=IfCondition(publish_evs_description)),
+        lu.log_info([
+            'Vehicle thremo TF: ',
+            args.vehicle_description_base_frame,
+            ' -> ',
+            args.vehicle_description_thremo_frame,
+        ], condition=IfCondition(publish_thremo_description)),
     ]
 
 
@@ -94,6 +146,22 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('vehicle_description_camera_roll', '0.0', cli=True)
     args.add_arg('vehicle_description_camera_pitch', '0.0', cli=True)
     args.add_arg('vehicle_description_camera_yaw', '0.0', cli=True)
+    args.add_arg('publish_vehicle_evs_description', False, cli=True)
+    args.add_arg('vehicle_description_evs_frame', 'evs_link', cli=True)
+    args.add_arg('vehicle_description_evs_x', '0.0', cli=True)
+    args.add_arg('vehicle_description_evs_y', '0.0', cli=True)
+    args.add_arg('vehicle_description_evs_z', '0.0', cli=True)
+    args.add_arg('vehicle_description_evs_roll', '0.0', cli=True)
+    args.add_arg('vehicle_description_evs_pitch', '0.0', cli=True)
+    args.add_arg('vehicle_description_evs_yaw', '0.0', cli=True)
+    args.add_arg('publish_vehicle_thremo_description', False, cli=True)
+    args.add_arg('vehicle_description_thremo_frame', 'thremo_link', cli=True)
+    args.add_arg('vehicle_description_thremo_x', '0.0', cli=True)
+    args.add_arg('vehicle_description_thremo_y', '0.0', cli=True)
+    args.add_arg('vehicle_description_thremo_z', '0.0', cli=True)
+    args.add_arg('vehicle_description_thremo_roll', '0.0', cli=True)
+    args.add_arg('vehicle_description_thremo_pitch', '0.0', cli=True)
+    args.add_arg('vehicle_description_thremo_yaw', '0.0', cli=True)
     args.add_arg('use_sim_time', False, cli=True)
 
     args.add_opaque_function(add_vehicle)
