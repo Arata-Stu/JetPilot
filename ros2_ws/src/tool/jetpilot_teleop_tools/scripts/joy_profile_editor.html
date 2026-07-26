@@ -344,12 +344,8 @@
       <div class="panel">
         <h2>CH3 Mode / モード</h2>
         <div class="form-grid">
-          <div class="field"><label>min_us</label><input type="number" data-rc-path="serial.ch3_min_us"></div>
-          <div class="field"><label>neutral_us</label><input type="number" data-rc-path="serial.ch3_neutral_us"></div>
-          <div class="field"><label>max_us</label><input type="number" data-rc-path="serial.ch3_max_us"></div>
-          <div class="field"><label>switch_deadband_us</label><input type="number" data-rc-path="serial.mode_switch_deadband_us"></div>
+          <div class="field"><label>switch_threshold_us</label><input type="number" data-rc-path="serial.ch3_switch_threshold_us"></div>
           <div class="field"><label>low_mode</label><input data-rc-path="serial.ch3_low_mode"></div>
-          <div class="field"><label>mid_mode</label><input data-rc-path="serial.ch3_mid_mode"></div>
           <div class="field"><label>high_mode</label><input data-rc-path="serial.ch3_high_mode"></div>
         </div>
       </div>
@@ -497,17 +493,13 @@ function emptyRcEscProfile() {
       ch2_min_us: 1000,
       ch2_neutral_us: 1500,
       ch2_max_us: 2000,
-      ch3_min_us: 1000,
-      ch3_neutral_us: 1500,
-      ch3_max_us: 2000,
       deadband_us: 20,
-      mode_switch_deadband_us: 120,
+      ch3_switch_threshold_us: 1500,
       steering_gain: 1.0,
       throttle_gain: 1.0,
       invert_steering: false,
       invert_throttle: false,
-      ch3_low_mode: "STOP",
-      ch3_mid_mode: "PROPO",
+      ch3_low_mode: "PROPO",
       ch3_high_mode: "AUTO"
     },
     driver: {
@@ -521,7 +513,7 @@ function emptyRcEscProfile() {
       steering_inversion: false,
       throttle_gain: 1.0,
       steering_gain: 1.0,
-      max_throttle: 0.7,
+      max_throttle: 1.0,
       max_throttle_slew_rate: 4.0,
       esc_direction_change_assist_enabled: true,
       esc_direction_deadband: 0.03,
@@ -536,9 +528,9 @@ function emptyRcEscProfile() {
       neutral_stop_reverse_start: -0.01,
       neutral_stop_reverse_end: -0.08,
       neutral_stop_reverse_step: -0.01,
-      steering_output_gain: -0.65,
+      steering_output_gain: 1.0,
       steering_output_offset: 0.0,
-      throttle_output_gain: 0.8,
+      throttle_output_gain: 1.0,
       throttle_output_offset: 0.0,
       steering_min_pulse_us: 1000.0,
       steering_neutral_pulse_us: 1500.0,

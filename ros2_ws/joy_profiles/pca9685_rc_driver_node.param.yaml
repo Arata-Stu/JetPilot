@@ -10,7 +10,7 @@ pca9685_rc_driver_node:
     steering_inversion: false
     throttle_gain: 1.0
     steering_gain: 1.0
-    max_throttle: 0.7
+    max_throttle: 1.0
     max_throttle_slew_rate: 4.0
     esc_direction_change_assist_enabled: true
     esc_direction_deadband: 0.03
@@ -25,13 +25,13 @@ pca9685_rc_driver_node:
     neutral_stop_reverse_start: -0.01
     neutral_stop_reverse_end: -0.08
     neutral_stop_reverse_step: -0.01
-    steering_output_gain: 0.65
+    steering_output_gain: 1.0
     steering_output_offset: 0.0
     throttle_output_gain: 1.0
     throttle_output_offset: 0.0
     steering_min_pulse_us: 1000.0
     steering_neutral_pulse_us: 1500.0
     steering_max_pulse_us: 2000.0
-    throttle_min_pulse_us: 750.0
+    throttle_min_pulse_us: 1000.0
     throttle_neutral_pulse_us: 1500.0
-    throttle_max_pulse_us: 2250.0
+    throttle_max_pulse_us: 2000.0

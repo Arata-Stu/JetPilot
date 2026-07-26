@@ -13,15 +13,11 @@ serial_reader_node:
     ch2_min_us: 1000
     ch2_neutral_us: 1500
     ch2_max_us: 2000
-    ch3_min_us: 1000
-    ch3_neutral_us: 1500
-    ch3_max_us: 2000
     deadband_us: 20
-    mode_switch_deadband_us: 120
+    ch3_switch_threshold_us: 1500
     steering_gain: 1.0
     throttle_gain: 1.0
     invert_steering: false
     invert_throttle: false
-    ch3_low_mode: STOP
-    ch3_mid_mode: PROPO
+    ch3_low_mode: PROPO
     ch3_high_mode: AUTO
