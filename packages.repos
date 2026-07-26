@@ -49,3 +49,10 @@ repositories:
     url: https://github.com/carbuncle01/openeb_ros2.git
     version: jetpilot-v1.0.0
 
+  # tool
+
+  ## multi_sensor_calibration
+  ros2_ws/src/tool/multi_sensor_calibration:
+    type: git
+    url: https://github.com/carbuncle01/multi_sensor_calibration.git
+    version: jetpilot-v1.0.0
