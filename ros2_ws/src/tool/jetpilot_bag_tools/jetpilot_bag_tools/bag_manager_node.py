@@ -61,6 +61,15 @@ DEFAULT_TOPICS = [
     "/realsense/color/image_raw",
     "/realsense/color/image_raw/compressed",
     "/realsense/color/metadata",
+    # RealSense IMU.
+    "/realsense/accel/imu_info",
+    "/realsense/accel/metadata",
+    "/realsense/accel/sample",
+    "/realsense/gyro/imu_info",
+    "/realsense/gyro/metadata",
+    "/realsense/gyro/sample",
+    "/realsense/extrinsics/depth_to_accel",
+    "/realsense/extrinsics/depth_to_gyro",
     # RealSense stereo infrared candidates. CameraInfo is required for offline VSLAM.
     "/realsense/infra1/camera_info",
     "/realsense/infra1/image_rect_raw",
