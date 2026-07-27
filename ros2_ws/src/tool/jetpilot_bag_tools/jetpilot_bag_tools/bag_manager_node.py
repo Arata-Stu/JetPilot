@@ -3,6 +3,7 @@
 import os
 import signal
 import subprocess
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
@@ -129,15 +130,34 @@ class BagManagerNode(Node):
         self.start_paused = bool(self.declare_parameter("start_paused", False).value)
         self.extra_args = declare_string_array_parameter(self, "extra_args")
         self.status_period_s = float(self.declare_parameter("status_period_s", 1.0).value)
+        self.raw_recording_request_topic = str(
+            self.declare_parameter(
+                "raw_recording_request_topic",
+                "/event_camera/raw_recording/request",
+            ).value
+        )
+        self.recording_start_timeout_s = float(
+            self.declare_parameter("recording_start_timeout_s", 5.0).value
+        )
 
         self.process: Optional[subprocess.Popen] = None
         self.current_uri = ""
         self.last_event = "idle"
+        self.raw_recording_requested = False
 
         self.request_sub = self.create_subscription(
             BagRequest, "/bag/request", self.handle_request, 10
         )
         self.status_pub = self.create_publisher(BagStatus, "/bag/status", 10)
+        self.raw_recording_request_pub = (
+            self.create_publisher(
+                BagRequest,
+                self.raw_recording_request_topic,
+                10,
+            )
+            if self.raw_recording_request_topic
+            else None
+        )
         self.timer = self.create_timer(self.status_period_s, self.publish_status)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -147,41 +167,104 @@ class BagManagerNode(Node):
 
     def handle_request(self, request: BagRequest) -> None:
         if request.command == BagRequest.START:
-            self.start_recording(request.label)
+            if self.start_recording(request.label):
+                self.publish_raw_recording_request(
+                    BagRequest.START,
+                    self.current_uri,
+                )
         elif request.command == BagRequest.STOP:
+            self.publish_raw_recording_request(BagRequest.STOP, request.label)
             self.stop_recording("stop requested")
         elif request.command == BagRequest.SPLIT:
             self.last_event = "split requested but not implemented"
             self.get_logger().warn(self.last_event)
+            self.publish_raw_recording_request(BagRequest.SPLIT, request.label)
         elif request.command == BagRequest.MARK:
             self.last_event = f"mark: {request.label}"
             self.get_logger().info(self.last_event)
+            self.publish_raw_recording_request(BagRequest.MARK, request.label)
         else:
             self.last_event = f"unknown request: {request.command}"
             self.get_logger().warn(self.last_event)
         self.publish_status()
 
-    def start_recording(self, label: str) -> None:
+    def start_recording(self, label: str) -> bool:
         if self.recording:
             self.last_event = "start ignored: already recording"
             self.get_logger().warn(self.last_event)
-            return
+            return True
 
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         safe_label = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in label).strip("_")
         name = f"{stamp}_{safe_label}" if safe_label else stamp
-        self.current_uri = str(self.output_dir / name)
+        output_path = self.output_dir / name
+        suffix = 1
+        while output_path.exists():
+            output_path = self.output_dir / f"{name}_{suffix:02d}"
+            suffix += 1
+        self.current_uri = str(output_path)
 
         command = self.build_record_command(self.current_uri)
 
         if not self.record_all and not self.topics:
             self.last_event = "start ignored: no topics configured"
             self.get_logger().error(self.last_event)
-            return
+            return False
 
         self.process = subprocess.Popen(command, preexec_fn=os.setsid)
+        if not self.wait_for_recording_directory():
+            self.last_event = (
+                "recording failed: rosbag output directory was not created: "
+                f"{self.current_uri}"
+            )
+            self.get_logger().error(self.last_event)
+            self.stop_recording_process()
+            return False
+
         self.last_event = "recording started"
         self.get_logger().info(f"Started rosbag recording: {self.current_uri}")
+        return True
+
+    def wait_for_recording_directory(self) -> bool:
+        deadline = time.monotonic() + max(0.0, self.recording_start_timeout_s)
+        output_path = Path(self.current_uri)
+
+        while self.recording:
+            if output_path.is_dir():
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.01)
+        return False
+
+    def publish_raw_recording_request(self, command: int, label: str) -> None:
+        if self.raw_recording_request_pub is None:
+            return
+
+        request = BagRequest()
+        request.header.stamp = self.get_clock().now().to_msg()
+        request.header.frame_id = "bag_manager"
+        request.command = command
+        request.label = label
+        self.raw_recording_request_pub.publish(request)
+        if command == BagRequest.START:
+            self.raw_recording_requested = True
+        elif command == BagRequest.STOP:
+            self.raw_recording_requested = False
+
+    def stop_recording_process(self) -> None:
+        if not self.recording:
+            self.process = None
+            return
+
+        assert self.process is not None
+        os.killpg(os.getpgid(self.process.pid), signal.SIGINT)
+        try:
+            self.process.wait(timeout=10.0)
+        except subprocess.TimeoutExpired:
+            os.killpg(os.getpgid(self.process.pid), signal.SIGTERM)
+            self.process.wait(timeout=5.0)
+        self.process = None
 
     def build_record_command(self, output_uri: str) -> List[str]:
         command = ["ros2", "bag", "record", "-o", output_uri]
@@ -229,18 +312,20 @@ class BagManagerNode(Node):
             self.get_logger().warn(self.last_event)
             return
 
-        assert self.process is not None
-        os.killpg(os.getpgid(self.process.pid), signal.SIGINT)
-        try:
-            self.process.wait(timeout=10.0)
-        except subprocess.TimeoutExpired:
-            os.killpg(os.getpgid(self.process.pid), signal.SIGTERM)
-            self.process.wait(timeout=5.0)
-        self.process = None
+        self.stop_recording_process()
         self.last_event = reason
         self.get_logger().info(f"Stopped rosbag recording: {self.current_uri}")
 
     def publish_status(self) -> None:
+        if self.raw_recording_requested and not self.recording:
+            self.publish_raw_recording_request(
+                BagRequest.STOP,
+                "rosbag_process_stopped",
+            )
+            self.process = None
+            self.last_event = "rosbag process stopped unexpectedly"
+            self.get_logger().error(self.last_event)
+
         msg = BagStatus()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = "bag_manager"
@@ -251,6 +336,8 @@ class BagManagerNode(Node):
         self.status_pub.publish(msg)
 
     def destroy_node(self) -> bool:
+        if self.raw_recording_requested:
+            self.publish_raw_recording_request(BagRequest.STOP, "node_shutdown")
         if self.recording:
             self.stop_recording("node shutdown")
         return super().destroy_node()

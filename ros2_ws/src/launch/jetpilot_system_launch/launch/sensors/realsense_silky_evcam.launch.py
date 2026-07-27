@@ -122,10 +122,10 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('silky_evcam_serial', '')
     args.add_arg('silky_evcam_device_format', '')
     args.add_arg('silky_evcam_frame_id', 'event_camera')
-    args.add_arg('silky_evcam_raw_recording_enabled', False)
+    args.add_arg('silky_evcam_raw_recording_enabled', True)
     args.add_arg(
         'silky_evcam_raw_recording_request_topic', '/event_camera/raw_recording/request')
-    args.add_arg('silky_evcam_raw_recording_auto_start', True)
+    args.add_arg('silky_evcam_raw_recording_auto_start', False)
     args.add_arg('silky_evcam_raw_recording_dir', '/workspaces/record/openeb_raw')
     args.add_arg('silky_evcam_raw_recording_basename', 'openeb')
     args.add_arg('silky_evcam_raw_recording_split_duration_s', '0.0')

@@ -71,6 +71,7 @@ def test_drive_presets_enable_live_sensor_teleop_and_vehicle() -> None:
 
     assert "enable_sensor_kit:=true" in output
     assert "enable_tool:=true" in output
+    assert "enable_jetson_stats:=true" in output
     assert "enable_bag_manager:=false" in output
     assert "enable_joy:=true" in output
     assert "enable_teleop:=true" in output
@@ -78,6 +79,17 @@ def test_drive_presets_enable_live_sensor_teleop_and_vehicle() -> None:
     assert "enable_vehicle:=true" in output
     assert "vehicle_interface_pkg:=jetpilot_vesc_interface" in output
     assert "enable_localization:=false" in output
+
+
+def test_jetson_stats_can_be_disabled_explicitly() -> None:
+    output = run_launcher(
+        "drive-vesc",
+        "--set",
+        "enable_jetson_stats:=false",
+        "--dry-run",
+    ).stdout
+
+    assert "enable_jetson_stats:=false" in output
 
 
 def test_bag_manager_can_be_enabled_explicitly_for_drive_presets() -> None:
@@ -115,6 +127,38 @@ def test_sensor_kit_launch_can_be_selected_explicitly() -> None:
         in output
     )
     assert "sensor_kit_camera_name:=realsense" in output
+
+
+def test_openeb_raw_recording_follows_bag_manager_session() -> None:
+    project_root = LAUNCHER.parents[1]
+    bringup_source = (
+        project_root
+        / "ros2_ws/src/launch/jetpilot_system_launch/launch/bringup.launch.py"
+    ).read_text(encoding="utf-8")
+    bag_manager_source = (
+        project_root
+        / "ros2_ws/src/tool/jetpilot_bag_tools/jetpilot_bag_tools/bag_manager_node.py"
+    ).read_text(encoding="utf-8")
+    openeb_driver_source = (
+        project_root
+        / "ros2_ws/src/sensing/openeb_ros2/src/driver_component.cpp"
+    ).read_text(encoding="utf-8")
+
+    assert (
+        "args.add_arg('sensor_kit_silky_evcam_raw_recording_enabled', True"
+        in bringup_source
+    )
+    assert (
+        "args.add_arg('sensor_kit_silky_evcam_raw_recording_auto_start', False"
+        in bringup_source
+    )
+    assert "self.wait_for_recording_directory()" in bag_manager_source
+    assert "BagRequest.START,\n                    self.current_uri" in bag_manager_source
+    assert "self.publish_raw_recording_request(BagRequest.STOP" in bag_manager_source
+    assert "requested_path.is_absolute()" in openeb_driver_source
+    assert "raw_recording_dir_ = requested_path.lexically_normal().string()" in (
+        openeb_driver_source
+    )
 
 
 def test_flir_sensor_kit_launches_can_be_selected_explicitly() -> None:

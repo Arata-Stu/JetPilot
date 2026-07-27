@@ -137,3 +137,5 @@ bag_manager_node:
     ## Escape hatch for ros2 bag record flags not modeled above.
     extra_args: []
     status_period_s: 1.0
+    raw_recording_request_topic: "/event_camera/raw_recording/request"
+    recording_start_timeout_s: 5.0

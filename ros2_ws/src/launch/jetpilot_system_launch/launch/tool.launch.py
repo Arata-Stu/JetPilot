@@ -157,7 +157,7 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('enable_joy', False, cli=True)
     args.add_arg('enable_teleop', False, cli=True)
     args.add_arg('enable_rc_serial', False, cli=True)
-    args.add_arg('enable_jetson_stats', False, cli=True)
+    args.add_arg('enable_jetson_stats', True, cli=True)
     args.add_arg('jetson_stats_diagnostics_topic', '/jetson/diagnostics', cli=True)
     args.add_arg('jetson_stats_interval', '0.5', cli=True)
     args.add_arg('control_authority', 'hardware_mux', cli=True)

@@ -109,9 +109,10 @@ Examples:
     --map /workspaces/map/course_a --raceline /workspaces/map/course_a/course_raceline.csv
   $(basename "$0") custom --components sensor,bag-manager,joy,teleop,operation,vehicle-vesc
 
-The launcher starts from explicit all-OFF module settings. Vehicle hardware is
-never enabled by a localization/replay preset, and replay + vehicle overrides
-are rejected. Direct ros2 launch remains available for intentional HIL tests.
+The launcher starts with Jetson stats enabled and all actuator modules OFF.
+Vehicle hardware is never enabled by a localization/replay preset, and replay
++ vehicle overrides are rejected. Direct ros2 launch remains available for
+intentional HIL tests.
 EOF
 }
 
@@ -175,11 +176,12 @@ set_base_args() {
   set_arg allow_unsafe_replay_control_topics false
   set_arg allow_unsafe_replay_with_vehicle false
 
-  set_arg enable_tool false
+  set_arg enable_tool true
   set_arg enable_bag_manager false
   set_arg enable_joy false
   set_arg enable_teleop false
   set_arg enable_rc_serial false
+  set_arg enable_jetson_stats true
   set_arg enable_vslam_snapshot false
   set_arg enable_operation false
   set_arg enable_planning false

@@ -26,7 +26,9 @@ JetPilot 全体の bringup をまとめる launch package です。tool、operat
 
 FLIR の既定 topic は `/flir/camera_info` と `/flir/image_raw`、既定 frame は `boson_optical_frame` です。デバイスや format は `sensor_kit_flir_video_device:=/dev/video0`、`sensor_kit_flir_pixel_format:=mono16` のように bringup 引数で上書きできます。
 
-SilkyEvCam/OpenEB の RAW 記録は `sensor_kit_silky_evcam_raw_recording_enabled:=true` で有効化します。JetPilot からの開始・停止要求は既定で `/event_camera/raw_recording/request` に `jetpilot_msgs/msg/BagRequest` を publish します。
+SilkyEvCam/OpenEBを含むsensor kitでは、RAW記録機能が既定で待機状態になります。Bag Managerを有効にして `/bag/request` へSTARTを送ると、rosbag directoryの生成後に `/event_camera/raw_recording/request` へ同じ開始要求が転送され、MCAP、RAW、`*.raw.metadata.yaml` が同じsession directoryへ保存されます。STOPも同じトリガーでRAW停止要求を先に送ってからrosbagを終了します。カメラ起動直後の自動RAW記録は無効です。
+
+Jetson 上の通常起動では `isaac_ros_jetson_stats` が既定で有効になり、診断情報を `/jetson/diagnostics` へ publish します。必要に応じて `enable_jetson_stats:=false` で無効化できます。`scripts/bringup.sh` のオフライン再生プリセットでは tool stack 自体を停止するため、Jetson stats も起動しません。
 
 ## Topic flow
 
