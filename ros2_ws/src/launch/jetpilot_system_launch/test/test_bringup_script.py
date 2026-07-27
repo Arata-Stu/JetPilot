@@ -154,6 +154,64 @@ def test_unknown_sensor_kit_is_rejected() -> None:
     assert "sensor kit must be realsense, flir, realsense-silky, or realsense-silky-flir" in result.stderr
 
 
+def test_rtp_destination_and_topic_can_be_overridden() -> None:
+    output = run_launcher(
+        "sensor",
+        "--dry-run",
+        "--set",
+        "sensor_kit_enable_rtp_stream:=true",
+        "--set",
+        "sensor_kit_rtp_host:=192.168.1.10",
+        "--set",
+        "sensor_kit_rtp_image_topic:=/realsense/infra1/image_rect_raw",
+    ).stdout
+
+    assert "sensor_kit_enable_rtp_stream:=true" in output
+    assert "sensor_kit_rtp_host:=192.168.1.10" in output
+    assert "sensor_kit_rtp_image_topic:=/realsense/infra1/image_rect_raw" in output
+    assert "RTP receiver : 192.168.1.10:5004" in output
+
+
+def test_rtp_requires_a_destination_host() -> None:
+    result = run_launcher(
+        "sensor",
+        "--dry-run",
+        "--set",
+        "sensor_kit_enable_rtp_stream:=true",
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "requires sensor_kit_rtp_host" in result.stderr
+
+
+def test_interactive_sensor_configuration_includes_rtp_prompts() -> None:
+    source = LAUNCHER.read_text(encoding="utf-8")
+
+    assert "configure_rtp_interactively" in source
+    assert "RTP映像送信を有効にしますか？" in source
+    assert "RTP送信先IP / host" in source
+    assert "choose_one 'RTP image topic'" in source
+    assert "トピックを手入力..." in source
+
+
+def test_flir_launch_can_load_the_rtp_component() -> None:
+    flir_launch = (
+        LAUNCHER.parents[1]
+        / "ros2_ws"
+        / "src"
+        / "launch"
+        / "jetpilot_system_launch"
+        / "launch"
+        / "sensors"
+        / "flir_boson.launch.py"
+    ).read_text(encoding="utf-8")
+
+    assert "if lu.is_true(args.enable_rtp_stream):" in flir_launch
+    assert "jetpilot_rtp_tools::ImageRtpSenderComponent" in flir_launch
+    assert "'image_topic': args.rtp_image_topic" in flir_launch
+
+
 def test_empty_launch_arguments_are_not_emitted() -> None:
     output = run_launcher("vehicle-vesc", "--dry-run").stdout
 

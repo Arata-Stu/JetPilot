@@ -1,7 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import isaac_ros_launch_utils as lu
 import isaac_ros_launch_utils.all_types as lut
+from ament_index_python.packages import get_package_share_directory
 from launch_ros.actions import ComposableNodeContainer
 
 
@@ -32,6 +35,39 @@ def launch_flir_boson(args: lu.ArgumentContainer) -> list[lut.Action]:
             extra_arguments=[{'use_intra_process_comms': True}],
         )
     ]
+
+    if lu.is_true(args.enable_rtp_stream):
+        rtp_config_yaml = os.path.join(
+            get_package_share_directory('jetpilot_system_launch'),
+            'config/sensing',
+            'image_rtp_sender.param.yaml'
+        )
+        composable_nodes.append(
+            lut.ComposableNode(
+                package='jetpilot_rtp_tools',
+                plugin='jetpilot_rtp_tools::ImageRtpSenderComponent',
+                name='image_rtp_sender',
+                namespace='',
+                parameters=[
+                    rtp_config_yaml,
+                    {
+                        'image_topic': args.rtp_image_topic,
+                        'host': args.rtp_host,
+                        'port': lut.ParameterValue(args.rtp_port, value_type=int),
+                        'codec': args.rtp_codec,
+                        'fps': lut.ParameterValue(args.rtp_fps, value_type=int),
+                        'bitrate': lut.ParameterValue(args.rtp_bitrate, value_type=int),
+                        'gop': lut.ParameterValue(args.rtp_gop, value_type=int),
+                        'mtu': lut.ParameterValue(args.rtp_mtu, value_type=int),
+                        'payload': lut.ParameterValue(args.rtp_payload, value_type=int),
+                        'encoder': args.rtp_encoder,
+                        'enable_status_log': lu.is_true(args.rtp_enable_status_log),
+                        'use_sim_time': lu.is_true(args.use_sim_time),
+                    },
+                ],
+                extra_arguments=[{'use_intra_process_comms': True}],
+            )
+        )
 
     actions = [
         lu.log_info([

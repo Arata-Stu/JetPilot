@@ -611,7 +611,7 @@ prompt_yes_no() {
   done
 }
 
-prompt_path() {
+prompt_value() {
   local prompt="$1"
   local default="${2:-}"
   local value
@@ -625,12 +625,16 @@ prompt_path() {
   fi
 }
 
+prompt_path() {
+  prompt_value "$@"
+}
+
 append_unique_option() {
   local candidate="$1"
   local option
 
   [[ -n "$candidate" ]] || return
-  for option in "${options[@]}"; do
+  for option in "${options[@]-}"; do
     [[ "$option" == "$candidate" ]] && return
   done
   options+=("$candidate")
@@ -902,6 +906,73 @@ configure_bag_manager_interactively() {
   esac
 }
 
+configure_rtp_interactively() {
+  local current
+  local default='no'
+  local host
+  local topic
+  local selected
+  local sensor_launch
+  local options=()
+
+  current="$(get_arg sensor_kit_enable_rtp_stream 2>/dev/null || true)"
+  if is_true "$current"; then
+    default='yes'
+  fi
+  if ! prompt_yes_no 'RTP映像送信を有効にしますか？' "$default"; then
+    set_arg sensor_kit_enable_rtp_stream false
+    return
+  fi
+  set_arg sensor_kit_enable_rtp_stream true
+
+  host="$(get_arg sensor_kit_rtp_host 2>/dev/null || true)"
+  while [[ -z "$host" ]]; do
+    host="$(prompt_value 'RTP送信先IP / host' "$host")"
+    [[ -n "$host" ]] || printf '送信先IPまたはhost名を入力してください。\n' >&2
+  done
+  set_arg sensor_kit_rtp_host "$host"
+
+  topic="$(get_arg sensor_kit_rtp_image_topic 2>/dev/null || true)"
+  append_unique_option "$topic"
+  sensor_launch="$(get_arg sensor_kit_interface_launch 2>/dev/null || true)"
+  case "$sensor_launch" in
+    *realsense_silky_flir.launch.py)
+      append_unique_option '/realsense/color/image_raw'
+      append_unique_option '/event_camera/event_image'
+      append_unique_option '/flir/image_raw'
+      append_unique_option '/realsense/infra1/image_rect_raw'
+      append_unique_option '/realsense/infra2/image_rect_raw'
+      ;;
+    *realsense_silky_evcam.launch.py)
+      append_unique_option '/realsense/color/image_raw'
+      append_unique_option '/event_camera/event_image'
+      append_unique_option '/realsense/infra1/image_rect_raw'
+      append_unique_option '/realsense/infra2/image_rect_raw'
+      ;;
+    *flir_boson.launch.py)
+      append_unique_option '/flir/image_raw'
+      ;;
+    *)
+      append_unique_option '/realsense/color/image_raw'
+      append_unique_option '/realsense/infra1/image_rect_raw'
+      append_unique_option '/realsense/infra2/image_rect_raw'
+      ;;
+  esac
+  options+=('トピックを手入力...')
+
+  selected="$(choose_one 'RTP image topic' "${options[@]}")" || exit $?
+  if [[ "$selected" == 'トピックを手入力...' ]]; then
+    topic=''
+    while [[ -z "$topic" ]]; do
+      topic="$(prompt_value 'RTP image topic')"
+      [[ -n "$topic" ]] || printf '画像トピックを入力してください。\n' >&2
+    done
+  else
+    topic="$selected"
+  fi
+  set_arg sensor_kit_rtp_image_topic "$topic"
+}
+
 configure_sensor_kit_interactively() {
   local selection
   local current_launch
@@ -937,6 +1008,7 @@ configure_sensor_kit_interactively() {
 
   selection="$(choose_one 'Sensor kit launch' "${options[@]}")" || exit $?
   apply_sensor_kit "${selection%%[[:space:]]*}"
+  configure_rtp_interactively
 }
 
 configure_rviz_interactively() {
@@ -1007,6 +1079,11 @@ validate_configuration() {
   if is_true "$(get_arg enable_raceline_publisher)" \
     && [[ -z "$(get_arg raceline_csv 2>/dev/null || true)" ]]; then
     die "preset '$PRESET' requires --raceline PATH"
+  fi
+  if is_true "$(get_arg enable_sensor_kit)" \
+    && is_true "$(get_arg sensor_kit_enable_rtp_stream 2>/dev/null || true)"; then
+    [[ -n "$(get_arg sensor_kit_rtp_host 2>/dev/null || true)" ]] \
+      || die 'sensor_kit_enable_rtp_stream=true requires sensor_kit_rtp_host'
   fi
   if [[ -n "$MAP_DIR" ]]; then
     [[ "$DRY_RUN" == 'true' || -d "$MAP_DIR" ]] \
@@ -1099,6 +1176,13 @@ print_summary() {
     printf '  sensor launch: %s/%s\n' \
       "$(get_arg sensor_kit_interface_pkg 2>/dev/null || printf 'jetpilot_system_launch')" \
       "$(get_arg sensor_kit_interface_launch 2>/dev/null || printf 'launch/sensors/realsense.launch.py')"
+    if is_true "$(get_arg sensor_kit_enable_rtp_stream 2>/dev/null || true)"; then
+      printf '  RTP topic    : %s\n' \
+        "$(get_arg sensor_kit_rtp_image_topic 2>/dev/null || printf '/realsense/color/image_raw')"
+      printf '  RTP receiver : %s:%s\n' \
+        "$(get_arg sensor_kit_rtp_host)" \
+        "$(get_arg sensor_kit_rtp_port 2>/dev/null || printf '5004')"
+    fi
   fi
   printf '  localization : %s\n' "$(get_arg enable_localization)"
   printf '  tool/teleop  : %s / %s\n' \
