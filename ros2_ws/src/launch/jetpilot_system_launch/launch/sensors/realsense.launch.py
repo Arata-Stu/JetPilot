@@ -43,7 +43,7 @@ def launch_realsense(args: lu.ArgumentContainer) -> list[lut.Action]:
         'enable_infra1': True,
         'enable_infra2': True,
         'enable_depth': lu.is_true(args.enable_depth),
-        'enable_color': lu.is_true(args.enable_color) or lu.is_true(args.enable_rtp_stream),
+        'enable_color': True,
         'enable_rgbd': False,
         'enable_accel': True,
         'enable_gyro': True,
@@ -129,7 +129,7 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('run_standalone', False)
     args.add_arg('camera_name', 'realsense')
     args.add_arg('enable_depth', False)
-    args.add_arg('enable_color', False)
+    args.add_arg('enable_color', True)
     args.add_arg('enable_rtp_stream', False)
     args.add_arg('rtp_image_topic', '/realsense/color/image_raw')
     args.add_arg('rtp_host', '')

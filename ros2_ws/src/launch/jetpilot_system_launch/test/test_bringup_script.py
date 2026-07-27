@@ -189,7 +189,9 @@ def test_interactive_sensor_configuration_includes_rtp_prompts() -> None:
     source = LAUNCHER.read_text(encoding="utf-8")
 
     assert "configure_rtp_interactively" in source
-    assert "RTP映像送信を有効にしますか？" in source
+    assert "choose_one 'RTP stream'" in source
+    assert "on   RTP送信 ON" in source
+    assert "off  RTP送信 OFF" in source
     assert "RTP送信先IP / host" in source
     assert "choose_one 'RTP image topic'" in source
     assert "トピックを手入力..." in source

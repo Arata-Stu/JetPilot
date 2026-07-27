@@ -97,7 +97,7 @@ def launch_flir_boson(args: lu.ArgumentContainer) -> list[lut.Action]:
 def generate_launch_description() -> lut.LaunchDescription:
     args = lu.ArgumentContainer()
 
-    args.add_arg('container_name', 'sensor_kit_container')
+    args.add_arg('container_name', 'multi_sensor_container')
     args.add_arg('run_standalone', True)
     args.add_arg('camera_name', 'realsense')
     args.add_arg('enable_depth', False)

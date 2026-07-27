@@ -24,29 +24,26 @@
     publish_tf: true
     tf_publish_rate: 0.0
 
-    # Enable only the stereo infrared pair by default. RGB is disabled because
-    # some D435I units can expose depth/motion while the RGB sensor is unavailable.
+    # Keep the stereo infrared pair and RGB stream enabled for all workflows.
     enable_infra1: true
     enable_infra2: true
-    enable_color: false
+    enable_color: true
     enable_depth: false
     enable_rgbd: false
     enable_accel: false
     enable_gyro: false
-    enable_sync: false
+    enable_sync: true
 
-    # RGB is used for FPV and should remain 60 fps by default. Stereo infrared
-    # is for localization and can use a different profile, including 90 fps.
-    depth_module.infra_profile: "424x240x90"
+    # Keep RGB and stereo infrared at the same 60 fps for synchronized
+    # multi-modal processing.
+    depth_module.infra_profile: "424x240x60"
     depth_module.infra1_format: "Y8"
     depth_module.infra2_format: "Y8"
     # Enable depth only for diagnostics if infra frames are advertised but do not flow.
     # enable_depth: true
     # depth_module.depth_profile: "640x480x15"
     # depth_module.depth_format: "Z16"
-    # enable_color is controlled by launch. It is enabled automatically when
-    # sensor_kit_enable_rtp_stream is true.
-    # enable_color: true
+    # Color remains enabled even when RTP and E2E inference are disabled.
     rgb_camera.color_profile: "424x240x60"
     rgb_camera.color_format: "RGB8"
 

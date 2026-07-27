@@ -260,9 +260,9 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('sensor_kit_interface_pkg', 'jetpilot_system_launch', cli=True)
     args.add_arg('sensor_kit_interface_launch', 'launch/sensors/realsense.launch.py', cli=True)
     args.add_arg('sensor_kit_camera_name', 'realsense', cli=True)
-    args.add_arg('sensor_kit_container_name', 'sensor_kit_container', cli=True)
+    args.add_arg('sensor_kit_container_name', 'multi_sensor_container', cli=True)
     args.add_arg('sensor_kit_enable_depth', False, cli=True)
-    args.add_arg('sensor_kit_enable_color', False, cli=True)
+    args.add_arg('sensor_kit_enable_color', True, cli=True)
     args.add_arg('sensor_kit_enable_rtp_stream', False, cli=True)
     args.add_arg('sensor_kit_rtp_image_topic', '/realsense/color/image_raw', cli=True)
     args.add_arg('sensor_kit_rtp_host', '', cli=True)
@@ -299,6 +299,16 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('sensor_kit_silky_evcam_raw_recording_basename', 'openeb', cli=True)
     args.add_arg(
         'sensor_kit_silky_evcam_raw_recording_split_duration_s', '0.0', cli=True)
+
+    args.add_arg('enable_e2e_inference', False, cli=True)
+    args.add_arg('e2e_image_topic', '/realsense/color/image_raw', cli=True)
+    args.add_arg('e2e_camera_info_topic', '/realsense/color/camera_info', cli=True)
+    args.add_arg('e2e_control_cmd_topic', '/auto/control_cmd', cli=True)
+    args.add_arg('e2e_model_root', '/opt/jetpilot/models/e2e/latest', cli=True)
+    args.add_arg('e2e_input_image_width', '424', cli=True)
+    args.add_arg('e2e_input_image_height', '240', cli=True)
+    args.add_arg('e2e_network_image_width', '212', cli=True)
+    args.add_arg('e2e_network_image_height', '120', cli=True)
 
     args.add_arg('enable_localization', False, cli=True)
     args.add_arg('localization_camera_name', 'realsense', cli=True)
@@ -605,6 +615,27 @@ def generate_launch_description() -> lut.LaunchDescription:
                 'use_sim_time': args.use_sim_time,
             },
             condition=IfCondition(args.enable_sensor_kit),
+        ))
+
+    actions.append(
+        lu.include(
+            'jetpilot_e2e_inference',
+            'launch/e2e_tensor_rt.launch.py',
+            launch_arguments={
+                'container_name': args.sensor_kit_container_name,
+                'run_standalone': lut.NotSubstitution(
+                    _LaunchBoolean(args.enable_sensor_kit)),
+                'image_topic': args.e2e_image_topic,
+                'camera_info_topic': args.e2e_camera_info_topic,
+                'control_cmd_topic': args.e2e_control_cmd_topic,
+                'model_root': args.e2e_model_root,
+                'input_image_width': args.e2e_input_image_width,
+                'input_image_height': args.e2e_input_image_height,
+                'network_image_width': args.e2e_network_image_width,
+                'network_image_height': args.e2e_network_image_height,
+                'use_sim_time': args.use_sim_time,
+            },
+            condition=IfCondition(args.enable_e2e_inference),
         ))
 
     actions.append(

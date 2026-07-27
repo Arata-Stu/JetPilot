@@ -84,6 +84,23 @@ str(args.some_launch_argument)
 これらは多くの場合、`LaunchConfiguration` / Python 評価済み値 / ROS launch
 Action が期待する型の境界をまたいでいる。
 
+## センサー・E2E推論の共有コンテナ
+
+センサーと画像ベースE2E推論の既定コンテナ名は
+`multi_sensor_container`とする。実行器には
+`rclcpp_components`の`component_container_mt`を使う。
+
+- センサーlaunchがコンテナを所有する場合、推論launchは
+  `run_standalone:=false`で同じコンテナへロードする。
+- 推論launchだけを起動する場合は`run_standalone:=true`とし、推論側で
+  `multi_sensor_container`を作る。
+- コンテナ名の`_mt` suffixは付けない。マルチスレッドかどうかは
+  executableの選択で表現する。
+- 画像の前処理からTensorRTまでにPython/OpenCV/NumPyノードを挟まない。
+  GPU上のNITROS tensor経路を維持する。
+- 通常のCPUメモリをpublishするカメラでは、GPU入口の転送自体は残る。
+  同一コンテナ化だけでカメラ取得時点から完全なzero-copyにはならない。
+
 ## 参考
 
 - `isaac_ros_launch_utils.core.ArgumentContainer.add_opaque_function()`

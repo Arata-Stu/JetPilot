@@ -1,26 +1,121 @@
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDescription
-from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
-from launch_ros.actions import Node, SetRemap
+from launch_ros.actions import ComposableNodeContainer, LoadComposableNodes, Node
+from launch_ros.descriptions import ComposableNode
+from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
     pkg_share = FindPackageShare("jetpilot_e2e_inference")
-    trt_share = FindPackageShare("isaac_ros_tensor_rt")
 
     model_root = LaunchConfiguration("model_root")
     model_file_path = LaunchConfiguration("model_file_path")
     engine_file_path = LaunchConfiguration("engine_file_path")
     param_file = LaunchConfiguration("param_file")
+    container_name = LaunchConfiguration("container_name")
+
+    image_encoder = ComposableNode(
+        package="isaac_ros_dnn_image_encoder",
+        plugin="nvidia::isaac_ros::dnn_inference::DnnImageEncoderNode",
+        name="e2e_image_encoder",
+        namespace="",
+        parameters=[
+            {
+                "input_image_width": ParameterValue(
+                    LaunchConfiguration("input_image_width"), value_type=int
+                ),
+                "input_image_height": ParameterValue(
+                    LaunchConfiguration("input_image_height"), value_type=int
+                ),
+                "network_image_width": ParameterValue(
+                    LaunchConfiguration("network_image_width"), value_type=int
+                ),
+                "network_image_height": ParameterValue(
+                    LaunchConfiguration("network_image_height"), value_type=int
+                ),
+                "input_encoding": LaunchConfiguration("input_encoding"),
+                "enable_padding": ParameterValue(
+                    LaunchConfiguration("enable_padding"), value_type=bool
+                ),
+                "image_mean": LaunchConfiguration("image_mean"),
+                "image_stddev": LaunchConfiguration("image_stddev"),
+                "tensor_name": LaunchConfiguration("input_tensor_name"),
+                "use_sim_time": ParameterValue(
+                    LaunchConfiguration("use_sim_time"), value_type=bool
+                ),
+            }
+        ],
+        remappings=[
+            ("image", LaunchConfiguration("image_topic")),
+            ("camera_info", LaunchConfiguration("camera_info_topic")),
+            ("tensors", LaunchConfiguration("tensor_input_topic")),
+        ],
+        extra_arguments=[{"use_intra_process_comms": True}],
+    )
+
+    tensor_rt = ComposableNode(
+        package="isaac_ros_tensor_rt",
+        plugin="nvidia::isaac_ros::dnn_inference::TensorRTNode",
+        name="e2e_tensor_rt",
+        namespace="",
+        parameters=[
+            {
+                "model_file_path": model_file_path,
+                "engine_file_path": engine_file_path,
+                "force_engine_update": ParameterValue(
+                    LaunchConfiguration("force_engine_update"), value_type=bool
+                ),
+                "enable_fp16": ParameterValue(
+                    LaunchConfiguration("enable_fp16"), value_type=bool
+                ),
+                "input_tensor_names": LaunchConfiguration("input_tensor_names"),
+                "input_binding_names": LaunchConfiguration("input_binding_names"),
+                "input_tensor_formats": LaunchConfiguration("input_tensor_formats"),
+                "output_tensor_names": LaunchConfiguration("output_tensor_names"),
+                "output_binding_names": LaunchConfiguration("output_binding_names"),
+                "output_tensor_formats": LaunchConfiguration("output_tensor_formats"),
+                "use_sim_time": ParameterValue(
+                    LaunchConfiguration("use_sim_time"), value_type=bool
+                ),
+            }
+        ],
+        remappings=[
+            ("tensor_pub", LaunchConfiguration("tensor_input_topic")),
+            ("tensor_sub", LaunchConfiguration("tensor_output_topic")),
+        ],
+        extra_arguments=[{"use_intra_process_comms": True}],
+    )
+
+    inference_components = [image_encoder, tensor_rt]
 
     return LaunchDescription(
         [
+            DeclareLaunchArgument("container_name", default_value="multi_sensor_container"),
+            DeclareLaunchArgument("run_standalone", default_value="true"),
+            DeclareLaunchArgument("use_sim_time", default_value="false"),
             DeclareLaunchArgument("image_topic", default_value="/realsense/color/image_raw"),
+            DeclareLaunchArgument(
+                "camera_info_topic", default_value="/realsense/color/camera_info"
+            ),
             DeclareLaunchArgument("control_cmd_topic", default_value="/auto/control_cmd"),
             DeclareLaunchArgument("tensor_input_topic", default_value="/e2e/tensor_input"),
             DeclareLaunchArgument("tensor_output_topic", default_value="/e2e/tensor_output"),
+            DeclareLaunchArgument("input_image_width", default_value="424"),
+            DeclareLaunchArgument("input_image_height", default_value="240"),
+            DeclareLaunchArgument("network_image_width", default_value="212"),
+            DeclareLaunchArgument("network_image_height", default_value="120"),
+            DeclareLaunchArgument("input_encoding", default_value="rgb8"),
+            DeclareLaunchArgument("enable_padding", default_value="true"),
+            DeclareLaunchArgument(
+                "image_mean", default_value="[0.485, 0.456, 0.406]"
+            ),
+            DeclareLaunchArgument(
+                "image_stddev", default_value="[0.229, 0.224, 0.225]"
+            ),
+            DeclareLaunchArgument("input_tensor_name", default_value="input_tensor"),
             DeclareLaunchArgument("model_root", default_value="/opt/jetpilot/models/e2e/latest"),
             DeclareLaunchArgument(
                 "model_file_path",
@@ -36,50 +131,48 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument("force_engine_update", default_value="false"),
             DeclareLaunchArgument("enable_fp16", default_value="true"),
-            DeclareLaunchArgument("input_tensor_format", default_value="nitros_tensor_list_nchw_rgb_f32"),
-            DeclareLaunchArgument("output_tensor_format", default_value="nitros_tensor_list_nchw_rgb_f32"),
-            Node(
-                package="jetpilot_e2e_inference",
-                executable="e2e_image_encoder_node.py",
-                name="e2e_image_encoder",
-                output="screen",
-                parameters=[param_file],
-                remappings=[
-                    ("image", LaunchConfiguration("image_topic")),
-                    ("tensor_pub", LaunchConfiguration("tensor_input_topic")),
-                ],
+            DeclareLaunchArgument(
+                "input_tensor_names", default_value="['input_tensor']"
             ),
-            GroupAction(
-                [
-                    SetRemap(src="tensor_pub", dst=LaunchConfiguration("tensor_input_topic")),
-                    SetRemap(src="tensor_sub", dst=LaunchConfiguration("tensor_output_topic")),
-                    IncludeLaunchDescription(
-                        PythonLaunchDescriptionSource(
-                            PathJoinSubstitution(
-                                [trt_share, "launch", "isaac_ros_tensor_rt.launch.py"]
-                            )
-                        ),
-                        launch_arguments={
-                            "model_file_path": model_file_path,
-                            "engine_file_path": engine_file_path,
-                            "force_engine_update": LaunchConfiguration("force_engine_update"),
-                            "input_tensor_names": "['input_tensor']",
-                            "input_binding_names": "['image']",
-                            "input_tensor_formats": ["['", LaunchConfiguration("input_tensor_format"), "']"],
-                            "output_tensor_names": "['output_tensor']",
-                            "output_binding_names": "['control']",
-                            "output_tensor_formats": ["['", LaunchConfiguration("output_tensor_format"), "']"],
-                            "enable_fp16": LaunchConfiguration("enable_fp16"),
-                        }.items(),
-                    ),
-                ]
+            DeclareLaunchArgument("input_binding_names", default_value="['image']"),
+            DeclareLaunchArgument(
+                "input_tensor_formats",
+                default_value="['nitros_tensor_list_nchw_rgb_f32']",
+            ),
+            DeclareLaunchArgument(
+                "output_tensor_names", default_value="['output_tensor']"
+            ),
+            DeclareLaunchArgument("output_binding_names", default_value="['control']"),
+            DeclareLaunchArgument(
+                "output_tensor_formats",
+                default_value="['nitros_tensor_list_nhwc_rgb_f32']",
+            ),
+            ComposableNodeContainer(
+                name=container_name,
+                namespace="",
+                package="rclcpp_components",
+                executable="component_container_mt",
+                composable_node_descriptions=[],
+                output="screen",
+                condition=IfCondition(LaunchConfiguration("run_standalone")),
+            ),
+            LoadComposableNodes(
+                target_container=container_name,
+                composable_node_descriptions=inference_components,
             ),
             Node(
                 package="jetpilot_e2e_inference",
                 executable="e2e_control_decoder_node.py",
                 name="e2e_control_decoder",
                 output="screen",
-                parameters=[param_file],
+                parameters=[
+                    param_file,
+                    {
+                        "use_sim_time": ParameterValue(
+                            LaunchConfiguration("use_sim_time"), value_type=bool
+                        )
+                    },
+                ],
                 remappings=[
                     ("tensor_sub", LaunchConfiguration("tensor_output_topic")),
                     ("control_cmd", LaunchConfiguration("control_cmd_topic")),

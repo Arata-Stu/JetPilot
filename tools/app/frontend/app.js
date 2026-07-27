@@ -170,6 +170,8 @@ const state = {
   jetsonInspectBusy: false,
   jetsonTransfer: {
     selectedPullPaths: [],
+    activePullPaths: [],
+    currentPath: "",
     running: false,
     currentIndex: 0,
     total: 0,
@@ -5583,30 +5585,41 @@ function renderJetsonTransfers() {
   const sequences = jetsonRosbagSequences();
   pruneSelectedJetsonPullPaths(sequences);
   const selectedPullPaths = selectedJetsonPullPaths();
+  const activePullPaths = jetsonActivePullPaths();
   const queue = state.jetsonTransfer;
   const queueRunning = Boolean(queue.running);
+  const pullBusy = actionBusy("jetson:pull") || queueRunning;
+  const currentPullPath = queue.currentPath || activePullPaths[queue.currentIndex] || "";
   const queueText = queueRunning
-    ? `Running ${queue.currentIndex + 1} of ${queue.total}`
-    : selectedPullPaths.length
-      ? `${selectedPullPaths.length} selected`
-      : "No sequence selected";
+    ? `Pulling ${queue.currentIndex + 1} of ${queue.total}: ${shortName(currentPullPath)}`
+    : actionBusy("jetson:pull")
+      ? `Starting ${activePullPaths.length || selectedPullPaths.length || 1} pull transfer${(activePullPaths.length || selectedPullPaths.length) > 1 ? "s" : ""}`
+      : selectedPullPaths.length
+        ? `${selectedPullPaths.length} selected`
+        : "No sequence selected";
+  const primaryPullLabel = queueRunning
+    ? `Pulling ${queue.currentIndex + 1}/${queue.total}`
+    : actionButtonLabel("jetson:pull", selectedPullPaths.length > 1 ? "Pull Selected in Order" : "Pull Selected Sequence", "Starting Pull...");
   const sequenceOptions = sequences
     .map((sequence) => `<option value="${esc(sequence.path)}">${esc(sequence.name)} - ${esc(sequence.modified || sequence.path)}</option>`)
     .join("");
   const sequenceList = sequences
     .slice(0, 12)
     .map(
-      (sequence) => `
+      (sequence) => {
+        const rowState = jetsonPullRowState(sequence.path, selectedPullPaths);
+        return `
         <div class="mini-row selectable-row">
           <div>
-            <strong><label><input type="checkbox" ${selectedPullPaths.includes(sequence.path) ? "checked" : ""} onchange="toggleJetsonPullSelection(${js(sequence.path)}, this.checked)" /> ${esc(sequence.name)}</label></strong>
+            <strong><label><input type="checkbox" ${selectedPullPaths.includes(sequence.path) ? "checked" : ""} ${pullBusy ? "disabled" : ""} onchange="toggleJetsonPullSelection(${js(sequence.path)}, this.checked)" /> ${esc(sequence.name)}</label></strong>
             <div class="path" title="${esc(sequence.path)}">${esc(sequence.path)}</div>
           </div>
           <div class="actions">
-            <button onclick="useJetsonRosbag(${js(sequence.path)})">Use</button>
-            <button class="primary ${actionBusy("jetson:pull") ? "is-busy" : ""}" onclick="pullJetsonRosbag(${js(sequence.path)})" ${queueRunning ? "disabled" : ""} ${actionButtonAttrs("jetson:pull", "Pull transfer is starting...")}>${esc(actionButtonLabel("jetson:pull", "Pull", "Starting..."))}</button>
+            <button onclick="useJetsonRosbag(${js(sequence.path)})" ${pullBusy ? "disabled" : ""}>Use</button>
+            <button class="primary ${rowState.className}" onclick="pullJetsonRosbag(${js(sequence.path)})" ${rowState.disabled ? `disabled title="${esc(rowState.title)}"` : ""}>${esc(rowState.label)}</button>
           </div>
-        </div>`,
+        </div>`;
+      },
     )
     .join("");
   return `
@@ -5616,21 +5629,21 @@ function renderJetsonTransfers() {
         <div class="form-grid">
           <div class="field full">
             <label>Discovered by metadata.yaml</label>
-            <select id="pull-remote-select" onchange="useJetsonRosbag(this.value)">
+            <select id="pull-remote-select" onchange="useJetsonRosbag(this.value)" ${pullBusy ? "disabled" : ""}>
               <option value="">Select inspected sequence</option>
               ${sequenceOptions}
             </select>
           </div>
-          <div class="field full"><label>From Jetson</label><input id="pull-remote" value="" placeholder="${esc(config.jetson_record_root || "")}/<sequence>" /></div>
-          <div class="field full"><label>To notebook</label><input id="pull-local" value="${esc(config.record_root || "")}" /></div>
+          <div class="field full"><label>From Jetson</label><input id="pull-remote" value="" placeholder="${esc(config.jetson_record_root || "")}/<sequence>" ${pullBusy ? "disabled" : ""} /></div>
+          <div class="field full"><label>To notebook</label><input id="pull-local" value="${esc(config.record_root || "")}" ${pullBusy ? "disabled" : ""} /></div>
           <div class="transfer-queue-summary full">
             <span>${esc(queueText)}</span>
             <span class="spacer"></span>
-            <button onclick="selectAllJetsonPulls()" ${sequences.length && !queueRunning ? "" : "disabled"}>Select All</button>
-            <button onclick="clearJetsonPullSelection()" ${selectedPullPaths.length && !queueRunning ? "" : "disabled"}>Clear</button>
+            <button onclick="selectAllJetsonPulls()" ${sequences.length && !pullBusy ? "" : "disabled"}>Select All</button>
+            <button onclick="clearJetsonPullSelection()" ${selectedPullPaths.length && !pullBusy ? "" : "disabled"}>Clear</button>
           </div>
           <div class="actions full">
-            <button class="primary ${actionBusy("jetson:pull") ? "is-busy" : ""}" onclick="startJetsonPull()" ${queueRunning ? "disabled" : ""} ${actionButtonAttrs("jetson:pull", "Pull transfer is starting...")}>${esc(actionButtonLabel("jetson:pull", selectedPullPaths.length > 1 ? "Pull Selected in Order" : "Pull Selected Sequence", "Starting Pull..."))}</button>
+            <button class="primary ${actionBusy("jetson:pull") ? "is-busy" : ""}" onclick="startJetsonPull()" ${queueRunning ? "disabled" : ""} ${actionButtonAttrs("jetson:pull", "Pull transfer is starting...")}>${esc(primaryPullLabel)}</button>
             <button onclick="copyPullCommand()">Copy rsync Command</button>
           </div>
           ${
@@ -8849,6 +8862,7 @@ function pullLocalPath() {
 }
 
 function useJetsonRosbag(path) {
+  if (state.jetsonTransfer.running || actionBusy("jetson:pull")) return;
   if ($("pull-remote")) $("pull-remote").value = path || "";
   if ($("pull-remote-select") && path) $("pull-remote-select").value = path;
   if (path) setJetsonPullSelection([path], { renderAfter: false });
@@ -8878,12 +8892,45 @@ function selectedJetsonPullPaths() {
   return [...new Set((state.jetsonTransfer.selectedPullPaths || []).filter(Boolean))];
 }
 
+function jetsonActivePullPaths() {
+  return [...new Set((state.jetsonTransfer.activePullPaths || []).filter(Boolean))];
+}
+
+function jetsonPullRowState(path, selectedPullPaths = selectedJetsonPullPaths()) {
+  const queue = state.jetsonTransfer || {};
+  const activePaths = jetsonActivePullPaths();
+  const activeIndex = activePaths.indexOf(path);
+  const pullBusy = actionBusy("jetson:pull") || queue.running;
+  if (pullBusy && activeIndex >= 0) {
+    if (queue.running && activeIndex < queue.currentIndex) {
+      return { className: "", disabled: true, label: "Done", title: "This selected sequence has already been pulled in the current queue." };
+    }
+    if (queue.running && activeIndex === queue.currentIndex) {
+      return { className: "is-busy", disabled: true, label: "Pulling...", title: "This selected sequence is currently being pulled." };
+    }
+    if (queue.running) {
+      return { className: "", disabled: true, label: "Queued", title: "This selected sequence is waiting in the current pull queue." };
+    }
+    return { className: "is-busy", disabled: true, label: "Starting...", title: "This selected sequence is included in the pull that is starting." };
+  }
+  if (pullBusy) {
+    return { className: "", disabled: true, label: "Pull", title: "Another selected sequence is being pulled." };
+  }
+  return {
+    className: "",
+    disabled: false,
+    label: selectedPullPaths.includes(path) ? "Pull This" : "Pull",
+    title: "",
+  };
+}
+
 function setJetsonPullSelection(paths, options = {}) {
   state.jetsonTransfer.selectedPullPaths = [...new Set((paths || []).filter(Boolean))];
   if (options.renderAfter !== false) render();
 }
 
 function toggleJetsonPullSelection(path, checked) {
+  if (state.jetsonTransfer.running || actionBusy("jetson:pull")) return;
   const selected = new Set(selectedJetsonPullPaths());
   if (checked) selected.add(path);
   else selected.delete(path);
@@ -8891,10 +8938,12 @@ function toggleJetsonPullSelection(path, checked) {
 }
 
 function selectAllJetsonPulls() {
+  if (state.jetsonTransfer.running || actionBusy("jetson:pull")) return;
   setJetsonPullSelection(jetsonRosbagSequences().map((sequence) => sequence.path));
 }
 
 function clearJetsonPullSelection() {
+  if (state.jetsonTransfer.running || actionBusy("jetson:pull")) return;
   setJetsonPullSelection([]);
 }
 
@@ -8932,7 +8981,13 @@ async function startJetsonPull() {
     target: `${target.user}@${target.host}`,
     detail: `From:\n${pullPaths.join("\n")}\n\nTo:\n${localPath}`,
   })) return null;
-  if (!beginAction("jetson:pull", "Starting Jetson pull")) return null;
+  state.jetsonTransfer.activePullPaths = pullPaths;
+  state.jetsonTransfer.currentPath = pullPaths[0] || "";
+  if (!beginAction("jetson:pull", "Starting Jetson pull")) {
+    state.jetsonTransfer.activePullPaths = [];
+    state.jetsonTransfer.currentPath = "";
+    return null;
+  }
   state.jetsonTransfer.running = true;
   state.jetsonTransfer.currentIndex = 0;
   state.jetsonTransfer.total = pullPaths.length;
@@ -8941,6 +8996,7 @@ async function startJetsonPull() {
     let lastTask = null;
     for (let index = 0; index < pullPaths.length; index += 1) {
       state.jetsonTransfer.currentIndex = index;
+      state.jetsonTransfer.currentPath = pullPaths[index];
       render();
       lastTask = await startTransfer("jetson-to-local", {
         host: target.host,
@@ -8962,6 +9018,8 @@ async function startJetsonPull() {
     return null;
   } finally {
     state.jetsonTransfer.running = false;
+    state.jetsonTransfer.activePullPaths = [];
+    state.jetsonTransfer.currentPath = "";
     state.jetsonTransfer.currentIndex = 0;
     state.jetsonTransfer.total = 0;
     endAction("jetson:pull", { renderAfter: false });

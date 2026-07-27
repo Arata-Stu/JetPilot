@@ -88,10 +88,10 @@ def generate_launch_description() -> lut.LaunchDescription:
 
     args.add_arg('enable_realsense', True)
     args.add_arg('camera_name', 'realsense')
-    args.add_arg('container_name', 'sensor_kit_container')
+    args.add_arg('container_name', 'multi_sensor_container')
     args.add_arg('run_standalone', True)
     args.add_arg('enable_depth', False)
-    args.add_arg('enable_color', False)
+    args.add_arg('enable_color', True)
     args.add_arg('enable_rtp_stream', False)
     args.add_arg('rtp_image_topic', '/realsense/color/image_raw')
     args.add_arg('rtp_host', '')

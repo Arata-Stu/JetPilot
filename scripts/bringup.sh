@@ -908,7 +908,6 @@ configure_bag_manager_interactively() {
 
 configure_rtp_interactively() {
   local current
-  local default='no'
   local host
   local topic
   local selected
@@ -917,13 +916,25 @@ configure_rtp_interactively() {
 
   current="$(get_arg sensor_kit_enable_rtp_stream 2>/dev/null || true)"
   if is_true "$current"; then
-    default='yes'
+    options+=('on   RTP送信 ON')
+    options+=('off  RTP送信 OFF')
+  else
+    options+=('off  RTP送信 OFF')
+    options+=('on   RTP送信 ON')
   fi
-  if ! prompt_yes_no 'RTP映像送信を有効にしますか？' "$default"; then
-    set_arg sensor_kit_enable_rtp_stream false
-    return
-  fi
-  set_arg sensor_kit_enable_rtp_stream true
+  selected="$(choose_one 'RTP stream' "${options[@]}")" || exit $?
+  case "${selected%%[[:space:]]*}" in
+    on)
+      set_arg sensor_kit_enable_rtp_stream true
+      ;;
+    off)
+      set_arg sensor_kit_enable_rtp_stream false
+      return
+      ;;
+    *)
+      die "unknown RTP stream selection: $selected"
+      ;;
+  esac
 
   host="$(get_arg sensor_kit_rtp_host 2>/dev/null || true)"
   while [[ -z "$host" ]]; do
@@ -932,6 +943,7 @@ configure_rtp_interactively() {
   done
   set_arg sensor_kit_rtp_host "$host"
 
+  options=()
   topic="$(get_arg sensor_kit_rtp_image_topic 2>/dev/null || true)"
   append_unique_option "$topic"
   sensor_launch="$(get_arg sensor_kit_interface_launch 2>/dev/null || true)"

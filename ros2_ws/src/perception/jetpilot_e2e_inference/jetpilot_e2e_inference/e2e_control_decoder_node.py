@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import math
 import time
 
-import numpy as np
 import rclpy
 from isaac_ros_tensor_list_interfaces.msg import TensorList
 from jetpilot_msgs.msg import ControlCommand
@@ -38,22 +38,33 @@ class E2EControlDecoderNode(Node):
             self.get_logger().warn(f"Tensor not found: {self.output_tensor_name}")
             return
 
-        values = np.frombuffer(bytes(tensor.data), dtype=np.float32).reshape(-1)
-        if values.size < len(self.output_fields):
+        try:
+            values = memoryview(tensor.data).cast("f")
+        except (TypeError, ValueError) as exc:
+            self.get_logger().warn(f"Tensor data is not a contiguous float32 buffer: {exc}")
+            return
+
+        if len(values) < len(self.output_fields):
             self.get_logger().warn(
-                f"Tensor has {values.size} values, expected {len(self.output_fields)}"
+                f"Tensor has {len(values)} values, expected {len(self.output_fields)}"
             )
             return
 
         decoded = {field: float(values[index]) for index, field in enumerate(self.output_fields)}
+        if not all(math.isfinite(value) for value in decoded.values()):
+            self.get_logger().warn("Tensor contains a non-finite control value")
+            return
+
         cmd = ControlCommand()
         cmd.header = msg.header
         cmd.header.frame_id = cmd.header.frame_id or "base_link"
-        cmd.steering = float(
-            np.clip(decoded.get("steering", 0.0), self.steering_min, self.steering_max)
+        cmd.steering = min(
+            max(decoded.get("steering", 0.0), self.steering_min),
+            self.steering_max,
         )
-        cmd.throttle = float(
-            np.clip(decoded.get("throttle", 0.0), self.throttle_min, self.throttle_max)
+        cmd.throttle = min(
+            max(decoded.get("throttle", 0.0), self.throttle_min),
+            self.throttle_max,
         )
         cmd.brake = 0.0
         cmd.reverse = 0.0
