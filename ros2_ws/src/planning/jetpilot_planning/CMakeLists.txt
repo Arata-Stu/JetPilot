@@ -18,17 +18,35 @@ ament_auto_add_library(${PROJECT_NAME}_raceline_csv SHARED
 )
 target_compile_features(${PROJECT_NAME}_raceline_csv PUBLIC cxx_std_17)
 
-ament_auto_add_executable(route_lane_selector_node
+ament_auto_add_library(${PROJECT_NAME}_route_lane_selector_node SHARED
   src/route_lane_selector_node.cpp
 )
-target_compile_features(route_lane_selector_node PUBLIC cxx_std_17)
-target_link_libraries(route_lane_selector_node ${PROJECT_NAME}_core)
+target_compile_features(${PROJECT_NAME}_route_lane_selector_node PUBLIC cxx_std_17)
+target_link_libraries(${PROJECT_NAME}_route_lane_selector_node ${PROJECT_NAME}_core)
 
-ament_auto_add_executable(raceline_path_publisher_node
+ament_auto_add_executable(route_lane_selector_node
+  src/route_lane_selector_node_main.cpp
+)
+target_compile_features(route_lane_selector_node PUBLIC cxx_std_17)
+target_link_libraries(route_lane_selector_node ${PROJECT_NAME}_route_lane_selector_node)
+
+ament_auto_add_library(${PROJECT_NAME}_raceline_path_publisher_node SHARED
   src/raceline_path_publisher_node.cpp
 )
+target_compile_features(${PROJECT_NAME}_raceline_path_publisher_node PUBLIC cxx_std_17)
+target_link_libraries(
+  ${PROJECT_NAME}_raceline_path_publisher_node
+  ${PROJECT_NAME}_raceline_csv
+)
+
+ament_auto_add_executable(raceline_path_publisher_node
+  src/raceline_path_publisher_node_main.cpp
+)
 target_compile_features(raceline_path_publisher_node PUBLIC cxx_std_17)
-target_link_libraries(raceline_path_publisher_node ${PROJECT_NAME}_raceline_csv)
+target_link_libraries(
+  raceline_path_publisher_node
+  ${PROJECT_NAME}_raceline_path_publisher_node
+)
 
 install(DIRECTORY config launch
   DESTINATION share/${PROJECT_NAME}

@@ -1,5 +1,8 @@
 # Hardware Interface Package Design
 
+プロジェクト全体のpackage、依存方向、言語、build方式は
+[JetPilotプロジェクト設計方針](project_design_policy.md)に従う。
+
 bringup TUIへ新しいvehicle interfaceまたはsensor kitを登録する手順とmanifest仕様は、
 [Bringup profile追加ルール](bringup_profile_rules.md)を参照する。
 

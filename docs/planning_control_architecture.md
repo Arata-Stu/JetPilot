@@ -1,5 +1,8 @@
 # Planning / Control architecture
 
+プロジェクト全体のpackage、依存方向、言語、build方式は
+[JetPilotプロジェクト設計方針](project_design_policy.md)に従います。
+
 この文書は planning と controller の契約です。初期実装としてlane selectorと
 Pure Pursuit controllerが入り、従来の固定値`autonomous_control_node`はsystem bringup
 から外れました。分岐条件module、障害物回避とMPCはこの契約上へ追加します。

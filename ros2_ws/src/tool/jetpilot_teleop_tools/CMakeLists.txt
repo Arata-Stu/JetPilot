@@ -8,12 +8,30 @@ endif()
 find_package(ament_cmake_auto REQUIRED)
 ament_auto_find_build_dependencies()
 
-ament_auto_add_executable(teleop_cmd_node src/teleop_cmd_node.cpp)
-target_compile_features(teleop_cmd_node PUBLIC cxx_std_17)
+ament_auto_add_library(${PROJECT_NAME}_teleop_cmd_node SHARED
+  src/teleop_cmd_node.cpp
+)
+target_compile_features(${PROJECT_NAME}_teleop_cmd_node PUBLIC cxx_std_17)
 
-ament_auto_add_executable(teleop_button_manager_node src/teleop_button_manager_node.cpp)
-target_include_directories(teleop_button_manager_node PRIVATE include)
+ament_auto_add_executable(teleop_cmd_node
+  src/teleop_cmd_node_main.cpp
+)
+target_compile_features(teleop_cmd_node PUBLIC cxx_std_17)
+target_link_libraries(teleop_cmd_node ${PROJECT_NAME}_teleop_cmd_node)
+
+ament_auto_add_library(${PROJECT_NAME}_teleop_button_manager_node SHARED
+  src/teleop_button_manager_node.cpp
+)
+target_compile_features(${PROJECT_NAME}_teleop_button_manager_node PUBLIC cxx_std_17)
+
+ament_auto_add_executable(teleop_button_manager_node
+  src/teleop_button_manager_node_main.cpp
+)
 target_compile_features(teleop_button_manager_node PUBLIC cxx_std_17)
+target_link_libraries(
+  teleop_button_manager_node
+  ${PROJECT_NAME}_teleop_button_manager_node
+)
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)

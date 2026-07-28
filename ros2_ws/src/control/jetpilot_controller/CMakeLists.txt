@@ -17,12 +17,20 @@ ament_auto_add_library(${PROJECT_NAME}_core SHARED
 )
 target_compile_features(${PROJECT_NAME}_core PUBLIC cxx_std_17)
 
-ament_auto_add_executable(path_tracking_controller_node
+ament_auto_add_library(${PROJECT_NAME}_path_tracking_controller_node SHARED
   src/path_tracking_controller_node.cpp
 )
-target_compile_features(path_tracking_controller_node PUBLIC cxx_std_17)
-target_link_libraries(path_tracking_controller_node ${PROJECT_NAME}_core)
+target_compile_features(${PROJECT_NAME}_path_tracking_controller_node PUBLIC cxx_std_17)
+target_link_libraries(${PROJECT_NAME}_path_tracking_controller_node ${PROJECT_NAME}_core)
 
+ament_auto_add_executable(path_tracking_controller_node
+  src/path_tracking_controller_node_main.cpp
+)
+target_compile_features(path_tracking_controller_node PUBLIC cxx_std_17)
+target_link_libraries(
+  path_tracking_controller_node
+  ${PROJECT_NAME}_path_tracking_controller_node
+)
 install(DIRECTORY config launch
   DESTINATION share/${PROJECT_NAME}
 )
