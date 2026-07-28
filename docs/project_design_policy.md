@@ -224,13 +224,15 @@ if(BUILD_TESTING)
   target_link_libraries(test_example ${PROJECT_NAME}_core)
 endif()
 
-ament_auto_package()
+ament_auto_package(USE_SCOPED_HEADER_INSTALL_DIR)
 ```
 
 追加ルール:
 
 - 依存packageは原則として`package.xml`へ記載し、`ament_auto_find_build_dependencies()`で
   解決する。
+- `ament_auto_package(USE_SCOPED_HEADER_INSTALL_DIR)`を使用し、公開headerを
+  `include/<package-name>/`単位でinstallする。
 - header、source、nodeのmainを分離し、algorithmとnode実装をlibraryとしてテスト可能に
   する。
 - 新規C++ codeは原則C++17を基準とする。依存先がより新しい規格を必要とする場合は、
