@@ -297,8 +297,6 @@ def generate_launch_description() -> lut.LaunchDescription:
         '/workspaces/record/openeb_raw',
         cli=True)
     args.add_arg('sensor_kit_silky_evcam_raw_recording_basename', 'openeb', cli=True)
-    args.add_arg(
-        'sensor_kit_silky_evcam_raw_recording_split_duration_s', '0.0', cli=True)
 
     args.add_arg('enable_e2e_inference', False, cli=True)
     args.add_arg('e2e_image_topic', '/realsense/color/image_raw', cli=True)
@@ -610,8 +608,6 @@ def generate_launch_description() -> lut.LaunchDescription:
                     args.sensor_kit_silky_evcam_raw_recording_dir,
                 'silky_evcam_raw_recording_basename':
                     args.sensor_kit_silky_evcam_raw_recording_basename,
-                'silky_evcam_raw_recording_split_duration_s':
-                    args.sensor_kit_silky_evcam_raw_recording_split_duration_s,
                 'use_sim_time': args.use_sim_time,
             },
             condition=IfCondition(args.enable_sensor_kit),

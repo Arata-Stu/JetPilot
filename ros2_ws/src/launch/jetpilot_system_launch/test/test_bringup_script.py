@@ -143,6 +143,10 @@ def test_openeb_raw_recording_follows_bag_manager_session() -> None:
         project_root
         / "ros2_ws/src/sensing/openeb_ros2/src/driver_component.cpp"
     ).read_text(encoding="utf-8")
+    bag_manager_config = (
+        project_root
+        / "ros2_ws/src/launch/jetpilot_system_launch/config/tool/bag_manager.param.yaml"
+    ).read_text(encoding="utf-8")
 
     assert (
         "args.add_arg('sensor_kit_silky_evcam_raw_recording_enabled', True"
@@ -155,6 +159,13 @@ def test_openeb_raw_recording_follows_bag_manager_session() -> None:
     assert "self.wait_for_recording_directory()" in bag_manager_source
     assert "BagRequest.START,\n                    self.current_uri" in bag_manager_source
     assert "self.publish_raw_recording_request(BagRequest.STOP" in bag_manager_source
+    assert '"--max-bag-duration"' in bag_manager_source
+    assert "self.handle_scheduled_raw_split" in bag_manager_source
+    assert "recording_split_duration_s: 0" in bag_manager_config
+    assert "max_bag_duration:" not in bag_manager_config
+    assert "sensor_kit_silky_evcam_raw_recording_split_duration_s" not in (
+        bringup_source
+    )
     assert "requested_path.is_absolute()" in openeb_driver_source
     assert "raw_recording_dir_ = requested_path.lexically_normal().string()" in (
         openeb_driver_source
@@ -207,13 +218,16 @@ def test_rtp_destination_and_topic_can_be_overridden() -> None:
         "--set",
         "sensor_kit_rtp_host:=192.168.1.10",
         "--set",
+        "sensor_kit_rtp_port:=5006",
+        "--set",
         "sensor_kit_rtp_image_topic:=/realsense/infra1/image_rect_raw",
     ).stdout
 
     assert "sensor_kit_enable_rtp_stream:=true" in output
     assert "sensor_kit_rtp_host:=192.168.1.10" in output
+    assert "sensor_kit_rtp_port:=5006" in output
     assert "sensor_kit_rtp_image_topic:=/realsense/infra1/image_rect_raw" in output
-    assert "RTP receiver : 192.168.1.10:5004" in output
+    assert "RTP receiver : 192.168.1.10:5006" in output
 
 
 def test_rtp_requires_a_destination_host() -> None:
@@ -229,6 +243,24 @@ def test_rtp_requires_a_destination_host() -> None:
     assert "requires sensor_kit_rtp_host" in result.stderr
 
 
+def test_rtp_rejects_invalid_destination_ports() -> None:
+    for port in ("0", "65536", "not-a-port"):
+        result = run_launcher(
+            "sensor",
+            "--dry-run",
+            "--set",
+            "sensor_kit_enable_rtp_stream:=true",
+            "--set",
+            "sensor_kit_rtp_host:=192.168.1.10",
+            "--set",
+            f"sensor_kit_rtp_port:={port}",
+            check=False,
+        )
+
+        assert result.returncode != 0
+        assert "sensor_kit_rtp_port must be an integer between 1 and 65535" in result.stderr
+
+
 def test_interactive_sensor_configuration_includes_rtp_prompts() -> None:
     source = LAUNCHER.read_text(encoding="utf-8")
 
@@ -237,6 +269,8 @@ def test_interactive_sensor_configuration_includes_rtp_prompts() -> None:
     assert "on   RTP送信 ON" in source
     assert "off  RTP送信 OFF" in source
     assert "RTP送信先IP / host" in source
+    assert "RTP送信先UDP port" in source
+    assert "UDP portは1〜65535の整数で入力してください。" in source
     assert "choose_one 'RTP image topic'" in source
     assert "トピックを手入力..." in source
 

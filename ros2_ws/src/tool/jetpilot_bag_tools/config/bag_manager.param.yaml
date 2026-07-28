@@ -110,9 +110,10 @@ bag_manager_node:
     serialization_format: ""
 
     ## Splitting. Values of 0 disable each split condition.
-    ## max_bag_size is bytes. max_bag_duration is seconds.
+    ## max_bag_size is bytes. recording_split_duration_s is the shared
+    ## duration in seconds for both rosbag MCAP and OpenEB RAW.
     max_bag_size: 0
-    max_bag_duration: 0
+    recording_split_duration_s: 0
 
     ## Recorder cache in bytes. 0 keeps rosbag2 default.
     max_cache_size: 0

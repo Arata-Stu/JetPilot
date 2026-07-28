@@ -48,8 +48,6 @@ def add_sensor_interface(args: lu.ArgumentContainer):
             lu.is_true(args.silky_evcam_raw_recording_auto_start)).lower(),
         'silky_evcam_raw_recording_dir': args.silky_evcam_raw_recording_dir,
         'silky_evcam_raw_recording_basename': args.silky_evcam_raw_recording_basename,
-        'silky_evcam_raw_recording_split_duration_s':
-            args.silky_evcam_raw_recording_split_duration_s,
         'use_sim_time': str(lu.is_true(args.use_sim_time)).lower(),
     }
 
@@ -114,7 +112,6 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg(
         'silky_evcam_raw_recording_dir', '/workspaces/record/openeb_raw', cli=True)
     args.add_arg('silky_evcam_raw_recording_basename', 'openeb', cli=True)
-    args.add_arg('silky_evcam_raw_recording_split_duration_s', '0.0', cli=True)
     args.add_arg('use_sim_time', False, cli=True)
 
     args.add_opaque_function(add_sensor_interface)

@@ -111,7 +111,12 @@ class BagManagerNode(Node):
         self.storage_id = str(self.declare_parameter("storage_id", "mcap").value)
         self.serialization_format = str(self.declare_parameter("serialization_format", "").value)
         self.max_bag_size = int(self.declare_parameter("max_bag_size", 0).value)
-        self.max_bag_duration = int(self.declare_parameter("max_bag_duration", 0).value)
+        self.recording_split_duration_s = int(
+            self.declare_parameter("recording_split_duration_s", 0).value
+        )
+        legacy_max_bag_duration = int(
+            self.declare_parameter("max_bag_duration", 0).value
+        )
         self.max_cache_size = int(self.declare_parameter("max_cache_size", 0).value)
         self.compression_mode = str(self.declare_parameter("compression_mode", "").value)
         self.compression_format = str(self.declare_parameter("compression_format", "").value)
@@ -139,11 +144,29 @@ class BagManagerNode(Node):
         self.recording_start_timeout_s = float(
             self.declare_parameter("recording_start_timeout_s", 5.0).value
         )
+        if self.recording_split_duration_s < 0:
+            raise ValueError("recording_split_duration_s must be non-negative")
+        if legacy_max_bag_duration != 0:
+            raise ValueError(
+                "max_bag_duration is no longer configurable; use "
+                "recording_split_duration_s for coordinated bag/RAW splitting"
+            )
+        if any(
+            argument == "--max-bag-duration"
+            or argument == "-d"
+            or argument.startswith("--max-bag-duration=")
+            for argument in self.extra_args
+        ):
+            raise ValueError(
+                "extra_args must not override --max-bag-duration; use "
+                "recording_split_duration_s"
+            )
 
         self.process: Optional[subprocess.Popen] = None
         self.current_uri = ""
         self.last_event = "idle"
         self.raw_recording_requested = False
+        self.raw_split_timer = None
 
         self.request_sub = self.create_subscription(
             BagRequest, "/bag/request", self.handle_request, 10
@@ -167,18 +190,24 @@ class BagManagerNode(Node):
 
     def handle_request(self, request: BagRequest) -> None:
         if request.command == BagRequest.START:
+            already_recording = self.recording
             if self.start_recording(request.label):
                 self.publish_raw_recording_request(
                     BagRequest.START,
                     self.current_uri,
                 )
+                if not already_recording:
+                    self.start_raw_split_timer()
         elif request.command == BagRequest.STOP:
+            self.stop_raw_split_timer()
             self.publish_raw_recording_request(BagRequest.STOP, request.label)
             self.stop_recording("stop requested")
         elif request.command == BagRequest.SPLIT:
-            self.last_event = "split requested but not implemented"
+            self.last_event = (
+                "manual split ignored: automatic bag/raw splitting is controlled by "
+                "recording_split_duration_s"
+            )
             self.get_logger().warn(self.last_event)
-            self.publish_raw_recording_request(BagRequest.SPLIT, request.label)
         elif request.command == BagRequest.MARK:
             self.last_event = f"mark: {request.label}"
             self.get_logger().info(self.last_event)
@@ -252,6 +281,31 @@ class BagManagerNode(Node):
         elif command == BagRequest.STOP:
             self.raw_recording_requested = False
 
+    def start_raw_split_timer(self) -> None:
+        self.stop_raw_split_timer()
+        if self.recording_split_duration_s <= 0:
+            return
+        self.raw_split_timer = self.create_timer(
+            float(self.recording_split_duration_s),
+            self.handle_scheduled_raw_split,
+        )
+
+    def stop_raw_split_timer(self) -> None:
+        if self.raw_split_timer is None:
+            return
+        self.raw_split_timer.cancel()
+        self.destroy_timer(self.raw_split_timer)
+        self.raw_split_timer = None
+
+    def handle_scheduled_raw_split(self) -> None:
+        if not self.recording or not self.raw_recording_requested:
+            self.stop_raw_split_timer()
+            return
+        self.publish_raw_recording_request(
+            BagRequest.SPLIT,
+            "scheduled_split",
+        )
+
     def stop_recording_process(self) -> None:
         if not self.recording:
             self.process = None
@@ -274,8 +328,13 @@ class BagManagerNode(Node):
             command.extend(["--serialization-format", self.serialization_format])
         if self.max_bag_size > 0:
             command.extend(["--max-bag-size", str(self.max_bag_size)])
-        if self.max_bag_duration > 0:
-            command.extend(["--max-bag-duration", str(self.max_bag_duration)])
+        if self.recording_split_duration_s > 0:
+            command.extend(
+                [
+                    "--max-bag-duration",
+                    str(self.recording_split_duration_s),
+                ]
+            )
         if self.max_cache_size > 0:
             command.extend(["--max-cache-size", str(self.max_cache_size)])
         if self.compression_mode:
@@ -318,6 +377,7 @@ class BagManagerNode(Node):
 
     def publish_status(self) -> None:
         if self.raw_recording_requested and not self.recording:
+            self.stop_raw_split_timer()
             self.publish_raw_recording_request(
                 BagRequest.STOP,
                 "rosbag_process_stopped",
@@ -336,6 +396,7 @@ class BagManagerNode(Node):
         self.status_pub.publish(msg)
 
     def destroy_node(self) -> bool:
+        self.stop_raw_split_timer()
         if self.raw_recording_requested:
             self.publish_raw_recording_request(BagRequest.STOP, "node_shutdown")
         if self.recording:

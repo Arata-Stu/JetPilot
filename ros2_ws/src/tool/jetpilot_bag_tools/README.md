@@ -24,12 +24,15 @@ JetPilot 用の rosbag 操作 package です。joystick や UI から `/bag/requ
 2. parameter から `ros2 bag record` の option を組み立てて起動する
 3. rosbagの出力 directory が作成されたことを確認する
 4. 確定した絶対pathをlabelに入れ、OpenEBへRAW STARTをpublishする
-5. STOPではOpenEBへRAW STOPをpublishしてからrosbagを正常終了する
-6. `status_period_s` ごとに `/bag/status` をpublishする
+5. `recording_split_duration_s` が正なら、rosbagのduration分割と同じ周期でOpenEBへSPLITをpublishする
+6. STOPではOpenEBへRAW STOPをpublishしてからrosbagを正常終了する
+7. `status_period_s` ごとに `/bag/status` をpublishする
 
 `record_all=true` の場合は `-a` で全 topic を記録します。`record_all=false` の場合は `topics` parameter に列挙された topic だけを記録します。既定の `topics` は、制御、operation、vehicle feedback、TF、localization、RealSense、event camera を offline 解析しやすいようにまとめています。
 
 `raw_recording_request_topic` を空文字にするとOpenEB連携を無効化できます。`recording_start_timeout_s` は、rosbag出力directoryの生成を待つ上限時間です。連携時のOpenEB RAWとsidecar metadataはMCAPおよび`metadata.yaml`と同じsession directoryへ保存されます。
+
+duration分割は`recording_split_duration_s`だけで設定します。この1つの値がrosbagの`--max-bag-duration`とOpenEBへの周期SPLITの両方に使われます。`max_bag_duration`や`extra_args`からの個別上書きはエラーになります。`0`は両方のduration分割を無効化します。手動の`BagRequest.SPLIT`は境界の不一致を防ぐため無視されます。
 
 ## 起動
 

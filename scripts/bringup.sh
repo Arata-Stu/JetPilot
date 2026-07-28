@@ -41,6 +41,12 @@ is_true() {
   esac
 }
 
+is_valid_udp_port() {
+  local port="${1:-}"
+
+  [[ "$port" =~ ^[0-9]{1,5}$ ]] && ((10#$port >= 1 && 10#$port <= 65535))
+}
+
 print_presets() {
   cat <<'EOF'
 sensor               Sensor kit + camera TF only (no actuator)
@@ -911,6 +917,7 @@ configure_bag_manager_interactively() {
 configure_rtp_interactively() {
   local current
   local host
+  local port
   local topic
   local selected
   local sensor_launch
@@ -944,6 +951,17 @@ configure_rtp_interactively() {
     [[ -n "$host" ]] || printf '送信先IPまたはhost名を入力してください。\n' >&2
   done
   set_arg sensor_kit_rtp_host "$host"
+
+  port="$(get_arg sensor_kit_rtp_port 2>/dev/null || true)"
+  port="${port:-5004}"
+  while true; do
+    port="$(prompt_value 'RTP送信先UDP port' "$port")"
+    if is_valid_udp_port "$port"; then
+      break
+    fi
+    printf 'UDP portは1〜65535の整数で入力してください。\n' >&2
+  done
+  set_arg sensor_kit_rtp_port "$port"
 
   options=()
   topic="$(get_arg sensor_kit_rtp_image_topic 2>/dev/null || true)"
@@ -1098,6 +1116,8 @@ validate_configuration() {
     && is_true "$(get_arg sensor_kit_enable_rtp_stream 2>/dev/null || true)"; then
     [[ -n "$(get_arg sensor_kit_rtp_host 2>/dev/null || true)" ]] \
       || die 'sensor_kit_enable_rtp_stream=true requires sensor_kit_rtp_host'
+    is_valid_udp_port "$(get_arg sensor_kit_rtp_port 2>/dev/null || true)" \
+      || die 'sensor_kit_rtp_port must be an integer between 1 and 65535'
   fi
   if [[ -n "$MAP_DIR" ]]; then
     [[ "$DRY_RUN" == 'true' || -d "$MAP_DIR" ]] \
