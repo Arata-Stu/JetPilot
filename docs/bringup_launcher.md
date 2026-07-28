@@ -62,10 +62,16 @@ launch argument can be overridden without creating duplicates:
   -- enable_rviz:=false enable_hd_map_publisher:=true
 ```
 
+Vehicle interface and sensor kit choices are loaded dynamically from JSON profiles. Use
+`--list-vehicles`, `--list-sensor-kits`, and `--validate-profiles` to inspect them. Adding a new
+hardware profile does not require editing `scripts/bringup.sh`; follow
+[Bringup profile追加ルール](bringup_profile_rules.md).
+
 The first selector chooses one preset with arrow keys and Enter. For `vehicle`, `teleop`, `drive`,
-and `runtime`, the next selector chooses the vehicle interface (`pca` or `vesc`). Presets that enable
-live sensors then open the sensor kit selector in the same way. Existing names such as `drive-pca`
-and `drive-vesc` remain accepted as compatibility aliases for scripts, but are not shown in the TUI.
+and `runtime`, the next selector lists the discovered vehicle interface profiles. Presets that enable
+live sensors then list the discovered sensor kit profiles in the same way. Existing names such as
+`drive-pca` and `drive-vesc` remain accepted as compatibility aliases for scripts, but are not shown
+in the TUI.
 
 Select `custom` only when you want to build your own component set. Inside `custom`, press Tab or
 Space on each component to turn it ON, then press Enter to confirm all selected components at once.

@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "kind": "vehicle",
+  "id": "vesc",
+  "label": "VESC vehicle interface",
+  "order": 20,
+  "aliases": [],
+  "launch": {
+    "package": "jetpilot_vesc_interface",
+    "file": "launch/vesc_interface.launch.xml"
+  },
+  "driver_param": {
+    "package": "jetpilot_vesc_interface",
+    "path": "config/vesc_interface.param.yaml"
+  },
+  "arguments": {
+    "publish_vehicle_description": true,
+    "publish_vehicle_evs_description": true,
+    "publish_vehicle_thremo_description": true
+  }
+}

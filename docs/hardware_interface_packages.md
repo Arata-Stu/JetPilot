@@ -1,5 +1,8 @@
 # Hardware Interface Package Design
 
+bringup TUIへ新しいvehicle interfaceまたはsensor kitを登録する手順とmanifest仕様は、
+[Bringup profile追加ルール](bringup_profile_rules.md)を参照する。
+
 JetPilot は、車体ごとに異なる hardware 依存部分を個別 package として切り出す。
 system launch 側は「どの package のどの launch を読むか」だけを知り、実際の
 driver node、parameter、frame、topic の詳細は個別 package 側に閉じ込める。

@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "kind": "sensor_kit",
+  "id": "flir",
+  "label": "FLIR Boson",
+  "order": 20,
+  "aliases": [
+    "boson",
+    "flir-boson",
+    "flir_boson"
+  ],
+  "launch": {
+    "package": "jetpilot_system_launch",
+    "file": "launch/sensors/flir_boson.launch.py"
+  },
+  "arguments": {
+    "sensor_kit_camera_name": "realsense",
+    "sensor_kit_rtp_image_topic": "/flir/image_raw",
+    "sensor_kit_enable_flir": true,
+    "sensor_kit_flir_namespace": "flir",
+    "sensor_kit_flir_node_name": "boson",
+    "sensor_kit_flir_camera_name": "boson",
+    "sensor_kit_flir_frame_id": "boson_optical_frame",
+    "sensor_kit_flir_video_device": "/dev/video0",
+    "sensor_kit_flir_pixel_format": "mono16",
+    "sensor_kit_flir_image_width": 640,
+    "sensor_kit_flir_image_height": 512,
+    "sensor_kit_flir_framerate": 60.0,
+    "sensor_kit_flir_io_method": "mmap"
+  },
+  "rtp_topics": [
+    "/flir/image_raw"
+  ]
+}

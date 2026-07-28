@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "kind": "sensor_kit",
+  "id": "realsense-silky-flir",
+  "label": "RealSense + SilkyEvCam/OpenEB + FLIR Boson",
+  "order": 40,
+  "aliases": [
+    "all",
+    "realsense_silky_flir"
+  ],
+  "launch": {
+    "package": "jetpilot_system_launch",
+    "file": "launch/sensors/realsense_silky_flir.launch.py"
+  },
+  "arguments": {
+    "sensor_kit_camera_name": "realsense",
+    "sensor_kit_rtp_image_topic": "/realsense/color/image_raw",
+    "sensor_kit_enable_flir": true,
+    "sensor_kit_flir_namespace": "flir",
+    "sensor_kit_flir_node_name": "boson",
+    "sensor_kit_flir_camera_name": "boson",
+    "sensor_kit_flir_frame_id": "boson_optical_frame",
+    "sensor_kit_flir_video_device": "/dev/video0",
+    "sensor_kit_flir_pixel_format": "mono16",
+    "sensor_kit_flir_image_width": 640,
+    "sensor_kit_flir_image_height": 512,
+    "sensor_kit_flir_framerate": 60.0,
+    "sensor_kit_flir_io_method": "mmap"
+  },
+  "rtp_topics": [
+    "/realsense/color/image_raw",
+    "/event_camera/event_image",
+    "/flir/image_raw",
+    "/realsense/infra1/image_rect_raw",
+    "/realsense/infra2/image_rect_raw"
+  ]
+}

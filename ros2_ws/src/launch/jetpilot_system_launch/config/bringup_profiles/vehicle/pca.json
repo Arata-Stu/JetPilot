@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "kind": "vehicle",
+  "id": "pca",
+  "label": "PCA9685 RC vehicle interface",
+  "order": 10,
+  "aliases": [
+    "pca9685"
+  ],
+  "launch": {
+    "package": "pca9685_rc_driver",
+    "file": "launch/pca9685_rc_interface.launch.xml"
+  },
+  "driver_param": {
+    "package": "pca9685_rc_driver",
+    "path": "config/pca9685_rc_driver_node.param.yaml",
+    "workspace_override": "pca9685_rc_driver_node.param.yaml"
+  },
+  "arguments": {
+    "publish_vehicle_description": true,
+    "publish_vehicle_evs_description": false,
+    "publish_vehicle_thremo_description": false
+  }
+}

@@ -6,6 +6,7 @@
 - [Isaac ROS Launch Guidelines](docs/isaac_ros_launch_guidelines.md)
 - [Localization Manager](ros2_ws/src/localization/jetpilot_localization_manager/README.md)
 - [Bringup presets / TUI](docs/bringup_launcher.md)
+- [Bringup profile追加ルール](docs/bringup_profile_rules.md)
 - [Planning / Control Architecture](docs/planning_control_architecture.md)
 - [rosbag Replay Safety](docs/rosbag_replay_safety.md)
 

@@ -8,9 +8,13 @@ ROS2_SETUP_FILE="${ROS2_SETUP_FILE:-${ROS2_WS}/install/setup.bash}"
 MAP_ROOT="${MAP_ROOT:-/workspaces/map}"
 RECORD_ROOT="${RECORD_ROOT:-/workspaces/record}"
 LAUNCH_PACKAGE="${JETPILOT_LAUNCH_PACKAGE:-jetpilot_system_launch}"
+PYTHON_BIN="${PYTHON_BIN:-python3}"
+PROFILE_HELPER="${SCRIPT_DIR}/bringup_profiles.py"
+PROFILE_ROOT="${BRINGUP_PROFILE_ROOT:-${PROJECT_ROOT}/ros2_ws/src/launch/jetpilot_system_launch/config/bringup_profiles}"
 
 PRESET=''
 VEHICLE_BACKEND='none'
+SENSOR_KIT_PROFILE=''
 MAP_DIR="${BRINGUP_MAP_DIR:-}"
 ROSBAG="${BRINGUP_ROSBAG:-}"
 RACELINE_CSV="${BRINGUP_RACELINE_CSV:-}"
@@ -29,6 +33,7 @@ ARG_NAMES=()
 ARG_VALUES=()
 EXTRA_LAUNCH_ARGS=()
 CUSTOM_COMPONENTS=''
+SENSOR_KIT_RTP_TOPICS=()
 
 die() {
   printf 'error: %s\n' "$*" >&2
@@ -76,16 +81,21 @@ Usage:
 Options:
   -p, --preset NAME    Use a preset (see --list-presets)
       --list-presets   List available presets
+      --list-vehicles  List discovered vehicle interface profiles
+      --list-sensor-kits
+                        List discovered sensor kit profiles
+      --validate-profiles
+                        Validate every bringup profile manifest
       --map PATH       Set map_dir (or BRINGUP_MAP_DIR)
       --bag PATH       Set rosbag directory/metadata.yaml (or BRINGUP_ROSBAG)
       --raceline PATH  Enable the C++ raceline loader with this generated CSV
       --rate RATE      Rosbag replay rate (default: 1.0)
-      --vehicle TYPE   Override vehicle backend: none, pca, vesc
+      --vehicle PROFILE
+                        Select a discovered vehicle interface profile
       --bag-manager    Enable bag manager recording control
       --no-bag-manager Disable bag manager recording control
       --sensor-kit NAME
-                        Select sensor kit: realsense, flir, realsense-silky,
-                        realsense-silky-flir
+                        Select a discovered sensor kit profile
       --rviz-config NAME_OR_PATH
                         Select RViz config: default, vslam-debug, or absolute path
       --components LIST
@@ -223,22 +233,40 @@ first_existing_path() {
   printf '%s' "$fallback"
 }
 
-pca_driver_param() {
-  first_existing_path \
-    "${ROS2_WS}/src/vehicle/pca9685_rc_interface/pca9685_rc_driver/config/pca9685_rc_driver_node.param.yaml" \
-    "${ROS2_WS}/joy_profiles/pca9685_rc_driver_node.param.yaml" \
-    "${PROJECT_ROOT}/ros2_ws/joy_profiles/pca9685_rc_driver_node.param.yaml" \
-    "${ROS2_WS}/src/vehicle/pca9685_rc_interface/pca9685_rc_driver/config/pca9685_rc_driver_node.param.yaml" \
-    "${PROJECT_ROOT}/ros2_ws/src/vehicle/pca9685_rc_interface/pca9685_rc_driver/config/pca9685_rc_driver_node.param.yaml" \
-    "${ROS2_WS}/install/pca9685_rc_driver/share/pca9685_rc_driver/config/pca9685_rc_driver_node.param.yaml"
+profile_command() {
+  command -v "$PYTHON_BIN" >/dev/null 2>&1 \
+    || die "Python command was not found: $PYTHON_BIN"
+  [[ -f "$PROFILE_HELPER" ]] || die "bringup profile helper was not found: $PROFILE_HELPER"
+  [[ -d "$PROFILE_ROOT" ]] || die "bringup profile directory was not found: $PROFILE_ROOT"
+  "$PYTHON_BIN" "$PROFILE_HELPER" --root "$PROFILE_ROOT" "$@"
 }
 
-vesc_driver_param() {
-  first_existing_path \
-    "${ROS2_WS}/src/vehicle/vesc_interface/jetpilot_vesc_interface/config/vesc_interface.param.yaml" \
-    "${ROS2_WS}/src/vehicle/vesc_interface/jetpilot_vesc_interface/config/vesc_interface.param.yaml" \
-    "${PROJECT_ROOT}/ros2_ws/src/vehicle/vesc_interface/jetpilot_vesc_interface/config/vesc_interface.param.yaml" \
-    "${ROS2_WS}/install/jetpilot_vesc_interface/share/jetpilot_vesc_interface/config/vesc_interface.param.yaml"
+list_profiles() {
+  local kind="$1"
+  profile_command list --kind "$kind"
+}
+
+resolve_profile() {
+  local kind="$1"
+  local profile_id="$2"
+  profile_command resolve \
+    --kind "$kind" \
+    --id "$profile_id" \
+    --project-root "$PROJECT_ROOT" \
+    --ros2-ws "$ROS2_WS"
+}
+
+print_profile_choices() {
+  local kind="$1"
+  local profile_id
+  local label
+  local profile_list
+
+  profile_list="$(list_profiles "$kind")"
+  while IFS=$'\t' read -r profile_id label; do
+    [[ -n "$profile_id" ]] || continue
+    printf '%-24s %s\n' "$profile_id" "$label"
+  done <<< "$profile_list"
 }
 
 raceline_selector_param() {
@@ -266,88 +294,64 @@ configure_raceline() {
 
 apply_vehicle() {
   local backend="$1"
-  VEHICLE_BACKEND="$backend"
-  case "$backend" in
-    none)
-      set_arg enable_vehicle false
-      set_arg publish_vehicle_description false
-      set_arg publish_vehicle_evs_description false
-      set_arg publish_vehicle_thremo_description false
-      ;;
-    pca)
-      set_arg enable_vehicle true
-      set_arg publish_vehicle_description true
-      set_arg publish_vehicle_evs_description false
-      set_arg publish_vehicle_thremo_description false
-      set_arg vehicle_interface_pkg pca9685_rc_driver
-      set_arg vehicle_interface_launch launch/pca9685_rc_interface.launch.xml
-      set_arg vehicle_driver_param "$(pca_driver_param)"
-      ;;
-    vesc)
-      set_arg enable_vehicle true
-      set_arg publish_vehicle_description true
-      set_arg publish_vehicle_evs_description true
-      set_arg publish_vehicle_thremo_description true
-      set_arg vehicle_interface_pkg jetpilot_vesc_interface
-      set_arg vehicle_interface_launch launch/vesc_interface.launch.xml
-      set_arg vehicle_driver_param "$(vesc_driver_param)"
-      ;;
-    *) die "vehicle backend must be none, pca, or vesc: $backend" ;;
-  esac
+  local records
+  local key
+  local value
+
+  if [[ "$backend" == 'none' ]]; then
+    VEHICLE_BACKEND='none'
+    set_arg enable_vehicle false
+    set_arg publish_vehicle_description false
+    set_arg publish_vehicle_evs_description false
+    set_arg publish_vehicle_thremo_description false
+    return
+  fi
+
+  records="$(resolve_profile vehicle "$backend")"
+  set_arg enable_vehicle true
+  set_arg publish_vehicle_description false
+  set_arg publish_vehicle_evs_description false
+  set_arg publish_vehicle_thremo_description false
+  while IFS=$'\t' read -r key value; do
+    case "$key" in
+      id) VEHICLE_BACKEND="$value" ;;
+      launch_package) set_arg vehicle_interface_pkg "$value" ;;
+      launch_file) set_arg vehicle_interface_launch "$value" ;;
+      driver_param) set_arg vehicle_driver_param "$value" ;;
+      argument:*) set_arg "${key#argument:}" "$value" ;;
+    esac
+  done <<< "$records"
+
+  [[ -n "$(get_arg vehicle_interface_pkg 2>/dev/null || true)" ]] \
+    || die "vehicle profile '$backend' does not define a launch package"
+  [[ -n "$(get_arg vehicle_interface_launch 2>/dev/null || true)" ]] \
+    || die "vehicle profile '$backend' does not define a launch file"
+  [[ -n "$(get_arg vehicle_driver_param 2>/dev/null || true)" ]] \
+    || die "vehicle profile '$backend' does not define a driver parameter file"
 }
 
 apply_sensor_kit() {
   local sensor_kit="$1"
+  local records
+  local key
+  local value
 
-  case "$sensor_kit" in
-    realsense)
-      set_arg sensor_kit_interface_pkg jetpilot_system_launch
-      set_arg sensor_kit_interface_launch launch/sensors/realsense.launch.py
-      set_arg sensor_kit_camera_name realsense
-      set_arg sensor_kit_rtp_image_topic /realsense/color/image_raw
-      ;;
-    flir|boson|flir-boson|flir_boson)
-      set_arg sensor_kit_interface_pkg jetpilot_system_launch
-      set_arg sensor_kit_interface_launch launch/sensors/flir_boson.launch.py
-      set_arg sensor_kit_camera_name realsense
-      set_arg sensor_kit_rtp_image_topic /flir/image_raw
-      set_arg sensor_kit_enable_flir true
-      set_arg sensor_kit_flir_namespace flir
-      set_arg sensor_kit_flir_node_name boson
-      set_arg sensor_kit_flir_camera_name boson
-      set_arg sensor_kit_flir_frame_id boson_optical_frame
-      set_arg sensor_kit_flir_video_device /dev/video0
-      set_arg sensor_kit_flir_pixel_format mono16
-      set_arg sensor_kit_flir_image_width 640
-      set_arg sensor_kit_flir_image_height 512
-      set_arg sensor_kit_flir_framerate 60.0
-      set_arg sensor_kit_flir_io_method mmap
-      ;;
-    realsense-silky|realsense_silky|silky)
-      set_arg sensor_kit_interface_pkg jetpilot_system_launch
-      set_arg sensor_kit_interface_launch launch/sensors/realsense_silky_evcam.launch.py
-      set_arg sensor_kit_camera_name realsense
-      set_arg sensor_kit_rtp_image_topic /realsense/color/image_raw
-      ;;
-    realsense-silky-flir|realsense_silky_flir|all)
-      set_arg sensor_kit_interface_pkg jetpilot_system_launch
-      set_arg sensor_kit_interface_launch launch/sensors/realsense_silky_flir.launch.py
-      set_arg sensor_kit_camera_name realsense
-      set_arg sensor_kit_rtp_image_topic /realsense/color/image_raw
-      set_arg sensor_kit_enable_flir true
-      set_arg sensor_kit_flir_namespace flir
-      set_arg sensor_kit_flir_node_name boson
-      set_arg sensor_kit_flir_camera_name boson
-      set_arg sensor_kit_flir_frame_id boson_optical_frame
-      set_arg sensor_kit_flir_video_device /dev/video0
-      set_arg sensor_kit_flir_pixel_format mono16
-      set_arg sensor_kit_flir_image_width 640
-      set_arg sensor_kit_flir_image_height 512
-      set_arg sensor_kit_flir_framerate 60.0
-      set_arg sensor_kit_flir_io_method mmap
-      ;;
-    *) die "sensor kit must be realsense, flir, realsense-silky, or realsense-silky-flir: $sensor_kit" ;;
-  esac
+  records="$(resolve_profile sensor_kit "$sensor_kit")"
+  SENSOR_KIT_RTP_TOPICS=()
+  while IFS=$'\t' read -r key value; do
+    case "$key" in
+      id) SENSOR_KIT_PROFILE="$value" ;;
+      launch_package) set_arg sensor_kit_interface_pkg "$value" ;;
+      launch_file) set_arg sensor_kit_interface_launch "$value" ;;
+      argument:*) set_arg "${key#argument:}" "$value" ;;
+      rtp_topic) SENSOR_KIT_RTP_TOPICS+=("$value") ;;
+    esac
+  done <<< "$records"
+
+  [[ -n "$(get_arg sensor_kit_interface_pkg 2>/dev/null || true)" ]] \
+    || die "sensor kit profile '$sensor_kit' does not define a launch package"
+  [[ -n "$(get_arg sensor_kit_interface_launch 2>/dev/null || true)" ]] \
+    || die "sensor kit profile '$sensor_kit' does not define a launch file"
 }
 
 resolve_rviz_config() {
@@ -941,7 +945,6 @@ configure_rtp_interactively() {
   local port
   local topic
   local selected
-  local sensor_launch
   local options=()
 
   current="$(get_arg sensor_kit_enable_rtp_stream 2>/dev/null || true)"
@@ -987,30 +990,9 @@ configure_rtp_interactively() {
   options=()
   topic="$(get_arg sensor_kit_rtp_image_topic 2>/dev/null || true)"
   append_unique_option "$topic"
-  sensor_launch="$(get_arg sensor_kit_interface_launch 2>/dev/null || true)"
-  case "$sensor_launch" in
-    *realsense_silky_flir.launch.py)
-      append_unique_option '/realsense/color/image_raw'
-      append_unique_option '/event_camera/event_image'
-      append_unique_option '/flir/image_raw'
-      append_unique_option '/realsense/infra1/image_rect_raw'
-      append_unique_option '/realsense/infra2/image_rect_raw'
-      ;;
-    *realsense_silky_evcam.launch.py)
-      append_unique_option '/realsense/color/image_raw'
-      append_unique_option '/event_camera/event_image'
-      append_unique_option '/realsense/infra1/image_rect_raw'
-      append_unique_option '/realsense/infra2/image_rect_raw'
-      ;;
-    *flir_boson.launch.py)
-      append_unique_option '/flir/image_raw'
-      ;;
-    *)
-      append_unique_option '/realsense/color/image_raw'
-      append_unique_option '/realsense/infra1/image_rect_raw'
-      append_unique_option '/realsense/infra2/image_rect_raw'
-      ;;
-  esac
+  for topic in "${SENSOR_KIT_RTP_TOPICS[@]}"; do
+    append_unique_option "$topic"
+  done
   options+=('トピックを手入力...')
 
   selected="$(choose_one 'RTP image topic' "${options[@]}")" || exit $?
@@ -1028,36 +1010,16 @@ configure_rtp_interactively() {
 
 configure_sensor_kit_interactively() {
   local selection
-  local current_launch
+  local profile_id
+  local label
+  local profile_list
   local options=()
 
-  current_launch="$(get_arg sensor_kit_interface_launch 2>/dev/null || true)"
-  case "$current_launch" in
-    *realsense_silky_flir.launch.py)
-      options+=('realsense-silky-flir  RealSense + SilkyEvCam/OpenEB + FLIR Boson')
-      options+=('realsense-silky       RealSense + SilkyEvCam/OpenEB')
-      options+=('flir                  FLIR Boson')
-      options+=('realsense             RealSense')
-      ;;
-    *realsense_silky_evcam.launch.py)
-      options+=('realsense-silky  RealSense + SilkyEvCam/OpenEB')
-      options+=('realsense-silky-flir  RealSense + SilkyEvCam/OpenEB + FLIR Boson')
-      options+=('flir             FLIR Boson')
-      options+=('realsense        RealSense')
-      ;;
-    *flir_boson.launch.py)
-      options+=('flir                  FLIR Boson')
-      options+=('realsense-silky-flir  RealSense + SilkyEvCam/OpenEB + FLIR Boson')
-      options+=('realsense-silky       RealSense + SilkyEvCam/OpenEB')
-      options+=('realsense             RealSense')
-      ;;
-    *)
-      options+=('realsense        RealSense')
-      options+=('realsense-silky  RealSense + SilkyEvCam/OpenEB')
-      options+=('realsense-silky-flir  RealSense + SilkyEvCam/OpenEB + FLIR Boson')
-      options+=('flir             FLIR Boson')
-      ;;
-  esac
+  profile_list="$(list_profiles sensor_kit)"
+  while IFS=$'\t' read -r profile_id label; do
+    [[ -n "$profile_id" ]] || continue
+    options+=("$profile_id  $label")
+  done <<< "$profile_list"
 
   selection="$(choose_one 'Sensor kit launch' "${options[@]}")" || exit $?
   apply_sensor_kit "${selection%%[[:space:]]*}"
@@ -1066,10 +1028,16 @@ configure_sensor_kit_interactively() {
 
 configure_vehicle_interactively() {
   local selection
-  local options=(
-    'pca   PCA9685 RC vehicle interface'
-    'vesc  VESC vehicle interface'
-  )
+  local profile_id
+  local label
+  local profile_list
+  local options=()
+
+  profile_list="$(list_profiles vehicle)"
+  while IFS=$'\t' read -r profile_id label; do
+    [[ -n "$profile_id" ]] || continue
+    options+=("$profile_id  $label")
+  done <<< "$profile_list"
 
   selection="$(choose_one 'Vehicle interface' "${options[@]}")" || exit $?
   apply_vehicle "${selection%%[[:space:]]*}"
@@ -1131,7 +1099,7 @@ validate_configuration() {
     die 'rosbag replay and vehicle hardware cannot be enabled together'
   fi
   if [[ "$REQUIRES_VEHICLE" == 'true' ]] && ! is_true "$vehicle"; then
-    die "preset '$PRESET' requires --vehicle pca or --vehicle vesc"
+    die "preset '$PRESET' requires --vehicle PROFILE (see --list-vehicles)"
   fi
   if [[ "$REQUIRES_MAP" == 'true' ]] \
     && is_true "$(get_arg enable_localization)" \
@@ -1173,7 +1141,7 @@ validate_configuration() {
   if is_true "$vehicle"; then
     local driver_param
     [[ "$VEHICLE_BACKEND" != 'none' ]] \
-      || die 'enable_vehicle=true requires --vehicle pca or --vehicle vesc'
+      || die 'enable_vehicle=true requires --vehicle PROFILE'
     driver_param="$(get_arg vehicle_driver_param)"
     [[ "$DRY_RUN" == 'true' || -f "$driver_param" ]] \
       || die "vehicle driver parameter file does not exist: $driver_param"
@@ -1205,6 +1173,11 @@ ensure_ros_environment() {
   command -v ros2 >/dev/null 2>&1 || die 'ros2 command was not found'
   if is_true "$(get_arg enable_vehicle)"; then
     packages+=("$(get_arg vehicle_interface_pkg)")
+  fi
+  if is_true "$(get_arg enable_sensor_kit)"; then
+    packages+=(
+      "$(get_arg sensor_kit_interface_pkg 2>/dev/null || printf 'jetpilot_system_launch')"
+    )
   fi
   if is_true "$(get_arg enable_localization)"; then
     packages+=(jetpilot_localization_manager)
@@ -1242,6 +1215,7 @@ print_summary() {
   printf '  vehicle      : %s\n' "$displayed_backend"
   printf '  sensor       : %s\n' "$(get_arg enable_sensor_kit)"
   if is_true "$(get_arg enable_sensor_kit)"; then
+    printf '  sensor kit   : %s\n' "${SENSOR_KIT_PROFILE:-default}"
     printf '  sensor launch: %s/%s\n' \
       "$(get_arg sensor_kit_interface_pkg 2>/dev/null || printf 'jetpilot_system_launch')" \
       "$(get_arg sensor_kit_interface_launch 2>/dev/null || printf 'launch/sensors/realsense.launch.py')"
@@ -1282,6 +1256,9 @@ while (($# > 0)); do
       ;;
     --preset=*) PRESET="${1#*=}"; shift ;;
     --list-presets) print_presets; exit 0 ;;
+    --list-vehicles) print_profile_choices vehicle; exit 0 ;;
+    --list-sensor-kits) print_profile_choices sensor_kit; exit 0 ;;
+    --validate-profiles) profile_command validate; exit 0 ;;
     --map)
       (($# >= 2)) || die '--map requires a path'
       MAP_DIR="$2"
@@ -1307,7 +1284,7 @@ while (($# > 0)); do
       ;;
     --rate=*) REPLAY_RATE="${1#*=}"; shift ;;
     --vehicle)
-      (($# >= 2)) || die '--vehicle requires none, pca, or vesc'
+      (($# >= 2)) || die '--vehicle requires a profile ID'
       CLI_VEHICLE="$2"
       shift 2
       ;;
@@ -1321,7 +1298,7 @@ while (($# > 0)); do
       shift
       ;;
     --sensor-kit)
-      (($# >= 2)) || die '--sensor-kit requires realsense or realsense-silky'
+      (($# >= 2)) || die '--sensor-kit requires a profile ID'
       CLI_SENSOR_KIT="$2"
       shift 2
       ;;

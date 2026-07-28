@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import os
 import shlex
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -15,6 +17,11 @@ def find_launcher() -> Path:
 
 
 LAUNCHER = find_launcher()
+PROJECT_ROOT = LAUNCHER.parents[1]
+PROFILE_ROOT = (
+    PROJECT_ROOT
+    / "ros2_ws/src/launch/jetpilot_system_launch/config/bringup_profiles"
+)
 
 
 def run_launcher(
@@ -50,6 +57,102 @@ def test_presets_are_listed() -> None:
         assert preset in output
 
 
+def test_vehicle_and_sensor_profiles_are_listed_dynamically() -> None:
+    vehicles = run_launcher("--list-vehicles").stdout
+    sensor_kits = run_launcher("--list-sensor-kits").stdout
+
+    assert "pca" in vehicles
+    assert "PCA9685 RC vehicle interface" in vehicles
+    assert "vesc" in vehicles
+    assert "VESC vehicle interface" in vehicles
+    assert "realsense" in sensor_kits
+    assert "flir" in sensor_kits
+    assert "realsense-silky" in sensor_kits
+
+
+def test_bringup_profiles_pass_schema_validation() -> None:
+    output = run_launcher("--validate-profiles").stdout
+
+    assert "vehicle: 2 profile(s)" in output
+    assert "sensor_kit: 4 profile(s)" in output
+    assert "validated: 6 profile(s)" in output
+
+
+def test_new_manifest_is_available_without_editing_launcher(tmp_path: Path) -> None:
+    profile_root = tmp_path / "bringup_profiles"
+    shutil.copytree(PROFILE_ROOT, profile_root)
+    mock_profile = {
+        "schema_version": 1,
+        "kind": "vehicle",
+        "id": "mock",
+        "label": "Mock vehicle interface",
+        "order": 90,
+        "aliases": [],
+        "launch": {
+            "package": "mock_vehicle_interface",
+            "file": "launch/mock_vehicle_interface.launch.xml",
+        },
+        "driver_param": {
+            "package": "mock_vehicle_interface",
+            "path": "config/mock.param.yaml",
+        },
+        "arguments": {
+            "publish_vehicle_description": True,
+            "publish_vehicle_evs_description": False,
+            "publish_vehicle_thremo_description": False,
+        },
+    }
+    (profile_root / "vehicle/mock.json").write_text(
+        json.dumps(mock_profile), encoding="utf-8"
+    )
+    mock_sensor_profile = {
+        "schema_version": 1,
+        "kind": "sensor_kit",
+        "id": "mock-sensor",
+        "label": "Mock sensor kit",
+        "order": 90,
+        "aliases": [],
+        "launch": {
+            "package": "mock_sensor_kit",
+            "file": "launch/mock_sensor_kit.launch.py",
+        },
+        "arguments": {
+            "sensor_kit_camera_name": "mock",
+            "sensor_kit_rtp_image_topic": "/mock/image_raw",
+        },
+        "rtp_topics": ["/mock/image_raw"],
+    }
+    (profile_root / "sensor_kit/mock-sensor.json").write_text(
+        json.dumps(mock_sensor_profile), encoding="utf-8"
+    )
+    env = dict(os.environ)
+    env["BRINGUP_PROFILE_ROOT"] = str(profile_root)
+
+    listed_vehicles = run_launcher("--list-vehicles", env=env).stdout
+    listed_sensors = run_launcher("--list-sensor-kits", env=env).stdout
+    vehicle_output = run_launcher(
+        "vehicle", "--vehicle", "mock", "--dry-run", env=env
+    ).stdout
+    sensor_output = run_launcher(
+        "sensor", "--sensor-kit", "mock-sensor", "--dry-run", env=env
+    ).stdout
+
+    assert "mock" in listed_vehicles
+    assert "Mock vehicle interface" in listed_vehicles
+    assert "vehicle      : mock" in vehicle_output
+    assert "vehicle_interface_pkg:=mock_vehicle_interface" in vehicle_output
+    assert (
+        "vehicle_interface_launch:=launch/mock_vehicle_interface.launch.xml"
+        in vehicle_output
+    )
+    assert "mock-sensor" in listed_sensors
+    assert "Mock sensor kit" in listed_sensors
+    assert "sensor_kit_interface_pkg:=mock_sensor_kit" in sensor_output
+    assert "sensor_kit_interface_launch:=launch/mock_sensor_kit.launch.py" in (
+        sensor_output
+    )
+
+
 def test_generic_vehicle_presets_accept_an_explicit_interface() -> None:
     pca = run_launcher("vehicle", "--vehicle", "pca", "--dry-run").stdout
     vesc = run_launcher("drive", "--vehicle", "vesc", "--dry-run").stdout
@@ -69,7 +172,7 @@ def test_generic_vehicle_preset_requires_an_interface_noninteractively() -> None
     result = run_launcher("drive", "--dry-run", check=False)
 
     assert result.returncode != 0
-    assert "requires --vehicle pca or --vehicle vesc" in result.stderr
+    assert "requires --vehicle PROFILE" in result.stderr
 
 
 def test_vehicle_presets_select_matching_driver_configuration() -> None:
@@ -227,7 +330,8 @@ def test_unknown_sensor_kit_is_rejected() -> None:
     )
 
     assert result.returncode != 0
-    assert "sensor kit must be realsense, flir, realsense-silky, or realsense-silky-flir" in result.stderr
+    assert "unknown sensor_kit profile 'unknown-camera'" in result.stderr
+    assert "available:" in result.stderr
 
 
 def test_rtp_destination_and_topic_can_be_overridden() -> None:
@@ -301,8 +405,8 @@ def test_interactive_vehicle_configuration_has_one_profile_selector() -> None:
 
     assert "configure_vehicle_interactively" in source
     assert "choose_one 'Vehicle interface'" in source
-    assert "'pca   PCA9685 RC vehicle interface'" in source
-    assert "'vesc  VESC vehicle interface'" in source
+    assert "profile_list=\"$(list_profiles vehicle)\"" in source
+    assert "profile_list=\"$(list_profiles sensor_kit)\"" in source
     assert "'vehicle            Vehicle interface (select next)'" in source
     assert "'vehicle-pca        PCA9685 vehicle interface'" not in source
     assert "'vehicle-vesc       VESC vehicle interface'" not in source
