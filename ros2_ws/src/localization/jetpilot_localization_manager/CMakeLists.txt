@@ -13,17 +13,17 @@ ament_auto_add_library(${PROJECT_NAME}_core SHARED
 )
 target_compile_features(${PROJECT_NAME}_core PUBLIC cxx_std_17)
 
-ament_auto_add_library(${PROJECT_NAME}_node SHARED
+ament_auto_add_library(${PROJECT_NAME}_node_impl SHARED
   src/localization_manager_node.cpp
 )
-target_compile_features(${PROJECT_NAME}_node PUBLIC cxx_std_17)
-target_link_libraries(${PROJECT_NAME}_node ${PROJECT_NAME}_core)
+target_compile_features(${PROJECT_NAME}_node_impl PUBLIC cxx_std_17)
+target_link_libraries(${PROJECT_NAME}_node_impl ${PROJECT_NAME}_core)
 
 ament_auto_add_executable(jetpilot_localization_manager_node
   src/localization_manager_node_main.cpp
 )
 target_compile_features(jetpilot_localization_manager_node PUBLIC cxx_std_17)
-target_link_libraries(jetpilot_localization_manager_node ${PROJECT_NAME}_node)
+target_link_libraries(jetpilot_localization_manager_node ${PROJECT_NAME}_node_impl)
 install(DIRECTORY config
   DESTINATION share/${PROJECT_NAME}
 )
