@@ -24,6 +24,7 @@ CLI_SENSOR_KIT=''
 REQUIRES_MAP=false
 REQUIRES_ROSBAG=false
 REQUIRES_RACELINE=false
+REQUIRES_VEHICLE=false
 ARG_NAMES=()
 ARG_VALUES=()
 EXTRA_LAUNCH_ARGS=()
@@ -57,14 +58,10 @@ replay-localization  Safe rosbag replay + localization + RViz (bag/map required)
 offline-vslam        Rosbag replay + VSLAM visualization + RViz (bag required)
 offline-vslam-map    Rosbag replay + VSLAM mapping debug + RViz (bag/map required)
 offline-localization Rosbag replay + VGL/VSLAM localization + RViz (bag/map required)
-vehicle-pca          PCA9685 vehicle interface only
-vehicle-vesc         VESC vehicle interface only
-teleop-pca           Joy/teleop/operation + PCA9685 vehicle
-teleop-vesc          Joy/teleop/operation + VESC vehicle
-drive-pca            Live sensor + joy/teleop/operation + PCA9685 vehicle
-drive-vesc           Live sensor + joy/teleop/operation + VESC vehicle
-runtime-pca          Live sensor/localization/teleop + PCA9685 vehicle (map required)
-runtime-vesc         Live sensor/localization/teleop + VESC vehicle (map required)
+vehicle              Selected vehicle interface only
+teleop               Joy/teleop/operation + selected vehicle interface
+drive                Live sensor + joy/teleop/operation + selected vehicle interface
+runtime              Live sensor/localization/teleop + selected vehicle interface (map required)
 custom               Interactive component selection; all components start OFF
 EOF
 }
@@ -92,7 +89,7 @@ Options:
       --rviz-config NAME_OR_PATH
                         Select RViz config: default, vslam-debug, or absolute path
       --components LIST
-                        Custom component list, e.g. sensor,joy,teleop,vehicle-vesc
+                        Custom component list, e.g. sensor,joy,teleop,vehicle
       --set ARG:=VALUE Override one bringup launch argument
       --dry-run        Print the exact command without running ROS
   -y, --yes            Skip the hardware launch confirmation
@@ -100,8 +97,8 @@ Options:
   -- ARG:=VALUE ...    Additional overrides (merged; duplicate names are replaced)
 
 Examples:
-  $(basename "$0") --preset vehicle-pca
-  $(basename "$0") --preset drive-vesc
+  $(basename "$0") --preset vehicle --vehicle pca
+  $(basename "$0") --preset drive --vehicle vesc
   $(basename "$0") --preset localization --map /workspaces/map/course_a
   $(basename "$0") replay-localization --bag /workspaces/record/run_01 \\
     --map /workspaces/map/course_a --rate 0.5
@@ -110,10 +107,12 @@ Examples:
     --map /workspaces/map/course_a
   $(basename "$0") offline-localization --bag /workspaces/record/run_01 \\
     --map /workspaces/map/course_a
-  $(basename "$0") runtime-vesc --map /workspaces/map/course_a --dry-run
-  $(basename "$0") custom --components sensor,localization,hd-map,control,vehicle-vesc \\
-    --map /workspaces/map/course_a --raceline /workspaces/map/course_a/course_raceline.csv
-  $(basename "$0") custom --components sensor,bag-manager,joy,teleop,operation,vehicle-vesc
+  $(basename "$0") runtime --vehicle vesc --map /workspaces/map/course_a --dry-run
+  $(basename "$0") custom --components sensor,localization,hd-map,control,vehicle \\
+    --vehicle vesc --map /workspaces/map/course_a \\
+    --raceline /workspaces/map/course_a/course_raceline.csv
+  $(basename "$0") custom --components sensor,bag-manager,joy,teleop,operation,vehicle \\
+    --vehicle vesc
 
 The launcher starts with Jetson stats enabled and all actuator modules OFF.
 Vehicle hardware is never enabled by a localization/replay preset, and replay
@@ -126,6 +125,7 @@ known_preset() {
   case "$1" in
     sensor|localization-only|localization|localize-live|replay-localization|\
       offline-vslam|offline-vslam-map|offline-localization|\
+      vehicle|teleop|drive|runtime|\
       vehicle-pca|vehicle-vesc|teleop-pca|teleop-vesc|\
       drive-pca|drive-vesc|runtime-pca|runtime-vesc|custom) return 0 ;;
     *) return 1 ;;
@@ -470,6 +470,25 @@ apply_preset() {
       set_arg vslam_localize_on_startup true
       REQUIRES_MAP=true
       ;;
+    vehicle)
+      REQUIRES_VEHICLE=true
+      ;;
+    teleop)
+      enable_teleop_stack
+      REQUIRES_VEHICLE=true
+      ;;
+    drive)
+      set_arg enable_sensor_kit true
+      enable_drive_stack
+      REQUIRES_VEHICLE=true
+      ;;
+    runtime)
+      enable_teleop_stack
+      set_arg enable_sensor_kit true
+      enable_localization_stack
+      REQUIRES_VEHICLE=true
+      REQUIRES_MAP=true
+      ;;
     vehicle-pca)
       apply_vehicle pca
       ;;
@@ -719,6 +738,9 @@ apply_custom_component_token() {
     rviz)
       set_arg enable_rviz true
       ;;
+    vehicle)
+      REQUIRES_VEHICLE=true
+      ;;
     vehicle-pca)
       apply_vehicle pca
       ;;
@@ -746,7 +768,7 @@ apply_custom_components() {
       case "$token" in
         sensor|live-sensor) saw_live=true ;;
         replay|rosbag-replay) saw_replay=true ;;
-        vehicle-pca|vehicle-vesc) vehicle_count=$((vehicle_count + 1)) ;;
+        vehicle|vehicle-pca|vehicle-vesc) vehicle_count=$((vehicle_count + 1)) ;;
       esac
       apply_custom_component_token "$token"
     done
@@ -757,7 +779,7 @@ apply_custom_components() {
       case "$token" in
         sensor|live-sensor) saw_live=true ;;
         replay|rosbag-replay) saw_replay=true ;;
-        vehicle-pca|vehicle-vesc) vehicle_count=$((vehicle_count + 1)) ;;
+        vehicle|vehicle-pca|vehicle-vesc) vehicle_count=$((vehicle_count + 1)) ;;
       esac
       apply_custom_component_token "$token"
     done <<< "$selection"
@@ -767,7 +789,7 @@ apply_custom_components() {
     die 'custom components must choose either sensor or replay, not both'
   fi
   if ((vehicle_count > 1)); then
-    die 'custom components must choose only one vehicle backend'
+    die 'custom components must choose only one vehicle interface'
   fi
 }
 
@@ -867,8 +889,7 @@ interactive_custom() {
     'raceline           Planning with generated raceline CSV'
     'control            Planning + Pure Pursuit control'
     'rviz               RViz'
-    'vehicle-pca        PCA9685 vehicle interface'
-    'vehicle-vesc       VESC vehicle interface'
+    'vehicle            Vehicle interface (select next)'
   )
 
   selection="$(choose_many 'Custom components' "${options[@]}")" || exit $?
@@ -1043,6 +1064,17 @@ configure_sensor_kit_interactively() {
   configure_rtp_interactively
 }
 
+configure_vehicle_interactively() {
+  local selection
+  local options=(
+    'pca   PCA9685 RC vehicle interface'
+    'vesc  VESC vehicle interface'
+  )
+
+  selection="$(choose_one 'Vehicle interface' "${options[@]}")" || exit $?
+  apply_vehicle "${selection%%[[:space:]]*}"
+}
+
 configure_rviz_interactively() {
   local selection
   local options=(
@@ -1097,6 +1129,9 @@ validate_configuration() {
   fi
   if is_true "$replay" && is_true "$vehicle"; then
     die 'rosbag replay and vehicle hardware cannot be enabled together'
+  fi
+  if [[ "$REQUIRES_VEHICLE" == 'true' ]] && ! is_true "$vehicle"; then
+    die "preset '$PRESET' requires --vehicle pca or --vehicle vesc"
   fi
   if [[ "$REQUIRES_MAP" == 'true' ]] \
     && is_true "$(get_arg enable_localization)" \
@@ -1353,6 +1388,10 @@ if [[ "$PRESET" == 'custom' ]]; then
 fi
 if [[ -n "${CLI_VEHICLE:-}" ]]; then
   apply_vehicle "$CLI_VEHICLE"
+fi
+if [[ "$INTERACTIVE" == 'true' && -z "${CLI_VEHICLE:-}" ]] \
+  && [[ "$REQUIRES_VEHICLE" == 'true' ]]; then
+  configure_vehicle_interactively
 fi
 if [[ "$INTERACTIVE" == 'true' && -z "$CLI_SENSOR_KIT" ]] \
   && is_true "$(get_arg enable_sensor_kit)"; then

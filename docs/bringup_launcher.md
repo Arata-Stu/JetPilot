@@ -14,32 +14,34 @@ Common presets:
 
 ```bash
 # Vehicle interface only
-/workspaces/scripts/bringup.sh vehicle-pca
-/workspaces/scripts/bringup.sh vehicle-vesc
+/workspaces/scripts/bringup.sh vehicle --vehicle pca
+/workspaces/scripts/bringup.sh vehicle --vehicle vesc
 
 # Joy/teleop/operation plus a vehicle interface
-/workspaces/scripts/bringup.sh teleop-pca
-/workspaces/scripts/bringup.sh teleop-vesc
+/workspaces/scripts/bringup.sh teleop --vehicle pca
+/workspaces/scripts/bringup.sh teleop --vehicle vesc
 
 # Live sensor plus joy/teleop/operation and vehicle interface
-/workspaces/scripts/bringup.sh drive-pca
-/workspaces/scripts/bringup.sh drive-vesc
+/workspaces/scripts/bringup.sh drive --vehicle pca
+/workspaces/scripts/bringup.sh drive --vehicle vesc
 
 # Live camera + localization, without an actuator driver
 /workspaces/scripts/bringup.sh localization \
   --map /workspaces/map/course_a
 
 # Full live runtime; autonomous control remains OFF until explicitly requested
-/workspaces/scripts/bringup.sh runtime-pca \
+/workspaces/scripts/bringup.sh runtime --vehicle pca \
   --map /workspaces/map/course_a
 
 # Custom one-shot component selection
 /workspaces/scripts/bringup.sh custom \
-  --components sensor,joy,teleop,operation,vehicle-vesc
+  --components sensor,joy,teleop,operation,vehicle \
+  --vehicle vesc
 
 # Map localization + HD map + lane planning + Pure Pursuit
 /workspaces/scripts/bringup.sh custom \
-  --components sensor,localization,hd-map,control,vehicle-vesc \
+  --components sensor,localization,hd-map,control,vehicle \
+  --vehicle vesc \
   --map /workspaces/map/course_a \
   --raceline /workspaces/map/course_a/course_a_raceline.csv
 
@@ -60,12 +62,18 @@ launch argument can be overridden without creating duplicates:
   -- enable_rviz:=false enable_hd_map_publisher:=true
 ```
 
-The first selector chooses one preset with arrow keys and Enter. Select `custom` only when you want
-to build your own component set. Inside `custom`, press Tab or Space on each component to turn it ON,
-then press Enter to confirm all selected components at once. The same selection can be reused
+The first selector chooses one preset with arrow keys and Enter. For `vehicle`, `teleop`, `drive`,
+and `runtime`, the next selector chooses the vehicle interface (`pca` or `vesc`). Presets that enable
+live sensors then open the sensor kit selector in the same way. Existing names such as `drive-pca`
+and `drive-vesc` remain accepted as compatibility aliases for scripts, but are not shown in the TUI.
+
+Select `custom` only when you want to build your own component set. Inside `custom`, press Tab or
+Space on each component to turn it ON, then press Enter to confirm all selected components at once.
+Selecting `vehicle` opens the vehicle interface selector next. The same selection can be reused
 non-interactively with `--components`; available names include `sensor`, `replay`, `localization`,
-`bag-manager`, `joy`, `teleop`, `operation`, `planning`, `control`, `rviz`, `vehicle-pca`, and
-`vehicle-vesc`. Selecting `control` also enables `planning` and the operation command mux;
+`bag-manager`, `joy`, `teleop`, `operation`, `planning`, `control`, `rviz`, and `vehicle`. Pass
+`--vehicle pca` or `--vehicle vesc` when a non-interactive preset/component enables `vehicle`.
+Selecting `control` also enables `planning` and the operation command mux;
 selecting `planning` alone is useful for validating the selected trajectory without publishing
 autonomous commands. Passing `--raceline` enables the C++ CSV publisher and automatically selects
 the matching two-lane planner configuration; the CSV path must be absolute inside Docker.
@@ -74,7 +82,8 @@ commands, pass the map explicitly:
 
 ```bash
 /workspaces/scripts/bringup.sh custom \
-  --components sensor,localization,vehicle-vesc \
+  --components sensor,localization,vehicle \
+  --vehicle vesc \
   --map /workspaces/map/course_a
 ```
 

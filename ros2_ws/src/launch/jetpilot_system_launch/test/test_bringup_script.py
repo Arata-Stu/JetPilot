@@ -35,24 +35,45 @@ def test_presets_are_listed() -> None:
     output = run_launcher("--list-presets").stdout
 
     for preset in (
-        "vehicle-pca",
-        "vehicle-vesc",
+        "vehicle",
+        "teleop",
+        "drive",
+        "runtime",
         "localization",
         "localize-live",
         "replay-localization",
         "offline-vslam",
         "offline-vslam-map",
         "offline-localization",
-        "drive-pca",
-        "drive-vesc",
-        "runtime-pca",
-        "runtime-vesc",
         "custom",
     ):
         assert preset in output
 
 
+def test_generic_vehicle_presets_accept_an_explicit_interface() -> None:
+    pca = run_launcher("vehicle", "--vehicle", "pca", "--dry-run").stdout
+    vesc = run_launcher("drive", "--vehicle", "vesc", "--dry-run").stdout
+
+    assert "preset       : vehicle" in pca
+    assert "vehicle      : pca" in pca
+    assert "vehicle_interface_pkg:=pca9685_rc_driver" in pca
+
+    assert "preset       : drive" in vesc
+    assert "vehicle      : vesc" in vesc
+    assert "enable_sensor_kit:=true" in vesc
+    assert "enable_teleop:=true" in vesc
+    assert "vehicle_interface_pkg:=jetpilot_vesc_interface" in vesc
+
+
+def test_generic_vehicle_preset_requires_an_interface_noninteractively() -> None:
+    result = run_launcher("drive", "--dry-run", check=False)
+
+    assert result.returncode != 0
+    assert "requires --vehicle pca or --vehicle vesc" in result.stderr
+
+
 def test_vehicle_presets_select_matching_driver_configuration() -> None:
+    # Legacy aliases remain supported for existing scripts.
     pca = run_launcher("vehicle-pca", "--dry-run").stdout
     vesc = run_launcher("vehicle-vesc", "--dry-run").stdout
 
@@ -275,6 +296,18 @@ def test_interactive_sensor_configuration_includes_rtp_prompts() -> None:
     assert "トピックを手入力..." in source
 
 
+def test_interactive_vehicle_configuration_has_one_profile_selector() -> None:
+    source = LAUNCHER.read_text(encoding="utf-8")
+
+    assert "configure_vehicle_interactively" in source
+    assert "choose_one 'Vehicle interface'" in source
+    assert "'pca   PCA9685 RC vehicle interface'" in source
+    assert "'vesc  VESC vehicle interface'" in source
+    assert "'vehicle            Vehicle interface (select next)'" in source
+    assert "'vehicle-pca        PCA9685 vehicle interface'" not in source
+    assert "'vehicle-vesc       VESC vehicle interface'" not in source
+
+
 def test_flir_launch_can_load_the_rtp_component() -> None:
     flir_launch = (
         LAUNCHER.parents[1]
@@ -302,7 +335,9 @@ def test_custom_components_can_be_selected_in_one_argument() -> None:
     output = run_launcher(
         "custom",
         "--components",
-        "sensor,joy,teleop,operation,vehicle-vesc",
+        "sensor,joy,teleop,operation,vehicle",
+        "--vehicle",
+        "vesc",
         "--dry-run",
     ).stdout
 
@@ -621,6 +656,10 @@ def test_every_noninteractive_preset_emits_unique_launch_arguments(tmp_path: Pat
         "offline-vslam",
         "offline-vslam-map",
         "offline-localization",
+        "vehicle",
+        "teleop",
+        "drive",
+        "runtime",
         "vehicle-pca",
         "vehicle-vesc",
         "teleop-pca",
@@ -632,6 +671,8 @@ def test_every_noninteractive_preset_emits_unique_launch_arguments(tmp_path: Pat
     )
     for preset in presets:
         arguments = [preset, "--dry-run"]
+        if preset in {"vehicle", "teleop", "drive", "runtime"}:
+            arguments += ["--vehicle", "vesc"]
         if preset in {
             "localization-only",
             "localization",
@@ -641,6 +682,7 @@ def test_every_noninteractive_preset_emits_unique_launch_arguments(tmp_path: Pat
             "offline-localization",
             "runtime-pca",
             "runtime-vesc",
+            "runtime",
         }:
             arguments += ["--map", str(map_dir)]
         if preset in {
