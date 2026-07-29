@@ -30,6 +30,13 @@ TOP_LEVEL_FIELDS = {
     "arguments",
     "rtp_topics",
 }
+SENSOR_KIT_INTEGRATION_ARGUMENTS = {
+    "localization_camera_name",
+    "vgl_topic_config_file",
+    "vslam_enable_imu",
+    "vslam_imu_topic",
+    "vehicle_description_camera_frame",
+}
 
 
 class ProfileError(ValueError):
@@ -87,10 +94,16 @@ def check_argument_name(kind: str, name: str, path: Path) -> None:
             or name.startswith("publish_vehicle_")
         )
     else:
-        allowed = name.startswith("sensor_kit_") and name not in {
-            "sensor_kit_interface_pkg",
-            "sensor_kit_interface_launch",
-        }
+        allowed = (
+            name in SENSOR_KIT_INTEGRATION_ARGUMENTS
+            or (
+                name.startswith("sensor_kit_")
+                and name not in {
+                    "sensor_kit_interface_pkg",
+                    "sensor_kit_interface_launch",
+                }
+            )
+        )
     if not allowed:
         fail(f"{path}: argument is not allowed for {kind} profiles: {name}")
 

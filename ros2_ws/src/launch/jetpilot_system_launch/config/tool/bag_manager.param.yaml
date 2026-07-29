@@ -46,7 +46,8 @@ bag_manager_node:
       - /localization/pose_hint_state
       - /localization/pose_hint_required
       - /localization/current_section
-      - /localization/diagnostics
+      - /localization/vslam/diagnostics
+      - /localization/vgl/diagnostics
       - /planning/diagnostics
       - /controller/diagnostics
       - /jetson/diagnostics
@@ -72,6 +73,7 @@ bag_manager_node:
       - /realsense/color/image_raw
       - /realsense/color/image_raw/compressed
       - /realsense/color/metadata
+      - /realsense/diagnostics
 
       ## RealSense depth candidates. Enable only when depth replay is needed.
       # - /realsense/depth/camera_info
@@ -104,6 +106,17 @@ bag_manager_node:
       - /realsense/infra2/metadata
       - /realsense/extrinsics/depth_to_infra1
       - /realsense/extrinsics/depth_to_infra2
+
+      ## OAK-D Lite RGB, synchronized rectified stereo, and IMU.
+      ## ROS depth and point cloud are not generated.
+      - /oakd_lite/rgb/camera_info
+      - /oakd_lite/rgb/image_raw
+      - /oakd_lite/left/camera_info
+      - /oakd_lite/left/image_rect
+      - /oakd_lite/right/camera_info
+      - /oakd_lite/right/image_rect
+      - /oakd_lite/imu/data
+      - /oakd_lite/diagnostics
     exclude_topics: []
 
     ## Storage backend. Use "mcap" for modern rosbag2 recording, or "sqlite3" if needed.

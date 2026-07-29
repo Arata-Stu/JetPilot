@@ -65,7 +65,7 @@ def add_vslam(args: lu.ArgumentContainer) -> list[lut.Action]:
     use_rectified_images = lu.is_true(args.vslam_use_rectified_images)
 
     remappings = [
-        ('visual_slam/imu', '/front_stereo_imu/imu'),
+        ('visual_slam/imu', args.vslam_imu_topic),
         ('visual_slam/initial_pose', args.vslam_initial_pose_topic),
         ('visual_slam/trigger_hint', args.vslam_trigger_hint_topic),
         ('/diagnostics', args.vslam_diagnostics_topic),
@@ -116,7 +116,7 @@ def add_vslam(args: lu.ArgumentContainer) -> list[lut.Action]:
         'enable_localization_n_mapping': lut.ParameterValue(args.vslam_enable_slam, value_type=bool),
         'enable_ground_constraint_in_odometry': lut.ParameterValue(args.vslam_enable_ground_constraint_in_odometry, value_type=bool),
         'enable_ground_constraint_in_slam': lut.ParameterValue(args.vslam_enable_ground_constraint_in_slam, value_type=bool),
-        'enable_imu_fusion': lut.ParameterValue(args.vslam_enable_imu, value_type=bool),
+        'tracking_mode': 1 if lu.is_true(args.vslam_enable_imu) else 0,
         'image_qos': args.vslam_image_qos,
         'save_map_folder_path': args.vslam_save_map_folder_path,
         'load_map_folder_path': args.vslam_load_map_folder_path,
@@ -162,6 +162,7 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('is_sim', False)
     args.add_arg('publish_odom_to_base_tf', True)
     args.add_arg('vslam_enable_imu', False)
+    args.add_arg('vslam_imu_topic', '/front_stereo_imu/imu')
     args.add_arg('vslam_publish_map_to_odom_tf', True)
     args.add_arg('vslam_enable_slam', False)
     args.add_arg('vslam_enabled_stereo_cameras', '')
@@ -174,7 +175,7 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('vslam_enable_request_hint', True)
     args.add_arg('vslam_initial_pose_topic', '/localization/pose_hint')
     args.add_arg('vslam_trigger_hint_topic', '/visual_slam/trigger_hint')
-    args.add_arg('vslam_diagnostics_topic', '/localization/diagnostics')
+    args.add_arg('vslam_diagnostics_topic', '/localization/vslam/diagnostics')
     args.add_arg('vslam_use_rectified_images', False)
     args.add_arg('vslam_enable_ground_constraint_in_odometry', False)
     args.add_arg('vslam_enable_ground_constraint_in_slam', False)

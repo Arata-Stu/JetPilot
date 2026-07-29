@@ -29,12 +29,13 @@ waiting for `/clock`.
 | Subscribe | `/localization/trigger` | `std_msgs/msg/Bool` | A `true` value starts/restarts localization (joystick). |
 | Service | `/localization/relocalize` | `std_srvs/srv/Trigger` | Starts/restarts localization (web UI/CLI). |
 | Subscribe | `/initialpose` | `geometry_msgs/msg/PoseWithCovarianceStamped` | Manual fallback. |
+| Subscribe | `/localization/vslam/diagnostics` | `diagnostic_msgs/msg/DiagnosticArray` | VSLAM localization state. |
 | Publish | `/localization/pose_hint` | `geometry_msgs/msg/PoseWithCovarianceStamped` | Validated hint for VSLAM. |
 | Publish | `/localization/pose_hint_required` | `std_msgs/msg/Bool` | Latched UI indicator. |
 | Publish | `/localization/pose_hint_state` | `std_msgs/msg/String` | Latched JSON state for UI/diagnostics. |
 
-All names are parameters. Defaults remain compatible with the previous Python
-`localization_manager` implementation.
+All names are parameters. Diagnostics use a VSLAM-specific topic to avoid collisions
+with other diagnostic publishers.
 
 Example request:
 

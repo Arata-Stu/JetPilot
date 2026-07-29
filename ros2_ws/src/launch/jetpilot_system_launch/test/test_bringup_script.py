@@ -66,6 +66,8 @@ def test_vehicle_and_sensor_profiles_are_listed_dynamically() -> None:
     assert "vesc" in vehicles
     assert "VESC vehicle interface" in vehicles
     assert "realsense" in sensor_kits
+    assert "oakd-lite" in sensor_kits
+    assert "Luxonis OAK-D Lite" in sensor_kits
     assert "flir" in sensor_kits
     assert "realsense-silky" in sensor_kits
 
@@ -74,8 +76,8 @@ def test_bringup_profiles_pass_schema_validation() -> None:
     output = run_launcher("--validate-profiles").stdout
 
     assert "vehicle: 2 profile(s)" in output
-    assert "sensor_kit: 4 profile(s)" in output
-    assert "validated: 6 profile(s)" in output
+    assert "sensor_kit: 5 profile(s)" in output
+    assert "validated: 7 profile(s)" in output
 
 
 def test_new_manifest_is_available_without_editing_launcher(tmp_path: Path) -> None:
@@ -251,6 +253,71 @@ def test_sensor_kit_launch_can_be_selected_explicitly() -> None:
         in output
     )
     assert "sensor_kit_camera_name:=realsense" in output
+
+
+def test_oakd_lite_profile_selects_depthai_composable_launch() -> None:
+    output = run_launcher(
+        "sensor",
+        "--sensor-kit",
+        "oakd-lite",
+        "--dry-run",
+    ).stdout
+
+    assert "sensor kit   : oakd-lite" in output
+    assert (
+        "sensor_kit_interface_launch:=launch/sensors/oakd_lite.launch.py"
+        in output
+    )
+    assert "sensor_kit_camera_name:=oakd_lite" in output
+    assert "sensor_kit_enable_color:=true" in output
+    assert "sensor_kit_enable_depth:=false" in output
+    assert "sensor_kit_rtp_fps:=35" in output
+    assert "localization_camera_name:=oakd_lite" in output
+    assert "vgl_topic_config_file:=vgl_camera_topics_oakd_lite.yaml" in output
+    assert "vslam_enable_imu:=false" in output
+    assert "vslam_imu_topic:=/oakd_lite/imu/data" in output
+
+
+def test_oakd_lite_uses_depthai_v3_component_and_is_recorded() -> None:
+    launch_source = (
+        PROJECT_ROOT
+        / "ros2_ws/src/launch/jetpilot_system_launch/launch/sensors"
+        / "oakd_lite.launch.py"
+    ).read_text(encoding="utf-8")
+    sensor_config = (
+        PROJECT_ROOT
+        / "ros2_ws/src/launch/jetpilot_system_launch/config/sensing"
+        / "oakd_lite.param.yaml"
+    ).read_text(encoding="utf-8")
+    localization_topics = (
+        PROJECT_ROOT
+        / "ros2_ws/src/launch/jetpilot_system_launch/config/localization"
+        / "vgl_camera_topics_oakd_lite.yaml"
+    ).read_text(encoding="utf-8")
+    bag_manager_config = (
+        PROJECT_ROOT
+        / "ros2_ws/src/launch/jetpilot_system_launch/config/tool"
+        / "bag_manager.param.yaml"
+    ).read_text(encoding="utf-8")
+
+    assert "package='depthai_ros_driver_v3'" in launch_source
+    assert "plugin='depthai_ros_driver::Driver'" in launch_source
+    assert "executable='component_container_mt'" in launch_source
+    assert "use_intra_process_comms': True" in launch_source
+    assert "i_left_rect_publish_topic: true" in sensor_config
+    assert "i_right_rect_publish_topic: true" in sensor_config
+    assert "i_left_rect_synced: true" in sensor_config
+    assert "i_right_rect_synced: true" in sensor_config
+    assert "/oakd_lite/left/image_rect" in localization_topics
+    assert "/oakd_lite/right/image_rect" in localization_topics
+    assert "/oakd_lite/rgb/image_raw" in bag_manager_config
+    assert "/oakd_lite/left/image_rect" in bag_manager_config
+    assert "/oakd_lite/right/image_rect" in bag_manager_config
+    assert "/oakd_lite/stereo/image_raw" not in bag_manager_config
+    assert "/oakd_lite/imu/data" in bag_manager_config
+    assert "('/diagnostics', f'/{args.camera_name}/diagnostics')" in launch_source
+    assert "/oakd_lite/diagnostics" in bag_manager_config
+    assert "\n      - /diagnostics\n" not in bag_manager_config
 
 
 def test_openeb_raw_recording_follows_bag_manager_session() -> None:

@@ -28,7 +28,7 @@ JetPilot 用の rosbag 操作 package です。joystick や UI から `/bag/requ
 6. STOPではOpenEBへRAW STOPをpublishしてからrosbagを正常終了する
 7. `status_period_s` ごとに `/bag/status` をpublishする
 
-`record_all=true` の場合は `-a` で全 topic を記録します。`record_all=false` の場合は `topics` parameter に列挙された topic だけを記録します。既定の `topics` は、制御、operation、vehicle feedback、TF、localization、RealSense、event camera を offline 解析しやすいようにまとめています。
+`record_all=true` の場合は `-a` で全 topic を記録します。`record_all=false` の場合は `topics` parameter に列挙された topic だけを記録します。既定の `topics` は、制御、operation、vehicle feedback、TF、localization、RealSense、OAK-D Lite、event camera を offline 解析しやすいようにまとめています。診断情報は`/diagnostics`へ集約せず、発行元別のtopicを記録します。
 
 `raw_recording_request_topic` を空文字にするとOpenEB連携を無効化できます。`recording_start_timeout_s` は、rosbag出力directoryの生成を待つ上限時間です。連携時のOpenEB RAWとsidecar metadataはMCAPおよび`metadata.yaml`と同じsession directoryへ保存されます。
 

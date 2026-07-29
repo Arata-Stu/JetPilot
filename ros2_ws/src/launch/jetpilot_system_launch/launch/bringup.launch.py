@@ -52,8 +52,10 @@ _REPLAY_ISOLATED_TOPICS = (
     '/visual_localization/pose',
     '/visual_slam/tracking/odometry',
     '/visual_slam/tracking/slam_path',
-    '/diagnostics',
-    '/localization/diagnostics',
+    '/localization/vslam/diagnostics',
+    '/localization/vgl/diagnostics',
+    '/realsense/diagnostics',
+    '/oakd_lite/diagnostics',
     '/planning/diagnostics',
     '/controller/diagnostics',
     '/jetson/diagnostics',
@@ -316,20 +318,25 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('localization_base_frame', 'base_link', cli=True)
     args.add_arg('enable_vslam', True, cli=True)
     args.add_arg('vslam_enable_slam', True, cli=True)
+    args.add_arg('vslam_enable_imu', False, cli=True)
+    args.add_arg('vslam_imu_topic', '/front_stereo_imu/imu', cli=True)
     args.add_arg('vslam_enable_ground_constraint_in_odometry', False, cli=True)
     args.add_arg('vslam_enable_ground_constraint_in_slam', False, cli=True)
     args.add_arg('vslam_enable_visualization', False, cli=True)
     args.add_arg('vslam_localize_on_startup', False, cli=True)
     args.add_arg('vslam_hint_request_topic', '/visual_slam/trigger_hint', cli=True)
     args.add_arg('vslam_pose_hint_topic', '/localization/pose_hint', cli=True)
+    args.add_arg(
+        'vslam_diagnostics_topic', '/localization/vslam/diagnostics', cli=True)
     args.add_arg('vslam_save_map_folder_path', '', cli=True)
     args.add_arg('manual_pose_topic', '/initialpose', cli=True)
     args.add_arg(
         'vgl_trigger_service', '/visual_localization/trigger_localization', cli=True)
     args.add_arg('vgl_pose_topic', '/visual_localization/pose', cli=True)
+    args.add_arg(
+        'vgl_diagnostics_topic', '/localization/vgl/diagnostics', cli=True)
     args.add_arg('localization_trigger_topic', '/localization/trigger', cli=True)
     args.add_arg('localization_trigger_service', '/localization/relocalize', cli=True)
-    args.add_arg('localization_diagnostics_topic', '/localization/diagnostics', cli=True)
     args.add_arg(
         'pose_hint_required_topic', '/localization/pose_hint_required', cli=True)
     args.add_arg('pose_hint_state_topic', '/localization/pose_hint_state', cli=True)
@@ -449,7 +456,8 @@ def generate_launch_description() -> lut.LaunchDescription:
                     args.manual_pose_topic,
                     args.vgl_pose_topic,
                     args.localization_trigger_topic,
-                    args.localization_diagnostics_topic,
+                    args.vslam_diagnostics_topic,
+                    args.vgl_diagnostics_topic,
                     args.planning_diagnostics_topic,
                     args.controller_diagnostics_topic,
                     args.jetson_stats_diagnostics_topic,
@@ -646,6 +654,8 @@ def generate_launch_description() -> lut.LaunchDescription:
                 'localization_base_frame': args.localization_base_frame,
                 'enable_vslam': args.enable_vslam,
                 'vslam_enable_slam': args.vslam_enable_slam,
+                'vslam_enable_imu': args.vslam_enable_imu,
+                'vslam_imu_topic': args.vslam_imu_topic,
                 'vslam_enable_ground_constraint_in_odometry':
                     args.vslam_enable_ground_constraint_in_odometry,
                 'vslam_enable_ground_constraint_in_slam':
@@ -654,13 +664,14 @@ def generate_launch_description() -> lut.LaunchDescription:
                 'vslam_localize_on_startup': args.vslam_localize_on_startup,
                 'vslam_hint_request_topic': args.vslam_hint_request_topic,
                 'vslam_pose_hint_topic': args.vslam_pose_hint_topic,
+                'vslam_diagnostics_topic': args.vslam_diagnostics_topic,
                 'vslam_save_map_folder_path': args.vslam_save_map_folder_path,
                 'manual_pose_topic': args.manual_pose_topic,
                 'vgl_trigger_service': args.vgl_trigger_service,
                 'vgl_pose_topic': args.vgl_pose_topic,
+                'vgl_diagnostics_topic': args.vgl_diagnostics_topic,
                 'localization_trigger_topic': args.localization_trigger_topic,
                 'localization_trigger_service': args.localization_trigger_service,
-                'localization_diagnostics_topic': args.localization_diagnostics_topic,
                 'pose_hint_required_topic': args.pose_hint_required_topic,
                 'pose_hint_state_topic': args.pose_hint_state_topic,
                 'enable_localization_manager': args.enable_localization_manager,

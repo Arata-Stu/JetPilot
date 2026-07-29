@@ -60,7 +60,7 @@ def test_localization_manager_launch_contract_is_wired_statically() -> None:
         "'manual_pose_topic': args.manual_pose_topic",
         "'vgl_pose_topic': args.vgl_pose_topic",
         "'localization_trigger_topic': args.localization_trigger_topic",
-        "'diagnostics_topic': args.localization_diagnostics_topic",
+        "'diagnostics_topic': args.vslam_diagnostics_topic",
         "'use_sim_time': use_sim_time",
     ):
         assert parameter in localization_source
@@ -89,8 +89,14 @@ def test_configurable_localization_endpoints_are_wired_to_producers() -> None:
     assert "'image_qos_profile': args.vgl_image_qos_profile" in vgl_source
     assert "('visual_localization/trigger_localization', args.vgl_trigger_service)" in vgl_source
     assert "('visual_localization/pose', args.vgl_pose_topic)" in vgl_source
-    assert "'vslam_diagnostics_topic': args.localization_diagnostics_topic" in localization_source
+    assert "'vslam_diagnostics_topic': args.vslam_diagnostics_topic" in localization_source
     assert "('/diagnostics', args.vslam_diagnostics_topic)" in vslam_source
+    assert "'vgl_diagnostics_topic': args.vgl_diagnostics_topic" in localization_source
+    assert "('/diagnostics', args.vgl_diagnostics_topic)" in vgl_source
+    assert "'vslam_enable_imu': lu.is_true(args.vslam_enable_imu)" in localization_source
+    assert "'vslam_imu_topic': args.vslam_imu_topic" in localization_source
+    assert "('visual_slam/imu', args.vslam_imu_topic)" in vslam_source
+    assert "'tracking_mode': 1 if lu.is_true(args.vslam_enable_imu) else 0" in vslam_source
 
 
 def test_jetson_stats_is_enabled_by_default() -> None:

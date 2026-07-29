@@ -43,7 +43,8 @@ DEFAULT_TOPICS = [
     "/visual_slam/tracking/odometry",
     "/localization/pose_hint_state",
     "/localization/pose_hint_required",
-    "/localization/diagnostics",
+    "/localization/vslam/diagnostics",
+    "/localization/vgl/diagnostics",
     "/planning/diagnostics",
     "/controller/diagnostics",
     "/jetson/diagnostics",
@@ -62,6 +63,7 @@ DEFAULT_TOPICS = [
     "/realsense/color/image_raw",
     "/realsense/color/image_raw/compressed",
     "/realsense/color/metadata",
+    "/realsense/diagnostics",
     # RealSense IMU.
     "/realsense/accel/imu_info",
     "/realsense/accel/metadata",
@@ -86,6 +88,15 @@ DEFAULT_TOPICS = [
     "/realsense/infra2/metadata",
     "/realsense/extrinsics/depth_to_infra1",
     "/realsense/extrinsics/depth_to_infra2",
+    # OAK-D Lite RGB, synchronized rectified stereo, IMU, and diagnostics.
+    "/oakd_lite/rgb/camera_info",
+    "/oakd_lite/rgb/image_raw",
+    "/oakd_lite/left/camera_info",
+    "/oakd_lite/left/image_rect",
+    "/oakd_lite/right/camera_info",
+    "/oakd_lite/right/image_rect",
+    "/oakd_lite/imu/data",
+    "/oakd_lite/diagnostics",
 ]
 
 

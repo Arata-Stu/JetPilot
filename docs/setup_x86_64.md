@@ -108,7 +108,7 @@ newgrp docker
 
 ## 4. デバイス・プラットフォーム固有設定
 
-x86_64 環境では、RealSense の udev ルールを適用します。
+x86_64環境では、使用するUSB sensorのudevルールを適用します。
 
 ### 4.1 Intel RealSense udev ルールの設定
 
@@ -132,6 +132,18 @@ cd "${RC_AS_ROOT}"
 ```
 
 適用後、SilkyEvCam を抜き差しし、Docker コンテナを再起動してください。
+
+### 4.3 Luxonis OAK udev ルールの設定
+
+OAK-D LiteをDockerコンテナ内の通常ユーザーから扱えるようにするため、host側に
+udevルールを適用します。
+
+```bash
+cd "${RC_AS_ROOT}"
+./scripts/install_depthai_udev_rules.sh
+```
+
+適用後、OAK-D Liteを抜き差しし、Dockerコンテナを再起動してください。
 
 ---
 
@@ -179,6 +191,7 @@ docker:
   image:
     additional_image_keys:
       - realsense
+      - depthai
       - silky_evcam
       - additional_setting
 EOF
@@ -196,6 +209,7 @@ grep -n 'record.*workspaces/record' /usr/lib/isaac-ros-cli/run_dev.py
 grep -n 'map.*workspaces/map' /usr/lib/isaac-ros-cli/run_dev.py
 grep -n -- '-v /dev:/dev' /usr/lib/isaac-ros-cli/run_dev.py
 ls -l /etc/isaac-ros-cli/docker/Dockerfile.silky_evcam
+ls -l /etc/isaac-ros-cli/docker/Dockerfile.depthai
 ls -l /etc/isaac-ros-cli/docker/Dockerfile.additional_setting
 ```
 

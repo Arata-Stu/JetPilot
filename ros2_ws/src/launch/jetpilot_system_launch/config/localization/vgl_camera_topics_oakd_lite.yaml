@@ -1,0 +1,8 @@
+stereo_cameras:
+  - name: oakd_lite_front
+    left: /oakd_lite/left/image_rect
+    left_camera_info: /oakd_lite/left/camera_info
+    left_frame_id: oakd_lite_left_camera_optical_frame
+    right: /oakd_lite/right/image_rect
+    right_camera_info: /oakd_lite/right/camera_info
+    right_frame_id: oakd_lite_right_camera_optical_frame

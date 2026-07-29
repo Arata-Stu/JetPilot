@@ -4,10 +4,7 @@ import isaac_ros_launch_utils as lu
 import isaac_ros_launch_utils.all_types as lut
 
 def add_sensor_interface(args: lu.ArgumentContainer):
-    if not (
-        lu.is_true(args.enable_sensor_interface) and
-        lu.is_true(args.enable_realsense)
-    ):
+    if not lu.is_true(args.enable_sensor_interface):
         return []
 
     launch_arguments = {

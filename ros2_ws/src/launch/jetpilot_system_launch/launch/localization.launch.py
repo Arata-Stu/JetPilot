@@ -19,6 +19,7 @@ import isaac_ros_launch_utils as lu
 import isaac_ros_launch_utils.all_types as lut
 import os
 import yaml
+from ament_index_python.packages import get_package_share_directory
 
 
 def localization_component_container(container_name: str):
@@ -28,6 +29,19 @@ def localization_component_container(container_name: str):
         executable='component_container_mt',
         arguments=['--ros-args', '--log-level', 'info'],
         output='screen',
+    )
+
+
+def resolve_topic_config_file(topic_config_file: str) -> str:
+    if not topic_config_file or os.path.isabs(topic_config_file):
+        return topic_config_file
+
+    relative_path = topic_config_file
+    if not relative_path.startswith('config/'):
+        relative_path = os.path.join('config', 'localization', relative_path)
+    return os.path.join(
+        get_package_share_directory('jetpilot_system_launch'),
+        relative_path,
     )
 
 
@@ -81,7 +95,8 @@ def add_nodes(args: lu.ArgumentContainer):
     if lu.is_true(args.run_standalone):
         actions.append(localization_component_container(args.container_name))
 
-    camera_optical_frames = camera_optical_frames_from_topic_config(args.vgl_topic_config_file)
+    topic_config_file = resolve_topic_config_file(args.vgl_topic_config_file)
+    camera_optical_frames = camera_optical_frames_from_topic_config(topic_config_file)
     base_frame = args.localization_base_frame
     if enable_vgl:
         cuvgl_map_dir = os.path.join(args.map_dir, 'cuvgl_map') if args.map_dir else ''
@@ -100,11 +115,12 @@ def add_nodes(args: lu.ArgumentContainer):
                         'vgl_camera_optical_frames': camera_optical_frames,
                         'vgl_map_dir': cuvgl_map_dir,
                         'vgl_base_frame': base_frame,
-                        'topic_config_file': args.vgl_topic_config_file,
+                        'topic_config_file': topic_config_file,
                         'vgl_model_dir': args.vgl_model_dir,
                         'vgl_image_qos_profile': args.vgl_image_qos_profile,
                         'vgl_trigger_service': args.vgl_trigger_service,
                         'vgl_pose_topic': args.vgl_pose_topic,
+                        'vgl_diagnostics_topic': args.vgl_diagnostics_topic,
                         'use_sim_time': use_sim_time,
                         'vgl_config_dir': lu.get_path(
                             'jetpilot_system_launch',
@@ -121,7 +137,7 @@ def add_nodes(args: lu.ArgumentContainer):
         params = {
             'container_name': args.container_name,
             'vslam_enabled_stereo_cameras': args.camera_name,
-            'vslam_topic_config_file': args.vgl_topic_config_file,
+            'vslam_topic_config_file': topic_config_file,
             'vslam_map_frame': 'map',
             'vslam_odom_frame': 'odom',
             'vslam_image_qos': 'SENSOR_DATA',
@@ -134,11 +150,13 @@ def add_nodes(args: lu.ArgumentContainer):
             'vslam_enable_ground_constraint_in_slam':
                 lu.is_true(args.vslam_enable_ground_constraint_in_slam),
             'vslam_camera_optical_frames': camera_optical_frames,
+            'vslam_enable_imu': lu.is_true(args.vslam_enable_imu),
+            'vslam_imu_topic': args.vslam_imu_topic,
             'vslam_base_frame': base_frame,
             'vslam_use_rectified_images': True,
             'vslam_initial_pose_topic': args.vslam_pose_hint_topic,
             'vslam_trigger_hint_topic': args.vslam_hint_request_topic,
-            'vslam_diagnostics_topic': args.localization_diagnostics_topic,
+            'vslam_diagnostics_topic': args.vslam_diagnostics_topic,
             'use_sim_time': use_sim_time,
         }
         if args.vslam_save_map_folder_path:
@@ -177,7 +195,7 @@ def add_nodes(args: lu.ArgumentContainer):
                 'vgl_pose_topic': args.vgl_pose_topic,
                 'localization_trigger_topic': args.localization_trigger_topic,
                 'localization_trigger_service': args.localization_trigger_service,
-                'diagnostics_topic': args.localization_diagnostics_topic,
+                'diagnostics_topic': args.vslam_diagnostics_topic,
                 'pose_hint_required_topic': args.pose_hint_required_topic,
                 'pose_hint_state_topic': args.pose_hint_state_topic,
             }]
@@ -338,20 +356,25 @@ def generate_launch_description() -> lut.LaunchDescription:
     # vslam parameters
     args.add_arg('enable_vslam', True, cli=True)
     args.add_arg('vslam_enable_slam', True, cli=True)
+    args.add_arg('vslam_enable_imu', False, cli=True)
+    args.add_arg('vslam_imu_topic', '/front_stereo_imu/imu', cli=True)
     args.add_arg('vslam_enable_ground_constraint_in_odometry', False, cli=True)
     args.add_arg('vslam_enable_ground_constraint_in_slam', False, cli=True)
     args.add_arg('vslam_enable_visualization', False, cli=True)
     args.add_arg('vslam_localize_on_startup', False, cli=True)
     args.add_arg('vslam_hint_request_topic', '/visual_slam/trigger_hint', cli=True)
     args.add_arg('vslam_pose_hint_topic', '/localization/pose_hint', cli=True)
+    args.add_arg(
+        'vslam_diagnostics_topic', '/localization/vslam/diagnostics', cli=True)
     args.add_arg('vslam_save_map_folder_path', '', cli=True)
     args.add_arg('manual_pose_topic', '/initialpose', cli=True)
     args.add_arg(
         'vgl_trigger_service', '/visual_localization/trigger_localization', cli=True)
     args.add_arg('vgl_pose_topic', '/visual_localization/pose', cli=True)
+    args.add_arg(
+        'vgl_diagnostics_topic', '/localization/vgl/diagnostics', cli=True)
     args.add_arg('localization_trigger_topic', '/localization/trigger', cli=True)
     args.add_arg('localization_trigger_service', '/localization/relocalize', cli=True)
-    args.add_arg('localization_diagnostics_topic', '/localization/diagnostics', cli=True)
     args.add_arg(
         'pose_hint_required_topic', '/localization/pose_hint_required', cli=True)
     args.add_arg('pose_hint_state_topic', '/localization/pose_hint_state', cli=True)

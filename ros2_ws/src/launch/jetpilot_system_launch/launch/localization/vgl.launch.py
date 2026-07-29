@@ -83,6 +83,7 @@ def add_visual_global_localization(args: lu.ArgumentContainer) -> list[lut.Actio
     remappings.extend([
         ('visual_localization/trigger_localization', args.vgl_trigger_service),
         ('visual_localization/pose', args.vgl_pose_topic),
+        ('/diagnostics', args.vgl_diagnostics_topic),
     ])
 
     stereo_localizer_cam_ids = ','.join([str(i) for i in range(num_cameras)])
@@ -164,6 +165,7 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg(
         'vgl_trigger_service', '/visual_localization/trigger_localization')
     args.add_arg('vgl_pose_topic', '/visual_localization/pose')
+    args.add_arg('vgl_diagnostics_topic', '/localization/vgl/diagnostics')
     args.add_arg('use_sim_time', False)
 
     args.add_opaque_function(add_visual_global_localization)

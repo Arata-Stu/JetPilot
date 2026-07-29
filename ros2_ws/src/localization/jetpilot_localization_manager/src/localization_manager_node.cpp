@@ -52,8 +52,8 @@ LocalizationManagerNode::LocalizationManagerNode()
     declare_parameter<std::string>("localization_trigger_topic", "/localization/trigger");
   localization_trigger_service_ =
     declare_parameter<std::string>("localization_trigger_service", "/localization/relocalize");
-  diagnostics_topic_ =
-    declare_parameter<std::string>("diagnostics_topic", "/localization/diagnostics");
+  diagnostics_topic_ = declare_parameter<std::string>(
+    "diagnostics_topic", "/localization/vslam/diagnostics");
   vslam_diagnostics_hardware_id_ =
     declare_parameter<std::string>("vslam_diagnostics_hardware_id", "visual_slam");
   vslam_localized_key_ =

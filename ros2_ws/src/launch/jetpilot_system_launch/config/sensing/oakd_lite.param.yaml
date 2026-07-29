@@ -1,0 +1,91 @@
+/**:
+  ros__parameters:
+    # OAK-D Lite: low-resolution, maximum-rate RGB + rectified stereo + IMU.
+    # ROS depth, point cloud, and neural-network processing are intentionally disabled.
+    driver:
+      i_enable_ir: false
+      i_usb_speed: SUPER
+      i_pipeline_auto_calibration_mode: "OFF"
+      i_restart_on_diagnostics_error: true
+      i_publish_tf_from_calibration: true
+      i_tf_device_name: oakd_lite
+      i_tf_device_model: OAK-D-LITE
+      i_tf_base_frame: oakd_lite
+      i_tf_parent_frame: camera_link
+      i_tf_imu_from_descr: "true"
+
+    pipeline_gen:
+      i_pipeline_type: RGBD
+      i_nn_type: none
+      i_enable_imu: true
+      i_enable_diagnostics: true
+      i_enable_rgbd: false
+      i_enable_vio: false
+
+    # OAK-D Lite's IMX214 color sensor is rated up to 35 Hz. The driver
+    # requests a cropped 640x400 output to keep host bandwidth low.
+    rgb:
+      i_publish_topic: true
+      i_publish_full_resolution: false
+      i_width: 640
+      i_height: 400
+      i_fps: 35.0
+      i_undistorted: true
+      i_enable_lazy_publisher: false
+      i_publish_compressed: false
+      i_synced: false
+      i_enable_nn: false
+      i_enable_feature_tracker: false
+      i_max_q_size: 8
+
+    # OV7251 stereo sensors support 640x400 at up to 117 Hz. Publish the
+    # hardware-synchronized rectified mono pair for Isaac ROS VSLAM/VGL.
+    # StereoDepth still performs rectification on-device, but its depth output
+    # is not published to ROS.
+    stereo:
+      i_publish_topic: false
+      i_width: 640
+      i_height: 400
+      i_fps: 117.0
+      i_depth_preset: FAST_ACCURACY
+      i_aligned: false
+      i_subpixel: false
+      i_lr_check: false
+      i_extended_disp: false
+      i_enable_temporal_filter: false
+      i_enable_spatial_filter: false
+      i_enable_speckle_filter: false
+      i_enable_lazy_publisher: false
+      i_publish_compressed: false
+      i_output_disparity: false
+      i_reverse_stereo_socket_order: true
+      i_left_rect_publish_topic: true
+      i_right_rect_publish_topic: true
+      i_left_rect_synced: true
+      i_right_rect_synced: true
+      i_synced: false
+      i_max_q_size: 8
+
+    # Group the stereo pair on-device and assign an identical ROS timestamp.
+    # A 1 ms grouping window is safely below one 117 Hz frame interval.
+    sync:
+      sync_threshold: 1
+      sync_attempts: 10
+
+    # BMI270 requests above 400 Hz are rounded to its highest exposed runtime
+    # rate. These values match Luxonis' high-rate raw-streaming example.
+    imu:
+      i_message_type: IMU
+      i_sync_method: COPY
+      i_enable_acc: true
+      i_acc_mode: ACCELEROMETER_UNCALIBRATED
+      i_acc_freq: 480
+      i_enable_gyro: true
+      i_gyro_mode: GYROSCOPE_UNCALIBRATED
+      i_gyro_freq: 400
+      i_enable_mag: false
+      i_enable_rotation: false
+      i_rot_cov: -1.0
+      i_batch_report_threshold: 1
+      i_max_batch_reports: 10
+      i_max_q_size: 50

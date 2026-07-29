@@ -24,6 +24,8 @@
     num_cameras: 2
     min_num_images: 2
     multicam_mode: 1
+    # 0: stereo/multi-camera, 1: visual-inertial, 2: RGB-D
+    # Launch switches this to 1 only when vslam_enable_imu:=true.
     tracking_mode: 0
     sync_matching_threshold_ms: 5.0
     enable_image_denoising: false
@@ -62,9 +64,8 @@
     # ============================================
     # IMU Fusion Settings
     # 
-    # enable_imu_fusion: IMUデータ統合の有効化
-    # true: IMUデータを使用（視覚+慣性の統合推定）
-    # false: カメラのみ使用（視覚オドメトリのみ）
+    # tracking_mode=1: IMUデータを使用（視覚+慣性の統合推定）
+    # tracking_mode=0: カメラのみ使用（視覚オドメトリのみ）
     # 
     # gyro_noise_density: ジャイロスコープのホワイトノイズ密度 [rad/s/√Hz]
     # センサーの測定精度を表すパラメータ
@@ -86,7 +87,6 @@
     # より正確に設定する場合は
     # https://github.com/ethz-asl/kalibr
     # ============================================
-    enable_imu_fusion: false
     gyro_noise_density: 0.000244
     gyro_random_walk: 0.000019393
     accel_noise_density: 0.001862

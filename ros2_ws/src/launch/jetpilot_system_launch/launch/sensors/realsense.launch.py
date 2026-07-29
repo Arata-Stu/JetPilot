@@ -67,6 +67,9 @@ def launch_realsense(args: lu.ArgumentContainer) -> list[lut.Action]:
         name=args.camera_name,
         namespace='',
         parameters=parameters,
+        remappings=[
+            ('/diagnostics', f'/{args.camera_name}/diagnostics'),
+        ],
         extra_arguments=[{'use_intra_process_comms': True}],
     )
     composable_nodes = [realsense_node]
