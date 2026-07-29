@@ -2125,7 +2125,7 @@ function renderMapBuildForm() {
     <div class="form-grid">
       <div class="field full">
         <label>Rosbag</label>
-        <select id="build-rosbag" onchange="scheduleMapBuildPreflight()">
+        <select id="build-rosbag" onchange="selectMapBuildRosbag(this.value)">
           <option value="">Select rosbag</option>
           ${state.rosbags.map((bag) => `<option value="${esc(bag.path)}">${esc(bag.display_name || bag.name)} - ${esc(bag.path)}</option>`).join("")}
         </select>
@@ -2363,13 +2363,44 @@ function analysisTopics(kind) {
 
 function preferredAnalysisTopic(kind, topics) {
   const preferences = {
-    image: ["/realsense/color/image_raw/compressed", "/realsense/color/image_raw", "/event_camera/event_image", "/realsense/infra1/image_rect_raw"],
+    image: [
+      "/realsense/color/image_raw/compressed",
+      "/realsense/color/image_raw",
+      "/oakd_lite/rgb/image_raw/compressed",
+      "/oakd_lite/rgb/image_raw",
+      "/event_camera/event_image",
+      "/realsense/infra1/image_rect_raw",
+    ],
     control: ["/vehicle/control_cmd", "/auto/control_cmd", "/teleop/control_cmd", "/propo/control_cmd"],
     mode: ["/operation_mode/state"],
     pose: ["/visual_slam/tracking/odometry", "/localization/odometry", "/odom"],
     speed: ["/visual_slam/tracking/odometry", "/commands/motor/speed"],
   }[kind] || [];
   return preferences.map((name) => topics.find((topic) => topic.name === name)).find(Boolean)?.name || topics[0]?.name || "";
+}
+
+function cameraTopicConfigForTopics(topics) {
+  const topicNames = new Set(
+    (topics || [])
+      .map((topic) => String(topic?.name || topic?.topic || topic || ""))
+      .filter(Boolean),
+  );
+  if (!topicNames.size) return null;
+
+  const matches = (state.cameraTopicConfigs || []).filter((config) => {
+    const required = Array.isArray(config.required_topics) ? config.required_topics.filter(Boolean) : [];
+    return required.length > 0 && required.every((topic) => topicNames.has(String(topic)));
+  });
+  return matches.sort((left, right) => {
+    const topicDifference = (right.required_topics?.length || 0) - (left.required_topics?.length || 0);
+    if (topicDifference) return topicDifference;
+    return Number(right.score || 0) - Number(left.score || 0);
+  })[0] || null;
+}
+
+function defaultCameraTopicConfig() {
+  const configs = state.cameraTopicConfigs || [];
+  return configs.find((config) => config.recommended) || configs[0] || null;
 }
 
 function analysisTopicOptions(kind, selected, optional = true) {
@@ -3054,6 +3085,10 @@ async function selectAnalysisBag(path) {
     const detail = await api(apiPath("/api/rosbags/detail", { path: selectedPath }));
     if (state.analysis.selectedBagPath !== selectedPath) return;
     state.analysis.bagDetail = detail.rosbag || detail;
+    if (changed) {
+      const selectedConfig = cameraTopicConfigForTopics(analysisTopicRecords()) || defaultCameraTopicConfig();
+      state.analysis.topicConfigPath = selectedConfig?.path || "";
+    }
     for (const kind of ["image", "control", "mode", "pose", "speed"]) {
       const key = `${kind}Topic`;
       state.analysis[key] = changed ? preferredAnalysisTopic(kind, analysisTopics(kind)) : previousTopics[kind];
@@ -6742,12 +6777,41 @@ function fillMapDir() {
   updateMapDirPreview();
 }
 
-function useRosbag(path) {
+async function selectMapBuildRosbag(path) {
+  const selectedPath = String(path || "");
+  const manualInput = $("build-topic-config");
+  if (manualInput) manualInput.value = "";
+  if (!selectedPath) {
+    updateCameraTopicPreview();
+    scheduleMapBuildPreflight({ immediate: true, force: true });
+    return;
+  }
+
+  try {
+    const detail = await api(apiPath("/api/rosbags/detail", { path: selectedPath }));
+    if ($("build-rosbag")?.value !== selectedPath) return;
+    const selectedConfig = (
+      cameraTopicConfigForTopics((detail.rosbag || detail)?.topics || [])
+      || defaultCameraTopicConfig()
+    );
+    const configSelect = $("build-topic-config-select");
+    if (configSelect) configSelect.value = selectedConfig?.path || "";
+    updateCameraTopicPreview();
+  } catch (error) {
+    toast(`Camera config detection failed: ${error.message}`, "error");
+  } finally {
+    if ($("build-rosbag")?.value === selectedPath) {
+      scheduleMapBuildPreflight({ immediate: true, force: true });
+    }
+  }
+}
+
+async function useRosbag(path) {
   state.tab = "map-builder";
   render();
   $("build-rosbag").value = path;
   fillMapDir();
-  scheduleMapBuildPreflight({ immediate: true, force: true });
+  await selectMapBuildRosbag(path);
 }
 
 function selectedCameraTopicConfig() {
@@ -9165,6 +9229,7 @@ window.setFpvHost = setFpvHost;
 window.updateFpvCommandPreview = updateFpvCommandPreview;
 window.fillMapDir = fillMapDir;
 window.useRosbag = useRosbag;
+window.selectMapBuildRosbag = selectMapBuildRosbag;
 window.openBagAnalysis = openBagAnalysis;
 window.selectAnalysisBag = selectAnalysisBag;
 window.updateAnalysisOption = updateAnalysisOption;

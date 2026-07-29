@@ -96,6 +96,27 @@ def _camera_topic_config_score(path: Path) -> int:
     return score
 
 
+def _camera_topic_config_required_topics(path: Path) -> list[str]:
+    topic_keys = {"left", "right", "left_camera_info", "right_camera_info"}
+    topics: set[str] = set()
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+
+    for raw_line in text.splitlines():
+        line = raw_line.split("#", 1)[0].strip()
+        key, separator, raw_value = line.partition(":")
+        if not separator or key not in topic_keys:
+            continue
+        value = raw_value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        if value.startswith("/"):
+            topics.add(value)
+    return sorted(topics)
+
+
 def scan_camera_topic_configs(config: ConsoleConfig) -> list[dict[str, object]]:
     config_dir = localization_config_dir(config)
     if not config_dir.exists():
@@ -113,6 +134,7 @@ def scan_camera_topic_configs(config: ConsoleConfig) -> list[dict[str, object]]:
                 "relative_path": _path_relative_to(path, config.ros2_ws),
                 "score": score,
                 "recommended": path == default_topic_config(config) or score >= 80,
+                "required_topics": _camera_topic_config_required_topics(path),
             }
         )
 

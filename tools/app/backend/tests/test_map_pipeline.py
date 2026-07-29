@@ -1,11 +1,56 @@
 from __future__ import annotations
 
 import math
+import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from jetpilot_console.map_pipeline import build_vgl_vslam_script, generate_raceline_script
+from jetpilot_console.map_pipeline import (
+    build_vgl_vslam_script,
+    generate_raceline_script,
+    scan_camera_topic_configs,
+)
+
+
+class ScanCameraTopicConfigsTest(unittest.TestCase):
+    def test_exposes_topics_used_to_match_a_rosbag(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_dir:
+            ros2_ws = Path(temporary_dir)
+            config_dir = (
+                ros2_ws
+                / "src"
+                / "launch"
+                / "jetpilot_system_launch"
+                / "config"
+                / "localization"
+            )
+            config_dir.mkdir(parents=True)
+            config_path = config_dir / "vgl_camera_topics_oakd_lite.yaml"
+            config_path.write_text(
+                """
+stereo_cameras:
+  - name: oakd_lite_front
+    left: /oakd_lite/left/image_rect
+    left_camera_info: /oakd_lite/left/camera_info
+    right: /oakd_lite/right/image_rect
+    right_camera_info: /oakd_lite/right/camera_info
+""".strip(),
+                encoding="utf-8",
+            )
+
+            configs = scan_camera_topic_configs(SimpleNamespace(ros2_ws=ros2_ws))
+
+            self.assertEqual(len(configs), 1)
+            self.assertEqual(
+                configs[0]["required_topics"],
+                [
+                    "/oakd_lite/left/camera_info",
+                    "/oakd_lite/left/image_rect",
+                    "/oakd_lite/right/camera_info",
+                    "/oakd_lite/right/image_rect",
+                ],
+            )
 
 
 class BuildVglVslamScriptTest(unittest.TestCase):
