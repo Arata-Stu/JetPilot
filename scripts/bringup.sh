@@ -2,8 +2,13 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(dirname -- "$SCRIPT_DIR")"
 ROS2_WS="${ROS2_WS:-/workspaces/ros2_ws}"
+PROJECT_ROOT="${JETPILOT_PROJECT_ROOT:-$(dirname -- "$SCRIPT_DIR")}"
+if [[ -z "${JETPILOT_PROJECT_ROOT:-}" \
+      && ! -d "${PROJECT_ROOT}/ros2_ws" \
+      && -d "$ROS2_WS" ]]; then
+  PROJECT_ROOT="$(dirname -- "$ROS2_WS")"
+fi
 ROS2_SETUP_FILE="${ROS2_SETUP_FILE:-${ROS2_WS}/install/setup.bash}"
 MAP_ROOT="${MAP_ROOT:-/workspaces/map}"
 RECORD_ROOT="${RECORD_ROOT:-/workspaces/record}"

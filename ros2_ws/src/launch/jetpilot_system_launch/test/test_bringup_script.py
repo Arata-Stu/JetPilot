@@ -38,6 +38,31 @@ def run_launcher(
     )
 
 
+def test_launcher_resolves_project_root_when_scripts_are_mounted_separately(
+    tmp_path: Path,
+) -> None:
+    detached_scripts = tmp_path / "scripts"
+    detached_scripts.mkdir()
+    detached_launcher = detached_scripts / "bringup.sh"
+    detached_helper = detached_scripts / "bringup_profiles.py"
+    shutil.copy2(LAUNCHER, detached_launcher)
+    shutil.copy2(LAUNCHER.with_name("bringup_profiles.py"), detached_helper)
+    env = dict(os.environ)
+    env["ROS2_WS"] = str(PROJECT_ROOT / "ros2_ws")
+    env.pop("JETPILOT_PROJECT_ROOT", None)
+    env.pop("BRINGUP_PROFILE_ROOT", None)
+
+    result = subprocess.run(
+        ["bash", str(detached_launcher), "--list-sensor-kits"],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert "oakd-lite" in result.stdout
+
+
 def test_presets_are_listed() -> None:
     output = run_launcher("--list-presets").stdout
 

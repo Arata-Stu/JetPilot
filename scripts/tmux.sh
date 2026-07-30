@@ -2,8 +2,13 @@
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(dirname -- "$SCRIPT_DIR")"
 ROS2_WS="${ROS2_WS:-/workspaces/ros2_ws}"
+PROJECT_ROOT="${JETPILOT_PROJECT_ROOT:-$(dirname -- "$SCRIPT_DIR")}"
+if [[ -z "${JETPILOT_PROJECT_ROOT:-}" \
+      && ! -d "${PROJECT_ROOT}/ros2_ws" \
+      && -d "$ROS2_WS" ]]; then
+  PROJECT_ROOT="$(dirname -- "$ROS2_WS")"
+fi
 ROS2_SETUP_FILE="${ROS2_SETUP_FILE:-${ROS2_WS}/install/setup.bash}"
 MAP_ROOT="${MAP_ROOT:-/workspaces/map}"
 RECORD_ROOT="${RECORD_ROOT:-/workspaces/record}"
@@ -148,6 +153,7 @@ cleanup_failed_session() {
 trap cleanup_failed_session EXIT
 
 printf -v PROJECT_ROOT_Q '%q' "$PROJECT_ROOT"
+printf -v SCRIPT_DIR_Q '%q' "$SCRIPT_DIR"
 printf -v ROS2_SETUP_FILE_Q '%q' "$ROS2_SETUP_FILE"
 printf -v MAP_ROOT_Q '%q' "$MAP_ROOT"
 printf -v RECORD_ROOT_Q '%q' "$RECORD_ROOT"
@@ -190,7 +196,7 @@ create_run_session() {
   prepare_pane \
     "$main_pane" \
     'bringup' \
-    "cd ${PROJECT_ROOT_Q} && ./scripts/bringup.sh"
+    "cd ${PROJECT_ROOT_Q} && ${SCRIPT_DIR_Q}/bringup.sh"
   prepare_pane \
     "$node_pane" \
     'ROS nodes' \
@@ -223,7 +229,7 @@ create_map_session() {
   prepare_pane \
     "$main_pane" \
     'create map' \
-    "cd ${PROJECT_ROOT_Q} && ./scripts/create_map.sh"
+    "cd ${PROJECT_ROOT_Q} && ${SCRIPT_DIR_Q}/create_map.sh"
   prepare_pane \
     "$map_pane" \
     'map artifacts' \
@@ -256,7 +262,7 @@ create_dev_session() {
   prepare_pane \
     "$build_pane" \
     'build' \
-    "cd ${PROJECT_ROOT_Q} && ./scripts/build.sh"
+    "cd ${PROJECT_ROOT_Q} && ${SCRIPT_DIR_Q}/build.sh"
   prepare_pane \
     "$git_pane" \
     'git status' \
