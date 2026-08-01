@@ -90,6 +90,8 @@ def test_vehicle_and_sensor_profiles_are_listed_dynamically() -> None:
     assert "PCA9685 RC vehicle interface" in vehicles
     assert "vesc" in vehicles
     assert "VESC vehicle interface" in vehicles
+    assert "jpbb" in vehicles
+    assert "JPBB-01 USB/RC safety bridge" in vehicles
     assert "realsense" in sensor_kits
     assert "oakd-lite" in sensor_kits
     assert "Luxonis OAK-D Lite" in sensor_kits
@@ -100,9 +102,9 @@ def test_vehicle_and_sensor_profiles_are_listed_dynamically() -> None:
 def test_bringup_profiles_pass_schema_validation() -> None:
     output = run_launcher("--validate-profiles").stdout
 
-    assert "vehicle: 2 profile(s)" in output
+    assert "vehicle: 3 profile(s)" in output
     assert "sensor_kit: 5 profile(s)" in output
-    assert "validated: 7 profile(s)" in output
+    assert "validated: 8 profile(s)" in output
 
 
 def test_new_manifest_is_available_without_editing_launcher(tmp_path: Path) -> None:
@@ -193,6 +195,18 @@ def test_generic_vehicle_presets_accept_an_explicit_interface() -> None:
     assert "enable_sensor_kit:=true" in vesc
     assert "enable_teleop:=true" in vesc
     assert "vehicle_interface_pkg:=jetpilot_vesc_interface" in vesc
+
+
+def test_jpbb_vehicle_profile_resolves_without_changing_existing_backends() -> None:
+    output = run_launcher("drive", "--vehicle", "jpbb", "--dry-run").stdout
+
+    assert "vehicle      : jpbb" in output
+    assert "vehicle_interface_pkg:=jetpilot_bridge_interface" in output
+    assert (
+        "vehicle_interface_launch:=launch/jetpilot_bridge_interface.launch.xml"
+        in output
+    )
+    assert "jetpilot_bridge_interface_node.param.yaml" in output
 
 
 def test_generic_vehicle_preset_requires_an_interface_noninteractively() -> None:

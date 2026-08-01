@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "kind": "vehicle",
+  "id": "jpbb",
+  "label": "JPBB-01 USB/RC safety bridge",
+  "order": 30,
+  "aliases": [
+    "jetpilot-bridge"
+  ],
+  "launch": {
+    "package": "jetpilot_bridge_interface",
+    "file": "launch/jetpilot_bridge_interface.launch.xml"
+  },
+  "driver_param": {
+    "package": "jetpilot_bridge_interface",
+    "path": "config/jetpilot_bridge_interface_node.param.yaml"
+  },
+  "arguments": {
+    "publish_vehicle_description": true,
+    "publish_vehicle_evs_description": false,
+    "publish_vehicle_thremo_description": false
+  }
+}
