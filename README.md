@@ -4,6 +4,7 @@
 
 - [Project Design Policy](docs/project_design_policy.md)
 - [Hardware Interface Package Design](docs/hardware_interface_packages.md)
+- [JPBB-01 Firmware / Build / Flash](docs/jpbb_firmware.md)
 - [Isaac ROS Launch Guidelines](docs/isaac_ros_launch_guidelines.md)
 - [Localization Manager](ros2_ws/src/localization/jetpilot_localization_manager/README.md)
 - [Bringup presets / TUI](docs/bringup_launcher.md)

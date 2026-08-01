@@ -226,6 +226,10 @@ ls -l /etc/isaac-ros-cli/docker/Dockerfile.depthai
 ls -l /etc/isaac-ros-cli/docker/Dockerfile.additional_setting
 ```
 
+`vcs import`ではJPBB-01の基板資料とSTM32 firmwareも
+`hardware/jetpilot_bridge_board`へ取得される。ビルドと書き込みは
+[JPBB-01 Firmware / Build / Flash](jpbb_firmware.md)を参照する。
+
 以後、`isaac-ros-cli` の変更を再ビルド・再インストールする場合は、プロジェクトのルートから次を実行します。
 
 ```bash
