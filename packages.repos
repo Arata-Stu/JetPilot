@@ -16,6 +16,8 @@ repositories:
     version: jetpilot-v1.0.0
 
   # Tools
+
+  ## custom_joy_node
   ros2_ws/src/tool/custom_joy_node:
     type: git
     url: https://github.com/carbuncle01/custom_joy_node.git
