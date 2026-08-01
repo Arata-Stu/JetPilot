@@ -702,6 +702,7 @@ class AnalysisRouteTests(unittest.TestCase):
             map_root=self.map_root,
             ros2_ws=self.ros2_ws,
             repo_root=self.repo_root,
+            python_ws=self.repo_root / "python_ws",
             python_bin="python3",
             launch_package="jetpilot_system_launch",
             analysis_ros_domain_id=92,
@@ -837,6 +838,51 @@ class AnalysisRouteTests(unittest.TestCase):
         )
         self.assertEqual(bag_status, 200)
         self.assertEqual(self.json_body(bag_raw)["rosbag"]["topic_count"], 2)
+
+    def test_e2e_recorded_analysis_route_and_model_index(self) -> None:
+        bag = write_bag(
+            self.record_root / "e2e-run",
+            {
+                "/camera": ("sensor_msgs/msg/Image", 30),
+                "/auto/control_cmd": ("jetpilot_msgs/msg/ControlCommand", 30),
+                "/vehicle/control_cmd": ("jetpilot_msgs/msg/ControlCommand", 30),
+                "/visual_slam/tracking/odometry": ("nav_msgs/msg/Odometry", 30),
+                "/e2e/diagnostics": ("diagnostic_msgs/msg/DiagnosticArray", 30),
+            },
+        )
+        model_dir = self.repo_root / "outputs" / "run-a"
+        model_dir.mkdir(parents=True)
+        (model_dir / "model.onnx").write_bytes(b"onnx")
+        (model_dir / "metadata.json").write_text(
+            json.dumps({"model_name": "run-a"}), encoding="utf-8"
+        )
+
+        model_status, _, model_raw = self.request("GET", "/api/e2e/models")
+        self.assertEqual(model_status, 200)
+        self.assertEqual(self.json_body(model_raw)["models"][0]["name"], "run-a")
+
+        request = {
+            "analysis_kind": "e2e",
+            "e2e_mode": "recorded_localization",
+            "rosbag": str(bag),
+            "image_topic": "/camera",
+            "prediction_control_topic": "/auto/control_cmd",
+            "applied_control_topic": "/vehicle/control_cmd",
+            "pose_topic": "/visual_slam/tracking/odometry",
+            "e2e_diagnostic_topic": "/e2e/diagnostics",
+            "trajectory_mode": "recorded",
+            "max_fps": 15,
+        }
+        status, _, raw = self.request("POST", "/api/e2e-analyses", request)
+        payload = self.json_body(raw)
+
+        self.assertEqual(status, 201, payload)
+        self.assertTrue(payload["preflight"]["ready"])
+        self.assertEqual(self.tasks.calls[0]["kind"], "analyze-e2e")
+        script = str(self.tasks.calls[0]["command"][2])
+        self.assertIn("jetpilot_console.e2e_analysis_worker", script)
+        self.assertIn("--mode recorded_localization", script)
+        self.assertIn("--e2e-diagnostic-topic /e2e/diagnostics", script)
 
     def test_analysis_claims_selected_map_as_a_second_resource(self) -> None:
         bag = write_bag(

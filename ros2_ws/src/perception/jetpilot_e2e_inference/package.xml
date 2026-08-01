@@ -12,6 +12,7 @@
   <exec_depend>isaac_ros_tensor_list_interfaces</exec_depend>
   <exec_depend>isaac_ros_dnn_image_encoder</exec_depend>
   <exec_depend>isaac_ros_tensor_rt</exec_depend>
+  <exec_depend>diagnostic_msgs</exec_depend>
   <exec_depend>jetpilot_msgs</exec_depend>
   <exec_depend>ament_index_python</exec_depend>
   <exec_depend>launch</exec_depend>

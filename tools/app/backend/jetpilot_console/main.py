@@ -23,6 +23,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from .bag_analysis import AnalysisRepository, build_analysis_script, rosbag_detail
 from .config import ConsoleConfig
+from .e2e_analysis import scan_e2e_models
 from .fpv_receiver import FpvReceiverManager
 from .fpv_stream import FpvStreamSettings
 from .indexes import (
@@ -308,6 +309,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/analyses":
             self._json({"analyses": self.server.state.analyses.list()})
             return
+        if path == "/api/e2e/models":
+            self._json({"models": scan_e2e_models(self.server.state.config)})
+            return
         if path.startswith("/api/analyses/"):
             self._analysis_get(path)
             return
@@ -486,6 +490,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path in {"/api/analyses", "/api/analyses/start"}:
             self._start_analysis(body)
+            return
+        if path in {"/api/e2e-analyses", "/api/e2e-analyses/start"}:
+            self._start_analysis(body, e2e=True)
             return
         if path == "/api/maps/build-vgl-vslam":
             self._start_map_build(body)
@@ -1353,10 +1360,14 @@ find {shlex.quote(record_root)} -name metadata.yaml -printf '%TY-%Tm-%Td %TH:%TM
         )
         self._json({"task": config_task.to_json()}, HTTPStatus.CREATED)
 
-    def _start_analysis(self, body: dict[str, Any]) -> None:
+    def _start_analysis(self, body: dict[str, Any], *, e2e: bool = False) -> None:
         config = self.server.state.config
         try:
-            preflight = evaluate_preflight(config, "analyze-rosbag", body)
+            preflight = evaluate_preflight(
+                config,
+                "analyze-e2e" if e2e else "analyze-rosbag",
+                body,
+            )
         except (TypeError, ValueError) as exc:
             self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
             return
@@ -1394,6 +1405,13 @@ find {shlex.quote(record_root)} -name metadata.yaml -printf '%TY-%Tm-%Td %TH:%TM
                 if resolved.get("output_model_dir")
                 else None
             )
+            e2e_mode = str(resolved.get("e2e_mode") or "") if e2e else ""
+            e2e_model = (
+                Path(str(resolved["model_path"])) if resolved.get("model_path") else None
+            )
+            e2e_provider = str(resolved.get("inference_provider") or "auto")
+            e2e_deadline_ms = float(resolved.get("deadline_ms") or 33.3)
+            e2e_manual_only = bool(resolved.get("manual_only", True))
         except (KeyError, TypeError, ValueError) as exc:
             self._json({"error": f"preflight result is incomplete: {exc}"}, HTTPStatus.CONFLICT)
             return
@@ -1413,11 +1431,28 @@ find {shlex.quote(record_root)} -name metadata.yaml -printf '%TY-%Tm-%Td %TH:%TM
             "offline_localization_mode",
             "max_fps",
             "topic_config",
+            "analysis_kind",
+            "e2e_mode",
+            "model_path",
+            "teacher_control_topic",
+            "prediction_control_topic",
+            "applied_control_topic",
+            "comparison_control_topic",
+            "section_topic",
+            "e2e_diagnostic_topic",
+            "inference_provider",
+            "manual_only",
+            "deadline_ms",
         )
         stored_request = {key: body.get(key) for key in accepted_fields if key in body}
         stored_request["label"] = label
+        if e2e:
+            stored_request["analysis_kind"] = "e2e"
+            stored_request["e2e_mode"] = e2e_mode
         initial_phase = (
-            "offline-localization" if trajectory_mode == "offline" else "extracting"
+            "offline-localization"
+            if trajectory_mode == "offline"
+            else ("e2e-prepare" if e2e else "extracting")
         )
 
         analysis_id = ""
@@ -1448,6 +1483,19 @@ find {shlex.quote(record_root)} -name metadata.yaml -printf '%TY-%Tm-%Td %TH:%TM
                 expected_map_fingerprint=expected_map_fingerprint,
                 topic_config=topic_config,
                 model_dir=model_dir,
+                comparison_control_topic=str(
+                    resolved.get("comparison_control_topic") or ""
+                ),
+                section_topic=str(resolved.get("section_topic") or ""),
+                e2e_diagnostic_topic=str(resolved.get("e2e_diagnostic_topic") or ""),
+                e2e_mode=e2e_mode,
+                e2e_model=e2e_model,
+                e2e_provider=e2e_provider,
+                e2e_teacher_topic=str(resolved.get("teacher_control_topic") or ""),
+                e2e_prediction_topic=str(resolved.get("prediction_control_topic") or ""),
+                e2e_applied_control_topic=str(resolved.get("applied_control_topic") or ""),
+                e2e_manual_only=e2e_manual_only,
+                e2e_deadline_ms=e2e_deadline_ms,
             )
         except (OSError, TypeError, ValueError) as exc:
             if analysis_id:
@@ -1470,6 +1518,13 @@ find {shlex.quote(record_root)} -name metadata.yaml -printf '%TY-%Tm-%Td %TH:%TM
             {"name": "timeline", "path": str(analysis_dir / "timeline.json")},
             {"name": "frames", "path": str(analysis_dir / "frames")},
         ]
+        if e2e:
+            artifacts.extend(
+                [
+                    {"name": "E2E metrics", "path": str(analysis_dir / "e2e" / "metrics.json")},
+                    {"name": "E2E predictions", "path": str(analysis_dir / "e2e" / "predictions.csv")},
+                ]
+            )
         resource_key = (
             f"analysis-ros-domain:{config.analysis_ros_domain_id}"
             if trajectory_mode == "offline"
@@ -1480,8 +1535,8 @@ find {shlex.quote(record_root)} -name metadata.yaml -printf '%TY-%Tm-%Td %TH:%TM
             resource_keys.append(f"map-dir:{map_dir}")
         try:
             task = self.server.state.tasks.start(
-                kind="analyze-rosbag",
-                title=f"Analyze rosbag: {label}",
+                kind="analyze-e2e" if e2e else "analyze-rosbag",
+                title=(f"E2E analysis: {label}" if e2e else f"Analyze rosbag: {label}"),
                 command=["bash", "-lc", script],
                 cwd=str(config.repo_root),
                 artifacts=artifacts,

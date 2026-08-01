@@ -50,6 +50,7 @@ bag_manager_node:
       - /localization/vgl/diagnostics
       - /planning/diagnostics
       - /controller/diagnostics
+      - /e2e/diagnostics
       - /jetson/diagnostics
 
       ## SilkyEvCam event camera.

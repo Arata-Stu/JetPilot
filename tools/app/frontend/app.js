@@ -26,6 +26,7 @@ const state = {
   rosbags: [],
   rosbagTrash: [],
   maps: [],
+  e2eModels: [],
   listControls: {
     rosbags: { query: "", sort: "newest", groupByDate: true, collapsedDays: {} },
     rosbagTrash: { query: "", sort: "newest", groupByDate: true, collapsedDays: {} },
@@ -216,6 +217,16 @@ const state = {
     frameRequestSerial: 0,
     channelRender: {},
     jetsonSelectedSeries: [],
+    e2eMode: "supervised",
+    e2eModelPath: "",
+    e2eProvider: "auto",
+    e2eTeacherTopic: "/teleop/control_cmd",
+    e2ePredictionTopic: "/auto/control_cmd",
+    e2eAppliedTopic: "/vehicle/control_cmd",
+    e2eDiagnosticTopic: "/e2e/diagnostics",
+    e2eSectionTopic: "/localization/current_section",
+    e2eManualOnly: true,
+    e2eDeadlineMs: 33.3,
   },
 };
 
@@ -223,6 +234,7 @@ const tabs = [
   ["dashboard", "Dashboard"],
   ["rosbags", "Rosbags"],
   ["bag-analysis", "Bag Analysis"],
+  ["e2e-analysis", "E2E Analysis"],
   ["map-builder", "Map Builder"],
   ["joy-profile", "Joy Profile"],
   ["fpv", "FPV"],
@@ -869,7 +881,7 @@ function confirmAction({ title, target = "", detail = "", destructive = false })
 function runWorkflowAction(workflow) {
   if (workflow === "map-build") setTab("map-builder");
   else if (workflow === "bag-analysis") setTab("bag-analysis");
-  else if (workflow === "e2e") setTab("rosbags");
+  else if (workflow === "e2e") setTab("e2e-analysis");
   else if (workflow === "fpv") setTab("fpv");
   else if (workflow === "jetson") setTab("jetson");
 }
@@ -1060,6 +1072,10 @@ function trimTrailingSlash(value) {
   return String(value || "").replace(/\/+$/, "");
 }
 
+function isAnalysisTab(tab = state.tab) {
+  return tab === "bag-analysis" || tab === "e2e-analysis";
+}
+
 function sh(value) {
   const text = String(value ?? "");
   if (!text) return "''";
@@ -1069,7 +1085,7 @@ function sh(value) {
 
 async function refreshAll() {
   const previousFpvSession = state.fpv.browserStatus?.session_id || "";
-  const [config, tasks, rosbags, rosbagTrash, maps, cameraTopicConfigs, localIps, analyses, fpvStatus] = await Promise.all([
+  const [config, tasks, rosbags, rosbagTrash, maps, cameraTopicConfigs, localIps, analyses, e2eModels, fpvStatus] = await Promise.all([
     api("/api/config"),
     api("/api/tasks"),
     api("/api/rosbags/local"),
@@ -1078,6 +1094,7 @@ async function refreshAll() {
     api("/api/map-builder/camera-topic-configs"),
     api("/api/network/local-ips").catch(() => ({ ips: [] })),
     api("/api/analyses").catch(() => ({ analyses: [] })),
+    api("/api/e2e/models").catch(() => ({ models: [] })),
     api("/api/fpv/status").catch(() => ({ fpv: { available: false, running: false } })),
   ]);
   state.config = config;
@@ -1088,6 +1105,10 @@ async function refreshAll() {
   state.cameraTopicConfigs = cameraTopicConfigs.configs || [];
   state.localIps = localIps.ips || [];
   state.analysis.analyses = normalizeAnalysisList(analyses);
+  state.e2eModels = e2eModels.models || [];
+  if (!state.analysis.e2eModelPath && state.e2eModels[0]) {
+    state.analysis.e2eModelPath = state.e2eModels[0].path || "";
+  }
   state.fpv.browserStatus = fpvStatus.fpv || state.fpv.browserStatus;
   noteFpvWebRtcRtpObserved(state.fpv.browserStatus);
   if (
@@ -1122,7 +1143,7 @@ async function refreshAll() {
 }
 
 function setTab(tab) {
-  if (state.tab === "bag-analysis" && tab !== "bag-analysis") pauseAnalysisPlayback();
+  if (isAnalysisTab(state.tab) && !isAnalysisTab(tab)) pauseAnalysisPlayback();
   if (state.tab === "maps" && tab !== "maps") stopSimulationLoop();
   if (
     state.tab === "fpv"
@@ -1172,7 +1193,7 @@ function render() {
   requestAnimationFrame(() => {
     drawMapPreview();
     drawSimulationPreview();
-    if (state.tab === "bag-analysis") mountAnalysisViewer();
+    if (isAnalysisTab()) mountAnalysisViewer();
     scheduleVisiblePreflights({ force: forcePreflight });
   });
 }
@@ -1217,6 +1238,7 @@ function updateLogOnly(chunk = "", append = false) {
 function renderPage() {
   if (state.tab === "rosbags") return renderRosbags();
   if (state.tab === "bag-analysis") return renderBagAnalysis();
+  if (state.tab === "e2e-analysis") return renderE2EAnalysis();
   if (state.tab === "map-builder") return renderMapBuilder();
   if (state.tab === "joy-profile") return renderJoyProfile();
   if (state.tab === "fpv") return renderFpv();
@@ -1494,12 +1516,12 @@ function dashboardWorkflowItems() {
     },
     {
       key: "e2e",
-      title: "E2E Training",
-      detail: "Prepare datasets, train models, compare runs, export ONNX, and deploy inference artifacts.",
-      status: "waiting",
-      progress: state.rosbags.length ? 20 : 0,
-      action: "Open Rosbags",
-      next: "This workflow is not first-class in the Console yet. It should get dataset, train, compare, export, and deploy steps.",
+      title: "E2E Analysis",
+      detail: "Run offline inference, compare teacher and prediction, or evaluate driven bags by map section.",
+      status: runningKinds.has("analyze-e2e") ? "running" : state.rosbags.length ? "ready" : "waiting",
+      progress: state.rosbags.length ? (state.e2eModels.length ? 70 : 40) : 0,
+      action: "New E2E Analysis",
+      next: state.rosbags.length ? "Select supervised, offline-localization, or recorded-localization mode." : "Record or pull a rosbag before E2E analysis.",
     },
     {
       key: "fpv",
@@ -1851,6 +1873,10 @@ function scheduleVisiblePreflights(options = {}) {
   if ($("build-rosbag")) scheduleMapBuildPreflight({ immediate: true, force: Boolean(options.force) });
   if (state.tab === "bag-analysis") {
     scheduleAnalysisPreflight({ immediate: true, force: Boolean(options.force) });
+    return;
+  }
+  if (state.tab === "e2e-analysis") {
+    scheduleE2EPreflight({ immediate: true, force: Boolean(options.force) });
     return;
   }
   if (state.tab === "dashboard") {
@@ -2474,8 +2500,9 @@ function toggleAnalysisImageTopic(topicName) {
   state.analysis.imageTopic = state.analysis.primaryImageTopic;
   const payload = analysisPreflightPayload();
   bindAnalysisPreflight(payload);
-  scheduleAnalysisPreflight({ immediate: true, force: true });
-  if (state.tab === "bag-analysis") render();
+  if (state.tab === "e2e-analysis") scheduleE2EPreflight({ immediate: true, force: true });
+  else scheduleAnalysisPreflight({ immediate: true, force: true });
+  if (isAnalysisTab()) render();
 }
 
 function setAnalysisPrimaryTopic(topicName) {
@@ -2488,8 +2515,9 @@ function setAnalysisPrimaryTopic(topicName) {
   }
   const payload = analysisPreflightPayload();
   bindAnalysisPreflight(payload);
-  scheduleAnalysisPreflight({ immediate: true, force: true });
-  if (state.tab === "bag-analysis") render();
+  if (state.tab === "e2e-analysis") scheduleE2EPreflight({ immediate: true, force: true });
+  else scheduleAnalysisPreflight({ immediate: true, force: true });
+  if (isAnalysisTab()) render();
 }
 
 function setAnalysisPreset(preset) {
@@ -2500,7 +2528,7 @@ function setAnalysisPreset(preset) {
   const payload = analysisPreflightPayload();
   bindAnalysisPreflight(payload);
   scheduleAnalysisPreflight({ immediate: true, force: true });
-  if (state.tab === "bag-analysis") render();
+  if (isAnalysisTab()) render();
 }
 
 function renderAnalysisImageTopicsSelector() {
@@ -2571,6 +2599,151 @@ function renderBagAnalysis() {
       </section>
     </div>
   `;
+}
+
+function e2eAnalysisPayload() {
+  const analysis = state.analysis;
+  const mode = analysis.e2eMode || "supervised";
+  const selectedImages = Array.isArray(analysis.selectedImageTopics)
+    ? analysis.selectedImageTopics.filter(Boolean)
+    : [];
+  const primaryImage = analysis.primaryImageTopic || analysis.imageTopic || selectedImages[0] || "";
+  const trajectoryMode = mode === "offline_localization"
+    ? "offline"
+    : mode === "recorded_localization" ? "recorded" : "none";
+  return {
+    analysis_kind: "e2e",
+    e2e_mode: mode,
+    rosbag: analysis.selectedBagPath,
+    label: `${shortName(analysis.selectedBagPath) || "E2E"} / ${mode}`,
+    image_topic: primaryImage,
+    primary_image_topic: primaryImage,
+    image_topics: [...new Set([primaryImage, ...selectedImages].filter(Boolean))],
+    control_topic: mode === "supervised" ? analysis.e2eTeacherTopic : analysis.e2ePredictionTopic,
+    teacher_control_topic: analysis.e2eTeacherTopic,
+    prediction_control_topic: analysis.e2ePredictionTopic,
+    applied_control_topic: analysis.e2eAppliedTopic,
+    comparison_control_topic: analysis.e2eAppliedTopic,
+    mode_topic: analysis.modeTopic,
+    pose_topic: analysis.poseTopic,
+    speed_topic: analysis.speedTopic,
+    e2e_diagnostic_topic: analysis.e2eDiagnosticTopic,
+    section_topic: analysis.e2eSectionTopic,
+    trajectory_mode: trajectoryMode,
+    offline_localization_mode: analysis.offlineLocalizationMode,
+    map_dir: mode === "supervised" ? "" : analysis.selectedMapPath,
+    topic_config: analysis.topicConfigPath,
+    model_path: mode === "supervised" ? analysis.e2eModelPath : "",
+    inference_provider: analysis.e2eProvider,
+    manual_only: Boolean(analysis.e2eManualOnly),
+    deadline_ms: Number(analysis.e2eDeadlineMs) || 33.3,
+    max_fps: Number(analysis.maxFps) || 15,
+  };
+}
+
+function updateE2EOption(key, value) {
+  if (!(key in state.analysis)) return;
+  if (key === "e2eManualOnly") state.analysis[key] = Boolean(value);
+  else if (["e2eDeadlineMs", "maxFps"].includes(key)) state.analysis[key] = Number(value) || (key === "maxFps" ? 15 : 33.3);
+  else state.analysis[key] = String(value ?? "");
+  render();
+  scheduleE2EPreflight();
+}
+
+function scheduleE2EPreflight(options = {}) {
+  if (state.tab !== "e2e-analysis") return;
+  clearTimeout(analysisPreflightTimer);
+  const check = () => requestPreflight("analyze-e2e", e2eAnalysisPayload(), { force: Boolean(options.force) });
+  if (options.immediate) check();
+  else analysisPreflightTimer = setTimeout(check, 250);
+}
+
+function renderE2EAnalysis() {
+  return `
+    <div class="page analysis-page e2e-analysis-page">
+      <div class="analysis-create-layout">
+        <section class="panel analysis-create-panel">
+          <div class="panel-header"><h2>New E2E Analysis</h2><span class="spacer"></span><button onclick="refreshAnalysisData()">Refresh</button></div>
+          <div class="panel-body">${renderE2EAnalysisForm()}</div>
+        </section>
+        <section class="panel analysis-list-panel">
+          <div class="panel-header"><h2>E2E Analysis Jobs</h2><span class="spacer"></span></div>
+          <div class="panel-body" id="analysis-job-list">${renderAnalysisList("e2e")}</div>
+        </section>
+      </div>
+      <section class="panel analysis-viewer-panel">
+        <div class="panel-header"><h2>E2E Bag Viewer</h2><span class="spacer"></span>${state.analysis.selectedId ? `<button onclick="reloadAnalysisResult()">Reload Result</button>` : ""}</div>
+        <div class="panel-body" id="analysis-viewer-body">${renderAnalysisViewer()}</div>
+      </section>
+    </div>`;
+}
+
+function renderE2EAnalysisForm() {
+  const analysis = state.analysis;
+  const mode = analysis.e2eMode || "supervised";
+  const payload = e2eAnalysisPayload();
+  const topicConfigs = state.cameraTopicConfigs || [];
+  const modeCards = [
+    ["supervised", "1. Offline teacher comparison", "Run the selected ONNX model on bag images and compare steering/throttle with manual commands."],
+    ["offline_localization", "2. Driven bag + offline localization", "Re-localize images against an existing map (or scratch VSLAM), then aggregate results by section."],
+    ["recorded_localization", "3. Recorded online E2E + VSLAM", "Use the pose, E2E commands, diagnostics, and compute metrics already recorded in the bag."],
+  ];
+  return `
+    <div class="form-grid analysis-form e2e-form">
+      <div class="field full"><label>1. Evaluation mode</label><div class="e2e-mode-grid">
+        ${modeCards.map(([value, title, detail]) => `<button type="button" class="e2e-mode-card ${mode === value ? "selected" : ""}" onclick="updateE2EOption('e2eMode', ${js(value)})"><strong>${esc(title)}</strong><span>${esc(detail)}</span></button>`).join("")}
+      </div></div>
+      <div class="field full"><label for="e2e-bag">2. Rosbag</label><select id="e2e-bag" onchange="selectAnalysisBag(this.value)"><option value="">Select rosbag</option>${state.rosbags.map((item) => `<option value="${esc(item.path)}" ${item.path === analysis.selectedBagPath ? "selected" : ""}>${esc(item.display_name || item.name)} - ${esc(item.path)}</option>`).join("")}</select><div class="field-hint">${analysis.bagDetailLoading ? "Inspecting topics..." : analysis.selectedBagPath ? esc(analysis.selectedBagPath) : "Select the bag to evaluate."}</div></div>
+      <div class="field full"><label>3. Image topics</label>${renderAnalysisImageTopicsSelector()}</div>
+      ${mode === "supervised" ? `
+        <div class="field full"><label for="e2e-model">ONNX model</label><select id="e2e-model" onchange="updateE2EOption('e2eModelPath', this.value)"><option value="">Select model</option>${state.e2eModels.map((model) => `<option value="${esc(model.path)}" ${model.path === analysis.e2eModelPath ? "selected" : ""}>${esc(model.name)} — ${esc(model.relative_path || model.path)}</option>`).join("")}</select><div class="field-hint">${state.e2eModels.length ? `${state.e2eModels.length} exported model(s) found.` : "No model.onnx was found under the configured outputs folders."}</div></div>
+        <div class="field"><label>Teacher control</label><select onchange="updateE2EOption('e2eTeacherTopic', this.value)">${analysisTopicOptions("control", analysis.e2eTeacherTopic)}</select></div>
+        <div class="field"><label>Inference provider</label><select onchange="updateE2EOption('e2eProvider', this.value)">${[["auto","Auto (CUDA, then CPU)"],["cuda","CUDA"],["cpu","CPU"]].map(([value,label]) => `<option value="${value}" ${analysis.e2eProvider === value ? "selected" : ""}>${label}</option>`).join("")}</select></div>
+        <label class="field full check-row"><input type="checkbox" ${analysis.e2eManualOnly ? "checked" : ""} onchange="updateE2EOption('e2eManualOnly', this.checked)" /><span>Evaluate MANUAL sections only</span></label>
+      ` : `
+        <div class="field"><label>Recorded E2E output</label><select onchange="updateE2EOption('e2ePredictionTopic', this.value)">${analysisTopicOptions("control", analysis.e2ePredictionTopic)}</select></div>
+        <div class="field"><label>Applied vehicle command (optional)</label><select onchange="updateE2EOption('e2eAppliedTopic', this.value)">${analysisTopicOptions("control", analysis.e2eAppliedTopic)}</select></div>
+        <div class="field full"><label>Existing map</label><select onchange="updateE2EOption('selectedMapPath', this.value)"><option value="">No existing map${mode === "offline_localization" ? " / scratch VSLAM only" : ""}</option>${state.maps.map((map) => `<option value="${esc(map.path)}" ${map.path === analysis.selectedMapPath ? "selected" : ""}>${esc(mapOptionLabel(map))}</option>`).join("")}</select></div>
+        ${mode === "offline_localization" ? `<div class="field"><label>Offline localization method</label><select onchange="updateE2EOption('offlineLocalizationMode', this.value)">${[["auto","Auto: VGL then VSLAM"],["vgl","VGL required"],["vslam","Saved-map VSLAM"],["vslam_from_scratch","VSLAM from scratch"]].map(([value,label]) => `<option value="${value}" ${analysis.offlineLocalizationMode === value ? "selected" : ""}>${label}</option>`).join("")}</select></div><div class="field"><label>Camera configuration</label><select onchange="updateE2EOption('topicConfigPath', this.value)"><option value="">Use backend default</option>${topicConfigs.map((config) => `<option value="${esc(config.path)}" ${config.path === analysis.topicConfigPath ? "selected" : ""}>${esc(config.name)}</option>`).join("")}</select></div>` : ""}
+        <div class="field"><label>Recorded pose</label><select onchange="updateAnalysisOption('poseTopic', this.value)">${analysisTopicOptions("pose", analysis.poseTopic)}</select></div>
+        <div class="field"><label>E2E diagnostics</label><input value="${esc(analysis.e2eDiagnosticTopic)}" onchange="updateE2EOption('e2eDiagnosticTopic', this.value)" /></div>
+      `}
+      <div class="field"><label>Operation mode</label><select onchange="updateAnalysisOption('modeTopic', this.value)">${analysisTopicOptions("mode", analysis.modeTopic)}</select></div>
+      <div class="field"><label>Speed</label><select onchange="updateAnalysisOption('speedTopic', this.value)">${analysisTopicOptions("speed", analysis.speedTopic)}</select></div>
+      <div class="field"><label>Max extraction FPS</label><input type="number" min="1" max="60" value="${esc(analysis.maxFps)}" onchange="updateE2EOption('maxFps', this.value)" /></div>
+      <div class="field"><label>Deadline (ms)</label><input type="number" min="0.1" step="0.1" value="${esc(analysis.e2eDeadlineMs)}" onchange="updateE2EOption('e2eDeadlineMs', this.value)" /></div>
+      <div class="field full e2e-action-row"><button class="primary ${actionBusy("e2e-analysis:start") ? "is-busy" : ""}" onclick="startE2EAnalysis()" ${preflightButtonAttrs("analyze-e2e", payload)} ${actionButtonAttrs("e2e-analysis:start", "E2E analysis is starting...")}>${esc(actionButtonLabel("e2e-analysis:start", "Start E2E Analysis", "Starting..."))}</button><button onclick="scheduleE2EPreflight({ immediate:true, force:true })">Recheck</button><span>${renderPreflightButtonReason("analyze-e2e", payload)}</span></div>
+      <details class="field full"><summary>Preflight readiness</summary><div>${renderReadinessPanel("analyze-e2e", payload, { title: "E2E analysis readiness" })}</div></details>
+    </div>`;
+}
+
+async function startE2EAnalysis() {
+  const payload = e2eAnalysisPayload();
+  if (!confirmAction({ title: "Start E2E analysis?", target: payload.rosbag || "No rosbag selected", detail: `Mode: ${payload.e2e_mode}` })) return;
+  if (!beginAction("e2e-analysis:start", "Starting E2E analysis")) return;
+  if (!acquirePreflightExecution("analyze-e2e", payload)) { endAction("e2e-analysis:start"); return; }
+  try {
+    if (!(await confirmPreflight("analyze-e2e", payload))) return;
+    const result = await api("/api/e2e-analyses", { method: "POST", body: JSON.stringify(payload) });
+    if (result.preflight) cachePreflightResult("analyze-e2e", payload, result.preflight);
+    if (result.task) { rememberStartedTask(result.task, "analyze-e2e", payload); state.selectedTaskId = result.task.task_id; }
+    const record = normalizeAnalysisRecord(result.analysis || result);
+    const id = analysisRecordId(record);
+    if (id) {
+      pauseAnalysisPlayback();
+      state.analysis.analyses = [record, ...state.analysis.analyses.filter((item) => analysisRecordId(item) !== id)];
+      state.analysis.selectedId = id;
+      state.analysis.detail = null;
+      state.analysis.timeline = null;
+      state.analysis.currentTime = 0;
+    }
+    toast("E2E analysis started");
+  } catch (error) {
+    if (!capturePreflightError("analyze-e2e", payload, error)) toast(`E2E analysis start failed: ${error.message}`, "error");
+  } finally {
+    releasePreflightExecution("analyze-e2e", payload);
+    endAction("e2e-analysis:start", { renderAfter: state.tab === "e2e-analysis" });
+  }
 }
 
 function renderAnalysisForm() {
@@ -2716,11 +2889,16 @@ function renderAnalysisTopicCoverage() {
   `;
 }
 
-function renderAnalysisList() {
-  if (!state.analysis.analyses.length) return `<div class="empty">No analysis jobs yet. Select a bag and run the preprocessor.</div>`;
-  const items = filteredSortedItems(state.analysis.analyses, "analyses");
+function analysisRecordKind(item) {
+  return String(item?.analysis_kind || item?.request?.analysis_kind || item?.manifest?.analysis_kind || "bag");
+}
+
+function renderAnalysisList(kind = state.tab === "e2e-analysis" ? "e2e" : "bag") {
+  const source = state.analysis.analyses.filter((item) => kind === "e2e" ? analysisRecordKind(item) === "e2e" : analysisRecordKind(item) !== "e2e");
+  if (!source.length) return `<div class="empty">No ${kind === "e2e" ? "E2E " : ""}analysis jobs yet.</div>`;
+  const items = filteredSortedItems(source, "analyses");
   return `
-    ${renderListControls("analyses", items.length, state.analysis.analyses.length, "Search analysis, rosbag, map, status")}
+    ${renderListControls("analyses", items.length, source.length, "Search analysis, rosbag, map, status")}
     ${items.length
       ? renderDateGroupedList("analyses", items, renderAnalysisCards)
       : `<div class="empty">No analyses match the current filter.</div>`}
@@ -2930,6 +3108,7 @@ function renderAnalysisViewer() {
       </div>
       ${consistency.message ? `<div class="analysis-consistency ${consistency.className}"><strong>Map consistency</strong><span>${esc(consistency.message)}</span></div>` : ""}
       ${renderAnalysisSources()}
+      ${renderE2ESummaryPanel()}
       <div class="analysis-media-grid">
         <div class="analysis-image-panel">
           ${renderAnalysisCameraSelector()}
@@ -2956,7 +3135,7 @@ function renderAnalysisViewer() {
         <div class="analysis-map-panel">
           <canvas id="analysis-map-canvas" class="analysis-map-canvas"></canvas>
           <div id="analysis-map-empty" class="analysis-map-empty">${trajectory.samples.length ? (analysis.mapDetail ? "" : "Map background unavailable; showing trajectory extent.") : "No synchronized trajectory is available."}</div>
-          <div class="analysis-speed-legend"><span>slow</span><i></i><span>fast</span></div>
+          <div class="analysis-speed-legend ${timeline.e2e?.metrics?.teacher_free ? "aggression" : ""}"><span>${timeline.e2e?.metrics?.teacher_free ? "calm" : "slow"}</span><i></i><span>${timeline.e2e?.metrics?.teacher_free ? "aggressive" : "fast"}</span></div>
         </div>
       </div>
       <div class="analysis-signal-cards">
@@ -2965,6 +3144,12 @@ function renderAnalysisViewer() {
         ${analysisSignalCard("Throttle", "analysis-value-throttle", "-")}
         ${analysisSignalCard("Brake", "analysis-value-brake", "-")}
         ${analysisSignalCard("Vehicle speed", "analysis-value-speed", "-", "analysis-label-speed")}
+        ${timeline.e2e?.mode ? analysisSignalCard("E2E steering", "analysis-value-e2e-steering", "-") : ""}
+        ${timeline.e2e?.mode ? analysisSignalCard("Steering error / applied Δ", "analysis-value-e2e-steering-error", "-") : ""}
+        ${timeline.e2e?.mode ? analysisSignalCard("Pipeline latency", "analysis-value-e2e-latency", "-") : ""}
+        ${timeline.e2e?.mode ? analysisSignalCard("Aggressiveness", "analysis-value-e2e-aggression", "-") : ""}
+        ${timeline.e2e?.mode ? analysisSignalCard("Lateral acceleration", "analysis-value-e2e-latacc", "-") : ""}
+        ${timeline.e2e?.mode ? analysisSignalCard("Section", "analysis-value-e2e-section", "-") : ""}
       </div>
       <div class="analysis-chart-shell">
         <canvas id="analysis-timeline-canvas" class="analysis-timeline-canvas" onclick="seekAnalysisFromTimeline(event)"></canvas>
@@ -2973,6 +3158,66 @@ function renderAnalysisViewer() {
       ${issues.length ? `<div class="analysis-data-issues"><strong>Missing or degraded data</strong>${issues.map((issue) => `<span>${esc(issue)}</span>`).join("")}</div>` : ""}
     </div>
   `;
+}
+
+function e2eMetricText(value, suffix = "", digits = 3) {
+  const number = Number(value);
+  return Number.isFinite(number) ? `${number.toFixed(digits)}${suffix}` : "-";
+}
+
+function renderE2ESummaryPanel() {
+  const e2e = state.analysis.timeline?.e2e;
+  if (!e2e?.mode) return "";
+  const metrics = e2e.metrics || {};
+  const teacherFree = metrics.teacher_free || {};
+  const cards = e2e.mode === "supervised"
+    ? [
+      ["Steering MAE", e2eMetricText(metrics.steering?.mae)],
+      ["Steering RMSE", e2eMetricText(metrics.steering?.rmse)],
+      ["Throttle MAE", e2eMetricText(metrics.throttle?.mae)],
+      ["Inference p50", e2eMetricText(metrics.inference_ms?.p50, " ms", 2)],
+      ["Inference p95", e2eMetricText(metrics.inference_ms?.p95, " ms", 2)],
+      ["Deadline misses", `${Number(metrics.deadline_miss_count || 0)} (${e2eMetricText(Number(metrics.deadline_miss_rate || 0) * 100, "%", 1)})`],
+    ]
+    : [
+      ["Control samples", String(metrics.sample_count || 0)],
+      ["Pipeline p50", e2eMetricText(metrics.pipeline_latency_ms?.p50, " ms", 2)],
+      ["Pipeline p95", e2eMetricText(metrics.pipeline_latency_ms?.p95, " ms", 2)],
+      ["Decoder p95", e2eMetricText(metrics.decoder_callback_ms?.p95, " ms", 2)],
+      ["Applied steer Δ MAE", e2eMetricText(metrics.steering_applied?.mae)],
+      ["Deadline misses", String(metrics.deadline_miss_count || 0)],
+    ];
+  const sections = e2e.sections || [];
+  const events = e2e.events || [];
+  const worst = [...(e2e.predictions || [])]
+    .filter((item) => Number.isFinite(Number(item.steering_error ?? item.steering_applied_error)) || Number.isFinite(Number(item.cross_track_error_m)))
+    .sort((a, b) => Math.max(Math.abs(Number(b.steering_error ?? b.steering_applied_error) || 0), Number(b.cross_track_error_m) || 0) - Math.max(Math.abs(Number(a.steering_error ?? a.steering_applied_error) || 0), Number(a.cross_track_error_m) || 0))
+    .slice(0, 5);
+  return `
+    <section class="e2e-result-summary">
+      <div class="e2e-result-heading"><strong>E2E evaluation</strong><span>${esc(e2e.mode)}${e2e.model ? ` / ${esc(shortName(e2e.model))}` : ""}</span></div>
+      <div class="e2e-metric-grid">${cards.map(([label, value]) => `<div><span>${esc(label)}</span><strong>${esc(value)}</strong></div>`).join("")}</div>
+      ${teacherFree.score !== undefined ? `
+        <div class="e2e-teacher-free">
+          <div class="e2e-aggression-score"><span>Teacher-free Aggressiveness</span><strong>${e2eMetricText(teacherFree.score, " / 100", 1)}</strong><em class="${esc(teacherFree.classification || "")}">${esc(teacherFree.classification || "-")}</em><i><b style="width:${Math.max(0, Math.min(100, Number(teacherFree.score) || 0))}%"></b></i></div>
+          <div class="e2e-metric-grid teacher-free-grid">
+            ${[
+              ["Steering rate p95", e2eMetricText(teacherFree.steering_rate_abs_per_s?.p95, " /s", 2)],
+              ["Lateral accel p95", e2eMetricText(teacherFree.lateral_accel_abs_mps2?.p95, " m/s²", 2)],
+              ["Long. accel p95", e2eMetricText(teacherFree.longitudinal_accel_abs_mps2?.p95, " m/s²", 2)],
+              ["Jerk p95", e2eMetricText(teacherFree.jerk_abs_mps3?.p95, " m/s³", 2)],
+              ["Steer saturation", e2eMetricText(Number(teacherFree.steering_saturation_rate || 0) * 100, "%", 1)],
+              ["Oscillations", e2eMetricText(teacherFree.steering_oscillations_per_min, " /min", 1)],
+              ["Aggressive samples", e2eMetricText(Number(teacherFree.aggressive_sample_rate || 0) * 100, "%", 1)],
+              ["CTE p95", e2eMetricText(teacherFree.cross_track_error_m?.p95, " m", 3)],
+            ].map(([label, value]) => `<div><span>${esc(label)}</span><strong>${esc(value)}</strong></div>`).join("")}
+          </div>
+          <div class="field-hint">Score is the p95 weighted combination of steering/throttle rate, acceleration, jerk, lateral acceleration, and control saturation. Missing sensors are excluded from the weight normalization.</div>
+        </div>` : ""}
+      ${events.length ? `<div class="e2e-events"><strong>High-aggressiveness events</strong>${events.slice(0, 12).map((event) => `<button onclick="seekAnalysisTime(${Number(event.peak_t) || 0})"><span>${formatAnalysisClock(event.t_start)}–${formatAnalysisClock(event.t_end)} / ${esc(event.section || "-")}</span><b>${e2eMetricText(event.peak_score, "", 1)}</b><em>${esc((event.reasons || []).join(", ") || "combined load")}</em></button>`).join("")}</div>` : ""}
+      ${sections.length ? `<details open><summary>Section metrics</summary><div class="e2e-section-table"><table><thead><tr><th>Section</th><th>Samples</th><th>Aggression</th><th>Steer rate p95</th><th>Lat. accel p95</th><th>CTE p95</th><th>Latency p95</th><th>Laps</th></tr></thead><tbody>${sections.map((section) => `<tr onclick="seekAnalysisTime(${Number(section.t_start) || 0})"><td>${esc(section.section)}</td><td>${esc(section.sample_count || section.pose_count || 0)}</td><td>${e2eMetricText(section.teacher_free?.score, "", 1)}</td><td>${e2eMetricText(section.teacher_free?.steering_rate_abs_per_s?.p95, " /s", 2)}</td><td>${e2eMetricText(section.teacher_free?.lateral_accel_abs_mps2?.p95, " m/s²", 2)}</td><td>${e2eMetricText(section.cross_track_error_m?.p95, " m")}</td><td>${e2eMetricText(section.pipeline_latency_ms?.p95 ?? section.inference_ms?.p95, " ms", 2)}</td><td>${esc((section.laps || []).join(", "))}</td></tr>`).join("")}</tbody></table></div></details>` : ""}
+      ${worst.length ? `<div class="e2e-worst"><strong>Worst samples</strong>${worst.map((item) => `<button onclick="seekAnalysisTime(${Number(item.t) || 0})"><span>${formatAnalysisClock(item.t)} / ${esc(item.section || "-")}</span><b>${Number.isFinite(Number(item.steering_error ?? item.steering_applied_error)) ? `steer ${Number(item.steering_error ?? item.steering_applied_error).toFixed(3)}` : `CTE ${Number(item.cross_track_error_m).toFixed(3)} m`}</b></button>`).join("")}</div>` : ""}
+    </section>`;
 }
 
 function analysisSignalCard(label, id, value, labelId = "") {
@@ -3076,9 +3321,10 @@ async function selectAnalysisBag(path) {
     state.analysis.poseTopic = "";
     state.analysis.speedTopic = "";
   }
-  if (state.tab === "bag-analysis") render();
+  if (isAnalysisTab()) render();
   if (!selectedPath) {
-    scheduleAnalysisPreflight({ immediate: true, force: true });
+    if (state.tab === "e2e-analysis") scheduleE2EPreflight({ immediate: true, force: true });
+    else scheduleAnalysisPreflight({ immediate: true, force: true });
     return;
   }
   try {
@@ -3105,8 +3351,9 @@ async function selectAnalysisBag(path) {
   } finally {
     if (state.analysis.selectedBagPath === selectedPath) {
       state.analysis.bagDetailLoading = false;
-      if (state.tab === "bag-analysis") render();
-      scheduleAnalysisPreflight({ immediate: true, force: true });
+      if (isAnalysisTab()) render();
+      if (state.tab === "e2e-analysis") scheduleE2EPreflight({ immediate: true, force: true });
+      else scheduleAnalysisPreflight({ immediate: true, force: true });
     }
   }
 }
@@ -3119,9 +3366,12 @@ function updateAnalysisOption(key, value) {
   } else {
     state.analysis[key] = String(value ?? "");
   }
-  const payload = analysisPreflightPayload();
-  bindAnalysisPreflight(payload);
-  scheduleAnalysisPreflight();
+  if (state.tab === "e2e-analysis") scheduleE2EPreflight();
+  else {
+    const payload = analysisPreflightPayload();
+    bindAnalysisPreflight(payload);
+    scheduleAnalysisPreflight();
+  }
   if (key === "selectedMapPath" && state.analysis.timeline) updateAnalysisConsistencyDom();
 }
 
@@ -3166,7 +3416,7 @@ async function refreshAnalysisData() {
       refreshAnalysisList(),
       state.analysis.selectedBagPath ? selectAnalysisBag(state.analysis.selectedBagPath) : Promise.resolve(),
     ]);
-    if (state.tab === "bag-analysis") render();
+    if (isAnalysisTab()) render();
   } catch (error) {
     toast(`Analysis refresh failed: ${error.message}`, "error");
   }
@@ -3236,6 +3486,7 @@ async function startBagAnalysis() {
 async function openAnalysisResult(id) {
   const selectedId = String(id || "");
   if (!selectedId) return;
+  const selectedRecord = state.analysis.analyses.find((item) => analysisRecordId(item) === selectedId);
   pauseAnalysisPlayback();
   state.analysis.selectedId = selectedId;
   state.analysis.loadingResult = true;
@@ -3244,7 +3495,7 @@ async function openAnalysisResult(id) {
   state.analysis.mapDetail = null;
   state.analysis.currentTime = 0;
   resetAnalysisFrameRenderState();
-  if (state.tab !== "bag-analysis") state.tab = "bag-analysis";
+  state.tab = analysisRecordKind(selectedRecord) === "e2e" ? "e2e-analysis" : "bag-analysis";
   render();
   try {
     const [detail, timeline] = await Promise.all([
@@ -3271,7 +3522,7 @@ async function openAnalysisResult(id) {
   } finally {
     if (state.analysis.selectedId === selectedId) {
       state.analysis.loadingResult = false;
-      if (state.tab === "bag-analysis") render();
+      if (isAnalysisTab()) render();
     }
   }
 }
@@ -3284,8 +3535,21 @@ function normalizeAnalysisTimeline(raw) {
   const timeline = raw && typeof raw === "object" ? { ...raw } : {};
   timeline.frames = analysisFrames(timeline);
   timeline.controls = normalizeTimedRecords(timeline.controls);
+  timeline.comparison_controls = normalizeTimedRecords(timeline.comparison_controls);
   timeline.modes = normalizeTimedRecords(timeline.modes);
   timeline.speeds = normalizeTimedRecords(timeline.speeds);
+  timeline.sections = normalizeTimedRecords(timeline.sections);
+  timeline.e2e_diagnostics = normalizeTimedRecords(timeline.e2e_diagnostics);
+  const e2e = timeline.e2e && typeof timeline.e2e === "object" ? timeline.e2e : {};
+  timeline.e2e = {
+    ...e2e,
+    predictions: normalizeTimedRecords(e2e.predictions),
+    recorded_applied_controls: normalizeTimedRecords(e2e.recorded_applied_controls || timeline.comparison_controls),
+    latency: normalizeTimedRecords(e2e.latency || timeline.e2e_diagnostics),
+    sections: Array.isArray(e2e.sections) ? e2e.sections : [],
+    events: Array.isArray(e2e.events) ? e2e.events : [],
+    metrics: e2e.metrics && typeof e2e.metrics === "object" ? e2e.metrics : {},
+  };
   timeline.jetson_stats = normalizeJetsonStats(timeline.jetson_stats);
   const trajectory = timeline.trajectory && typeof timeline.trajectory === "object" ? timeline.trajectory : {};
   const trajectorySamples = normalizeTimedRecords(trajectory.samples || timeline.trajectory_samples);
@@ -3299,7 +3563,7 @@ function normalizeAnalysisTimeline(raw) {
     ),
   };
   const jetsonSeriesSamples = timeline.jetson_stats.series.flatMap((series) => series.samples || []);
-  const series = [timeline.frames, timeline.controls, timeline.modes, timeline.speeds, trajectorySamples, jetsonSeriesSamples];
+  const series = [timeline.frames, timeline.controls, timeline.comparison_controls, timeline.modes, timeline.speeds, trajectorySamples, jetsonSeriesSamples, timeline.e2e.predictions, timeline.e2e.latency];
   const lastTimes = series
     .map((records) => Number(records[records.length - 1]?.t))
     .filter(Number.isFinite);
@@ -3533,12 +3797,12 @@ function mountAnalysisViewer() {
 
 function startAnalysisAnimationFrame() {
   stopAnalysisAnimationFrame();
-  if (!state.analysis.playing || state.tab !== "bag-analysis") return;
+  if (!state.analysis.playing || !isAnalysisTab()) return;
   state.analysis.rafId = requestAnimationFrame(analysisPlaybackTick);
 }
 
 function analysisPlaybackTick(now) {
-  if (!state.analysis.playing || state.tab !== "bag-analysis") {
+  if (!state.analysis.playing || !isAnalysisTab()) {
     stopAnalysisAnimationFrame();
     return;
   }
@@ -4028,7 +4292,7 @@ function formatAnalysisValue(value, suffix = "") {
 }
 
 function updateAnalysisPlaybackDom(force = false) {
-  if (!state.analysis.timeline || state.tab !== "bag-analysis") return;
+  if (!state.analysis.timeline || !isAnalysisTab()) return;
   const time = state.analysis.currentTime;
   const duration = analysisDuration();
   const seek = $("analysis-seek");
@@ -4047,6 +4311,9 @@ function updateAnalysisPlaybackDom(force = false) {
   const mode = timedRecordAt(timeline.modes || [], time);
   const trajectory = timedRecordAt(analysisTrajectory(timeline).samples, time);
   const speed = timedRecordAt(timeline.speeds || [], time);
+  const e2ePrediction = timedRecordAt(timeline.e2e?.predictions || [], time);
+  const e2eLatency = timedRecordAt(timeline.e2e?.latency || [], time);
+  const recordedSection = timedRecordAt(timeline.sections || [], time);
   const speedLabel = $("analysis-label-speed");
   if (speedLabel) speedLabel.textContent = analysisSpeedSourceLabel(speed);
   const values = {
@@ -4058,6 +4325,18 @@ function updateAnalysisPlaybackDom(force = false) {
       speed?.value ?? speed?.speed_mps ?? trajectory?.speed_mps,
       analysisSpeedIsCommanded(speed) ? "" : " m/s",
     ),
+    "analysis-value-e2e-steering": formatAnalysisValue(e2ePrediction?.steering_pred ?? e2ePrediction?.steering),
+    "analysis-value-e2e-steering-error": formatAnalysisValue(e2ePrediction?.steering_error ?? e2ePrediction?.steering_applied_error),
+    "analysis-value-e2e-latency": formatAnalysisValue(
+      e2eLatency?.capture_to_command_ms ?? e2ePrediction?.pipeline_latency_ms ?? e2ePrediction?.total_ms,
+      " ms",
+    ),
+    "analysis-value-e2e-aggression": formatAnalysisValue(e2ePrediction?.aggressiveness_score, " / 100"),
+    "analysis-value-e2e-latacc": formatAnalysisValue(
+      e2ePrediction?.lateral_accel_mps2 ?? trajectory?.lateral_accel_mps2,
+      " m/s²",
+    ),
+    "analysis-value-e2e-section": String(e2ePrediction?.section || trajectory?.section || recordedSection?.section || "-"),
   };
   Object.entries(values).forEach(([id, value]) => {
     const element = $(id);
@@ -4100,17 +4379,96 @@ function analysisCanvasContext(canvas, fallbackHeight) {
 
 function drawAnalysisTimeline() {
   const canvas = $("analysis-timeline-canvas");
-  const prepared = analysisCanvasContext(canvas, 310);
-  if (!prepared || !state.analysis.timeline) return;
-  const { ctx, width, height } = prepared;
   const timeline = state.analysis.timeline;
+  if (!canvas || !timeline) return;
+  const e2e = timeline.e2e?.mode ? timeline.e2e : null;
+  const predictions = e2e?.predictions || [];
+  const errors = predictions.flatMap((item) => [Math.abs(Number(item.steering_error ?? item.steering_applied_error)), Math.abs(Number(item.throttle_error ?? item.throttle_applied_error))]).filter(Number.isFinite);
+  const errorMax = Math.max(0.1, ...errors) * 1.1;
+  const latencyRecords = (e2e?.latency || []).length ? e2e.latency : predictions;
+  const latencyMax = Math.max(1, ...latencyRecords.map((item) => Number(item.capture_to_command_ms ?? item.total_ms ?? item.inference_ms)).filter(Number.isFinite)) * 1.08;
+  const dynamicsRecords = analysisTrajectory(timeline).samples || [];
+  const dynamicsMax = Math.max(1, ...dynamicsRecords.flatMap((item) => [Math.abs(Number(item.longitudinal_accel_mps2)), Math.abs(Number(item.lateral_accel_mps2))]).filter(Number.isFinite)) * 1.08;
+  const jerkMax = Math.max(1, ...dynamicsRecords.map((item) => Math.abs(Number(item.jerk_mps3))).filter(Number.isFinite)) * 1.08;
+  const tracks = e2e ? [
+    {
+      label: "STEER GT/PRED",
+      min: -1,
+      max: 1,
+      lines: [
+        { records: predictions, value: (item) => item.steering_gt, color: "#d8dee9" },
+        { records: predictions, value: (item) => item.steering_pred ?? item.steering, color: "#5aa8ff" },
+        { records: e2e.recorded_applied_controls || [], value: (item) => item.steering, color: "#bd93f9" },
+      ],
+    },
+    {
+      label: "THROTTLE GT/PRED",
+      min: 0,
+      max: 1,
+      lines: [
+        { records: predictions, value: (item) => item.throttle_gt, color: "#d8dee9" },
+        { records: predictions, value: (item) => item.throttle_pred ?? item.throttle, color: "#45c478" },
+        { records: e2e.recorded_applied_controls || [], value: (item) => item.throttle, color: "#bd93f9" },
+      ],
+    },
+    {
+      label: "CONTROL ERROR",
+      min: -errorMax,
+      max: errorMax,
+      lines: [
+        { records: predictions, value: (item) => item.steering_error ?? item.steering_applied_error, color: "#ff6b6b" },
+        { records: predictions, value: (item) => item.throttle_error ?? item.throttle_applied_error, color: "#f0b35a" },
+      ],
+    },
+    {
+      label: "AGGRESSIVENESS",
+      min: 0,
+      max: 100,
+      lines: [{ records: predictions, value: (item) => item.aggressiveness_score, color: "#ff8c42" }],
+    },
+    {
+      label: "ACCEL m/s²",
+      min: -dynamicsMax,
+      max: dynamicsMax,
+      lines: [
+        { records: dynamicsRecords, value: (item) => item.longitudinal_accel_mps2, color: "#4fc3c7" },
+        { records: dynamicsRecords, value: (item) => item.lateral_accel_mps2, color: "#ff6b9d" },
+      ],
+    },
+    {
+      label: "JERK m/s³",
+      min: -jerkMax,
+      max: jerkMax,
+      lines: [{ records: dynamicsRecords, value: (item) => item.jerk_mps3, color: "#f6c85f" }],
+    },
+    {
+      label: "LATENCY ms",
+      min: 0,
+      max: latencyMax,
+      lines: [{ records: latencyRecords, value: (item) => item.capture_to_command_ms ?? item.total_ms ?? item.inference_ms, color: "#b28dff" }],
+    },
+    {
+      label: analysisSpeedSourceLabel(analysisSpeedSeries()[0], true),
+      min: 0,
+      max: analysisSpeedMaximum(),
+      lines: [{ records: analysisSpeedSeries(), value: (item) => item.value ?? item.speed_mps, color: "#e7b84b" }],
+    },
+  ] : [
+    { label: "STEER", min: -1, max: 1, lines: [{ records: timeline.controls || [], value: (item) => item.steering, color: "#5aa8ff" }] },
+    { label: "PEDALS", min: 0, max: 1, lines: [{ records: timeline.controls || [], value: (item) => item.throttle, color: "#45c478" }, { records: timeline.controls || [], value: (item) => item.brake, color: "#f26d6d" }] },
+    { label: analysisSpeedSourceLabel(analysisSpeedSeries()[0], true), min: 0, max: analysisSpeedMaximum(), lines: [{ records: analysisSpeedSeries(), value: (item) => item.value ?? item.speed_mps, color: "#e7b84b" }] },
+  ];
+  canvas.style.height = `${Math.max(310, 95 + tracks.length * 68)}px`;
+  const prepared = analysisCanvasContext(canvas, Math.max(310, 95 + tracks.length * 68));
+  if (!prepared) return;
+  const { ctx, width, height } = prepared;
   const duration = Math.max(0.001, analysisDuration(timeline));
   const left = 70;
   const right = 14;
   const top = 14;
   const modeHeight = 28;
   const chartTop = top + modeHeight + 12;
-  const chartHeight = Math.max(48, (height - chartTop - 20) / 3);
+  const chartHeight = Math.max(48, (height - chartTop - 20) / tracks.length);
   const plotWidth = Math.max(1, width - left - right);
   const toX = (time) => left + Math.max(0, Math.min(1, Number(time) / duration)) * plotWidth;
 
@@ -4156,29 +4514,6 @@ function drawAnalysisTimeline() {
     }
   });
 
-  const tracks = [
-    {
-      label: "STEER",
-      min: -1,
-      max: 1,
-      lines: [{ records: timeline.controls || [], value: (item) => item.steering, color: "#5aa8ff" }],
-    },
-    {
-      label: "PEDALS",
-      min: 0,
-      max: 1,
-      lines: [
-        { records: timeline.controls || [], value: (item) => item.throttle, color: "#45c478" },
-        { records: timeline.controls || [], value: (item) => item.brake, color: "#f26d6d" },
-      ],
-    },
-    {
-      label: analysisSpeedSourceLabel(analysisSpeedSeries()[0], true),
-      min: 0,
-      max: analysisSpeedMaximum(),
-      lines: [{ records: analysisSpeedSeries(), value: (item) => item.value ?? item.speed_mps, color: "#e7b84b" }],
-    },
-  ];
   tracks.forEach((track, trackIndex) => {
     const y = chartTop + trackIndex * chartHeight;
     const innerTop = y + 6;
@@ -4476,6 +4811,12 @@ function analysisSpeedColor(speed, maxSpeed) {
   return `hsl(${hue.toFixed(0)} 82% 60%)`;
 }
 
+function analysisAggressionColor(score) {
+  const fraction = Math.max(0, Math.min(1, Number(score || 0) / 100));
+  const hue = 135 - fraction * 135;
+  return `hsl(${hue.toFixed(0)} 86% 57%)`;
+}
+
 function drawAnalysisMap(backgroundImage = undefined) {
   const canvas = $("analysis-map-canvas");
   const prepared = analysisCanvasContext(canvas, 390);
@@ -4518,6 +4859,7 @@ function drawAnalysisMap(backgroundImage = undefined) {
   const canOverlay = analysisTrajectoryCanUseMap();
   if (canOverlay && samples.length >= 2) {
     const maxSpeed = Number(state.analysis.timeline?._trajectory_speed_max) || 1;
+    const useAggression = Boolean(state.analysis.timeline?.e2e?.metrics?.teacher_free);
     const maxSegments = Math.max(500, Math.floor(width * 4));
     const step = Math.max(1, Math.ceil(samples.length / maxSegments));
     ctx.save();
@@ -4529,7 +4871,9 @@ function drawAnalysisMap(backgroundImage = undefined) {
       const a = toPixel([previous.x, previous.y]);
       const b = toPixel([current.x, current.y]);
       if (![...a, ...b].every(Number.isFinite)) continue;
-      ctx.strokeStyle = analysisSpeedColor((Number(previous.speed_mps) + Number(current.speed_mps)) * 0.5, maxSpeed);
+      ctx.strokeStyle = useAggression
+        ? analysisAggressionColor((Number(previous.aggressiveness_score) + Number(current.aggressiveness_score)) * 0.5)
+        : analysisSpeedColor((Number(previous.speed_mps) + Number(current.speed_mps)) * 0.5, maxSpeed);
       ctx.beginPath();
       ctx.moveTo(a[0], a[1]);
       ctx.lineTo(b[0], b[1]);
@@ -9234,8 +9578,11 @@ window.openBagAnalysis = openBagAnalysis;
 window.selectAnalysisBag = selectAnalysisBag;
 window.updateAnalysisOption = updateAnalysisOption;
 window.scheduleAnalysisPreflight = scheduleAnalysisPreflight;
+window.scheduleE2EPreflight = scheduleE2EPreflight;
+window.updateE2EOption = updateE2EOption;
 window.refreshAnalysisData = refreshAnalysisData;
 window.startBagAnalysis = startBagAnalysis;
+window.startE2EAnalysis = startE2EAnalysis;
 window.openAnalysisResult = openAnalysisResult;
 window.reloadAnalysisResult = reloadAnalysisResult;
 window.deleteAnalysis = deleteAnalysis;
@@ -9324,7 +9671,7 @@ setInterval(() => {
   api("/api/tasks")
     .then(async (data) => {
       const nextTasks = data.tasks || [];
-      if (state.tab === "bag-analysis") {
+      if (isAnalysisTab()) {
         state.tasks = nextTasks;
         const previousSelected = state.analysis.analyses.find((item) => analysisRecordId(item) === state.analysis.selectedId);
         await refreshAnalysisList().catch(() => state.analysis.analyses);

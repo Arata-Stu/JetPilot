@@ -24,6 +24,7 @@ from .map_pipeline import (
     localization_config_dir,
 )
 from .security import resolve_under_root
+from .e2e_analysis import resolve_e2e_model
 
 
 PASS = "pass"
@@ -36,6 +37,7 @@ SUPPORTED_ACTIONS = frozenset(
         "generate-raceline",
         "generate-preview",
         "analyze-rosbag",
+        "analyze-e2e",
     }
 )
 
@@ -151,6 +153,8 @@ def evaluate_preflight(
         _map_build_preflight(config, values, report)
     elif normalized_action == "analyze-rosbag":
         _analyze_rosbag_preflight(config, values, report)
+    elif normalized_action == "analyze-e2e":
+        _analyze_e2e_preflight(config, values, report)
     else:
         map_dir = _required_map_dir(config, values.get("map_dir"), report)
         if map_dir is not None:
@@ -755,6 +759,197 @@ def _analyze_rosbag_preflight(
             PASS,
             "Speed can be read or derived from the selected trajectory source.",
         )
+
+
+def _analyze_e2e_preflight(
+    config: ConsoleConfig,
+    payload: Mapping[str, Any],
+    report: _Report,
+) -> None:
+    mode = str(payload.get("e2e_mode") or "supervised").strip().lower()
+    if mode not in {"supervised", "offline_localization", "recorded_localization"}:
+        report.add(
+            "e2e.mode",
+            "E2E analysis mode",
+            BLOCKED,
+            "Select supervised, offline-localization, or recorded-localization mode.",
+            details={"value": mode},
+        )
+        return
+
+    values = dict(payload)
+    teacher_topic = str(payload.get("teacher_control_topic") or "/teleop/control_cmd").strip()
+    prediction_topic = str(payload.get("prediction_control_topic") or "/auto/control_cmd").strip()
+    applied_topic = str(payload.get("applied_control_topic") or "/vehicle/control_cmd").strip()
+    if mode == "supervised":
+        values["control_topic"] = teacher_topic
+    else:
+        values["control_topic"] = prediction_topic
+        values["trajectory_mode"] = (
+            "offline" if mode == "offline_localization" else "recorded"
+        )
+    _analyze_rosbag_preflight(config, values, report)
+    report.resolved["analysis_kind"] = "e2e"
+    report.resolved["e2e_mode"] = mode
+
+    bag_path = Path(str(report.resolved.get("rosbag") or ""))
+    topics: Mapping[str, Any] = {}
+    metadata_path = bag_path / "metadata.yaml"
+    if metadata_path.is_file():
+        try:
+            metadata = _parse_rosbag_metadata(
+                metadata_path.read_text(encoding="utf-8", errors="replace")
+            )
+            raw_topics = metadata.get("topics")
+            if isinstance(raw_topics, Mapping):
+                topics = raw_topics
+        except OSError:
+            topics = {}
+
+    if mode == "supervised":
+        resolved_teacher = _analysis_topic(
+            topics,
+            report,
+            check_id="e2e.teacher_topic",
+            label="Teacher control topic",
+            raw_value=teacher_topic,
+            required=True,
+            expected_types={"jetpilot_msgs/msg/ControlCommand"},
+        )
+        if resolved_teacher:
+            report.resolved["teacher_control_topic"] = resolved_teacher
+            report.resolved["control_topic"] = resolved_teacher
+        try:
+            model_path, metadata = resolve_e2e_model(config, payload.get("model_path"))
+        except ValueError as exc:
+            model_path, metadata = None, {}
+            report.add(
+                "e2e.model",
+                "E2E model",
+                BLOCKED,
+                str(exc),
+                remediation="Export model.onnx with metadata.json and select it in E2E Analysis.",
+            )
+        if model_path is None:
+            if not any(check.id == "e2e.model" for check in report.checks):
+                report.add(
+                    "e2e.model",
+                    "E2E model",
+                    BLOCKED,
+                    "No E2E ONNX model was selected.",
+                    remediation="Select an exported model.onnx.",
+                )
+        else:
+            report.resolved["model_path"] = str(model_path)
+            report.resolved["model_metadata"] = metadata
+            report.add(
+                "e2e.model",
+                "E2E model",
+                PASS,
+                "The selected ONNX model is available for offline inference.",
+                details={"path": str(model_path), "metadata": bool(metadata)},
+            )
+    else:
+        resolved_prediction = _analysis_topic(
+            topics,
+            report,
+            check_id="e2e.prediction_topic",
+            label="Recorded E2E control topic",
+            raw_value=prediction_topic,
+            required=True,
+            expected_types={"jetpilot_msgs/msg/ControlCommand"},
+        )
+        if resolved_prediction:
+            report.resolved["prediction_control_topic"] = resolved_prediction
+            report.resolved["control_topic"] = resolved_prediction
+
+    resolved_applied = _analysis_topic(
+        topics,
+        report,
+        check_id="e2e.applied_topic",
+        label="Applied vehicle control topic",
+        raw_value=applied_topic,
+        required=False,
+        expected_types={"jetpilot_msgs/msg/ControlCommand"},
+    )
+    if resolved_applied and resolved_applied != report.resolved.get("control_topic"):
+        report.resolved["applied_control_topic"] = resolved_applied
+        report.resolved["comparison_control_topic"] = resolved_applied
+
+    for payload_key, resolved_key, check_id, label, default, expected in (
+        (
+            "e2e_diagnostic_topic",
+            "e2e_diagnostic_topic",
+            "e2e.diagnostics_topic",
+            "E2E diagnostics topic",
+            "/e2e/diagnostics",
+            {"diagnostic_msgs/msg/DiagnosticArray"},
+        ),
+        (
+            "section_topic",
+            "section_topic",
+            "e2e.section_topic",
+            "Recorded section topic",
+            "/localization/current_section",
+            {"std_msgs/msg/String"},
+        ),
+    ):
+        raw = str(payload.get(payload_key) or default).strip()
+        resolved_topic = _analysis_topic(
+            topics,
+            report,
+            check_id=check_id,
+            label=label,
+            raw_value=raw,
+            required=False,
+            expected_types=expected,
+        )
+        if resolved_topic:
+            report.resolved[resolved_key] = resolved_topic
+
+    provider = str(payload.get("inference_provider") or "auto").strip().lower()
+    if provider not in {"auto", "cpu", "cuda"}:
+        report.add(
+            "e2e.provider",
+            "Inference provider",
+            BLOCKED,
+            "Inference provider must be auto, cpu, or cuda.",
+            details={"value": provider},
+        )
+    else:
+        report.resolved["inference_provider"] = provider
+        report.add(
+            "e2e.provider",
+            "Inference provider",
+            PASS,
+            f"Offline inference provider is {provider}.",
+        )
+    try:
+        deadline_ms = float(payload.get("deadline_ms") or 33.3)
+    except (TypeError, ValueError):
+        deadline_ms = float("nan")
+    if not math.isfinite(deadline_ms) or deadline_ms <= 0.0 or deadline_ms > 10000.0:
+        report.add(
+            "e2e.deadline",
+            "Inference deadline",
+            BLOCKED,
+            "Inference deadline must be a positive finite value up to 10000 ms.",
+        )
+    else:
+        report.resolved["deadline_ms"] = deadline_ms
+        report.add(
+            "e2e.deadline",
+            "Inference deadline",
+            PASS,
+            f"Deadline misses will be counted above {deadline_ms:g} ms.",
+        )
+    report.resolved["manual_only"] = bool(payload.get("manual_only", True))
+    report.resolved["teacher_control_topic"] = str(
+        report.resolved.get("teacher_control_topic") or teacher_topic
+    )
+    report.resolved["prediction_control_topic"] = str(
+        report.resolved.get("prediction_control_topic") or prediction_topic
+    )
 
 
 def _analysis_runtime(config: ConsoleConfig, report: _Report) -> None:

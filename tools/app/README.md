@@ -171,6 +171,55 @@ useful mismatch warning, not proof that the Map is correct. Results in another
 frame remain viewable as a standalone trajectory but are not silently overlaid
 on the Map.
 
+## E2E bag analysis
+
+Open **E2E Analysis** and choose one of three workflows:
+
+- **Offline teacher comparison** extracts synchronized images, runs the selected
+  `model.onnx`, aligns each prediction to the nearest manual control command,
+  and reports steering/throttle MAE, RMSE, per-frame errors, preprocessing and
+  inference latency, and deadline misses. `metadata.json` next to the model is
+  used for input normalization, shape, and output field order.
+- **Driven bag + offline localization** reads the recorded E2E command and
+  replays the bag through VGL/VSLAM. Select an existing Map for map-relative
+  evaluation, or choose scratch VSLAM. The resulting trajectory is projected to
+  the HD Map centerline and summarized by section, lap, cross-track error,
+  speed, latency, and control samples.
+- **Recorded online E2E + VSLAM** uses pose and diagnostics already present in
+  the bag. It avoids a second localization pass and is intended for runs where
+  E2E inference and VSLAM were active together.
+
+Every mode uses the same synchronized video viewer, play/seek/rate controls,
+frame stepping, timeline cursor, and map overlay as Bag Analysis. E2E results
+add GT/prediction/error/latency tracks, summary cards, worst-frame shortcuts,
+and clickable section metrics. Supervised control error is only meaningful when
+a teacher command exists; autonomous runs without a teacher are evaluated using
+trajectory, smoothness, latency, deadline misses, and section context instead.
+
+Teacher-free evaluation is calculated for every E2E result, including bags
+without manual commands. It reports absolute steering and steering/throttle
+rate, steering oscillations, control saturation, speed, longitudinal
+acceleration, jerk, yaw rate, lateral acceleration, and cross-track error. A
+0–100 **Aggressiveness Score** is the p95 weighted combination of those
+available signals. Default normalization thresholds are 1.5 steering units/s,
+1.5 throttle units/s, 2.5 m/s² longitudinal acceleration, 6.0 m/s³ jerk, and
+3.0 m/s² lateral acceleration; missing signals are removed from the weight
+normalization rather than treated as zero. The score is shown with its component
+metrics and must not be interpreted as a standalone safety certification.
+
+Samples scoring 60 or above are grouped into high-aggressiveness events. The UI
+links each event to synchronized video, plots aggressiveness/acceleration/jerk
+over time, summarizes the same metrics per Map section, and colors the Map
+trajectory from calm to aggressive.
+
+The E2E decoder publishes `/e2e/diagnostics` with capture-to-command latency,
+decoder callback time, output interval, and deadline status. The default bag
+configuration records this topic together with `/jetson/diagnostics`, allowing
+GPU, CPU, memory, thermal, and power series to be inspected alongside the run.
+Exported ONNX models are discovered under the repository/Python workspace
+`outputs` folders. Additional roots can be added with
+`JETPILOT_E2E_MODEL_ROOTS` (colon-separated on Linux).
+
 Environment overrides:
 
 ```bash

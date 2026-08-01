@@ -437,6 +437,17 @@ def build_analysis_script(
     enable_warmup_step: bool = True,
     image_topics: list[str] | None = None,
     primary_image_topic: str = "",
+    comparison_control_topic: str = "",
+    section_topic: str = "",
+    e2e_diagnostic_topic: str = "",
+    e2e_mode: str = "",
+    e2e_model: Path | None = None,
+    e2e_provider: str = "auto",
+    e2e_teacher_topic: str = "",
+    e2e_prediction_topic: str = "",
+    e2e_applied_control_topic: str = "",
+    e2e_manual_only: bool = True,
+    e2e_deadline_ms: float = 33.3,
 ) -> str:
     """Build the Linux/Docker task script used by ``POST /api/analyses``.
 
@@ -454,6 +465,16 @@ def build_analysis_script(
         raise ValueError("resolved trajectory_mode must be recorded, offline, or none")
     if offline_localization_mode not in {"auto", "vgl", "vslam", "vslam_from_scratch"}:
         raise ValueError("offline_localization_mode must be auto, vgl, vslam, or vslam_from_scratch")
+    if e2e_mode and e2e_mode not in {
+        "supervised", "offline_localization", "recorded_localization"
+    }:
+        raise ValueError("unsupported E2E analysis mode")
+    if e2e_mode == "supervised" and e2e_model is None:
+        raise ValueError("supervised E2E analysis requires a model")
+    if e2e_provider not in {"auto", "cpu", "cuda"}:
+        raise ValueError("E2E provider must be auto, cpu, or cuda")
+    if not math.isfinite(e2e_deadline_ms) or e2e_deadline_ms <= 0.0:
+        raise ValueError("E2E deadline must be a positive finite value")
 
     status_file = analysis_dir / "status.json"
     snapshot = analysis_dir / "localization" / "vslam_snapshot.json"
@@ -766,6 +787,9 @@ def build_analysis_script(
         ("--mode-topic", mode_topic),
         ("--pose-topic", pose_topic if trajectory_mode == "recorded" else ""),
         ("--speed-topic", speed_topic),
+        ("--comparison-control-topic", comparison_control_topic),
+        ("--section-topic", section_topic),
+        ("--e2e-diagnostic-topic", e2e_diagnostic_topic),
         ("--map-dir", str(map_dir) if map_dir is not None else ""),
         ("--trajectory-snapshot", str(snapshot) if trajectory_mode == "offline" else ""),
         ("--expected-map-fingerprint", expected_map_fingerprint if map_dir is not None else ""),
@@ -773,4 +797,29 @@ def build_analysis_script(
         if value:
             worker.extend([option, _q(value)])
     lines.extend(['echo "[stage] extract and synchronize rosbag topics"', " ".join(worker)])
+    if e2e_mode:
+        e2e_worker = [
+            _q(config.python_bin),
+            "-m",
+            "jetpilot_console.e2e_analysis_worker",
+            "--analysis-dir",
+            _q(analysis_dir),
+            "--mode",
+            _q(e2e_mode),
+            "--provider",
+            _q(e2e_provider),
+            "--deadline-ms",
+            f"{e2e_deadline_ms:.9g}",
+            "--manual-only" if e2e_manual_only else "--no-manual-only",
+        ]
+        for option, value in (
+            ("--model", str(e2e_model) if e2e_model is not None else ""),
+            ("--map-dir", str(map_dir) if map_dir is not None else ""),
+            ("--teacher-topic", e2e_teacher_topic),
+            ("--prediction-topic", e2e_prediction_topic),
+            ("--applied-control-topic", e2e_applied_control_topic),
+        ):
+            if value:
+                e2e_worker.extend([option, _q(value)])
+        lines.extend(['echo "[stage] E2E evaluation"', " ".join(e2e_worker)])
     return "\n".join(lines) + "\n"

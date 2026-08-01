@@ -7,3 +7,5 @@ e2e_control_decoder:
     throttle_min: 0.0
     throttle_max: 1.0
     stale_timeout_sec: 0.2
+    deadline_ms: 33.3
+    diagnostics_topic: /e2e/diagnostics

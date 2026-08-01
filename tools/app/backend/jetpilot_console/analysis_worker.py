@@ -190,6 +190,36 @@ def _mode_payload(message: Any) -> dict[str, object]:
     }
 
 
+def _string_payload(message: Any) -> str:
+    return str(_nested(message, "data", default="") or "")
+
+
+def _e2e_diagnostic_payload(message: Any) -> dict[str, object] | None:
+    statuses = getattr(message, "status", None)
+    if not isinstance(statuses, (list, tuple)):
+        return None
+    for status in statuses:
+        name = str(getattr(status, "name", "") or "").lower()
+        hardware_id = str(getattr(status, "hardware_id", "") or "").lower()
+        if "e2e" not in name and "e2e" not in hardware_id:
+            continue
+        payload: dict[str, object] = {
+            "level": int(getattr(status, "level", 0) or 0),
+            "message": str(getattr(status, "message", "") or ""),
+        }
+        for value in getattr(status, "values", []) or []:
+            key = str(getattr(value, "key", "") or "").strip()
+            if not key:
+                continue
+            parsed = _jetson_numeric_value(getattr(value, "value", ""))
+            if parsed is not None:
+                payload[key] = parsed[0]
+            else:
+                payload[key] = str(getattr(value, "value", "") or "")
+        return payload
+    return None
+
+
 def _jetson_numeric_value(raw_value: Any) -> tuple[float, str] | None:
     text = str(raw_value or "").strip()
     if not text or text.lower() in {"offline", "disable", "disabled", "auto"}:
@@ -1023,6 +1053,9 @@ class AnalysisOptions:
     mode_topic: str = ""
     pose_topic: str = ""
     speed_topic: str = ""
+    comparison_control_topic: str = ""
+    section_topic: str = ""
+    e2e_diagnostic_topic: str = ""
     map_dir: Path | None = None
     trajectory_snapshot: Path | None = None
     status_file: Path | None = None
@@ -1154,9 +1187,12 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
     requested = set(image_topics)
     for topic in (
         options.control_topic,
+        options.comparison_control_topic,
         options.mode_topic,
         options.pose_topic,
         options.speed_topic,
+        options.section_topic,
+        options.e2e_diagnostic_topic,
     ):
         if topic:
             requested.add(topic)
@@ -1178,7 +1214,10 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
     message_classes = {topic: get_message(topic_types[topic]) for topic in requested}
     frames: list[dict[str, object]] = []
     controls: list[dict[str, object]] = []
+    comparison_controls: list[dict[str, object]] = []
     modes: list[dict[str, object]] = []
+    sections: list[dict[str, object]] = []
+    e2e_diagnostics: list[dict[str, object]] = []
     speeds: list[dict[str, object]] = []
     trajectory: list[dict[str, object]] = []
     jetson_samples: list[dict[str, object]] = []
@@ -1300,8 +1339,16 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
                 last_frame_timestamp_ns = timestamp_ns
         if options.control_topic and topic == options.control_topic:
             controls.append({**common, **_control_payload(message)})
+        if options.comparison_control_topic and topic == options.comparison_control_topic:
+            comparison_controls.append({**common, **_control_payload(message)})
         if options.mode_topic and topic == options.mode_topic:
             modes.append({**common, **_mode_payload(message)})
+        if options.section_topic and topic == options.section_topic:
+            sections.append({**common, "section": _string_payload(message)})
+        if options.e2e_diagnostic_topic and topic == options.e2e_diagnostic_topic:
+            payload = _e2e_diagnostic_payload(message)
+            if payload is not None:
+                e2e_diagnostics.append({**common, **payload})
         if options.speed_topic and topic == options.speed_topic:
             value = _explicit_speed(message)
             if value is not None:
@@ -1362,7 +1409,17 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
             for sample in trajectory
         ]
 
-    all_groups = [frames, controls, modes, speeds, trajectory, jetson_samples]
+    all_groups = [
+        frames,
+        controls,
+        comparison_controls,
+        modes,
+        sections,
+        e2e_diagnostics,
+        speeds,
+        trajectory,
+        jetson_samples,
+    ]
     timestamp_values = [
         int(sample["_timestamp_ns"])
         for group in all_groups
@@ -1377,7 +1434,10 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
 
     trajectory = _downsample(trajectory)
     controls = _downsample(controls)
+    comparison_controls = _downsample(comparison_controls)
     modes = _downsample(modes)
+    sections = _downsample(sections)
+    e2e_diagnostics = _downsample(e2e_diagnostics)
     speeds = _downsample(speeds)
     jetson_series_by_id: dict[str, dict[str, object]] = {}
     for sample in jetson_samples:
@@ -1496,7 +1556,10 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
         "effective_max_fps": effective_max_fps,
         "frames": frames,
         "controls": controls,
+        "comparison_controls": comparison_controls,
         "modes": modes,
+        "sections": sections,
+        "e2e_diagnostics": e2e_diagnostics,
         "speeds": speeds,
         "trajectory": {
             "source": trajectory_source,
@@ -1534,7 +1597,10 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
                 "image_topics": image_topics,
                 "primary_image_topic": primary_image_topic,
                 "control": options.control_topic,
+                "comparison_control": options.comparison_control_topic,
                 "mode": options.mode_topic,
+                "section": options.section_topic,
+                "e2e_diagnostics": options.e2e_diagnostic_topic,
                 "pose": options.pose_topic,
                 "speed": options.speed_topic,
                 "jetson_stats": jetson_diagnostic_topics,
@@ -1549,7 +1615,10 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
             "counts": {
                 "frames": len(frames),
                 "controls": len(controls),
+                "comparison_controls": len(comparison_controls),
                 "modes": len(modes),
+                "sections": len(sections),
+                "e2e_diagnostics": len(e2e_diagnostics),
                 "speeds": len(speeds),
                 "trajectory": len(trajectory),
                 "jetson_stats": sum(
@@ -1695,6 +1764,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mode-topic", default="")
     parser.add_argument("--pose-topic", default="")
     parser.add_argument("--speed-topic", default="")
+    parser.add_argument("--comparison-control-topic", default="")
+    parser.add_argument("--section-topic", default="")
+    parser.add_argument("--e2e-diagnostic-topic", default="")
     parser.add_argument("--map-dir", default="")
     parser.add_argument("--trajectory-snapshot", default="")
     parser.add_argument("--status-file", default="")
@@ -1753,6 +1825,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                     mode_topic=args.mode_topic,
                     pose_topic=args.pose_topic,
                     speed_topic=args.speed_topic,
+                    comparison_control_topic=args.comparison_control_topic,
+                    section_topic=args.section_topic,
+                    e2e_diagnostic_topic=args.e2e_diagnostic_topic,
                     map_dir=Path(args.map_dir).expanduser().resolve() if args.map_dir else None,
                     trajectory_snapshot=(
                         Path(args.trajectory_snapshot).expanduser().resolve()
