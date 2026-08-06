@@ -29,7 +29,7 @@ def e2e_model_roots(config: Any) -> list[Path]:
     ]
     configured = os.environ.get("JETPILOT_E2E_MODEL_ROOTS", "")
     candidates.extend(Path(value).expanduser() for value in configured.split(os.pathsep) if value)
-    deployed = Path("/workspaces/models/e2e")
+    deployed = Path("/workspaces/ros2_ws/models/e2e")
     if deployed.is_dir():
         candidates.append(deployed)
 

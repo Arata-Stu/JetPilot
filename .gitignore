@@ -15,6 +15,7 @@ lib/
 /map/
 /maps/
 isaac_ros_assets/
+/ros2_ws/models/
 tmp/
 
 # CenturyArks SilkyEvCam plugin source is distributed separately.

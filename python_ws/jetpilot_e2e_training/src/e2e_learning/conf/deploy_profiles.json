@@ -7,7 +7,7 @@
       "description": "Jetson through the direct Wi-Fi hotspot",
       "user": "tamiya",
       "host": "10.42.0.1",
-      "remote_root": "/home/tamiya/workspaces/JetPilot/models/e2e"
+      "remote_root": "/home/tamiya/workspaces/JetPilot/ros2_ws/models/e2e"
     },
     {
       "id": "usb",
@@ -15,7 +15,7 @@
       "description": "Jetson target through USB gadget networking",
       "user": "tamiya",
       "host": "192.168.55.1",
-      "remote_root": "/home/tamiya/workspaces/JetPilot/models/e2e"
+      "remote_root": "/home/tamiya/workspaces/JetPilot/ros2_ws/models/e2e"
     },
     {
       "id": "lan",
@@ -23,7 +23,7 @@
       "description": "Jetson on the configured local network",
       "user": "tamiya",
       "host": "192.168.11.190",
-      "remote_root": "/home/tamiya/workspaces/JetPilot/models/e2e"
+      "remote_root": "/home/tamiya/workspaces/JetPilot/ros2_ws/models/e2e"
     },
     {
       "id": "manual",
@@ -31,7 +31,7 @@
       "description": "Enter a Jetson IP address or hostname interactively",
       "user": "tamiya",
       "host": "__manual__",
-      "remote_root": "/home/tamiya/workspaces/JetPilot/models/e2e"
+      "remote_root": "/home/tamiya/workspaces/JetPilot/ros2_ws/models/e2e"
     }
   ]
 }

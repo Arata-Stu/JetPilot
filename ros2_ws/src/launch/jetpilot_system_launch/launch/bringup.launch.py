@@ -304,7 +304,7 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('e2e_image_topic', '/realsense/color/image_raw', cli=True)
     args.add_arg('e2e_camera_info_topic', '/realsense/color/camera_info', cli=True)
     args.add_arg('e2e_control_cmd_topic', '/auto/control_cmd', cli=True)
-    args.add_arg('e2e_model_root', '/workspaces/models/e2e/latest', cli=True)
+    args.add_arg('e2e_model_root', '/workspaces/ros2_ws/models/e2e/latest', cli=True)
     args.add_arg('e2e_input_image_width', '424', cli=True)
     args.add_arg('e2e_input_image_height', '240', cli=True)
     args.add_arg('e2e_network_image_width', '212', cli=True)

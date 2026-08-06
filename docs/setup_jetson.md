@@ -203,6 +203,7 @@ cat > "${ISAAC_ROS_WS}/.isaac-ros-cli/config.yaml" <<'EOF'
 docker:
   image:
     additional_image_keys:
+      - jp72_orin
       - realsense
       - depthai
       - silky_evcam
