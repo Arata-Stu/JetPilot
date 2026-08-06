@@ -30,6 +30,12 @@ axis centers, then walks through buttons, triggers, sticks, and d-pad inputs.
 Detection ignores already assigned inputs and requires axis movement above a
 threshold so stick noise is not accepted as a button or trigger.
 
+The d-pad may appear as four buttons or as two Hat axes. The browser editor's
+D-pad `Cap` controls detect both forms. For an axis d-pad, capture right and
+left to record the horizontal axis and its two directions; the generated
+`joy_button_mapping.param.yaml` disables the button binding and writes the
+axis binding automatically.
+
 The terminal prompts are shown in Japanese and English so the same tool can be
 used by mixed-language teams. Calibration also writes a standalone HTML editor
 next to the profile by default, for example `joy_profile.html`.

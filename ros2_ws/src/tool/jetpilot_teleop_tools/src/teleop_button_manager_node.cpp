@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <string>
 
 #include "jetpilot_teleop_tools/teleop_button_manager_node.hpp"
@@ -16,6 +17,12 @@ TeleopButtonManagerNode::TeleopButtonManagerNode() : Node("teleop_button_manager
   bag_stop_button_ = declare_parameter<int>("bag_stop_button", 4);
   steer_offset_inc_button_ = declare_parameter<int>("steer_offset_inc_button", 15);
   steer_offset_dec_button_ = declare_parameter<int>("steer_offset_dec_button", 14);
+  steer_offset_inc_axis_ = declare_parameter<int>("steer_offset_inc_axis", -1);
+  steer_offset_dec_axis_ = declare_parameter<int>("steer_offset_dec_axis", -1);
+  steer_offset_inc_axis_value_ = declare_numeric_parameter("steer_offset_inc_axis_value", 1.0);
+  steer_offset_dec_axis_value_ = declare_numeric_parameter("steer_offset_dec_axis_value", -1.0);
+  steer_offset_axis_threshold_ = std::clamp(
+    declare_numeric_parameter("steer_offset_axis_threshold", 0.5), 0.01, 1.0);
   const int localization_trigger_button = declare_parameter<int>("localization_trigger_button", -1);
   localization_trigger_topic_ =
     declare_parameter<std::string>("localization_trigger_topic", "/localization/trigger");
@@ -204,11 +211,19 @@ void TeleopButtonManagerNode::handle_joy(const sensor_msgs::msg::Joy & joy)
   {
     publish_bag_request(jetpilot_msgs::msg::BagRequest::STOP, "joy_stop");
   }
-  if (pressed_once(states_, 5, button_pressed(joy, steer_offset_inc_button_)))
+  const bool steer_offset_inc = button_pressed(joy, steer_offset_inc_button_) ||
+    axis_direction_pressed(
+    joy.axes, steer_offset_inc_axis_, steer_offset_inc_axis_value_,
+    steer_offset_axis_threshold_);
+  const bool steer_offset_dec = button_pressed(joy, steer_offset_dec_button_) ||
+    axis_direction_pressed(
+    joy.axes, steer_offset_dec_axis_, steer_offset_dec_axis_value_,
+    steer_offset_axis_threshold_);
+  if (pressed_once(states_, 5, steer_offset_inc))
   {
     publish_bool(steer_offset_inc_pub_);
   }
-  if (pressed_once(states_, 6, button_pressed(joy, steer_offset_dec_button_)))
+  if (pressed_once(states_, 6, steer_offset_dec))
   {
     publish_bool(steer_offset_dec_pub_);
   }

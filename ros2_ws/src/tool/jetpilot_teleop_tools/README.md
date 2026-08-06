@@ -29,7 +29,7 @@ steering は `steering_axis` に deadzone と scale をかけ、`[-1.0, 1.0]` �
 
 ## Button algorithm
 
-`teleop_button_manager_node` は誤操作を減らすため、AUTO/MANUAL/STOP を `hold_time_s` 以上の長押しで発火します。bag start/stop と offset 調整は押下 edge で1回だけ発火します。localization trigger は他の割当と button が衝突した場合、自動的に無効化します。
+`teleop_button_manager_node` は誤操作を減らすため、AUTO/MANUAL/STOP を `hold_time_s` 以上の長押しで発火します。bag start/stop と offset 調整は押下 edge で1回だけ発火します。steer offsetはbuttonに加えて、`steer_offset_inc_axis`／`steer_offset_dec_axis`と方向値を指定することでHat axis型の十字キーにも対応します。axis入力は`steer_offset_axis_threshold`を超えたときに押下と判定します。localization trigger は他の割当と button が衝突した場合、自動的に無効化します。
 
 ## 起動
 

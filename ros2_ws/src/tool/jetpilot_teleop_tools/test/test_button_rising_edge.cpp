@@ -9,6 +9,7 @@ namespace
 
 using jetpilot_teleop_tools::ButtonRisingEdge;
 using jetpilot_teleop_tools::ButtonManagerAssignments;
+using jetpilot_teleop_tools::axis_direction_pressed;
 using jetpilot_teleop_tools::find_button_conflict;
 using jetpilot_teleop_tools::find_localization_button_conflict;
 
@@ -49,6 +50,21 @@ TEST(ButtonRisingEdgeTest, OutOfRangeIndexIsSafe)
 
   EXPECT_FALSE(edge.update({1, 1}));
   EXPECT_FALSE(edge.update({}));
+}
+
+TEST(AxisDirectionTest, DetectsEitherDirectionPastThreshold)
+{
+  EXPECT_TRUE(axis_direction_pressed({0.0F, 0.8F}, 1, 1.0, 0.5));
+  EXPECT_FALSE(axis_direction_pressed({0.0F, 0.2F}, 1, 1.0, 0.5));
+  EXPECT_TRUE(axis_direction_pressed({0.0F, -0.8F}, 1, -1.0, 0.5));
+  EXPECT_FALSE(axis_direction_pressed({0.0F, -0.2F}, 1, -1.0, 0.5));
+}
+
+TEST(AxisDirectionTest, InvalidBindingIsSafe)
+{
+  EXPECT_FALSE(axis_direction_pressed({1.0F}, -1, 1.0, 0.5));
+  EXPECT_FALSE(axis_direction_pressed({1.0F}, 2, 1.0, 0.5));
+  EXPECT_FALSE(axis_direction_pressed({1.0F}, 0, 0.0, 0.5));
 }
 
 TEST(ButtonRisingEdgeTest, FindsOnlyEnabledConflicts)

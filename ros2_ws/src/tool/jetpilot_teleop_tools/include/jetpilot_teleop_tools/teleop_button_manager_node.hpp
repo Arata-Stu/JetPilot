@@ -48,6 +48,11 @@ private:
   int bag_stop_button_;
   int steer_offset_inc_button_;
   int steer_offset_dec_button_;
+  int steer_offset_inc_axis_;
+  int steer_offset_dec_axis_;
+  double steer_offset_inc_axis_value_;
+  double steer_offset_dec_axis_value_;
+  double steer_offset_axis_threshold_;
   std::string localization_trigger_topic_;
   double hold_time_s_;
   std::vector<HoldState> states_;

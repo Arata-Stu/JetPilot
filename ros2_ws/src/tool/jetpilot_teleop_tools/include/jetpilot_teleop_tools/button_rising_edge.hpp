@@ -1,6 +1,8 @@
 #ifndef JETPILOT_TELEOP_TOOLS__BUTTON_RISING_EDGE_HPP_
 #define JETPILOT_TELEOP_TOOLS__BUTTON_RISING_EDGE_HPP_
 
+#include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
@@ -10,6 +12,21 @@
 
 namespace jetpilot_teleop_tools
 {
+
+inline bool axis_direction_pressed(
+  const std::vector<float> & axes, const int index, const double direction,
+  const double threshold)
+{
+  if (index < 0 || static_cast<std::size_t>(index) >= axes.size() ||
+      !std::isfinite(direction) || direction == 0.0)
+  {
+    return false;
+  }
+
+  const auto activation = std::clamp(std::abs(threshold), 0.01, 1.0);
+  return direction > 0.0 ? axes[static_cast<std::size_t>(index)] >= activation :
+         axes[static_cast<std::size_t>(index)] <= -activation;
+}
 
 struct ButtonAssignment
 {

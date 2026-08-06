@@ -48,11 +48,13 @@ sticks:
     center_y: 0
     deadzone: 2500.0
 dpad:
-  type: button
-  up: 12
-  right: 15
-  down: 13
-  left: 14
+  type: axis
+  x_axis: 6
+  y_axis: 7
+  left_value: -32767
+  right_value: 32767
+  up_value: -32767
+  down_value: 32767
 button_mapping:
   deadman_button: triangle
   auto_button: square

@@ -282,12 +282,9 @@
       <div class="panel">
         <h2>D-pad / 十字キー</h2>
         <div class="form-grid">
-          <div class="field"><label>type</label><select data-path="dpad.type"><option>button</option></select></div>
-          <div class="field"><label>up button</label><div class="capture-field"><input type="number" data-path="dpad.up"><button class="capture" data-capture-kind="buttonPath" data-capture-target="dpad.up">Cap</button></div></div>
-          <div class="field"><label>right button</label><div class="capture-field"><input type="number" data-path="dpad.right"><button class="capture" data-capture-kind="buttonPath" data-capture-target="dpad.right">Cap</button></div></div>
-          <div class="field"><label>down button</label><div class="capture-field"><input type="number" data-path="dpad.down"><button class="capture" data-capture-kind="buttonPath" data-capture-target="dpad.down">Cap</button></div></div>
-          <div class="field"><label>left button</label><div class="capture-field"><input type="number" data-path="dpad.left"><button class="capture" data-capture-kind="buttonPath" data-capture-target="dpad.left">Cap</button></div></div>
+          <div class="field"><label>type</label><select data-path="dpad.type"><option value="button">button</option><option value="axis">axis</option></select></div>
         </div>
+        <div id="dpadFields"></div>
       </div>
     </div>
   </section>
@@ -458,7 +455,10 @@ function emptyProfile() {
       left: {x_axis: 0, y_axis: 1, invert_x: false, invert_y: true, center_x: 0, center_y: 0, deadzone: 2500},
       right: {x_axis: 3, y_axis: 4, invert_x: false, invert_y: true, center_x: 0, center_y: 0, deadzone: 2500}
     },
-    dpad: {type: "button", up: 12, right: 15, down: 13, left: 14},
+    dpad: {
+      type: "axis", x_axis: 6, y_axis: 7,
+      left_value: -32767, right_value: 32767, up_value: -32767, down_value: 32767
+    },
     button_mapping: {
       deadman_button: "triangle",
       auto_button: "cross",
@@ -687,7 +687,15 @@ function cleanProfileForOutput(profile) {
     delete trigger.max;
   }
   if (output.dpad) {
-    output.dpad = {
+    output.dpad = output.dpad.type === "axis" ? {
+      type: "axis",
+      x_axis: Number(output.dpad.x_axis ?? -1),
+      y_axis: Number(output.dpad.y_axis ?? -1),
+      left_value: Number(output.dpad.left_value ?? -32767),
+      right_value: Number(output.dpad.right_value ?? 32767),
+      up_value: Number(output.dpad.up_value ?? -32767),
+      down_value: Number(output.dpad.down_value ?? 32767),
+    } : {
       type: "button",
       up: Number(output.dpad.up ?? -1),
       right: Number(output.dpad.right ?? -1),
@@ -761,12 +769,29 @@ function teleopCmdYaml(profile) {
 
 function buttonMappingYaml(profile) {
   const mapping = profile.button_mapping || {};
-  const buttonIndex = (action, fallbackName) => {
+  const binding = (action, fallbackName) => {
     const selectedName = mapping[action] || fallbackName;
-    if (selectedName === "dpad_right") return Number(profile.dpad?.right ?? -1);
-    if (selectedName === "dpad_left") return Number(profile.dpad?.left ?? -1);
-    return Number(profile.buttons[selectedName] ?? -1);
+    if (selectedName === "dpad_right" && profile.dpad?.type === "axis") {
+      return {
+        button: -1,
+        axis: Number(profile.dpad.x_axis ?? -1),
+        axisValue: dpadRuntimeAxisValue(Number(profile.dpad.right_value ?? 32767)),
+      };
+    }
+    if (selectedName === "dpad_left" && profile.dpad?.type === "axis") {
+      return {
+        button: -1,
+        axis: Number(profile.dpad.x_axis ?? -1),
+        axisValue: dpadRuntimeAxisValue(Number(profile.dpad.left_value ?? -32767)),
+      };
+    }
+    if (selectedName === "dpad_right") return {button: Number(profile.dpad?.right ?? -1), axis: -1, axisValue: 1.0};
+    if (selectedName === "dpad_left") return {button: Number(profile.dpad?.left ?? -1), axis: -1, axisValue: -1.0};
+    return {button: Number(profile.buttons[selectedName] ?? -1), axis: -1, axisValue: 0.0};
   };
+  const buttonIndex = (action, fallbackName) => binding(action, fallbackName).button;
+  const steerInc = binding("steer_offset_inc_button", "dpad_right");
+  const steerDec = binding("steer_offset_dec_button", "dpad_left");
   return {
     teleop_button_manager_node: {
       ros__parameters: {
@@ -776,8 +801,13 @@ function buttonMappingYaml(profile) {
         back_button: buttonIndex("back_button", "share"),
         bag_start_button: buttonIndex("bag_start_button", "r1"),
         bag_stop_button: buttonIndex("bag_stop_button", "l1"),
-        steer_offset_inc_button: buttonIndex("steer_offset_inc_button", "dpad_right"),
-        steer_offset_dec_button: buttonIndex("steer_offset_dec_button", "dpad_left"),
+        steer_offset_inc_button: steerInc.button,
+        steer_offset_dec_button: steerDec.button,
+        steer_offset_inc_axis: steerInc.axis,
+        steer_offset_inc_axis_value: steerInc.axisValue,
+        steer_offset_dec_axis: steerDec.axis,
+        steer_offset_dec_axis_value: steerDec.axisValue,
+        steer_offset_axis_threshold: 0.5,
         localization_trigger_button: buttonIndex("localization_trigger_button", "options"),
         localization_trigger_topic: String(mapping.localization_trigger_topic || "/localization/trigger"),
         hold_time_s: Number(mapping.hold_time_s ?? 0.1)
@@ -809,7 +839,13 @@ function renderEditor() {
   `).join("");
   document.getElementById("buttonFunctionRows").innerHTML = buttonActions.map(([action, label]) => {
     const selected = state.profile.button_mapping?.[action] || "";
-    const index = selected ? state.profile.buttons[selected] : -1;
+    let index = selected ? state.profile.buttons[selected] : -1;
+    if (selected === "dpad_right") {
+      index = state.profile.dpad?.type === "axis" ? `axis ${state.profile.dpad?.x_axis ?? -1}` : state.profile.dpad?.right;
+    }
+    if (selected === "dpad_left") {
+      index = state.profile.dpad?.type === "axis" ? `axis ${state.profile.dpad?.x_axis ?? -1}` : state.profile.dpad?.left;
+    }
     return `
       <tr>
         <td>${label}<br><span class="muted">${action}</span></td>
@@ -820,6 +856,7 @@ function renderEditor() {
   }).join("");
   document.getElementById("triggerFields").innerHTML = ["l2", "r2"].map(name => triggerBlock(name)).join("");
   document.getElementById("stickFields").innerHTML = ["left", "right"].map(name => stickBlock(name)).join("");
+  document.getElementById("dpadFields").innerHTML = dpadBlock();
   document.getElementById("deviceSummary").textContent = `${state.profile.device.name || "Controller"} ${state.profile.device.path || ""}`;
   renderRcEsc();
   updateCaptureClasses();
@@ -866,6 +903,27 @@ function stickBlock(name) {
     ${check(`sticks.${name}.invert_x`, "invert_x", s.invert_x)}
     ${check(`sticks.${name}.invert_y`, "invert_y", s.invert_y)}
   </div>`;
+}
+
+function dpadBlock() {
+  const dpad = state.profile.dpad || {};
+  const directions = ["up", "right", "down", "left"];
+  if (dpad.type === "axis") {
+    return `<div class="muted">各方向のCapを押してから十字キーを操作すると、Hat軸番号と方向値を記録します。 / Capture each direction to record the Hat axis and value.</div>
+      <div class="form-grid">
+        ${field("dpad.x_axis", "x_axis", dpad.x_axis, "number")}
+        ${field("dpad.y_axis", "y_axis", dpad.y_axis, "number")}
+        ${directions.map(direction => field(
+          `dpad.${direction}_value`, `${direction}_value`, dpad[`${direction}_value`], "number",
+          capture("dpadDirection", direction))).join("")}
+      </div>`;
+  }
+  return `<div class="muted">各方向のCapを押してから十字キーを操作すると、button番号を記録します。Axisとして検出された場合はtypeも自動で切り替わります。 / Capture each direction; axis input switches the type automatically.</div>
+    <div class="form-grid">
+      ${directions.map(direction => field(
+        `dpad.${direction}`, `${direction} button`, dpad[direction], "number",
+        capture("dpadDirection", direction))).join("")}
+    </div>`;
 }
 
 function field(path, label, value, type = "text", captureButton = "") {
@@ -1054,6 +1112,11 @@ function rawToJoyAxisValue(value) {
   return Math.max(-1, Math.min(1, value / 32767));
 }
 
+function dpadRuntimeAxisValue(value) {
+  if (!Number.isFinite(value)) return 0;
+  return Math.abs(value) <= 1 ? value : rawToJoyAxisValue(value);
+}
+
 function estimateStickIdle(stick, samples) {
   const xAxis = Number(stick.x_axis);
   const yAxis = Number(stick.y_axis);
@@ -1120,6 +1183,8 @@ function renderTester() {
     ${meter("Right Y", normalizedStickAxis(input, right, "y"))}
     ${meter("L2", triggerValue(input, state.profile.triggers.l2), 0, 1)}
     ${meter("R2", triggerValue(input, state.profile.triggers.r2), 0, 1)}
+    ${state.profile.dpad?.type === "axis" ? meter("D-pad X", axisValue(input, Number(state.profile.dpad.x_axis))) : ""}
+    ${state.profile.dpad?.type === "axis" ? meter("D-pad Y", axisValue(input, Number(state.profile.dpad.y_axis))) : ""}
     <div class="button-states">${buttons}</div>
   `;
   document.getElementById("captureStatus").textContent = state.capture
@@ -1144,6 +1209,30 @@ function finishCapture(success = true) {
 function handleCapture(pad) {
   if (!state.capture) return;
   const capture = state.capture;
+  if (capture.kind === "dpadDirection") {
+    for (let index = 0; index < pad.buttons.length; index += 1) {
+      if (pad.buttons[index].pressed && !state.lastButtons[index]) {
+        state.profile.dpad.type = "button";
+        state.profile.dpad[capture.target] = index;
+        setStatus(`D-pad ${capture.target} をbutton ${index}として記録しました / Captured D-pad ${capture.target} as button ${index}`);
+        finishCapture();
+        return;
+      }
+    }
+    for (let index = 0; index < pad.axes.length; index += 1) {
+      const before = capture.axes[index] ?? 0;
+      if (Math.abs(pad.axes[index] - before) > 0.35) {
+        state.profile.dpad.type = "axis";
+        const axisName = capture.target === "left" || capture.target === "right" ? "x_axis" : "y_axis";
+        state.profile.dpad[axisName] = index;
+        state.profile.dpad[`${capture.target}_value`] = axisRawValue(pad, index);
+        setStatus(`D-pad ${capture.target} をaxis ${index}として記録しました / Captured D-pad ${capture.target} as axis ${index}`);
+        finishCapture();
+        return;
+      }
+    }
+    return;
+  }
   if (capture.kind === "profileButton" || capture.kind === "buttonPath") {
     for (let index = 0; index < pad.buttons.length; index += 1) {
       if (pad.buttons[index].pressed && !state.lastButtons[index]) {
@@ -1259,7 +1348,10 @@ document.addEventListener("input", event => {
 });
 
 document.addEventListener("change", event => {
-  if (event.target.matches("[data-path], [data-button], [data-button-action], [data-rc-path]")) syncOutputs();
+  if (event.target.matches("[data-path], [data-button], [data-button-action], [data-rc-path]")) {
+    syncOutputs();
+    if (event.target.matches('[data-path="dpad.type"]')) renderEditor();
+  }
 });
 
 document.addEventListener("click", event => {

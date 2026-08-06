@@ -851,6 +851,15 @@ def teleop_cmd_yaml(profile: dict[str, Any]) -> dict[str, Any]:
 def button_mapping_yaml(profile: dict[str, Any]) -> dict[str, Any]:
     buttons = profile["buttons"]
     mapping = profile.get("button_mapping", {})
+    dpad = profile.get("dpad", {})
+    dpad_is_axis = dpad.get("type") == "axis"
+
+    def dpad_axis_value(name: str, fallback: float) -> float:
+        value = float(dpad.get(name, fallback))
+        if abs(value) > 1.0:
+            value /= float(AXIS_MAX)
+        return max(-1.0, min(1.0, value))
+
     return {
         "teleop_button_manager_node": {
             "ros__parameters": {
@@ -860,8 +869,17 @@ def button_mapping_yaml(profile: dict[str, Any]) -> dict[str, Any]:
                 "back_button": buttons.get("share", -1),
                 "bag_start_button": buttons.get("r1", -1),
                 "bag_stop_button": buttons.get("l1", -1),
-                "steer_offset_inc_button": profile.get("dpad", {}).get("right", -1),
-                "steer_offset_dec_button": profile.get("dpad", {}).get("left", -1),
+                "steer_offset_inc_button": -1 if dpad_is_axis else dpad.get("right", -1),
+                "steer_offset_dec_button": -1 if dpad_is_axis else dpad.get("left", -1),
+                "steer_offset_inc_axis": dpad.get("x_axis", -1) if dpad_is_axis else -1,
+                "steer_offset_inc_axis_value": (
+                    dpad_axis_value("right_value", 1.0) if dpad_is_axis else 1.0
+                ),
+                "steer_offset_dec_axis": dpad.get("x_axis", -1) if dpad_is_axis else -1,
+                "steer_offset_dec_axis_value": (
+                    dpad_axis_value("left_value", -1.0) if dpad_is_axis else -1.0
+                ),
+                "steer_offset_axis_threshold": 0.5,
                 "localization_trigger_button": buttons.get("options", -1),
                 "localization_trigger_topic": mapping.get(
                     "localization_trigger_topic", "/localization/trigger"
