@@ -11,4 +11,4 @@ sudo apt-get install -y build-essential dpkg-dev debhelper dh-python make
 make distclean
 make build-stamped
 
-sudo apt install -y ../isaac-ros-cli_*.deb
+sudo apt install -y --allow-downgrades ../isaac-ros-cli_*.deb
