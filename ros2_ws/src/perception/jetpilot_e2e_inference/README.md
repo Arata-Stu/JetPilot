@@ -50,8 +50,8 @@ Jetson上でTensorRT engineを生成:
 
 ```bash
 ros2 run jetpilot_e2e_inference build_tensorrt_engine.sh \
-  /opt/jetpilot/models/e2e/latest/model.onnx \
-  /opt/jetpilot/models/e2e/latest/model.plan
+  /workspaces/models/e2e/latest/model.onnx \
+  /workspaces/models/e2e/latest/model.plan
 ```
 
 単独起動時は`multi_sensor_container`を作成します。
@@ -60,7 +60,7 @@ ros2 run jetpilot_e2e_inference build_tensorrt_engine.sh \
 ros2 launch jetpilot_e2e_inference e2e_tensor_rt.launch.py \
   image_topic:=/realsense/color/image_raw \
   control_cmd_topic:=/auto/control_cmd \
-  model_root:=/opt/jetpilot/models/e2e/latest
+  model_root:=/workspaces/models/e2e/latest
 ```
 
 既にセンサー側がコンテナを起動済みの場合は、そのコンテナへロードします。

@@ -33,6 +33,9 @@ def main(cfg: DictConfig) -> None:
         output_names=[output_name],
         opset_version=int(cfg.export.opset_version),
         dynamic_axes=None,
+        # Deployment copies model.onnx as one atomic artifact, so keep weights
+        # embedded instead of creating a separate model.onnx.data file.
+        external_data=False,
     )
 
     metadata = {

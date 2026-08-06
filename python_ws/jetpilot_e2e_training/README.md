@@ -75,6 +75,6 @@ On Jetson:
 
 ```bash
 ros2 run jetpilot_e2e_inference build_tensorrt_engine.sh \
-  /opt/jetpilot/models/e2e/camera_control/model.onnx \
-  /opt/jetpilot/models/e2e/camera_control/model.plan
+  /workspaces/models/e2e/camera_control/model.onnx \
+  /workspaces/models/e2e/camera_control/model.plan
 ```

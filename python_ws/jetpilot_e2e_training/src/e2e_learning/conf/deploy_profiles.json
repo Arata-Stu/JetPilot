@@ -3,19 +3,35 @@
   "profiles": [
     {
       "id": "jetson",
-      "label": "Jetson",
-      "description": "Default Jetson target on the local network",
-      "user": "nvidia",
-      "host": "jetson.local",
-      "remote_root": "/opt/jetpilot/models/e2e"
+      "label": "Jetson Hotspot",
+      "description": "Jetson through the direct Wi-Fi hotspot",
+      "user": "tamiya",
+      "host": "10.42.0.1",
+      "remote_root": "/home/tamiya/workspaces/JetPilot/models/e2e"
     },
     {
       "id": "usb",
       "label": "Jetson USB",
       "description": "Jetson target through USB gadget networking",
-      "user": "nvidia",
+      "user": "tamiya",
       "host": "192.168.55.1",
-      "remote_root": "/opt/jetpilot/models/e2e"
+      "remote_root": "/home/tamiya/workspaces/JetPilot/models/e2e"
+    },
+    {
+      "id": "lan",
+      "label": "Jetson LAN",
+      "description": "Jetson on the configured local network",
+      "user": "tamiya",
+      "host": "192.168.11.190",
+      "remote_root": "/home/tamiya/workspaces/JetPilot/models/e2e"
+    },
+    {
+      "id": "manual",
+      "label": "Manual IP",
+      "description": "Enter a Jetson IP address or hostname interactively",
+      "user": "tamiya",
+      "host": "__manual__",
+      "remote_root": "/home/tamiya/workspaces/JetPilot/models/e2e"
     }
   ]
 }

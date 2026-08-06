@@ -25,6 +25,7 @@ setup(
         "PyYAML",
         "tensorboard",
         "onnx",
+        "onnxscript",
         "onnxruntime",
         "matplotlib",
     ],

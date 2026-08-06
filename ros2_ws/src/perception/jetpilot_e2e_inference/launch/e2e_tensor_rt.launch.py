@@ -116,7 +116,7 @@ def generate_launch_description():
                 "image_stddev", default_value="[0.229, 0.224, 0.225]"
             ),
             DeclareLaunchArgument("input_tensor_name", default_value="input_tensor"),
-            DeclareLaunchArgument("model_root", default_value="/opt/jetpilot/models/e2e/latest"),
+            DeclareLaunchArgument("model_root", default_value="/workspaces/models/e2e/latest"),
             DeclareLaunchArgument(
                 "model_file_path",
                 default_value=PathJoinSubstitution([model_root, "model.onnx"]),

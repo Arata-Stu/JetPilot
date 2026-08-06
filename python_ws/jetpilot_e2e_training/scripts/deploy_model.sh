@@ -91,8 +91,11 @@ load_profiles() {
     PROFILE_USERS+=("$user")
     PROFILE_HOSTS+=("$host")
     PROFILE_ROOTS+=("$root")
-    [[ "$is_default" == "1" ]] && DEFAULT_PROFILE_INDEX=$((${#PROFILE_IDS[@]} - 1))
+    if [[ "$is_default" == "1" ]]; then
+      DEFAULT_PROFILE_INDEX=$((${#PROFILE_IDS[@]} - 1))
+    fi
   done <<< "$output"
+  return 0
 }
 
 load_presets() {
@@ -108,8 +111,11 @@ load_presets() {
     PRESET_MODEL_KINDS+=("$model_kind")
     PRESET_MODALITIES+=("$modality")
     PRESET_METADATA_FILENAMES+=("$metadata_filename")
-    [[ "$is_default" == "1" ]] && DEFAULT_PRESET_INDEX=$((${#PRESET_IDS[@]} - 1))
+    if [[ "$is_default" == "1" ]]; then
+      DEFAULT_PRESET_INDEX=$((${#PRESET_IDS[@]} - 1))
+    fi
   done <<< "$output"
+  return 0
 }
 
 find_profile_index() {
@@ -139,6 +145,7 @@ find_preset_index() {
 select_profile_index() {
   local index="$DEFAULT_PROFILE_INDEX"
   local choice
+  local destination
   if [[ -n "$REQUESTED_PROFILE" ]]; then
     find_profile_index "$REQUESTED_PROFILE"
     return
@@ -146,7 +153,12 @@ select_profile_index() {
   if [[ -t 0 && "$ASSUME_YES" == false ]]; then
     echo "接続profileを選択してください:" >&2
     for choice in "${!PROFILE_IDS[@]}"; do
-      printf '  %d) %s (%s)\n' "$((choice + 1))" "${PROFILE_LABELS[$choice]}" "${PROFILE_IDS[$choice]}" >&2
+      if [[ "${PROFILE_HOSTS[$choice]}" == "__manual__" ]]; then
+        destination="IPを手動入力"
+      else
+        destination="${PROFILE_USERS[$choice]}@${PROFILE_HOSTS[$choice]}"
+      fi
+      printf '  %d) %s (%s) - %s\n' "$((choice + 1))" "${PROFILE_LABELS[$choice]}" "${PROFILE_IDS[$choice]}" "$destination" >&2
     done
     read -r -p "番号 [$((index + 1))]: " choice
     choice="${choice:-$((index + 1))}"
@@ -174,6 +186,18 @@ select_preset_index() {
     index=$((choice - 1))
   fi
   printf '%s\n' "$index"
+}
+
+prompt_remote_host() {
+  local host
+  while true; do
+    read -r -p "JetsonのIPアドレスまたはhostnameを入力: " host
+    if [[ "$host" =~ ^[A-Za-z0-9._:-]+$ ]]; then
+      printf '%s\n' "$host"
+      return
+    fi
+    echo "有効なIPアドレスまたはhostnameを入力してください。" >&2
+  done
 }
 
 select_model() {
@@ -208,6 +232,10 @@ main() {
   load_presets
   local profile_index preset_index model_path metadata_path model_name remote_model_dir remote_target checksum confirm
   profile_index="$(select_profile_index)"
+  if [[ -z "$REMOTE_HOST" && "${PROFILE_IDS[$profile_index]}" == "manual" ]]; then
+    [[ -t 0 ]] || die "manual profile requires --host when running non-interactively"
+    REMOTE_HOST="$(prompt_remote_host)"
+  fi
   preset_index="$(select_preset_index)"
   model_path="$(select_model)"
   metadata_path="$(dirname -- "$model_path")/${PRESET_METADATA_FILENAMES[$preset_index]}"
@@ -235,9 +263,9 @@ main() {
   scp "$model_path" "${remote_target}:${remote_model_dir}/model.onnx.uploading"
   if [[ -f "$metadata_path" ]]; then
     scp "$metadata_path" "${remote_target}:${remote_model_dir}/metadata.json.uploading"
-    ssh "$remote_target" "mv -- '$remote_model_dir/model.onnx.uploading' '$remote_model_dir/model.onnx'; mv -- '$remote_model_dir/metadata.json.uploading' '$remote_model_dir/metadata.json'; echo '$checksum  $remote_model_dir/model.onnx' > '$remote_model_dir/model.onnx.sha256'; rm -f -- '$remote_model_dir/model.plan'; ln -sfn -- '$remote_model_dir' '${REMOTE_ROOT%/}/latest'"
+    ssh "$remote_target" "mv -- '$remote_model_dir/model.onnx.uploading' '$remote_model_dir/model.onnx'; mv -- '$remote_model_dir/metadata.json.uploading' '$remote_model_dir/metadata.json'; echo '$checksum  $remote_model_dir/model.onnx' > '$remote_model_dir/model.onnx.sha256'; rm -f -- '$remote_model_dir/model.plan'; ln -sfn -- '$model_name' '${REMOTE_ROOT%/}/latest'"
   else
-    ssh "$remote_target" "mv -- '$remote_model_dir/model.onnx.uploading' '$remote_model_dir/model.onnx'; echo '$checksum  $remote_model_dir/model.onnx' > '$remote_model_dir/model.onnx.sha256'; rm -f -- '$remote_model_dir/model.plan' '$remote_model_dir/metadata.json'; ln -sfn -- '$remote_model_dir' '${REMOTE_ROOT%/}/latest'"
+    ssh "$remote_target" "mv -- '$remote_model_dir/model.onnx.uploading' '$remote_model_dir/model.onnx'; echo '$checksum  $remote_model_dir/model.onnx' > '$remote_model_dir/model.onnx.sha256'; rm -f -- '$remote_model_dir/model.plan' '$remote_model_dir/metadata.json'; ln -sfn -- '$model_name' '${REMOTE_ROOT%/}/latest'"
   fi
 
   if [[ "$BUILD_ENGINE" == true ]]; then
