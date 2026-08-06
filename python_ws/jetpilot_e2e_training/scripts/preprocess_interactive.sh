@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PACKAGE_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 PROJECT_ROOT="$(cd -- "${PACKAGE_DIR}/../.." && pwd)"
+DATASET_ROOT="${JETPILOT_E2E_DATASET_ROOT:-${PACKAGE_DIR}/datasets}"
 
 if [[ -x /opt/env/bin/python ]]; then
   PYTHON_BIN="${PYTHON_BIN:-/opt/env/bin/python}"
@@ -53,7 +54,7 @@ select size_preset in "424x240 -> 212x120" "640x480 -> 320x240"; do
   esac
 done
 
-dataset_dir="${PROJECT_ROOT}/datasets/e2e/${dataset_name}"
+dataset_dir="${DATASET_ROOT}/${dataset_name}"
 "$PYTHON_BIN" -m e2e_learning.cli.preprocess_bag \
   data.bag_path="${bag_path}" \
   data.output_dir="${dataset_dir}" \

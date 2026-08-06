@@ -3,7 +3,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PACKAGE_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
-PROJECT_ROOT="$(cd -- "${PACKAGE_DIR}/../.." && pwd)"
+DATASET_ROOT="${JETPILOT_E2E_DATASET_ROOT:-${PACKAGE_DIR}/datasets}"
+OUTPUT_ROOT="${JETPILOT_E2E_OUTPUT_ROOT:-${PACKAGE_DIR}/outputs/e2e}"
 
 if [[ -x /opt/env/bin/python ]]; then
   PYTHON_BIN="${PYTHON_BIN:-/opt/env/bin/python}"
@@ -31,7 +32,7 @@ dataset_candidates=()
 while IFS= read -r path; do
   dataset_candidates+=("$path")
 done < <(
-  find "${PROJECT_ROOT}/datasets/e2e" -maxdepth 2 -name samples.csv -print 2>/dev/null \
+  find "${DATASET_ROOT}" -maxdepth 2 -name samples.csv -print 2>/dev/null \
     | sed 's#/samples.csv$##' | sort -r
 )
 
@@ -42,7 +43,7 @@ if ((${#dataset_candidates[@]} == 0)); then
   while IFS= read -r path; do
     dataset_candidates+=("$path")
   done < <(
-    find "${PROJECT_ROOT}/datasets/e2e" -maxdepth 2 -name samples.csv -print 2>/dev/null \
+    find "${DATASET_ROOT}" -maxdepth 2 -name samples.csv -print 2>/dev/null \
       | sed 's#/samples.csv$##' | sort -r
   )
 fi
@@ -69,7 +70,7 @@ select size_preset in "424x240 -> 212x120" "640x480 -> 320x240"; do
   esac
 done
 
-output_root="${PROJECT_ROOT}/outputs/e2e"
+output_root="${OUTPUT_ROOT}"
 "$PYTHON_BIN" -m e2e_learning.cli.train \
   experiment="${experiment}" \
   data.dataset_dir="${dataset_dir}" \

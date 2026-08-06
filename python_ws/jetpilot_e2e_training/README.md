@@ -30,11 +30,11 @@ python -m e2e_learning.cli.preprocess_bag \
   data.bag_path=/bags/run_001 \
   data.image_topic=/realsense/color/image_raw \
   data.control_topic=/teleop/control_cmd \
-  data.output_dir=../../datasets/e2e/run_001
+  data.output_dir=datasets/run_001
 
 python -m e2e_learning.cli.train \
   experiment=pilotnet_scratch \
-  data.dataset_dir=../../datasets/e2e/run_001 \
+  data.dataset_dir=datasets/run_001 \
   run.name=pilotnet_run_001
 
 python -m e2e_learning.cli.export_onnx \
@@ -44,9 +44,17 @@ python -m e2e_learning.cli.export_onnx \
 ## Comparison Experiments
 
 ```bash
-scripts/run_experiments.sh ../../datasets/e2e/run_001 exp_run_001
+scripts/run_experiments.sh datasets/run_001 exp_run_001
 scripts/compare_runs.sh outputs/e2e_experiments/exp_run_001
 ```
+
+The interactive scripts keep generated data inside this package by default:
+
+- datasets: `datasets/<dataset-name>`
+- training outputs: `outputs/e2e/<run-name>`
+
+Override these locations with `JETPILOT_E2E_DATASET_ROOT` and
+`JETPILOT_E2E_OUTPUT_ROOT` when needed.
 
 Each run writes UI-friendly files:
 
