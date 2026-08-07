@@ -24,6 +24,14 @@ from urllib.parse import parse_qs, unquote, urlparse
 from .bag_analysis import AnalysisRepository, build_analysis_script, rosbag_detail
 from .config import ConsoleConfig
 from .e2e_analysis import scan_e2e_models
+from .e2e_pipeline import (
+    PipelineTaskSpec,
+    build_deploy_task,
+    build_export_task,
+    build_preprocess_task,
+    build_train_task,
+    pipeline_catalog,
+)
 from .fpv_receiver import FpvReceiverManager
 from .fpv_stream import FpvStreamSettings
 from .indexes import (
@@ -312,6 +320,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/e2e/models":
             self._json({"models": scan_e2e_models(self.server.state.config)})
             return
+        if path == "/api/e2e/pipeline":
+            self._json(pipeline_catalog(self.server.state.config))
+            return
         if path.startswith("/api/analyses/"):
             self._analysis_get(path)
             return
@@ -493,6 +504,18 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path in {"/api/e2e-analyses", "/api/e2e-analyses/start"}:
             self._start_analysis(body, e2e=True)
+            return
+        if path == "/api/e2e/datasets/create":
+            self._start_e2e_pipeline_task(build_preprocess_task, body)
+            return
+        if path == "/api/e2e/training/start":
+            self._start_e2e_pipeline_task(build_train_task, body)
+            return
+        if path == "/api/e2e/export-onnx":
+            self._start_e2e_pipeline_task(build_export_task, body)
+            return
+        if path == "/api/e2e/deploy":
+            self._start_e2e_pipeline_task(build_deploy_task, body)
             return
         if path == "/api/maps/build-vgl-vslam":
             self._start_map_build(body)
@@ -1606,6 +1629,37 @@ find {shlex.quote(record_root)} -name metadata.yaml -printf '%TY-%Tm-%Td %TH:%TM
             {"analysis": analysis, "task": task.to_json(), "preflight": preflight},
             HTTPStatus.CREATED,
         )
+
+    def _start_e2e_pipeline_task(self, builder: Any, body: dict[str, Any]) -> None:
+        try:
+            spec: PipelineTaskSpec = builder(self.server.state.config, body)
+            task = self.server.state.tasks.start(
+                kind=spec.kind,
+                title=spec.title,
+                command=spec.command,
+                cwd=spec.cwd,
+                artifacts=spec.artifacts,
+                resource_key=spec.resource_keys[0] if spec.resource_keys else None,
+                resource_keys=spec.resource_keys,
+            )
+        except TaskResourceConflict as exc:
+            active = exc.active_task
+            self._json(
+                {
+                    "error": (
+                        "The selected E2E pipeline input or output is already in use: "
+                        f"{active.get('title') or active.get('kind')} "
+                        f"({active.get('task_id')}). Stop it or wait for it to finish."
+                    ),
+                    "active_task": active,
+                },
+                HTTPStatus.CONFLICT,
+            )
+            return
+        except (OSError, TypeError, ValueError) as exc:
+            self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+            return
+        self._json({"task": task.to_json()}, HTTPStatus.CREATED)
 
     def _start_map_build(self, body: dict[str, Any]) -> None:
         config = self.server.state.config

@@ -71,6 +71,15 @@ Each run writes UI-friendly files:
 scripts/deploy_model.sh outputs/e2e/pilotnet_run_001/model.onnx --preset camera_control
 ```
 
+対話端末で`fzf`が利用可能な場合、接続profile、model preset、ONNXモデルは
+検索可能なTUIで選択されます。UIやCIから非対話で転送し、Jetson上でTensorRT
+engineまで生成する場合は次のように実行します。
+
+```bash
+scripts/deploy_model.sh outputs/e2e/pilotnet_run_001/model.onnx \
+  --preset camera_control --profile jetson --build-engine --yes
+```
+
 On Jetson:
 
 ```bash

@@ -151,6 +151,21 @@ select_profile_index() {
     return
   fi
   if [[ -t 0 && "$ASSUME_YES" == false ]]; then
+    if command -v fzf >/dev/null 2>&1; then
+      local selected
+      selected="$({
+        for choice in "${!PROFILE_IDS[@]}"; do
+          if [[ "${PROFILE_HOSTS[$choice]}" == "__manual__" ]]; then
+            destination="IPを手動入力"
+          else
+            destination="${PROFILE_USERS[$choice]}@${PROFILE_HOSTS[$choice]}"
+          fi
+          printf '%s\t%s\t%s\t%s\n' "$choice" "${PROFILE_LABELS[$choice]}" "$destination" "${PROFILE_DESCRIPTIONS[$choice]}"
+        done
+      } | fzf --delimiter=$'\t' --with-nth=2.. --prompt='Jetson profile > ' --header='接続先を選択（Escで中止）')" || return 130
+      printf '%s\n' "${selected%%$'\t'*}"
+      return
+    fi
     echo "接続profileを選択してください:" >&2
     for choice in "${!PROFILE_IDS[@]}"; do
       if [[ "${PROFILE_HOSTS[$choice]}" == "__manual__" ]]; then
@@ -176,6 +191,16 @@ select_preset_index() {
     return
   fi
   if [[ -t 0 && "$ASSUME_YES" == false ]]; then
+    if command -v fzf >/dev/null 2>&1; then
+      local selected
+      selected="$({
+        for choice in "${!PRESET_IDS[@]}"; do
+          printf '%s\t%s\t%s\n' "$choice" "${PRESET_LABELS[$choice]}" "${PRESET_DESCRIPTIONS[$choice]}"
+        done
+      } | fzf --delimiter=$'\t' --with-nth=2.. --prompt='Model preset > ' --header='配備モデル種別を選択（Escで中止）')" || return 130
+      printf '%s\n' "${selected%%$'\t'*}"
+      return
+    fi
     echo "model presetを選択してください:" >&2
     for choice in "${!PRESET_IDS[@]}"; do
       printf '  %d) %s (%s)\n' "$((choice + 1))" "${PRESET_LABELS[$choice]}" "${PRESET_IDS[$choice]}" >&2
@@ -215,6 +240,12 @@ select_model() {
   ((${#candidates[@]} > 0)) || die "No ONNX model was found"
   if [[ ! -t 0 || "$ASSUME_YES" == true ]]; then
     printf '%s\n' "${candidates[0]}"
+    return
+  fi
+  if command -v fzf >/dev/null 2>&1; then
+    local selected
+    selected="$(printf '%s\n' "${candidates[@]}" | fzf --prompt='ONNX model > ' --header='Jetsonへ転送するモデルを選択（Escで中止）' --with-nth=1)" || return 130
+    printf '%s\n' "$selected"
     return
   fi
   for choice in "${!candidates[@]}"; do
@@ -263,14 +294,15 @@ main() {
   scp "$model_path" "${remote_target}:${remote_model_dir}/model.onnx.uploading"
   if [[ -f "$metadata_path" ]]; then
     scp "$metadata_path" "${remote_target}:${remote_model_dir}/metadata.json.uploading"
-    ssh "$remote_target" "mv -- '$remote_model_dir/model.onnx.uploading' '$remote_model_dir/model.onnx'; mv -- '$remote_model_dir/metadata.json.uploading' '$remote_model_dir/metadata.json'; echo '$checksum  $remote_model_dir/model.onnx' > '$remote_model_dir/model.onnx.sha256'; rm -f -- '$remote_model_dir/model.plan'; ln -sfn -- '$model_name' '${REMOTE_ROOT%/}/latest'"
+    ssh "$remote_target" "mv -- '$remote_model_dir/model.onnx.uploading' '$remote_model_dir/model.onnx'; mv -- '$remote_model_dir/metadata.json.uploading' '$remote_model_dir/metadata.json'; echo '$checksum  $remote_model_dir/model.onnx' > '$remote_model_dir/model.onnx.sha256'; rm -f -- '$remote_model_dir/model.plan'"
   else
-    ssh "$remote_target" "mv -- '$remote_model_dir/model.onnx.uploading' '$remote_model_dir/model.onnx'; echo '$checksum  $remote_model_dir/model.onnx' > '$remote_model_dir/model.onnx.sha256'; rm -f -- '$remote_model_dir/model.plan' '$remote_model_dir/metadata.json'; ln -sfn -- '$model_name' '${REMOTE_ROOT%/}/latest'"
+    ssh "$remote_target" "mv -- '$remote_model_dir/model.onnx.uploading' '$remote_model_dir/model.onnx'; echo '$checksum  $remote_model_dir/model.onnx' > '$remote_model_dir/model.onnx.sha256'; rm -f -- '$remote_model_dir/model.plan' '$remote_model_dir/metadata.json'"
   fi
 
   if [[ "$BUILD_ENGINE" == true ]]; then
-    ssh "$remote_target" "/usr/src/tensorrt/bin/trtexec --onnx='$remote_model_dir/model.onnx' --saveEngine='$remote_model_dir/model.plan' --fp16 --dumpBindings > '$remote_model_dir/build_engine.log' 2>&1"
+    ssh "$remote_target" "set -e; /usr/src/tensorrt/bin/trtexec --onnx='$remote_model_dir/model.onnx' --saveEngine='$remote_model_dir/model.plan.building' --fp16 --dumpBindings > '$remote_model_dir/build_engine.log' 2>&1; mv -- '$remote_model_dir/model.plan.building' '$remote_model_dir/model.plan'"
   fi
+  ssh "$remote_target" "ln -sfn -- '$model_name' '${REMOTE_ROOT%/}/latest'"
   echo "転送が完了しました: ${remote_target}:${remote_model_dir}"
 }
 

@@ -171,6 +171,7 @@ export ISAAC_ROS_WS="${RC_AS_ROOT}/ros2_ws"
 export ISAAC_DIR="${ISAAC_ROS_WS}"
 
 cd "${RC_AS_ROOT}"
+./scripts/prepare_workspace_dirs.sh
 vcs import < packages.repos
 
 # CenturyArks SilkyEvCam plugin source を Docker build context に配置
@@ -231,3 +232,8 @@ isaac-ros activate --build-local
 # コンテナ内で mount 先を確認
 ls -ld /workspaces/ros2_ws /workspaces/python_ws /workspaces/record /workspaces/map
 ```
+
+`record`、`map`、`ros2_ws/models/e2e`、E2E学習用の`datasets`と`outputs/e2e`は、
+空の骨組みだけをGitで管理しています。生成物自体はGit管理されません。
+Docker起動前に`prepare_workspace_dirs.sh`が実際の作成・書き込みを確認するため、
+Dockerによってmount元がroot所有で自動作成される問題を避けられます。

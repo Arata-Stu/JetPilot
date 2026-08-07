@@ -72,6 +72,13 @@ ros2 run jetpilot_e2e_inference build_tensorrt_engine.sh \
   /workspaces/ros2_ws/models/e2e/latest/model.plan
 ```
 
+Jetson上でアップロード済みモデルを対話的に選ぶ場合は、fzf対応TUIを使用できます。
+fzfがない環境では番号選択へ自動的に切り替わります。
+
+```bash
+ros2 run jetpilot_e2e_inference deploy_tensorrt_tui.sh
+```
+
 単独起動時は`multi_sensor_container`を作成します。
 
 ```bash

@@ -20,10 +20,13 @@ if [[ ! -x "$TRTEXEC" ]]; then
 fi
 
 mkdir -p -- "$(dirname -- "$ENGINE_PATH")"
+BUILDING_PATH="${ENGINE_PATH}.building"
+rm -f -- "$BUILDING_PATH"
+trap 'rm -f -- "$BUILDING_PATH"' EXIT
 args=(
   "$TRTEXEC"
   "--onnx=${ONNX_PATH}"
-  "--saveEngine=${ENGINE_PATH}"
+  "--saveEngine=${BUILDING_PATH}"
   "--dumpBindings"
 )
 if [[ "$FP16" == "1" || "$FP16" == "true" ]]; then
@@ -31,3 +34,5 @@ if [[ "$FP16" == "1" || "$FP16" == "true" ]]; then
 fi
 
 "${args[@]}" 2>&1 | tee "$(dirname -- "$ENGINE_PATH")/build_engine.log"
+mv -- "$BUILDING_PATH" "$ENGINE_PATH"
+trap - EXIT

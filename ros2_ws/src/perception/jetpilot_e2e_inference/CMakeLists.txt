@@ -10,6 +10,7 @@ install(PROGRAMS
   jetpilot_e2e_inference/e2e_control_decoder_node.py
   jetpilot_e2e_inference/e2e_pytorch_inference_node.py
   scripts/build_tensorrt_engine.sh
+  scripts/deploy_tensorrt_tui.sh
   DESTINATION lib/${PROJECT_NAME}
 )
 

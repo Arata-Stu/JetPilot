@@ -115,6 +115,27 @@ Implemented in this MVP:
   specific controls such as FoundationStereo model resolution are intentionally
   hidden from the main form.
 
+## E2E training and deployment pipeline
+
+Open **E2E Analysis** to run the notebook-side model workflow before using the
+existing offline evaluator:
+
+1. Select a rosbag, image topic, and teacher-control topic, then create a named
+   dataset under `python_ws/jetpilot_e2e_training/datasets`.
+2. Select the dataset and tune the experiment, epochs, learning rates, batch
+   size, validation split, data fraction, worker count, and device.
+3. Export a completed run's `best.pt` checkpoint to `model.onnx` and
+   `metadata.json`, then select it directly for Offline teacher comparison.
+4. Transfer the ONNX model to a configured Jetson profile. Engine generation is
+   enabled by default and runs `trtexec` remotely to create `model.plan` before
+   the Isaac ROS TensorRT launch consumes it.
+
+Every stage is a cancellable Console task with its command, log, output
+artifacts, and an exclusive lock for the selected dataset/run/deployment target.
+The UI deliberately targets the Isaac ROS TensorRT runtime pipeline; the
+non-Isaac ROS PyTorch inference node remains a dependency-failure fallback and
+is not exposed as a deployment choice.
+
 ## Goals
 
 - Manage rosbag, map, HD map, raceline, preview, and Jetson transfer workflows

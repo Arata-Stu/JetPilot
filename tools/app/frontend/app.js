@@ -27,6 +27,43 @@ const state = {
   rosbagTrash: [],
   maps: [],
   e2eModels: [],
+  e2ePipeline: {
+    datasets: [],
+    runs: [],
+    experiments: [],
+    deployProfiles: [],
+    deployPresets: [],
+    datasetRoot: "",
+    runRoot: "",
+    datasetName: "e2e_dataset",
+    datasetDir: "",
+    runName: "pilotnet_run",
+    runDir: "",
+    experiment: "pilotnet_scratch",
+    imageTopic: "/realsense/color/image_raw",
+    controlTopic: "/teleop/control_cmd",
+    inputWidth: 212,
+    inputHeight: 120,
+    maxControlDtSec: 0.1,
+    jpegQuality: 92,
+    batchSize: 64,
+    numWorkers: 4,
+    epochs: 30,
+    learningRate: 0.001,
+    finetuneEpochs: 20,
+    finetuneLearningRate: 0.0001,
+    valFraction: 0.2,
+    fraction: 1.0,
+    weightDecay: 0.0001,
+    seed: 42,
+    device: "",
+    deployProfile: "",
+    deployPreset: "",
+    deployHost: "",
+    deployUser: "",
+    remoteRoot: "",
+    buildEngine: true,
+  },
   listControls: {
     rosbags: { query: "", sort: "newest", groupByDate: true, collapsedDays: {} },
     rosbagTrash: { query: "", sort: "newest", groupByDate: true, collapsedDays: {} },
@@ -1085,7 +1122,7 @@ function sh(value) {
 
 async function refreshAll() {
   const previousFpvSession = state.fpv.browserStatus?.session_id || "";
-  const [config, tasks, rosbags, rosbagTrash, maps, cameraTopicConfigs, localIps, analyses, e2eModels, fpvStatus] = await Promise.all([
+  const [config, tasks, rosbags, rosbagTrash, maps, cameraTopicConfigs, localIps, analyses, e2eModels, e2ePipeline, fpvStatus] = await Promise.all([
     api("/api/config"),
     api("/api/tasks"),
     api("/api/rosbags/local"),
@@ -1095,6 +1132,7 @@ async function refreshAll() {
     api("/api/network/local-ips").catch(() => ({ ips: [] })),
     api("/api/analyses").catch(() => ({ analyses: [] })),
     api("/api/e2e/models").catch(() => ({ models: [] })),
+    api("/api/e2e/pipeline").catch(() => ({ datasets: [], runs: [], experiments: [], deploy_profiles: [], deploy_presets: [] })),
     api("/api/fpv/status").catch(() => ({ fpv: { available: false, running: false } })),
   ]);
   state.config = config;
@@ -1106,6 +1144,25 @@ async function refreshAll() {
   state.localIps = localIps.ips || [];
   state.analysis.analyses = normalizeAnalysisList(analyses);
   state.e2eModels = e2eModels.models || [];
+  state.e2ePipeline.datasets = e2ePipeline.datasets || [];
+  state.e2ePipeline.runs = e2ePipeline.runs || [];
+  state.e2ePipeline.experiments = e2ePipeline.experiments || [];
+  state.e2ePipeline.deployProfiles = e2ePipeline.deploy_profiles || [];
+  state.e2ePipeline.deployPresets = e2ePipeline.deploy_presets || [];
+  state.e2ePipeline.datasetRoot = e2ePipeline.dataset_root || "";
+  state.e2ePipeline.runRoot = e2ePipeline.run_root || "";
+  if (!state.e2ePipeline.datasetDir && state.e2ePipeline.datasets[0]) {
+    state.e2ePipeline.datasetDir = state.e2ePipeline.datasets[0].path || "";
+  }
+  if (!state.e2ePipeline.runDir && state.e2ePipeline.runs[0]) {
+    state.e2ePipeline.runDir = state.e2ePipeline.runs[0].path || "";
+  }
+  if (!state.e2ePipeline.deployProfile) {
+    state.e2ePipeline.deployProfile = e2ePipeline.default_deploy_profile || state.e2ePipeline.deployProfiles[0]?.id || "";
+  }
+  if (!state.e2ePipeline.deployPreset) {
+    state.e2ePipeline.deployPreset = e2ePipeline.default_deploy_preset || state.e2ePipeline.deployPresets[0]?.id || "";
+  }
   if (!state.analysis.e2eModelPath && state.e2eModels[0]) {
     state.analysis.e2eModelPath = state.e2eModels[0].path || "";
   }
@@ -2658,11 +2715,229 @@ function scheduleE2EPreflight(options = {}) {
   else analysisPreflightTimer = setTimeout(check, 250);
 }
 
+const E2E_PIPELINE_TASK_KINDS = [
+  "e2e-preprocess",
+  "e2e-train",
+  "e2e-export-onnx",
+  "e2e-deploy",
+];
+
+function isE2EPipelineTask(task) {
+  return E2E_PIPELINE_TASK_KINDS.includes(task?.kind);
+}
+
+function updateE2EPipelineOption(key, value) {
+  if (!(key in state.e2ePipeline)) return;
+  const booleanKeys = ["buildEngine"];
+  const numberKeys = [
+    "inputWidth", "inputHeight", "maxControlDtSec", "jpegQuality", "batchSize",
+    "numWorkers", "epochs", "learningRate", "finetuneEpochs",
+    "finetuneLearningRate", "valFraction", "fraction", "weightDecay", "seed",
+  ];
+  if (booleanKeys.includes(key)) state.e2ePipeline[key] = Boolean(value);
+  else if (numberKeys.includes(key)) state.e2ePipeline[key] = Number(value);
+  else state.e2ePipeline[key] = String(value ?? "");
+  if (key === "deployProfile") {
+    const profile = state.e2ePipeline.deployProfiles.find((item) => item.id === state.e2ePipeline.deployProfile);
+    if (profile) state.e2ePipeline.deployHost = profile.host === "__manual__" ? "" : (profile.host || "");
+    if (profile) {
+      state.e2ePipeline.deployUser = profile.user || "";
+      state.e2ePipeline.remoteRoot = profile.remote_root || "";
+    }
+  }
+  render();
+}
+
+function selectedE2ERun() {
+  return state.e2ePipeline.runs.find((item) => item.path === state.e2ePipeline.runDir) || null;
+}
+
+function selectedE2EDeployProfile() {
+  return state.e2ePipeline.deployProfiles.find((item) => item.id === state.e2ePipeline.deployProfile) || null;
+}
+
+async function startE2EPipelineTask(action, endpoint, title, target, payload) {
+  if (!confirmAction({ title, target, detail: "The command will run as a visible, cancellable Console task." })) return;
+  if (!beginAction(action, title)) return;
+  try {
+    const result = await api(endpoint, { method: "POST", body: JSON.stringify(payload) });
+    if (result.task) {
+      rememberStartedTask(result.task, action, payload);
+      state.selectedTaskId = result.task.task_id;
+      state.tasks = [result.task, ...state.tasks.filter((item) => item.task_id !== result.task.task_id)];
+    }
+    toast(`${title} started`);
+  } catch (error) {
+    toast(`${title} failed to start: ${error.message}`, "error");
+  } finally {
+    endAction(action, { renderAfter: state.tab === "e2e-analysis" });
+  }
+}
+
+function createE2EDataset() {
+  const pipeline = state.e2ePipeline;
+  return startE2EPipelineTask(
+    "e2e-pipeline:dataset",
+    "/api/e2e/datasets/create",
+    "Create E2E dataset",
+    pipeline.datasetName,
+    {
+      rosbag: state.analysis.selectedBagPath,
+      dataset_name: pipeline.datasetName,
+      image_topic: pipeline.imageTopic || state.analysis.imageTopic,
+      control_topic: pipeline.controlTopic,
+      input_width: pipeline.inputWidth,
+      input_height: pipeline.inputHeight,
+      max_control_dt_sec: pipeline.maxControlDtSec,
+      jpeg_quality: pipeline.jpegQuality,
+    },
+  );
+}
+
+function trainE2EModel() {
+  const pipeline = state.e2ePipeline;
+  return startE2EPipelineTask(
+    "e2e-pipeline:train",
+    "/api/e2e/training/start",
+    "Train E2E model",
+    pipeline.runName,
+    {
+      dataset_dir: pipeline.datasetDir,
+      run_name: pipeline.runName,
+      experiment: pipeline.experiment,
+      batch_size: pipeline.batchSize,
+      num_workers: pipeline.numWorkers,
+      epochs: pipeline.epochs,
+      learning_rate: pipeline.learningRate,
+      finetune_epochs: pipeline.finetuneEpochs,
+      finetune_learning_rate: pipeline.finetuneLearningRate,
+      val_fraction: pipeline.valFraction,
+      fraction: pipeline.fraction,
+      weight_decay: pipeline.weightDecay,
+      seed: pipeline.seed,
+      device: pipeline.device,
+    },
+  );
+}
+
+function exportE2EOnnx() {
+  const run = selectedE2ERun();
+  return startE2EPipelineTask(
+    "e2e-pipeline:export",
+    "/api/e2e/export-onnx",
+    "Export E2E ONNX",
+    run?.name || state.e2ePipeline.runDir,
+    { run_dir: state.e2ePipeline.runDir },
+  );
+}
+
+function deployE2EModel() {
+  const pipeline = state.e2ePipeline;
+  const run = selectedE2ERun();
+  const profile = selectedE2EDeployProfile();
+  return startE2EPipelineTask(
+    "e2e-pipeline:deploy",
+    "/api/e2e/deploy",
+    "Deploy E2E model",
+    `${pipeline.deployUser || profile?.user || ""}@${pipeline.deployHost || profile?.host || ""}`,
+    {
+      model_path: run?.onnx_path || "",
+      profile: pipeline.deployProfile,
+      preset: pipeline.deployPreset,
+      user: pipeline.deployUser,
+      host: pipeline.deployHost,
+      remote_root: pipeline.remoteRoot,
+      build_engine: pipeline.buildEngine,
+    },
+  );
+}
+
+function useE2ERunForOfflineEval() {
+  const run = selectedE2ERun();
+  if (!run?.onnx_path) {
+    toast("Export model.onnx before starting offline evaluation.", "error");
+    return;
+  }
+  state.analysis.e2eMode = "supervised";
+  state.analysis.e2eModelPath = run.onnx_path;
+  render();
+  requestAnimationFrame(() => $("e2e-offline-eval")?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  toast(`Offline evaluation model selected: ${run.name}`);
+}
+
+function e2ePipelineStageState() {
+  const pipeline = state.e2ePipeline;
+  const run = selectedE2ERun();
+  return [
+    ["Dataset", pipeline.datasets.length ? `${pipeline.datasets.length} ready` : "not created", Boolean(pipeline.datasets.length)],
+    ["Training", pipeline.runs.some((item) => item.best_checkpoint) ? `${pipeline.runs.length} run(s)` : "not trained", pipeline.runs.some((item) => item.best_checkpoint)],
+    ["ONNX", pipeline.runs.some((item) => item.onnx_path) ? "exported" : "not exported", pipeline.runs.some((item) => item.onnx_path)],
+    ["Offline eval", state.analysis.analyses.some((item) => analysisRecordKind(item) === "e2e") ? "result available" : "not evaluated", state.analysis.analyses.some((item) => analysisRecordKind(item) === "e2e")],
+    ["Jetson", state.tasks.some((item) => item.kind === "e2e-deploy" && item.status === "success") ? "deployed" : (run?.onnx_path ? "ready to deploy" : "waiting for ONNX"), state.tasks.some((item) => item.kind === "e2e-deploy" && item.status === "success")],
+  ];
+}
+
+function renderE2EPipeline() {
+  const pipeline = state.e2ePipeline;
+  const run = selectedE2ERun();
+  const profile = selectedE2EDeployProfile();
+  const hasTwoStages = pipeline.experiment === "mobilenet_head_then_finetune";
+  const pipelineTasks = state.tasks.filter(isE2EPipelineTask).slice(0, 8);
+  const imageTopic = pipeline.imageTopic || state.analysis.imageTopic;
+  return `
+    <section class="panel e2e-pipeline-panel">
+      <div class="panel-header"><h2>E2E Training & Deployment</h2><span class="spacer"></span><button onclick="refreshAll()">Refresh artifacts</button></div>
+      <div class="panel-body">
+        <div class="e2e-pipeline-progress">
+          ${e2ePipelineStageState().map(([label, detail, done], index) => `<div class="${done ? "done" : ""}"><span>${index + 1}</span><strong>${esc(label)}</strong><small>${esc(detail)}</small></div>`).join("")}
+        </div>
+        <div class="e2e-pipeline-grid">
+          <article class="e2e-pipeline-stage">
+            <header><span>01</span><div><strong>Create dataset</strong><small>Rosbag images + teacher commands</small></div></header>
+            <div class="field"><label>Rosbag</label><select onchange="selectAnalysisBag(this.value)"><option value="">Select rosbag</option>${state.rosbags.map((item) => `<option value="${esc(item.path)}" ${item.path === state.analysis.selectedBagPath ? "selected" : ""}>${esc(item.display_name || item.name)}</option>`).join("")}</select></div>
+            <div class="field"><label>Dataset name</label><input value="${esc(pipeline.datasetName)}" onchange="updateE2EPipelineOption('datasetName', this.value)" /><div class="field-hint">${esc(pipeline.datasetRoot)}</div></div>
+            <div class="field"><label>Image topic</label><select onchange="updateE2EPipelineOption('imageTopic', this.value)">${analysisTopicOptions("image", imageTopic)}</select></div>
+            <div class="field"><label>Teacher control</label><select onchange="updateE2EPipelineOption('controlTopic', this.value)">${analysisTopicOptions("control", pipeline.controlTopic)}</select></div>
+            <div class="e2e-compact-fields"><label>Width<input type="number" min="32" value="${esc(pipeline.inputWidth)}" onchange="updateE2EPipelineOption('inputWidth', this.value)" /></label><label>Height<input type="number" min="32" value="${esc(pipeline.inputHeight)}" onchange="updateE2EPipelineOption('inputHeight', this.value)" /></label><label>Max Δt (s)<input type="number" min="0.001" step="0.01" value="${esc(pipeline.maxControlDtSec)}" onchange="updateE2EPipelineOption('maxControlDtSec', this.value)" /></label></div>
+            <button class="primary ${actionBusy("e2e-pipeline:dataset") ? "is-busy" : ""}" onclick="createE2EDataset()" ${state.analysis.selectedBagPath && imageTopic && pipeline.controlTopic ? "" : "disabled"} ${actionButtonAttrs("e2e-pipeline:dataset", "Dataset creation is starting...")}>${esc(actionButtonLabel("e2e-pipeline:dataset", "Create dataset", "Starting..."))}</button>
+          </article>
+          <article class="e2e-pipeline-stage">
+            <header><span>02</span><div><strong>Train model</strong><small>Adjust repeatable training parameters</small></div></header>
+            <div class="field"><label>Dataset</label><select onchange="updateE2EPipelineOption('datasetDir', this.value)"><option value="">Select dataset</option>${pipeline.datasets.map((item) => `<option value="${esc(item.path)}" ${item.path === pipeline.datasetDir ? "selected" : ""}>${esc(item.name)} — ${esc(item.sample_count)} samples</option>`).join("")}</select></div>
+            <div class="field"><label>Run name</label><input value="${esc(pipeline.runName)}" onchange="updateE2EPipelineOption('runName', this.value)" /><div class="field-hint">${esc(pipeline.runRoot)}</div></div>
+            <div class="field"><label>Experiment</label><select onchange="updateE2EPipelineOption('experiment', this.value)">${pipeline.experiments.map((item) => `<option value="${esc(item.id)}" ${item.id === pipeline.experiment ? "selected" : ""}>${esc(item.label)}</option>`).join("")}</select></div>
+            <div class="e2e-compact-fields"><label>Epochs<input type="number" min="1" value="${esc(pipeline.epochs)}" onchange="updateE2EPipelineOption('epochs', this.value)" /></label><label>Learning rate<input type="number" min="0.00000001" step="0.0001" value="${esc(pipeline.learningRate)}" onchange="updateE2EPipelineOption('learningRate', this.value)" /></label><label>Batch<input type="number" min="1" value="${esc(pipeline.batchSize)}" onchange="updateE2EPipelineOption('batchSize', this.value)" /></label></div>
+            ${hasTwoStages ? `<div class="e2e-compact-fields"><label>Fine-tune epochs<input type="number" min="1" value="${esc(pipeline.finetuneEpochs)}" onchange="updateE2EPipelineOption('finetuneEpochs', this.value)" /></label><label>Fine-tune LR<input type="number" min="0.00000001" step="0.0001" value="${esc(pipeline.finetuneLearningRate)}" onchange="updateE2EPipelineOption('finetuneLearningRate', this.value)" /></label></div>` : ""}
+            <details><summary>Advanced parameters</summary><div class="e2e-compact-fields"><label>Data fraction<input type="number" min="0.001" max="1" step="0.05" value="${esc(pipeline.fraction)}" onchange="updateE2EPipelineOption('fraction', this.value)" /></label><label>Validation<input type="number" min="0.01" max="0.9" step="0.05" value="${esc(pipeline.valFraction)}" onchange="updateE2EPipelineOption('valFraction', this.value)" /></label><label>Workers<input type="number" min="0" value="${esc(pipeline.numWorkers)}" onchange="updateE2EPipelineOption('numWorkers', this.value)" /></label><label>Weight decay<input type="number" min="0" max="1" step="0.0001" value="${esc(pipeline.weightDecay)}" onchange="updateE2EPipelineOption('weightDecay', this.value)" /></label><label>Seed<input type="number" min="0" value="${esc(pipeline.seed)}" onchange="updateE2EPipelineOption('seed', this.value)" /></label><label>Device<select onchange="updateE2EPipelineOption('device', this.value)">${[["","Auto"],["cuda","CUDA"],["mps","Apple MPS"],["cpu","CPU"]].map(([value,label]) => `<option value="${value}" ${pipeline.device === value ? "selected" : ""}>${label}</option>`).join("")}</select></label></div></details>
+            <button class="primary ${actionBusy("e2e-pipeline:train") ? "is-busy" : ""}" onclick="trainE2EModel()" ${pipeline.datasetDir ? "" : "disabled"} ${actionButtonAttrs("e2e-pipeline:train", "Training is starting...")}>${esc(actionButtonLabel("e2e-pipeline:train", "Start training", "Starting..."))}</button>
+          </article>
+          <article class="e2e-pipeline-stage">
+            <header><span>03</span><div><strong>Evaluate & export</strong><small>Checkpoint → ONNX → offline eval</small></div></header>
+            <div class="field"><label>Training run</label><select onchange="updateE2EPipelineOption('runDir', this.value)"><option value="">Select run</option>${pipeline.runs.map((item) => `<option value="${esc(item.path)}" ${item.path === pipeline.runDir ? "selected" : ""}>${esc(item.name)} — ${esc(item.model || item.status)}</option>`).join("")}</select></div>
+            ${run ? `<div class="e2e-run-summary"><span>${run.best_checkpoint ? "Checkpoint ready" : "No best checkpoint"}</span><span>${run.onnx_path ? "ONNX ready" : "ONNX not exported"}</span><small>${esc(run.path)}</small></div>` : `<div class="empty compact">Select a completed training run.</div>`}
+            <div class="button-stack"><button class="primary ${actionBusy("e2e-pipeline:export") ? "is-busy" : ""}" onclick="exportE2EOnnx()" ${run?.best_checkpoint ? "" : "disabled"} ${actionButtonAttrs("e2e-pipeline:export", "ONNX export is starting...")}>${esc(actionButtonLabel("e2e-pipeline:export", "Export ONNX", "Starting..."))}</button><button onclick="useE2ERunForOfflineEval()" ${run?.onnx_path ? "" : "disabled"}>Use in offline eval</button></div>
+          </article>
+          <article class="e2e-pipeline-stage">
+            <header><span>04</span><div><strong>Deploy to Jetson</strong><small>SCP + remote trtexec + model.plan</small></div></header>
+            <div class="field"><label>Connection profile</label><select onchange="updateE2EPipelineOption('deployProfile', this.value)">${pipeline.deployProfiles.map((item) => `<option value="${esc(item.id)}" ${item.id === pipeline.deployProfile ? "selected" : ""}>${esc(item.label)} — ${esc(item.host === "__manual__" ? "manual" : item.host)}</option>`).join("")}</select></div>
+            <div class="e2e-compact-fields"><label>SSH user<input value="${esc(pipeline.deployUser || profile?.user || "")}" onchange="updateE2EPipelineOption('deployUser', this.value)" /></label><label>Host<input value="${esc(pipeline.deployHost || (profile?.host === "__manual__" ? "" : profile?.host) || "")}" onchange="updateE2EPipelineOption('deployHost', this.value)" /></label></div>
+            <div class="field"><label>Model preset</label><select onchange="updateE2EPipelineOption('deployPreset', this.value)">${pipeline.deployPresets.map((item) => `<option value="${esc(item.id)}" ${item.id === pipeline.deployPreset ? "selected" : ""}>${esc(item.label)}</option>`).join("")}</select></div>
+            <label class="check-row"><input type="checkbox" ${pipeline.buildEngine ? "checked" : ""} onchange="updateE2EPipelineOption('buildEngine', this.checked)" /><span>Build TensorRT engine on Jetson with trtexec (FP16)</span></label>
+            <div class="field-hint">${esc(pipeline.remoteRoot || profile?.remote_root || "")}</div>
+            <button class="primary ${actionBusy("e2e-pipeline:deploy") ? "is-busy" : ""}" onclick="deployE2EModel()" ${run?.onnx_path ? "" : "disabled"} ${actionButtonAttrs("e2e-pipeline:deploy", "Deployment is starting...")}>${esc(actionButtonLabel("e2e-pipeline:deploy", "Transfer & deploy", "Starting..."))}</button>
+          </article>
+        </div>
+        <details class="e2e-pipeline-tasks" ${pipelineTasks.some(isActiveTask) ? "open" : ""}><summary>Pipeline tasks (${pipelineTasks.length})</summary>${renderTaskTable(pipelineTasks)}</details>
+      </div>
+    </section>`;
+}
+
 function renderE2EAnalysis() {
   return `
     <div class="page analysis-page e2e-analysis-page">
+      ${renderE2EPipeline()}
       <div class="analysis-create-layout">
-        <section class="panel analysis-create-panel">
+        <section class="panel analysis-create-panel" id="e2e-offline-eval">
           <div class="panel-header"><h2>New E2E Analysis</h2><span class="spacer"></span><button onclick="refreshAnalysisData()">Refresh</button></div>
           <div class="panel-body">${renderE2EAnalysisForm()}</div>
         </section>
@@ -3342,6 +3617,10 @@ async function selectAnalysisBag(path) {
     if (changed) {
       state.analysis.selectedImageTopics = state.analysis.imageTopic ? [state.analysis.imageTopic] : [];
       state.analysis.primaryImageTopic = state.analysis.imageTopic || "";
+      state.e2ePipeline.imageTopic = state.analysis.imageTopic || "";
+      state.e2ePipeline.controlTopic = analysisTopics("control").find((topic) => topic.name === "/teleop/control_cmd")?.name
+        || state.analysis.controlTopic
+        || "";
     }
   } catch (error) {
     if (state.analysis.selectedBagPath === selectedPath) {
@@ -9580,6 +9859,12 @@ window.updateAnalysisOption = updateAnalysisOption;
 window.scheduleAnalysisPreflight = scheduleAnalysisPreflight;
 window.scheduleE2EPreflight = scheduleE2EPreflight;
 window.updateE2EOption = updateE2EOption;
+window.updateE2EPipelineOption = updateE2EPipelineOption;
+window.createE2EDataset = createE2EDataset;
+window.trainE2EModel = trainE2EModel;
+window.exportE2EOnnx = exportE2EOnnx;
+window.deployE2EModel = deployE2EModel;
+window.useE2ERunForOfflineEval = useE2ERunForOfflineEval;
 window.refreshAnalysisData = refreshAnalysisData;
 window.startBagAnalysis = startBagAnalysis;
 window.startE2EAnalysis = startE2EAnalysis;
@@ -9671,6 +9956,16 @@ setInterval(() => {
   api("/api/tasks")
     .then(async (data) => {
       const nextTasks = data.tasks || [];
+      const e2ePipelineTaskFinished = nextTasks.some((task) => {
+        if (!isE2EPipelineTask(task) || !isFinishedTask(task)) return false;
+        const previous = state.tasks.find((item) => item.task_id === task.task_id);
+        return !previous || previous.status !== task.status || previous.ended_at !== task.ended_at;
+      });
+      if (e2ePipelineTaskFinished) {
+        state.tasks = nextTasks;
+        await refreshAll();
+        return;
+      }
       if (isAnalysisTab()) {
         state.tasks = nextTasks;
         const previousSelected = state.analysis.analyses.find((item) => analysisRecordId(item) === state.analysis.selectedId);
