@@ -1,0 +1,18 @@
+e2e_pytorch_inference:
+  ros__parameters:
+    model_format: auto
+    model_kind: pilotnet
+    use_checkpoint_config: true
+    device: cpu
+    use_half: false
+    cpu_threads: 0
+    input_width: 212
+    input_height: 120
+    image_mean: [0.485, 0.456, 0.406]
+    image_std: [0.229, 0.224, 0.225]
+    steering_min: -1.0
+    steering_max: 1.0
+    throttle_min: 0.0
+    throttle_max: 1.0
+    max_inference_rate_hz: 0.0
+    log_interval: 100

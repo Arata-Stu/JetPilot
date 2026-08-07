@@ -2,6 +2,10 @@
 
 JetPilotの画像ベースE2E制御用ROS 2推論パイプラインです。
 
+TensorRT経路に加えて、`sensor_msgs/Image`を直接受信するPyTorch経路を
+提供します。PyTorch経路はIsaac ROS、NITROS、TensorRTを使用せず、CPUを
+既定deviceとして起動します。
+
 ## 実行構成
 
 ```text
@@ -44,6 +48,20 @@ TensorRT topicの既定tensor名:
 - モデル入力: 212 × 120、NCHW RGB float32
 - 正規化: ImageNet mean/std
 
+PyTorchノードは、学習が出力する`checkpoints/best.pt`または`last.pt`を直接
+読み込めます。checkpoint内の`cfg`からモデル種別、入力寸法、mean/stdを取得します。
+配備先ではcheckpointを`model.pt`という名前で配置してください。
+
+```bash
+mkdir -p /workspaces/ros2_ws/models/e2e/latest
+cp /path/to/checkpoints/best.pt \
+  /workspaces/ros2_ws/models/e2e/latest/model.pt
+```
+
+`pilotnet`はPyTorchだけで動作します。`mobilenet_v3_small` checkpointを使う場合は
+追加で`torchvision`が必要です。TorchScriptファイルも`model_format:=auto`または
+`model_format:=torchscript`で読み込めます。
+
 ## 起動
 
 Jetson上でTensorRT engineを生成:
@@ -79,3 +97,37 @@ ros2 launch jetpilot_system_launch bringup.launch.py \
   enable_sensor_kit:=true \
   enable_e2e_inference:=true
 ```
+
+## PyTorch推論
+
+推論ノード単体を起動する場合:
+
+```bash
+ros2 launch jetpilot_e2e_inference e2e_pytorch.launch.py \
+  model_file_path:=/workspaces/ros2_ws/models/e2e/latest/model.pt \
+  image_topic:=/realsense/color/image_raw \
+  control_cmd_topic:=/auto/control_cmd \
+  device:=cpu
+```
+
+センサーとPyTorch推論をまとめて起動する場合:
+
+```bash
+ros2 launch jetpilot_system_launch e2e.launch.py \
+  model_file_path:=/workspaces/ros2_ws/models/e2e/latest/model.pt
+```
+
+すでにカメラを起動済みなら、重複起動を避けます。
+
+```bash
+ros2 launch jetpilot_system_launch e2e.launch.py \
+  enable_sensor_kit:=false \
+  image_topic:=/realsense/color/image_raw
+```
+
+CUDA対応PyTorchが安定して利用できる環境では`device:=cuda`を明示できます。
+`device:=auto`はCUDAが利用可能ならCUDA、そうでなければCPUを選びます。
+
+PyTorchノードは`rclpy`プロセスとして動作するため、`rclcpp_components`の
+Composable Node containerへはロードされません。カメラcomponentは従来どおり
+`multi_sensor_container`で実行されます。

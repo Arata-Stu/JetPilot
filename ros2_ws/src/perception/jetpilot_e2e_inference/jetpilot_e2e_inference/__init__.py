@@ -1,1 +1,1 @@
-"""JetPilot E2E TensorRT inference ROS 2 nodes."""
+"""JetPilot E2E PyTorch and TensorRT inference ROS 2 nodes."""
