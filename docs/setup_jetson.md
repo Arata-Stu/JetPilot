@@ -205,7 +205,6 @@ docker:
     additional_image_keys:
       - jp72_orin
       - realsense
-      - depthai
       - silky_evcam
       - additional_setting
 EOF
