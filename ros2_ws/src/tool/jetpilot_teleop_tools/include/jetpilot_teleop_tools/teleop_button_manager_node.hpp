@@ -9,6 +9,7 @@
 #include "jetpilot_msgs/msg/bag_request.hpp"
 #include "jetpilot_msgs/msg/operation_mode_request.hpp"
 #include "jetpilot_teleop_tools/button_rising_edge.hpp"
+#include "jetpilot_teleop_tools/held_mode_selector.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/joy.hpp"
 #include "std_msgs/msg/bool.hpp"
@@ -25,15 +26,11 @@ private:
   struct HoldState
   {
     bool pressed{false};
-    bool emitted{false};
-    rclcpp::Time since;
   };
 
   double declare_numeric_parameter(const std::string & name, double default_value);
   static bool button_pressed(const sensor_msgs::msg::Joy & joy, int index);
   static HoldState & state_for(std::vector<HoldState> & states, std::size_t index);
-  bool held_once(std::vector<HoldState> & states, std::size_t state_index, bool pressed,
-                 const rclcpp::Time & current_time);
   static bool pressed_once(std::vector<HoldState> & states, std::size_t state_index, bool pressed);
   void publish_mode_request(std::uint8_t mode, const std::string & source);
   void publish_bag_request(std::uint8_t command, const std::string & label);
@@ -54,7 +51,8 @@ private:
   double steer_offset_dec_axis_value_;
   double steer_offset_axis_threshold_;
   std::string localization_trigger_topic_;
-  double hold_time_s_;
+  HeldModeSelector held_mode_selector_;
+  int last_held_mode_request_{-1};
   std::vector<HoldState> states_;
   ButtonRisingEdge localization_trigger_button_;
   rclcpp::Publisher<jetpilot_msgs::msg::OperationModeRequest>::SharedPtr mode_pub_;

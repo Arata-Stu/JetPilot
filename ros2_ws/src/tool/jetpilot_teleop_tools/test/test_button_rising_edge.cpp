@@ -3,6 +3,7 @@
 
 #include "gtest/gtest.h"
 #include "jetpilot_teleop_tools/button_rising_edge.hpp"
+#include "jetpilot_teleop_tools/held_mode_selector.hpp"
 
 namespace
 {
@@ -12,6 +13,8 @@ using jetpilot_teleop_tools::ButtonManagerAssignments;
 using jetpilot_teleop_tools::axis_direction_pressed;
 using jetpilot_teleop_tools::find_button_conflict;
 using jetpilot_teleop_tools::find_localization_button_conflict;
+using jetpilot_teleop_tools::HeldMode;
+using jetpilot_teleop_tools::HeldModeSelector;
 
 TEST(ButtonRisingEdgeTest, EmitsOncePerPress)
 {
@@ -91,6 +94,39 @@ TEST(ButtonRisingEdgeTest, LocalizationConflictPolicyAllowsBackModifierSharing)
   const auto conflict = find_localization_button_conflict(7, assignments);
   ASSERT_TRUE(conflict.has_value());
   EXPECT_EQ(*conflict, "bag_start_button");
+}
+
+TEST(HeldModeSelectorTest, AutoIsActiveOnlyWhileAutoButtonIsHeld)
+{
+  HeldModeSelector selector;
+  selector.set_hold_time(0.1);
+
+  EXPECT_EQ(selector.update(true, false, false, 1.0), HeldMode::STOP);
+  EXPECT_EQ(selector.update(true, false, false, 1.11), HeldMode::AUTO);
+  EXPECT_EQ(selector.update(true, false, false, 1.2), HeldMode::AUTO);
+  EXPECT_EQ(selector.update(false, false, false, 1.3), HeldMode::STOP);
+}
+
+TEST(HeldModeSelectorTest, ManualIsActiveOnlyWhileManualButtonIsHeld)
+{
+  HeldModeSelector selector;
+  selector.set_hold_time(0.1);
+
+  EXPECT_EQ(selector.update(false, true, false, 2.0), HeldMode::STOP);
+  EXPECT_EQ(selector.update(false, true, false, 2.11), HeldMode::MANUAL);
+  EXPECT_EQ(selector.update(false, false, false, 2.2), HeldMode::STOP);
+}
+
+TEST(HeldModeSelectorTest, StopAndConflictingModeButtonsFailSafeToStop)
+{
+  HeldModeSelector selector;
+  selector.set_hold_time(0.1);
+
+  EXPECT_EQ(selector.update(true, false, false, 3.0), HeldMode::STOP);
+  EXPECT_EQ(selector.update(true, false, false, 3.11), HeldMode::AUTO);
+  EXPECT_EQ(selector.update(true, true, false, 3.2), HeldMode::STOP);
+  EXPECT_EQ(selector.update(true, false, true, 3.3), HeldMode::AUTO);
+  EXPECT_EQ(selector.update(true, false, true, 3.41), HeldMode::STOP);
 }
 
 }  // namespace

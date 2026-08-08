@@ -31,7 +31,7 @@ TeleopButtonManagerNode::TeleopButtonManagerNode() : Node("teleop_button_manager
     RCLCPP_WARN(get_logger(), "localization_trigger_topic is empty; using /localization/trigger");
     localization_trigger_topic_ = "/localization/trigger";
   }
-  hold_time_s_ = declare_numeric_parameter("hold_time_s", 0.1);
+  held_mode_selector_.set_hold_time(declare_numeric_parameter("hold_time_s", 0.1));
 
   ButtonManagerAssignments button_assignments;
   button_assignments.auto_button = auto_button_;
@@ -113,32 +113,6 @@ TeleopButtonManagerNode::HoldState & TeleopButtonManagerNode::state_for(
   return states[index];
 }
 
-bool TeleopButtonManagerNode::held_once(std::vector<HoldState> & states,
-                                        const std::size_t state_index, const bool pressed,
-                                        const rclcpp::Time & current_time)
-{
-  auto & state = state_for(states, state_index);
-  if (!pressed)
-  {
-    state.pressed = false;
-    state.emitted = false;
-    return false;
-  }
-  if (!state.pressed)
-  {
-    state.pressed = true;
-    state.emitted = false;
-    state.since = current_time;
-    return false;
-  }
-  if (!state.emitted && (current_time - state.since).seconds() >= hold_time_s_)
-  {
-    state.emitted = true;
-    return true;
-  }
-  return false;
-}
-
 bool TeleopButtonManagerNode::pressed_once(std::vector<HoldState> & states,
                                            const std::size_t state_index, const bool pressed)
 {
@@ -190,24 +164,43 @@ void TeleopButtonManagerNode::handle_joy(const sensor_msgs::msg::Joy & joy)
 {
   const auto current_time = now();
   const bool back = button_pressed(joy, back_button_);
+  const bool auto_pressed = !back && button_pressed(joy, auto_button_);
+  const bool manual_pressed = !back && button_pressed(joy, manual_button_);
+  const bool stop_pressed = !back && button_pressed(joy, stop_button_);
+  const auto held_mode = held_mode_selector_.update(
+    auto_pressed, manual_pressed, stop_pressed, current_time.seconds());
 
-  if (held_once(states_, 0, !back && button_pressed(joy, auto_button_), current_time))
+  std::uint8_t requested_mode = jetpilot_msgs::msg::OperationModeRequest::STOP;
+  std::string mode_source = "joy_mode_released";
+  if (held_mode == HeldMode::AUTO)
   {
-    publish_mode_request(jetpilot_msgs::msg::OperationModeRequest::AUTO, "joy_auto_hold");
+    requested_mode = jetpilot_msgs::msg::OperationModeRequest::AUTO;
+    mode_source = "joy_auto_held";
   }
-  if (held_once(states_, 1, !back && button_pressed(joy, manual_button_), current_time))
+  else if (held_mode == HeldMode::MANUAL)
   {
-    publish_mode_request(jetpilot_msgs::msg::OperationModeRequest::MANUAL, "joy_manual_hold");
+    requested_mode = jetpilot_msgs::msg::OperationModeRequest::MANUAL;
+    mode_source = "joy_manual_held";
   }
-  if (held_once(states_, 2, !back && button_pressed(joy, stop_button_), current_time))
+  else if (stop_pressed)
   {
-    publish_mode_request(jetpilot_msgs::msg::OperationModeRequest::STOP, "joy_stop_hold");
+    mode_source = "joy_stop_hold";
   }
-  if (pressed_once(states_, 3, button_pressed(joy, bag_start_button_)))
+  else if (auto_pressed && manual_pressed)
+  {
+    mode_source = "joy_mode_conflict";
+  }
+
+  if (last_held_mode_request_ != requested_mode)
+  {
+    publish_mode_request(requested_mode, mode_source);
+    last_held_mode_request_ = requested_mode;
+  }
+  if (pressed_once(states_, 0, button_pressed(joy, bag_start_button_)))
   {
     publish_bag_request(jetpilot_msgs::msg::BagRequest::START, "joy_start");
   }
-  if (pressed_once(states_, 4, button_pressed(joy, bag_stop_button_)))
+  if (pressed_once(states_, 1, button_pressed(joy, bag_stop_button_)))
   {
     publish_bag_request(jetpilot_msgs::msg::BagRequest::STOP, "joy_stop");
   }
@@ -219,11 +212,11 @@ void TeleopButtonManagerNode::handle_joy(const sensor_msgs::msg::Joy & joy)
     axis_direction_pressed(
     joy.axes, steer_offset_dec_axis_, steer_offset_dec_axis_value_,
     steer_offset_axis_threshold_);
-  if (pressed_once(states_, 5, steer_offset_inc))
+  if (pressed_once(states_, 2, steer_offset_inc))
   {
     publish_bool(steer_offset_inc_pub_);
   }
-  if (pressed_once(states_, 6, steer_offset_dec))
+  if (pressed_once(states_, 3, steer_offset_dec))
   {
     publish_bool(steer_offset_dec_pub_);
   }
