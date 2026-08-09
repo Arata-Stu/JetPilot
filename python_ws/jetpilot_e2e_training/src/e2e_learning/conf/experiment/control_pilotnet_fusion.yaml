@@ -1,0 +1,16 @@
+# @package _global_
+
+defaults:
+  - override /model: fusion
+  - override /train: default
+
+run:
+  name: control_pilotnet_fusion
+
+model:
+  task: control
+  backbone: pilotnet
+  temporal: none
+  use_imu: false
+  sequence_length: 1
+  outputs: [steering, throttle]

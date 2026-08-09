@@ -581,6 +581,9 @@ def generate_launch_description() -> lut.LaunchDescription:
                 'sensor_interface_launch': args.sensor_kit_interface_launch,
                 'camera_name': args.sensor_kit_camera_name,
                 'container_name': args.sensor_kit_container_name,
+                # The sensor launch owns the shared component_container_mt.
+                # E2E inference below loads into this exact container.
+                'run_standalone': True,
                 'enable_depth': args.sensor_kit_enable_depth,
                 'enable_color': args.sensor_kit_enable_color,
                 'enable_rtp_stream': args.sensor_kit_enable_rtp_stream,

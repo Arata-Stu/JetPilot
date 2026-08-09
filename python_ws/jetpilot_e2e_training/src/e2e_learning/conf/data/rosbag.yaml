@@ -4,6 +4,9 @@ dataset_dir: datasets/e2e/default
 
 image_topic: /realsense/color/image_raw
 control_topic: /teleop/control_cmd
+odometry_topic: /visual_slam/tracking/odometry
+imu_topic: /sensors/imu
+task: control
 
 # Sensor presets:
 # 424x240 -> 212x120
@@ -12,6 +15,12 @@ input_width: 212
 input_height: 120
 
 max_control_dt_sec: 0.1
+max_odometry_dt_sec: 0.15
+trajectory_horizon_sec: 1.5
+trajectory_points: 10
+trajectory_scale_m: 5.0
+imu_window_sec: 0.5
+imu_samples: 10
 image_extension: jpg
 jpeg_quality: 92
 

@@ -1,6 +1,6 @@
 # jetpilot_e2e_inference
 
-JetPilotの画像ベースE2E制御用ROS 2推論パイプラインです。
+JetPilotの画像ベースE2E制御・trajectory推論用ROS 2パイプラインです。
 
 TensorRT経路に加えて、`sensor_msgs/Image`を直接受信するPyTorch経路を
 提供します。PyTorch経路はIsaac ROS、NITROS、TensorRTを使用せず、CPUを
@@ -12,11 +12,14 @@ TensorRT経路に加えて、`sensor_msgs/Image`を直接受信するPyTorch経�
 multi_sensor_container (component_container_mt)
   ├─ camera component
   ├─ Isaac ROS DNN Image Encoder
-  └─ Isaac ROS TensorRT
+  ├─ Isaac ROS TensorRT
+  └─ C++ E2E decoder component
 
-GPU/NITROS tensor
-  -> e2e_control_decoder
-  -> jetpilot_msgs/ControlCommand
+camera ROS image
+  └─ rclcpp intra-process -> DNN Image Encoder
+       └─ GPU/NITROS -> TensorRT
+            ├─ GPU/NITROS -> control decoder -> ControlCommand
+            └─ GPU/NITROS -> trajectory decoder -> Path
 ```
 
 画像のリサイズ、RGB float32化、正規化、NCHW変換は
@@ -25,17 +28,24 @@ GPU/NITROS tensor
 
 カメラが通常の`sensor_msgs/Image`をCPUメモリでpublishする場合、
 エンコーダ入口ではCPUからGPUへの転送が1回必要です。ただし、エンコーダから
-TensorRTまでのテンソルはNITROS形式で同じプロセス内を流れます。
+TensorRT、decoderまではNITROS形式で同じプロセス内を流れます。decoderでは最終的な
+ROSメッセージを作るために、必要な少数のfloatだけをGPUからCPUへコピーします。
 
-`e2e_control_decoder`は推論結果の小さなテンソルだけをROSメッセージへ変換します。
-Python側では`bytes()`やNumPy配列を作らず、受信バッファの`memoryview`を参照します。
+control / trajectory decoderはC++ Composable Nodeです。TensorRTと同じcontainerで
+Managed NITROS subscriberを使用し、通常のROS TensorListへの変換を挟みません。
+推論結果のCUDA bufferから、出力に必要な小さなfloat列だけをCPUへコピーして
+`ControlCommand`または`Path`へ変換します。
+既定の出力formatは学習側の`metadata.json`と同じ
+`nitros_tensor_list_nchw_rgb_f32`です。launchで変更する場合は
+`output_tensor_formats`と`decoder_tensor_format`を同じformatにしてください。
 
 ## モデル契約
 
 ONNXモデルの既定binding名:
 
 - input: `image`
-- output: `control`
+- control output: `control`
+- trajectory output: `trajectory`
 
 TensorRT topicの既定tensor名:
 
@@ -88,6 +98,28 @@ ros2 launch jetpilot_e2e_inference e2e_tensor_rt.launch.py \
   model_root:=/workspaces/ros2_ws/models/e2e/latest
 ```
 
+trajectoryモデルは次のように起動します。出力はcontrollerの既定入力である
+`/planning/trajectory`、`/planning/target_speed`、`/planning/ready`へpublishされます。
+点数とscaleは学習runの`metadata.json`に合わせてください。
+
+```bash
+ros2 launch jetpilot_e2e_inference e2e_tensor_rt.launch.py \
+  output_task:=trajectory \
+  model_root:=/workspaces/ros2_ws/models/e2e/camera_trajectory \
+  trajectory_points:=10 \
+  trajectory_scale_m:=5.0 \
+  trajectory_target_speed_mps:=0.8
+```
+
+decoderは原点`(0, 0)`を先頭に加え、正規化出力をmへ戻して`base_link`座標の
+`nav_msgs/Path`へ変換します。NaN、Inf、範囲外点、要素不足を検出した場合は経路を
+publishせず、`/planning/ready=false`を通知します。
+
+Isaac ROSの既存image encoderが作る入力は単一画像のNCHW tensorです。そのため
+TensorRT online経路が直接扱えるtrajectory構成は現在`trajectory_pilotnet`
+（単一画像・IMUなし）です。GRUの複数画像入力やIMU融合モデルはConsoleのoffline評価で
+比較できますが、online利用には対応する時系列/IMU tensor producerが必要です。
+
 既にセンサー側がコンテナを起動済みの場合は、そのコンテナへロードします。
 
 ```bash
@@ -104,6 +136,12 @@ ros2 launch jetpilot_system_launch bringup.launch.py \
   enable_sensor_kit:=true \
   enable_e2e_inference:=true
 ```
+
+このbringup経路ではsensor launchが`multi_sensor_container`の
+`component_container_mt`を1つだけ作り、camera driver、image encoder、TensorRT、
+C++ decoderをすべてそこへロードします。E2E側は`run_standalone:=false`となるため、
+推論専用の別プロセスは作りません。これがintra-process/NITROS経路を維持する既定の
+実行方法です。
 
 ## PyTorch推論
 

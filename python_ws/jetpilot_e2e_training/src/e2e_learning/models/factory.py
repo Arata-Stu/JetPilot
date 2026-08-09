@@ -6,6 +6,7 @@ from torch import nn
 from torchvision import models
 
 from e2e_learning.models.pilotnet import PilotNet
+from e2e_learning.models.fusion import FusionE2EModel
 
 
 class TorchvisionEncoderHead(nn.Module):
@@ -60,6 +61,8 @@ def build_model(config: Any) -> nn.Module:
             pretrained=bool(getattr(config, "pretrained", False)),
             weights_path=str(getattr(config, "weights_path", "")),
         )
+    if name == "fusion":
+        return FusionE2EModel(config)
     raise ValueError(f"Unsupported model: {name}")
 
 

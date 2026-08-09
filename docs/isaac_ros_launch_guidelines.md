@@ -98,8 +98,13 @@ Action が期待する型の境界をまたいでいる。
   executableの選択で表現する。
 - 画像の前処理からTensorRTまでにPython/OpenCV/NumPyノードを挟まない。
   GPU上のNITROS tensor経路を維持する。
+- TensorRT出力のdecoderもC++ Composable Nodeとし、同じコンテナ内で
+  `ManagedNitrosSubscriber<NitrosTensorListView>`を使用する。
 - 通常のCPUメモリをpublishするカメラでは、GPU入口の転送自体は残る。
   同一コンテナ化だけでカメラ取得時点から完全なzero-copyにはならない。
+- camera driverからimage encoderまではrclcpp intra-process、image encoderから
+  TensorRTとdecoderまではNITROSを使用する。decoderから通常ROSメッセージを
+  publishするための最小限のGPU-to-CPU copyは許容する。
 
 ## 参考
 

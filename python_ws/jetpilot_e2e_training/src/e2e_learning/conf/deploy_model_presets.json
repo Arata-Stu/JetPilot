@@ -9,6 +9,15 @@
       "model_kind": "e2e_control",
       "modality": "rgb",
       "metadata_filename": "metadata.json"
+    },
+    {
+      "id": "camera_trajectory",
+      "label": "Camera Trajectory",
+      "description": "Single image to local future trajectory",
+      "model_name": "camera_trajectory",
+      "model_kind": "e2e_trajectory",
+      "modality": "rgb",
+      "metadata_filename": "metadata.json"
     }
   ]
 }

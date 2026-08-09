@@ -1,8 +1,8 @@
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
-from launch_ros.actions import ComposableNodeContainer, LoadComposableNodes, Node
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
+from launch_ros.actions import ComposableNodeContainer, LoadComposableNodes
 from launch_ros.descriptions import ComposableNode
 from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
@@ -89,6 +89,59 @@ def generate_launch_description():
         extra_arguments=[{"use_intra_process_comms": True}],
     )
 
+    control_decoder = ComposableNode(
+        package="jetpilot_e2e_inference",
+        plugin="jetpilot_e2e_inference::E2EControlDecoderNode",
+        name="e2e_control_decoder",
+        namespace="",
+        parameters=[
+            param_file,
+            {
+                "use_sim_time": ParameterValue(
+                    LaunchConfiguration("use_sim_time"), value_type=bool
+                ),
+                "nitros_tensor_format": LaunchConfiguration("decoder_tensor_format"),
+            },
+        ],
+        remappings=[
+            ("tensor_sub", LaunchConfiguration("tensor_output_topic")),
+            ("control_cmd", LaunchConfiguration("control_cmd_topic")),
+        ],
+        extra_arguments=[{"use_intra_process_comms": True}],
+    )
+
+    trajectory_decoder = ComposableNode(
+        package="jetpilot_e2e_inference",
+        plugin="jetpilot_e2e_inference::E2ETrajectoryDecoderNode",
+        name="e2e_trajectory_decoder",
+        namespace="",
+        parameters=[
+            LaunchConfiguration("trajectory_param_file"),
+            {
+                "use_sim_time": ParameterValue(
+                    LaunchConfiguration("use_sim_time"), value_type=bool
+                ),
+                "nitros_tensor_format": LaunchConfiguration("decoder_tensor_format"),
+                "trajectory_points": ParameterValue(
+                    LaunchConfiguration("trajectory_points"), value_type=int
+                ),
+                "trajectory_scale_m": ParameterValue(
+                    LaunchConfiguration("trajectory_scale_m"), value_type=float
+                ),
+                "target_speed_mps": ParameterValue(
+                    LaunchConfiguration("trajectory_target_speed_mps"), value_type=float
+                ),
+            },
+        ],
+        remappings=[
+            ("tensor_sub", LaunchConfiguration("tensor_output_topic")),
+            ("trajectory", LaunchConfiguration("trajectory_topic")),
+            ("target_speed", LaunchConfiguration("target_speed_topic")),
+            ("planning_ready", LaunchConfiguration("planning_ready_topic")),
+        ],
+        extra_arguments=[{"use_intra_process_comms": True}],
+    )
+
     inference_components = [image_encoder, tensor_rt]
 
     return LaunchDescription(
@@ -101,6 +154,13 @@ def generate_launch_description():
                 "camera_info_topic", default_value="/realsense/color/camera_info"
             ),
             DeclareLaunchArgument("control_cmd_topic", default_value="/auto/control_cmd"),
+            DeclareLaunchArgument("trajectory_topic", default_value="/planning/trajectory"),
+            DeclareLaunchArgument("target_speed_topic", default_value="/planning/target_speed"),
+            DeclareLaunchArgument("planning_ready_topic", default_value="/planning/ready"),
+            DeclareLaunchArgument("output_task", default_value="control"),
+            DeclareLaunchArgument("trajectory_points", default_value="10"),
+            DeclareLaunchArgument("trajectory_scale_m", default_value="5.0"),
+            DeclareLaunchArgument("trajectory_target_speed_mps", default_value="0.8"),
             DeclareLaunchArgument("tensor_input_topic", default_value="/e2e/tensor_input"),
             DeclareLaunchArgument("tensor_output_topic", default_value="/e2e/tensor_output"),
             DeclareLaunchArgument("input_image_width", default_value="424"),
@@ -129,7 +189,15 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "param_file",
-                default_value=PathJoinSubstitution([pkg_share, "config", "e2e_inference.param.yaml"]),
+                default_value=PathJoinSubstitution(
+                    [pkg_share, "config", "e2e_inference.param.yaml"]
+                ),
+            ),
+            DeclareLaunchArgument(
+                "trajectory_param_file",
+                default_value=PathJoinSubstitution(
+                    [pkg_share, "config", "e2e_trajectory.param.yaml"]
+                ),
             ),
             DeclareLaunchArgument("force_engine_update", default_value="false"),
             DeclareLaunchArgument("enable_fp16", default_value="true"),
@@ -144,10 +212,23 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "output_tensor_names", default_value="['output_tensor']"
             ),
-            DeclareLaunchArgument("output_binding_names", default_value="['control']"),
+            DeclareLaunchArgument(
+                "output_binding_names",
+                default_value=PythonExpression(
+                    [
+                        "\"['trajectory']\" if '",
+                        LaunchConfiguration("output_task"),
+                        "' == 'trajectory' else \"['control']\"",
+                    ]
+                ),
+            ),
             DeclareLaunchArgument(
                 "output_tensor_formats",
-                default_value="['nitros_tensor_list_nhwc_rgb_f32']",
+                default_value="['nitros_tensor_list_nchw_rgb_f32']",
+            ),
+            DeclareLaunchArgument(
+                "decoder_tensor_format",
+                default_value="nitros_tensor_list_nchw_rgb_f32",
             ),
             ComposableNodeContainer(
                 name=container_name,
@@ -162,23 +243,19 @@ def generate_launch_description():
                 target_container=container_name,
                 composable_node_descriptions=inference_components,
             ),
-            Node(
-                package="jetpilot_e2e_inference",
-                executable="e2e_control_decoder_node.py",
-                name="e2e_control_decoder",
-                output="screen",
-                parameters=[
-                    param_file,
-                    {
-                        "use_sim_time": ParameterValue(
-                            LaunchConfiguration("use_sim_time"), value_type=bool
-                        )
-                    },
-                ],
-                remappings=[
-                    ("tensor_sub", LaunchConfiguration("tensor_output_topic")),
-                    ("control_cmd", LaunchConfiguration("control_cmd_topic")),
-                ],
+            LoadComposableNodes(
+                target_container=container_name,
+                composable_node_descriptions=[control_decoder],
+                condition=IfCondition(
+                    PythonExpression(["'", LaunchConfiguration("output_task"), "' == 'control'"])
+                ),
+            ),
+            LoadComposableNodes(
+                target_container=container_name,
+                composable_node_descriptions=[trajectory_decoder],
+                condition=IfCondition(
+                    PythonExpression(["'", LaunchConfiguration("output_task"), "' == 'trajectory'"])
+                ),
             ),
         ]
     )

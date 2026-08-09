@@ -1,0 +1,15 @@
+# @package _global_
+
+defaults:
+  - override /model: fusion
+  - override /train: default
+
+run:
+  name: trajectory_pilotnet
+
+model:
+  task: trajectory
+  backbone: pilotnet
+  temporal: none
+  use_imu: false
+  sequence_length: 1

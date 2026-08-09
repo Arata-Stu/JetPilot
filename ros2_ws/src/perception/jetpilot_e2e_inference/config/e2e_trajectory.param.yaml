@@ -1,0 +1,9 @@
+e2e_trajectory_decoder:
+  ros__parameters:
+    output_tensor_name: output_tensor
+    nitros_tensor_format: nitros_tensor_list_nchw_rgb_f32
+    trajectory_points: 10
+    trajectory_scale_m: 5.0
+    frame_id: base_link
+    target_speed_mps: 0.8
+    max_point_distance_m: 8.0
