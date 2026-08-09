@@ -144,8 +144,38 @@ class E2EPipelineTests(unittest.TestCase):
         run = self._run()
         export = build_export_task(self.config, {"run_dir": str(run)})
         self.assertEqual(export.kind, "e2e-export-onnx")
-        self.assertIn("model=pilotnet", export.command)
         self.assertIn(f"checkpoint={run.resolve() / 'checkpoints/best.pt'}", export.command)
+
+    def test_trajectory_training_uses_dataset_geometry(self) -> None:
+        dataset = self.training / "datasets" / "trajectory-a"
+        dataset.mkdir(parents=True)
+        (dataset / "samples.csv").write_text(
+            "image_path,trajectory,imu\nimages/000.jpg,[],[]\n"
+        )
+        (dataset / "metadata.yaml").write_text(
+            "task: trajectory\n"
+            "input_width: 212\n"
+            "input_height: 120\n"
+            "trajectory_horizon_sec: 2.0\n"
+            "trajectory_points: 12\n"
+            "trajectory_scale_m: 7.5\n"
+            "imu_window_sec: 0.8\n"
+            "imu_samples: 16\n"
+        )
+
+        train = build_train_task(
+            self.config,
+            {
+                "dataset_dir": str(dataset),
+                "run_name": "trajectory-run",
+                "experiment": "trajectory_pilotnet_gru_imu",
+            },
+        )
+
+        self.assertIn("data.trajectory_points=12", train.command)
+        self.assertIn("model.trajectory_points=12", train.command)
+        self.assertIn("model.trajectory_scale_m=7.5", train.command)
+        self.assertIn("model.imu_samples=16", train.command)
 
     def test_catalog_and_deploy_task_only_accept_exported_runs(self) -> None:
         dataset = self._dataset()

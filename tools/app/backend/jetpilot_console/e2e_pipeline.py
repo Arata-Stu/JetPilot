@@ -18,11 +18,20 @@ from .security import (
 
 NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 EXPERIMENTS = {
-    "pilotnet_scratch": {"label": "PilotNet / scratch", "stages": 1},
-    "mobilenet_frozen_head": {"label": "MobileNetV3 / frozen head", "stages": 1},
+    "pilotnet_scratch": {"label": "Control · PilotNet", "stages": 1, "task": "control"},
+    "control_pilotnet_fusion": {"label": "Control · PilotNet (fusion baseline)", "stages": 1, "task": "control", "model": "fusion"},
+    "control_pilotnet_gru": {"label": "Control · PilotNet + GRU", "stages": 1, "task": "control", "model": "fusion"},
+    "control_pilotnet_imu": {"label": "Control · PilotNet + IMU", "stages": 1, "task": "control", "model": "fusion"},
+    "control_pilotnet_gru_imu": {"label": "Control · PilotNet + GRU + IMU", "stages": 1, "task": "control", "model": "fusion"},
+    "trajectory_pilotnet": {"label": "Trajectory · PilotNet", "stages": 1, "task": "trajectory", "model": "fusion"},
+    "trajectory_pilotnet_gru": {"label": "Trajectory · PilotNet + GRU", "stages": 1, "task": "trajectory", "model": "fusion"},
+    "trajectory_pilotnet_imu": {"label": "Trajectory · PilotNet + IMU", "stages": 1, "task": "trajectory", "model": "fusion"},
+    "trajectory_pilotnet_gru_imu": {"label": "Trajectory · PilotNet + GRU + IMU", "stages": 1, "task": "trajectory", "model": "fusion"},
+    "mobilenet_frozen_head": {"label": "Control · MobileNetV3 / frozen head", "stages": 1, "task": "control"},
     "mobilenet_head_then_finetune": {
-        "label": "MobileNetV3 / head then fine-tune",
+        "label": "Control · MobileNetV3 / head then fine-tune",
         "stages": 2,
+        "task": "control",
     },
 }
 
@@ -140,6 +149,11 @@ def scan_datasets(config: Any) -> list[dict[str, Any]]:
                 "bag_path": str(metadata.get("bag_path") or ""),
                 "image_topic": str(metadata.get("image_topic") or ""),
                 "control_topic": str(metadata.get("control_topic") or ""),
+                "odometry_topic": str(metadata.get("odometry_topic") or ""),
+                "imu_topic": str(metadata.get("imu_topic") or ""),
+                "task": str(metadata.get("task") or "control"),
+                "trajectory_points": int(metadata.get("trajectory_points") or 0),
+                "trajectory_horizon_sec": float(metadata.get("trajectory_horizon_sec") or 0.0),
                 "input_width": int(metadata.get("input_width") or 0),
                 "input_height": int(metadata.get("input_height") or 0),
                 "modified_at_ns": str(stat.st_mtime_ns),
@@ -179,6 +193,8 @@ def scan_runs(config: Any) -> list[dict[str, Any]]:
                 "path": str(directory.resolve(strict=False)),
                 "status": str(progress.get("status") or ("trained" if best_path.is_file() else "incomplete")),
                 "model": str(model_data.get("name") or metrics.get("model") or ""),
+                "task": str(model_data.get("task") or metrics.get("task") or "control"),
+                "architecture": metrics.get("architecture") if isinstance(metrics.get("architecture"), dict) else {},
                 "dataset_dir": str(data.get("dataset_dir") or metrics.get("dataset_dir") or ""),
                 "input_width": int(data.get("input_width") or 0),
                 "input_height": int(data.get("input_height") or 0),
@@ -239,6 +255,15 @@ def build_preprocess_task(config: Any, body: dict[str, Any]) -> PipelineTaskSpec
     width = _integer(body.get("input_width", 212), label="input width", minimum=32, maximum=4096)
     height = _integer(body.get("input_height", 120), label="input height", minimum=32, maximum=4096)
     max_dt = _number(body.get("max_control_dt_sec", 0.1), label="max control dt", minimum=0.001, maximum=5.0)
+    max_odom_dt = _number(body.get("max_odometry_dt_sec", 0.15), label="max odometry dt", minimum=0.001, maximum=5.0)
+    task = str(body.get("task") or "control")
+    if task not in {"control", "trajectory"}:
+        raise ValueError("task must be control or trajectory")
+    trajectory_points = _integer(body.get("trajectory_points", 10), label="trajectory points", minimum=2, maximum=100)
+    trajectory_horizon = _number(body.get("trajectory_horizon_sec", 1.5), label="trajectory horizon", minimum=0.1, maximum=20.0)
+    trajectory_scale = _number(body.get("trajectory_scale_m", 5.0), label="trajectory scale", minimum=0.1, maximum=100.0)
+    imu_samples = _integer(body.get("imu_samples", 10), label="IMU samples", minimum=1, maximum=500)
+    imu_window = _number(body.get("imu_window_sec", 0.5), label="IMU window", minimum=0.01, maximum=10.0)
     jpeg_quality = _integer(body.get("jpeg_quality", 92), label="JPEG quality", minimum=1, maximum=100)
     command = _python_command(
         config,
@@ -247,10 +272,19 @@ def build_preprocess_task(config: Any, body: dict[str, Any]) -> PipelineTaskSpec
             f"data.bag_path={bag}",
             f"data.output_dir={output}",
             f"data.image_topic={_topic(body.get('image_topic'), label='image topic')}",
-            f"data.control_topic={_topic(body.get('control_topic'), label='control topic')}",
+            f"data.control_topic={_topic(body.get('control_topic') or '/teleop/control_cmd', label='control topic')}",
+            f"data.odometry_topic={_topic(body.get('odometry_topic') or '/visual_slam/tracking/odometry', label='odometry topic')}",
+            f"data.imu_topic={_topic(body.get('imu_topic') or '/sensors/imu', label='IMU topic')}",
+            f"data.task={task}",
             f"data.input_width={width}",
             f"data.input_height={height}",
             f"data.max_control_dt_sec={max_dt}",
+            f"data.max_odometry_dt_sec={max_odom_dt}",
+            f"data.trajectory_points={trajectory_points}",
+            f"data.trajectory_horizon_sec={trajectory_horizon}",
+            f"data.trajectory_scale_m={trajectory_scale}",
+            f"data.imu_samples={imu_samples}",
+            f"data.imu_window_sec={imu_window}",
             f"data.jpeg_quality={jpeg_quality}",
         ],
     )
@@ -298,6 +332,12 @@ def build_train_task(config: Any, body: dict[str, Any]) -> PipelineTaskSpec:
     if device not in {"", "cpu", "cuda", "mps"}:
         raise ValueError("device must be auto, cpu, cuda or mps")
     dataset_metadata = load_yaml(dataset / "metadata.yaml") if (dataset / "metadata.yaml").is_file() else {}
+    dataset_task = str(dataset_metadata.get("task") or "control")
+    experiment_task = str(EXPERIMENTS[experiment].get("task") or "control")
+    if dataset_task != experiment_task:
+        raise ValueError(
+            f"{experiment} requires a {experiment_task} dataset, but {dataset.name} is {dataset_task}"
+        )
     width = int(dataset_metadata.get("input_width") or body.get("input_width") or 212)
     height = int(dataset_metadata.get("input_height") or body.get("input_height") or 120)
     overrides = [
@@ -317,6 +357,19 @@ def build_train_task(config: Any, body: dict[str, Any]) -> PipelineTaskSpec:
         f"train.stages.0.epochs={epochs}",
         f"train.stages.0.lr={learning_rate}",
     ]
+    for key in (
+        "trajectory_horizon_sec",
+        "trajectory_points",
+        "trajectory_scale_m",
+        "imu_window_sec",
+        "imu_samples",
+    ):
+        if dataset_metadata.get(key) is not None:
+            overrides.append(f"data.{key}={dataset_metadata[key]}")
+    if str(EXPERIMENTS[experiment].get("model") or "") == "fusion":
+        for key in ("trajectory_points", "trajectory_scale_m", "imu_samples"):
+            if dataset_metadata.get(key) is not None:
+                overrides.append(f"model.{key}={dataset_metadata[key]}")
     if int(EXPERIMENTS[experiment]["stages"]) == 2:
         finetune_epochs = _integer(body.get("finetune_epochs", epochs), label="fine-tune epochs", minimum=1, maximum=10000)
         finetune_lr = _number(body.get("finetune_learning_rate", 0.0001), label="fine-tune learning rate", minimum=1e-8, maximum=10.0)
@@ -355,22 +408,11 @@ def _resolve_run(config: Any, value: object) -> tuple[Path, dict[str, Any]]:
 
 
 def build_export_task(config: Any, body: dict[str, Any]) -> PipelineTaskSpec:
-    directory, run_config = _resolve_run(config, body.get("run_dir"))
+    directory, _ = _resolve_run(config, body.get("run_dir"))
     checkpoint = directory / "checkpoints" / "best.pt"
     if not checkpoint.is_file() or checkpoint.is_symlink():
         raise ValueError(f"best checkpoint was not found: {checkpoint}")
-    model = run_config.get("model") if isinstance(run_config.get("model"), dict) else {}
-    data = run_config.get("data") if isinstance(run_config.get("data"), dict) else {}
-    model_name = str(model.get("name") or "pilotnet")
-    if model_name not in {"pilotnet", "mobilenet_v3_small"}:
-        raise ValueError(f"unsupported model in run.yaml: {model_name}")
     overrides = [
-        f"model={model_name}",
-        "model.pretrained=false" if model_name == "mobilenet_v3_small" else "model.input_channels=3",
-        f"data.dataset_dir={data.get('dataset_dir') or ''}",
-        f"data.input_width={int(data.get('input_width') or 212)}",
-        f"data.input_height={int(data.get('input_height') or 120)}",
-        f"run.name={directory.name}",
         f"checkpoint={checkpoint}",
         f"export.output_dir={directory}",
     ]

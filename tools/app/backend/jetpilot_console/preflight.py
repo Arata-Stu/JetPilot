@@ -807,18 +807,6 @@ def _analyze_e2e_preflight(
             topics = {}
 
     if mode == "supervised":
-        resolved_teacher = _analysis_topic(
-            topics,
-            report,
-            check_id="e2e.teacher_topic",
-            label="Teacher control topic",
-            raw_value=teacher_topic,
-            required=True,
-            expected_types={"jetpilot_msgs/msg/ControlCommand"},
-        )
-        if resolved_teacher:
-            report.resolved["teacher_control_topic"] = resolved_teacher
-            report.resolved["control_topic"] = resolved_teacher
         try:
             model_path, metadata = resolve_e2e_model(config, payload.get("model_path"))
         except ValueError as exc:
@@ -849,6 +837,20 @@ def _analyze_e2e_preflight(
                 "The selected ONNX model is available for offline inference.",
                 details={"path": str(model_path), "metadata": bool(metadata)},
             )
+        output_metadata = metadata.get("output") if isinstance(metadata.get("output"), Mapping) else {}
+        model_task = str(metadata.get("task") or output_metadata.get("task") or "control")
+        resolved_teacher = _analysis_topic(
+            topics,
+            report,
+            check_id="e2e.teacher_topic",
+            label="Teacher control topic",
+            raw_value=teacher_topic,
+            required=model_task == "control",
+            expected_types={"jetpilot_msgs/msg/ControlCommand"},
+        )
+        if resolved_teacher:
+            report.resolved["teacher_control_topic"] = resolved_teacher
+            report.resolved["control_topic"] = resolved_teacher
     else:
         resolved_prediction = _analysis_topic(
             topics,
@@ -892,6 +894,14 @@ def _analyze_e2e_preflight(
             "Recorded section topic",
             "/localization/current_section",
             {"std_msgs/msg/String"},
+        ),
+        (
+            "e2e_imu_topic",
+            "e2e_imu_topic",
+            "e2e.imu_topic",
+            "E2E IMU topic",
+            "/sensors/imu",
+            {"sensor_msgs/msg/Imu"},
         ),
     ):
         raw = str(payload.get(payload_key) or default).strip()

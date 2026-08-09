@@ -61,6 +61,8 @@ def _model_record(path: Path, root: Path) -> dict[str, Any]:
         "path": str(path),
         "name": str(metadata.get("model_name") or path.parent.name),
         "kind": str(metadata.get("model_kind") or "e2e_control"),
+        "task": str(metadata.get("task") or model_output.get("task") or "control"),
+        "architecture": metadata.get("architecture") if isinstance(metadata.get("architecture"), dict) else {},
         "root": str(root),
         "relative_path": str(path.relative_to(root)),
         "metadata_path": str(path.parent / METADATA_FILENAME) if metadata else "",

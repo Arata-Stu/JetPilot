@@ -40,11 +40,20 @@ const state = {
     runName: "pilotnet_run",
     runDir: "",
     experiment: "pilotnet_scratch",
+    datasetTask: "control",
     imageTopic: "/realsense/color/image_raw",
     controlTopic: "/teleop/control_cmd",
+    odometryTopic: "/visual_slam/tracking/odometry",
+    imuTopic: "/sensors/imu",
     inputWidth: 212,
     inputHeight: 120,
     maxControlDtSec: 0.1,
+    maxOdometryDtSec: 0.15,
+    trajectoryPoints: 10,
+    trajectoryHorizonSec: 1.5,
+    trajectoryScaleM: 5.0,
+    imuWindowSec: 0.5,
+    imuSamples: 10,
     jpegQuality: 92,
     batchSize: 64,
     numWorkers: 4,
@@ -261,6 +270,7 @@ const state = {
     e2ePredictionTopic: "/auto/control_cmd",
     e2eAppliedTopic: "/vehicle/control_cmd",
     e2eDiagnosticTopic: "/e2e/diagnostics",
+    e2eImuTopic: "/sensors/imu",
     e2eSectionTopic: "/localization/current_section",
     e2eManualOnly: true,
     e2eDeadlineMs: 33.3,
@@ -1153,6 +1163,17 @@ async function refreshAll() {
   state.e2ePipeline.runRoot = e2ePipeline.run_root || "";
   if (!state.e2ePipeline.datasetDir && state.e2ePipeline.datasets[0]) {
     state.e2ePipeline.datasetDir = state.e2ePipeline.datasets[0].path || "";
+  }
+  const activeDataset = state.e2ePipeline.datasets.find(
+    (item) => item.path === state.e2ePipeline.datasetDir,
+  );
+  const activeExperiment = state.e2ePipeline.experiments.find(
+    (item) => item.id === state.e2ePipeline.experiment,
+  );
+  if (activeDataset && activeExperiment?.task !== activeDataset.task) {
+    state.e2ePipeline.experiment = state.e2ePipeline.experiments.find(
+      (item) => item.task === activeDataset.task,
+    )?.id || "";
   }
   if (!state.e2ePipeline.runDir && state.e2ePipeline.runs[0]) {
     state.e2ePipeline.runDir = state.e2ePipeline.runs[0].path || "";
@@ -2665,9 +2686,13 @@ function e2eAnalysisPayload() {
     ? analysis.selectedImageTopics.filter(Boolean)
     : [];
   const primaryImage = analysis.primaryImageTopic || analysis.imageTopic || selectedImages[0] || "";
+  const model = state.e2eModels.find((item) => item.path === analysis.e2eModelPath);
+  const modelTask = String(model?.task || model?.output?.task || "control");
   const trajectoryMode = mode === "offline_localization"
     ? "offline"
-    : mode === "recorded_localization" ? "recorded" : "none";
+    : mode === "recorded_localization" || (mode === "supervised" && modelTask === "trajectory")
+      ? "recorded"
+      : "none";
   return {
     analysis_kind: "e2e",
     e2e_mode: mode,
@@ -2685,6 +2710,7 @@ function e2eAnalysisPayload() {
     pose_topic: analysis.poseTopic,
     speed_topic: analysis.speedTopic,
     e2e_diagnostic_topic: analysis.e2eDiagnosticTopic,
+    e2e_imu_topic: analysis.e2eImuTopic,
     section_topic: analysis.e2eSectionTopic,
     trajectory_mode: trajectoryMode,
     offline_localization_mode: analysis.offlineLocalizationMode,
@@ -2731,6 +2757,8 @@ function updateE2EPipelineOption(key, value) {
   const booleanKeys = ["buildEngine"];
   const numberKeys = [
     "inputWidth", "inputHeight", "maxControlDtSec", "jpegQuality", "batchSize",
+    "maxOdometryDtSec", "trajectoryPoints", "trajectoryHorizonSec", "trajectoryScaleM",
+    "imuWindowSec", "imuSamples",
     "numWorkers", "epochs", "learningRate", "finetuneEpochs",
     "finetuneLearningRate", "valFraction", "fraction", "weightDecay", "seed",
   ];
@@ -2745,7 +2773,23 @@ function updateE2EPipelineOption(key, value) {
       state.e2ePipeline.remoteRoot = profile.remote_root || "";
     }
   }
+  if (key === "datasetDir") {
+    const dataset = selectedE2EDataset();
+    const current = state.e2ePipeline.experiments.find((item) => item.id === state.e2ePipeline.experiment);
+    if (dataset && current?.task !== dataset.task) {
+      state.e2ePipeline.experiment = state.e2ePipeline.experiments.find((item) => item.task === dataset.task)?.id || "";
+    }
+  }
+  if (key === "runDir") {
+    const run = selectedE2ERun();
+    if (run?.task === "trajectory") state.e2ePipeline.deployPreset = "camera_trajectory";
+    else if (run?.task === "control") state.e2ePipeline.deployPreset = "camera_control";
+  }
   render();
+}
+
+function selectedE2EDataset() {
+  return state.e2ePipeline.datasets.find((item) => item.path === state.e2ePipeline.datasetDir) || null;
 }
 
 function selectedE2ERun() {
@@ -2786,9 +2830,18 @@ function createE2EDataset() {
       dataset_name: pipeline.datasetName,
       image_topic: pipeline.imageTopic || state.analysis.imageTopic,
       control_topic: pipeline.controlTopic,
+      odometry_topic: pipeline.odometryTopic,
+      imu_topic: pipeline.imuTopic,
+      task: pipeline.datasetTask,
       input_width: pipeline.inputWidth,
       input_height: pipeline.inputHeight,
       max_control_dt_sec: pipeline.maxControlDtSec,
+      max_odometry_dt_sec: pipeline.maxOdometryDtSec,
+      trajectory_points: pipeline.trajectoryPoints,
+      trajectory_horizon_sec: pipeline.trajectoryHorizonSec,
+      trajectory_scale_m: pipeline.trajectoryScaleM,
+      imu_window_sec: pipeline.imuWindowSec,
+      imu_samples: pipeline.imuSamples,
       jpeg_quality: pipeline.jpegQuality,
     },
   );
@@ -2879,11 +2932,15 @@ function e2ePipelineStageState() {
 
 function renderE2EPipeline() {
   const pipeline = state.e2ePipeline;
+  const dataset = selectedE2EDataset();
   const run = selectedE2ERun();
   const profile = selectedE2EDeployProfile();
   const hasTwoStages = pipeline.experiment === "mobilenet_head_then_finetune";
   const pipelineTasks = state.tasks.filter(isE2EPipelineTask).slice(0, 8);
   const imageTopic = pipeline.imageTopic || state.analysis.imageTopic;
+  const experiments = dataset
+    ? pipeline.experiments.filter((item) => item.task === dataset.task)
+    : pipeline.experiments;
   return `
     <section class="panel e2e-pipeline-panel">
       <div class="panel-header"><h2>E2E Training & Deployment</h2><span class="spacer"></span><button onclick="refreshAll()">Refresh artifacts</button></div>
@@ -2893,19 +2950,24 @@ function renderE2EPipeline() {
         </div>
         <div class="e2e-pipeline-grid">
           <article class="e2e-pipeline-stage">
-            <header><span>01</span><div><strong>Create dataset</strong><small>Rosbag images + teacher commands</small></div></header>
+            <header><span>01</span><div><strong>Create dataset</strong><small>Images + control / future trajectory + causal IMU</small></div></header>
             <div class="field"><label>Rosbag</label><select onchange="selectAnalysisBag(this.value)"><option value="">Select rosbag</option>${state.rosbags.map((item) => `<option value="${esc(item.path)}" ${item.path === state.analysis.selectedBagPath ? "selected" : ""}>${esc(item.display_name || item.name)}</option>`).join("")}</select></div>
             <div class="field"><label>Dataset name</label><input value="${esc(pipeline.datasetName)}" onchange="updateE2EPipelineOption('datasetName', this.value)" /><div class="field-hint">${esc(pipeline.datasetRoot)}</div></div>
+            <div class="field"><label>Learning task</label><select onchange="updateE2EPipelineOption('datasetTask', this.value)">${[["control","Control (steering + throttle)"],["trajectory","Trajectory (future odometry)"]].map(([value,label]) => `<option value="${value}" ${pipeline.datasetTask === value ? "selected" : ""}>${label}</option>`).join("")}</select></div>
             <div class="field"><label>Image topic</label><select onchange="updateE2EPipelineOption('imageTopic', this.value)">${analysisTopicOptions("image", imageTopic)}</select></div>
             <div class="field"><label>Teacher control</label><select onchange="updateE2EPipelineOption('controlTopic', this.value)">${analysisTopicOptions("control", pipeline.controlTopic)}</select></div>
+            <div class="field"><label>Odometry for trajectory GT</label><input value="${esc(pipeline.odometryTopic)}" onchange="updateE2EPipelineOption('odometryTopic', this.value)" /></div>
+            <div class="field"><label>IMU topic</label><input value="${esc(pipeline.imuTopic)}" onchange="updateE2EPipelineOption('imuTopic', this.value)" /></div>
             <div class="e2e-compact-fields"><label>Width<input type="number" min="32" value="${esc(pipeline.inputWidth)}" onchange="updateE2EPipelineOption('inputWidth', this.value)" /></label><label>Height<input type="number" min="32" value="${esc(pipeline.inputHeight)}" onchange="updateE2EPipelineOption('inputHeight', this.value)" /></label><label>Max Δt (s)<input type="number" min="0.001" step="0.01" value="${esc(pipeline.maxControlDtSec)}" onchange="updateE2EPipelineOption('maxControlDtSec', this.value)" /></label></div>
-            <button class="primary ${actionBusy("e2e-pipeline:dataset") ? "is-busy" : ""}" onclick="createE2EDataset()" ${state.analysis.selectedBagPath && imageTopic && pipeline.controlTopic ? "" : "disabled"} ${actionButtonAttrs("e2e-pipeline:dataset", "Dataset creation is starting...")}>${esc(actionButtonLabel("e2e-pipeline:dataset", "Create dataset", "Starting..."))}</button>
+            ${pipeline.datasetTask === "trajectory" ? `<div class="e2e-compact-fields"><label>Points<input type="number" min="2" value="${esc(pipeline.trajectoryPoints)}" onchange="updateE2EPipelineOption('trajectoryPoints', this.value)" /></label><label>Horizon (s)<input type="number" min="0.1" step="0.1" value="${esc(pipeline.trajectoryHorizonSec)}" onchange="updateE2EPipelineOption('trajectoryHorizonSec', this.value)" /></label><label>Scale (m)<input type="number" min="0.1" step="0.1" value="${esc(pipeline.trajectoryScaleM)}" onchange="updateE2EPipelineOption('trajectoryScaleM', this.value)" /></label></div>` : ""}
+            <details><summary>Alignment & IMU</summary><div class="e2e-compact-fields"><label>Odom Δt<input type="number" min="0.001" step="0.01" value="${esc(pipeline.maxOdometryDtSec)}" onchange="updateE2EPipelineOption('maxOdometryDtSec', this.value)" /></label><label>IMU window (s)<input type="number" min="0.01" step="0.1" value="${esc(pipeline.imuWindowSec)}" onchange="updateE2EPipelineOption('imuWindowSec', this.value)" /></label><label>IMU samples<input type="number" min="1" value="${esc(pipeline.imuSamples)}" onchange="updateE2EPipelineOption('imuSamples', this.value)" /></label></div></details>
+            <button class="primary ${actionBusy("e2e-pipeline:dataset") ? "is-busy" : ""}" onclick="createE2EDataset()" ${state.analysis.selectedBagPath && imageTopic && (pipeline.datasetTask === "trajectory" ? pipeline.odometryTopic : pipeline.controlTopic) ? "" : "disabled"} ${actionButtonAttrs("e2e-pipeline:dataset", "Dataset creation is starting...")}>${esc(actionButtonLabel("e2e-pipeline:dataset", "Create dataset", "Starting..."))}</button>
           </article>
           <article class="e2e-pipeline-stage">
             <header><span>02</span><div><strong>Train model</strong><small>Adjust repeatable training parameters</small></div></header>
-            <div class="field"><label>Dataset</label><select onchange="updateE2EPipelineOption('datasetDir', this.value)"><option value="">Select dataset</option>${pipeline.datasets.map((item) => `<option value="${esc(item.path)}" ${item.path === pipeline.datasetDir ? "selected" : ""}>${esc(item.name)} — ${esc(item.sample_count)} samples</option>`).join("")}</select></div>
+            <div class="field"><label>Dataset</label><select onchange="updateE2EPipelineOption('datasetDir', this.value)"><option value="">Select dataset</option>${pipeline.datasets.map((item) => `<option value="${esc(item.path)}" ${item.path === pipeline.datasetDir ? "selected" : ""}>${esc(item.task)} · ${esc(item.name)} — ${esc(item.sample_count)} samples</option>`).join("")}</select></div>
             <div class="field"><label>Run name</label><input value="${esc(pipeline.runName)}" onchange="updateE2EPipelineOption('runName', this.value)" /><div class="field-hint">${esc(pipeline.runRoot)}</div></div>
-            <div class="field"><label>Experiment</label><select onchange="updateE2EPipelineOption('experiment', this.value)">${pipeline.experiments.map((item) => `<option value="${esc(item.id)}" ${item.id === pipeline.experiment ? "selected" : ""}>${esc(item.label)}</option>`).join("")}</select></div>
+            <div class="field"><label>Experiment</label><select onchange="updateE2EPipelineOption('experiment', this.value)">${experiments.map((item) => `<option value="${esc(item.id)}" ${item.id === pipeline.experiment ? "selected" : ""}>${esc(item.label)}</option>`).join("")}</select></div>
             <div class="e2e-compact-fields"><label>Epochs<input type="number" min="1" value="${esc(pipeline.epochs)}" onchange="updateE2EPipelineOption('epochs', this.value)" /></label><label>Learning rate<input type="number" min="0.00000001" step="0.0001" value="${esc(pipeline.learningRate)}" onchange="updateE2EPipelineOption('learningRate', this.value)" /></label><label>Batch<input type="number" min="1" value="${esc(pipeline.batchSize)}" onchange="updateE2EPipelineOption('batchSize', this.value)" /></label></div>
             ${hasTwoStages ? `<div class="e2e-compact-fields"><label>Fine-tune epochs<input type="number" min="1" value="${esc(pipeline.finetuneEpochs)}" onchange="updateE2EPipelineOption('finetuneEpochs', this.value)" /></label><label>Fine-tune LR<input type="number" min="0.00000001" step="0.0001" value="${esc(pipeline.finetuneLearningRate)}" onchange="updateE2EPipelineOption('finetuneLearningRate', this.value)" /></label></div>` : ""}
             <details><summary>Advanced parameters</summary><div class="e2e-compact-fields"><label>Data fraction<input type="number" min="0.001" max="1" step="0.05" value="${esc(pipeline.fraction)}" onchange="updateE2EPipelineOption('fraction', this.value)" /></label><label>Validation<input type="number" min="0.01" max="0.9" step="0.05" value="${esc(pipeline.valFraction)}" onchange="updateE2EPipelineOption('valFraction', this.value)" /></label><label>Workers<input type="number" min="0" value="${esc(pipeline.numWorkers)}" onchange="updateE2EPipelineOption('numWorkers', this.value)" /></label><label>Weight decay<input type="number" min="0" max="1" step="0.0001" value="${esc(pipeline.weightDecay)}" onchange="updateE2EPipelineOption('weightDecay', this.value)" /></label><label>Seed<input type="number" min="0" value="${esc(pipeline.seed)}" onchange="updateE2EPipelineOption('seed', this.value)" /></label><label>Device<select onchange="updateE2EPipelineOption('device', this.value)">${[["","Auto"],["cuda","CUDA"],["mps","Apple MPS"],["cpu","CPU"]].map(([value,label]) => `<option value="${value}" ${pipeline.device === value ? "selected" : ""}>${label}</option>`).join("")}</select></label></div></details>
@@ -2913,7 +2975,7 @@ function renderE2EPipeline() {
           </article>
           <article class="e2e-pipeline-stage">
             <header><span>03</span><div><strong>Evaluate & export</strong><small>Checkpoint → ONNX → offline eval</small></div></header>
-            <div class="field"><label>Training run</label><select onchange="updateE2EPipelineOption('runDir', this.value)"><option value="">Select run</option>${pipeline.runs.map((item) => `<option value="${esc(item.path)}" ${item.path === pipeline.runDir ? "selected" : ""}>${esc(item.name)} — ${esc(item.model || item.status)}</option>`).join("")}</select></div>
+            <div class="field"><label>Training run</label><select onchange="updateE2EPipelineOption('runDir', this.value)"><option value="">Select run</option>${pipeline.runs.map((item) => `<option value="${esc(item.path)}" ${item.path === pipeline.runDir ? "selected" : ""}>${esc(item.task)} · ${esc(item.name)} — ${esc(item.model || item.status)}</option>`).join("")}</select></div>
             ${run ? `<div class="e2e-run-summary"><span>${run.best_checkpoint ? "Checkpoint ready" : "No best checkpoint"}</span><span>${run.onnx_path ? "ONNX ready" : "ONNX not exported"}</span><small>${esc(run.path)}</small></div>` : `<div class="empty compact">Select a completed training run.</div>`}
             <div class="button-stack"><button class="primary ${actionBusy("e2e-pipeline:export") ? "is-busy" : ""}" onclick="exportE2EOnnx()" ${run?.best_checkpoint ? "" : "disabled"} ${actionButtonAttrs("e2e-pipeline:export", "ONNX export is starting...")}>${esc(actionButtonLabel("e2e-pipeline:export", "Export ONNX", "Starting..."))}</button><button onclick="useE2ERunForOfflineEval()" ${run?.onnx_path ? "" : "disabled"}>Use in offline eval</button></div>
           </article>
@@ -2971,7 +3033,7 @@ function renderE2EAnalysisForm() {
       <div class="field full"><label for="e2e-bag">2. Rosbag</label><select id="e2e-bag" onchange="selectAnalysisBag(this.value)"><option value="">Select rosbag</option>${state.rosbags.map((item) => `<option value="${esc(item.path)}" ${item.path === analysis.selectedBagPath ? "selected" : ""}>${esc(item.display_name || item.name)} - ${esc(item.path)}</option>`).join("")}</select><div class="field-hint">${analysis.bagDetailLoading ? "Inspecting topics..." : analysis.selectedBagPath ? esc(analysis.selectedBagPath) : "Select the bag to evaluate."}</div></div>
       <div class="field full"><label>3. Image topics</label>${renderAnalysisImageTopicsSelector()}</div>
       ${mode === "supervised" ? `
-        <div class="field full"><label for="e2e-model">ONNX model</label><select id="e2e-model" onchange="updateE2EOption('e2eModelPath', this.value)"><option value="">Select model</option>${state.e2eModels.map((model) => `<option value="${esc(model.path)}" ${model.path === analysis.e2eModelPath ? "selected" : ""}>${esc(model.name)} — ${esc(model.relative_path || model.path)}</option>`).join("")}</select><div class="field-hint">${state.e2eModels.length ? `${state.e2eModels.length} exported model(s) found.` : "No model.onnx was found under the configured outputs folders."}</div></div>
+        <div class="field full"><label for="e2e-model">ONNX model</label><select id="e2e-model" onchange="updateE2EOption('e2eModelPath', this.value)"><option value="">Select model</option>${state.e2eModels.map((model) => `<option value="${esc(model.path)}" ${model.path === analysis.e2eModelPath ? "selected" : ""}>${esc(model.task || model.output?.task || "control")} · ${esc(model.name)} — ${esc(model.relative_path || model.path)}</option>`).join("")}</select><div class="field-hint">${state.e2eModels.length ? `${state.e2eModels.length} exported model(s) found. Trajectory models use recorded odometry as GT.` : "No model.onnx was found under the configured outputs folders."}</div></div>
         <div class="field"><label>Teacher control</label><select onchange="updateE2EOption('e2eTeacherTopic', this.value)">${analysisTopicOptions("control", analysis.e2eTeacherTopic)}</select></div>
         <div class="field"><label>Inference provider</label><select onchange="updateE2EOption('e2eProvider', this.value)">${[["auto","Auto (CUDA, then CPU)"],["cuda","CUDA"],["cpu","CPU"]].map(([value,label]) => `<option value="${value}" ${analysis.e2eProvider === value ? "selected" : ""}>${label}</option>`).join("")}</select></div>
         <label class="field full check-row"><input type="checkbox" ${analysis.e2eManualOnly ? "checked" : ""} onchange="updateE2EOption('e2eManualOnly', this.checked)" /><span>Evaluate MANUAL sections only</span></label>
@@ -2982,6 +3044,7 @@ function renderE2EAnalysisForm() {
         ${mode === "offline_localization" ? `<div class="field"><label>Offline localization method</label><select onchange="updateE2EOption('offlineLocalizationMode', this.value)">${[["auto","Auto: VGL then VSLAM"],["vgl","VGL required"],["vslam","Saved-map VSLAM"],["vslam_from_scratch","VSLAM from scratch"]].map(([value,label]) => `<option value="${value}" ${analysis.offlineLocalizationMode === value ? "selected" : ""}>${label}</option>`).join("")}</select></div><div class="field"><label>Camera configuration</label><select onchange="updateE2EOption('topicConfigPath', this.value)"><option value="">Use backend default</option>${topicConfigs.map((config) => `<option value="${esc(config.path)}" ${config.path === analysis.topicConfigPath ? "selected" : ""}>${esc(config.name)}</option>`).join("")}</select></div>` : ""}
         <div class="field"><label>Recorded pose</label><select onchange="updateAnalysisOption('poseTopic', this.value)">${analysisTopicOptions("pose", analysis.poseTopic)}</select></div>
         <div class="field"><label>E2E diagnostics</label><input value="${esc(analysis.e2eDiagnosticTopic)}" onchange="updateE2EOption('e2eDiagnosticTopic', this.value)" /></div>
+        <div class="field"><label>IMU for fusion model</label><input value="${esc(analysis.e2eImuTopic)}" onchange="updateE2EOption('e2eImuTopic', this.value)" /></div>
       `}
       <div class="field"><label>Operation mode</label><select onchange="updateAnalysisOption('modeTopic', this.value)">${analysisTopicOptions("mode", analysis.modeTopic)}</select></div>
       <div class="field"><label>Speed</label><select onchange="updateAnalysisOption('speedTopic', this.value)">${analysisTopicOptions("speed", analysis.speedTopic)}</select></div>
@@ -3413,18 +3476,25 @@ function renderAnalysisViewer() {
           <div class="analysis-speed-legend ${timeline.e2e?.metrics?.teacher_free ? "aggression" : ""}"><span>${timeline.e2e?.metrics?.teacher_free ? "calm" : "slow"}</span><i></i><span>${timeline.e2e?.metrics?.teacher_free ? "aggressive" : "fast"}</span></div>
         </div>
       </div>
+      ${timeline.e2e?.task === "trajectory" ? `
+        <div class="analysis-trajectory-panel">
+          <div class="analysis-trajectory-heading"><div><strong>Local trajectory</strong><span>base_link / synchronized with video</span></div><div class="analysis-trajectory-legend"><span class="gt">GT</span><span class="pred">Prediction</span></div></div>
+          <canvas id="analysis-e2e-trajectory-canvas" class="analysis-e2e-trajectory-canvas"></canvas>
+        </div>` : ""}
       <div class="analysis-signal-cards">
         ${analysisSignalCard("Mode", "analysis-value-mode", "-")}
         ${analysisSignalCard("Steering", "analysis-value-steering", "-")}
         ${analysisSignalCard("Throttle", "analysis-value-throttle", "-")}
         ${analysisSignalCard("Brake", "analysis-value-brake", "-")}
         ${analysisSignalCard("Vehicle speed", "analysis-value-speed", "-", "analysis-label-speed")}
-        ${timeline.e2e?.mode ? analysisSignalCard("E2E steering", "analysis-value-e2e-steering", "-") : ""}
-        ${timeline.e2e?.mode ? analysisSignalCard("Steering error / applied Δ", "analysis-value-e2e-steering-error", "-") : ""}
+        ${timeline.e2e?.mode && timeline.e2e?.task !== "trajectory" ? analysisSignalCard("E2E steering", "analysis-value-e2e-steering", "-") : ""}
+        ${timeline.e2e?.mode && timeline.e2e?.task !== "trajectory" ? analysisSignalCard("Steering error / applied Δ", "analysis-value-e2e-steering-error", "-") : ""}
         ${timeline.e2e?.mode ? analysisSignalCard("Pipeline latency", "analysis-value-e2e-latency", "-") : ""}
-        ${timeline.e2e?.mode ? analysisSignalCard("Aggressiveness", "analysis-value-e2e-aggression", "-") : ""}
-        ${timeline.e2e?.mode ? analysisSignalCard("Lateral acceleration", "analysis-value-e2e-latacc", "-") : ""}
+        ${timeline.e2e?.mode && timeline.e2e?.task !== "trajectory" ? analysisSignalCard("Aggressiveness", "analysis-value-e2e-aggression", "-") : ""}
+        ${timeline.e2e?.mode && timeline.e2e?.task !== "trajectory" ? analysisSignalCard("Lateral acceleration", "analysis-value-e2e-latacc", "-") : ""}
         ${timeline.e2e?.mode ? analysisSignalCard("Section", "analysis-value-e2e-section", "-") : ""}
+        ${timeline.e2e?.task === "trajectory" ? analysisSignalCard("Trajectory ADE", "analysis-value-e2e-trajectory-ade", "-") : ""}
+        ${timeline.e2e?.task === "trajectory" ? analysisSignalCard("Trajectory FDE", "analysis-value-e2e-trajectory-fde", "-") : ""}
       </div>
       <div class="analysis-chart-shell">
         <canvas id="analysis-timeline-canvas" class="analysis-timeline-canvas" onclick="seekAnalysisFromTimeline(event)"></canvas>
@@ -3445,7 +3515,16 @@ function renderE2ESummaryPanel() {
   if (!e2e?.mode) return "";
   const metrics = e2e.metrics || {};
   const teacherFree = metrics.teacher_free || {};
-  const cards = e2e.mode === "supervised"
+  const cards = e2e.task === "trajectory"
+    ? [
+      ["Trajectory ADE", e2eMetricText(metrics.trajectory?.ade_m, " m")],
+      ["Trajectory FDE", e2eMetricText(metrics.trajectory?.fde_m, " m")],
+      ["Point error p95", e2eMetricText(metrics.trajectory?.point_error_m?.p95, " m")],
+      ["Inference p50", e2eMetricText(metrics.inference_ms?.p50, " ms", 2)],
+      ["Inference p95", e2eMetricText(metrics.inference_ms?.p95, " ms", 2)],
+      ["GT missing", String(metrics.missing_teacher || 0)],
+    ]
+    : e2e.mode === "supervised"
     ? [
       ["Steering MAE", e2eMetricText(metrics.steering?.mae)],
       ["Steering RMSE", e2eMetricText(metrics.steering?.rmse)],
@@ -3465,9 +3544,12 @@ function renderE2ESummaryPanel() {
   const sections = e2e.sections || [];
   const events = e2e.events || [];
   const worst = [...(e2e.predictions || [])]
-    .filter((item) => Number.isFinite(Number(item.steering_error ?? item.steering_applied_error)) || Number.isFinite(Number(item.cross_track_error_m)))
-    .sort((a, b) => Math.max(Math.abs(Number(b.steering_error ?? b.steering_applied_error) || 0), Number(b.cross_track_error_m) || 0) - Math.max(Math.abs(Number(a.steering_error ?? a.steering_applied_error) || 0), Number(a.cross_track_error_m) || 0))
+    .filter((item) => Number.isFinite(Number(item.trajectory_ade_m ?? item.steering_error ?? item.steering_applied_error ?? item.cross_track_error_m)))
+    .sort((a, b) => Number(b.trajectory_ade_m ?? Math.max(Math.abs(Number(b.steering_error ?? b.steering_applied_error) || 0), Number(b.cross_track_error_m) || 0)) - Number(a.trajectory_ade_m ?? Math.max(Math.abs(Number(a.steering_error ?? a.steering_applied_error) || 0), Number(a.cross_track_error_m) || 0)))
     .slice(0, 5);
+  const sectionTable = e2e.task === "trajectory"
+    ? `<table><thead><tr><th>Section</th><th>Samples</th><th>ADE</th><th>FDE</th><th>Point p95</th><th>CTE p95</th><th>Inference p95</th><th>Laps</th></tr></thead><tbody>${sections.map((section) => `<tr onclick="seekAnalysisTime(${Number(section.t_start) || 0})"><td>${esc(section.section)}</td><td>${esc(section.sample_count || 0)}</td><td>${e2eMetricText(section.trajectory?.ade_m, " m")}</td><td>${e2eMetricText(section.trajectory?.fde_m, " m")}</td><td>${e2eMetricText(section.trajectory?.point_error_m?.p95, " m")}</td><td>${e2eMetricText(section.cross_track_error_m?.p95, " m")}</td><td>${e2eMetricText(section.inference_ms?.p95, " ms", 2)}</td><td>${esc((section.laps || []).join(", "))}</td></tr>`).join("")}</tbody></table>`
+    : `<table><thead><tr><th>Section</th><th>Samples</th><th>Aggression</th><th>Steer rate p95</th><th>Lat. accel p95</th><th>CTE p95</th><th>Latency p95</th><th>Laps</th></tr></thead><tbody>${sections.map((section) => `<tr onclick="seekAnalysisTime(${Number(section.t_start) || 0})"><td>${esc(section.section)}</td><td>${esc(section.sample_count || section.pose_count || 0)}</td><td>${e2eMetricText(section.teacher_free?.score, "", 1)}</td><td>${e2eMetricText(section.teacher_free?.steering_rate_abs_per_s?.p95, " /s", 2)}</td><td>${e2eMetricText(section.teacher_free?.lateral_accel_abs_mps2?.p95, " m/s²", 2)}</td><td>${e2eMetricText(section.cross_track_error_m?.p95, " m")}</td><td>${e2eMetricText(section.pipeline_latency_ms?.p95 ?? section.inference_ms?.p95, " ms", 2)}</td><td>${esc((section.laps || []).join(", "))}</td></tr>`).join("")}</tbody></table>`;
   return `
     <section class="e2e-result-summary">
       <div class="e2e-result-heading"><strong>E2E evaluation</strong><span>${esc(e2e.mode)}${e2e.model ? ` / ${esc(shortName(e2e.model))}` : ""}</span></div>
@@ -3490,8 +3572,8 @@ function renderE2ESummaryPanel() {
           <div class="field-hint">Score is the p95 weighted combination of steering/throttle rate, acceleration, jerk, lateral acceleration, and control saturation. Missing sensors are excluded from the weight normalization.</div>
         </div>` : ""}
       ${events.length ? `<div class="e2e-events"><strong>High-aggressiveness events</strong>${events.slice(0, 12).map((event) => `<button onclick="seekAnalysisTime(${Number(event.peak_t) || 0})"><span>${formatAnalysisClock(event.t_start)}–${formatAnalysisClock(event.t_end)} / ${esc(event.section || "-")}</span><b>${e2eMetricText(event.peak_score, "", 1)}</b><em>${esc((event.reasons || []).join(", ") || "combined load")}</em></button>`).join("")}</div>` : ""}
-      ${sections.length ? `<details open><summary>Section metrics</summary><div class="e2e-section-table"><table><thead><tr><th>Section</th><th>Samples</th><th>Aggression</th><th>Steer rate p95</th><th>Lat. accel p95</th><th>CTE p95</th><th>Latency p95</th><th>Laps</th></tr></thead><tbody>${sections.map((section) => `<tr onclick="seekAnalysisTime(${Number(section.t_start) || 0})"><td>${esc(section.section)}</td><td>${esc(section.sample_count || section.pose_count || 0)}</td><td>${e2eMetricText(section.teacher_free?.score, "", 1)}</td><td>${e2eMetricText(section.teacher_free?.steering_rate_abs_per_s?.p95, " /s", 2)}</td><td>${e2eMetricText(section.teacher_free?.lateral_accel_abs_mps2?.p95, " m/s²", 2)}</td><td>${e2eMetricText(section.cross_track_error_m?.p95, " m")}</td><td>${e2eMetricText(section.pipeline_latency_ms?.p95 ?? section.inference_ms?.p95, " ms", 2)}</td><td>${esc((section.laps || []).join(", "))}</td></tr>`).join("")}</tbody></table></div></details>` : ""}
-      ${worst.length ? `<div class="e2e-worst"><strong>Worst samples</strong>${worst.map((item) => `<button onclick="seekAnalysisTime(${Number(item.t) || 0})"><span>${formatAnalysisClock(item.t)} / ${esc(item.section || "-")}</span><b>${Number.isFinite(Number(item.steering_error ?? item.steering_applied_error)) ? `steer ${Number(item.steering_error ?? item.steering_applied_error).toFixed(3)}` : `CTE ${Number(item.cross_track_error_m).toFixed(3)} m`}</b></button>`).join("")}</div>` : ""}
+      ${sections.length ? `<details open><summary>Section metrics</summary><div class="e2e-section-table">${sectionTable}</div></details>` : ""}
+      ${worst.length ? `<div class="e2e-worst"><strong>Worst samples</strong>${worst.map((item) => `<button onclick="seekAnalysisTime(${Number(item.t) || 0})"><span>${formatAnalysisClock(item.t)} / ${esc(item.section || "-")}</span><b>${Number.isFinite(Number(item.trajectory_ade_m)) ? `ADE ${Number(item.trajectory_ade_m).toFixed(3)} m` : Number.isFinite(Number(item.steering_error ?? item.steering_applied_error)) ? `steer ${Number(item.steering_error ?? item.steering_applied_error).toFixed(3)}` : `CTE ${Number(item.cross_track_error_m).toFixed(3)} m`}</b></button>`).join("")}</div>` : ""}
     </section>`;
 }
 
@@ -3621,6 +3703,13 @@ async function selectAnalysisBag(path) {
       state.e2ePipeline.controlTopic = analysisTopics("control").find((topic) => topic.name === "/teleop/control_cmd")?.name
         || state.analysis.controlTopic
         || "";
+      state.e2ePipeline.odometryTopic = state.analysis.poseTopic || state.e2ePipeline.odometryTopic;
+      const imuTopic = analysisTopicRecords().find((topic) => topic.type === "sensor_msgs/msg/Imu" && topic.name === "/sensors/imu")
+        || analysisTopicRecords().find((topic) => topic.type === "sensor_msgs/msg/Imu");
+      if (imuTopic?.name) {
+        state.e2ePipeline.imuTopic = imuTopic.name;
+        state.analysis.e2eImuTopic = imuTopic.name;
+      }
     }
   } catch (error) {
     if (state.analysis.selectedBagPath === selectedPath) {
@@ -4616,6 +4705,8 @@ function updateAnalysisPlaybackDom(force = false) {
       " m/s²",
     ),
     "analysis-value-e2e-section": String(e2ePrediction?.section || trajectory?.section || recordedSection?.section || "-"),
+    "analysis-value-e2e-trajectory-ade": formatAnalysisValue(e2ePrediction?.trajectory_ade_m, " m"),
+    "analysis-value-e2e-trajectory-fde": formatAnalysisValue(e2ePrediction?.trajectory_fde_m, " m"),
   };
   Object.entries(values).forEach(([id, value]) => {
     const element = $(id);
@@ -4627,6 +4718,7 @@ function updateAnalysisPlaybackDom(force = false) {
     drawAnalysisTimeline();
     drawJetsonStatsChart();
     drawAnalysisMap();
+    drawE2ETrajectory();
     state.analysis.lastVisualUpdateMs = now;
   }
 }
@@ -4669,7 +4761,33 @@ function drawAnalysisTimeline() {
   const dynamicsRecords = analysisTrajectory(timeline).samples || [];
   const dynamicsMax = Math.max(1, ...dynamicsRecords.flatMap((item) => [Math.abs(Number(item.longitudinal_accel_mps2)), Math.abs(Number(item.lateral_accel_mps2))]).filter(Number.isFinite)) * 1.08;
   const jerkMax = Math.max(1, ...dynamicsRecords.map((item) => Math.abs(Number(item.jerk_mps3))).filter(Number.isFinite)) * 1.08;
-  const tracks = e2e ? [
+  const trajectoryTracks = [
+    {
+      label: "TRAJECTORY ADE m",
+      min: 0,
+      max: Math.max(0.1, ...predictions.map((item) => Number(item.trajectory_ade_m)).filter(Number.isFinite)) * 1.1,
+      lines: [{ records: predictions, value: (item) => item.trajectory_ade_m, color: "#5aa8ff" }],
+    },
+    {
+      label: "TRAJECTORY FDE m",
+      min: 0,
+      max: Math.max(0.1, ...predictions.map((item) => Number(item.trajectory_fde_m)).filter(Number.isFinite)) * 1.1,
+      lines: [{ records: predictions, value: (item) => item.trajectory_fde_m, color: "#f0b35a" }],
+    },
+    {
+      label: "LATENCY ms",
+      min: 0,
+      max: latencyMax,
+      lines: [{ records: latencyRecords, value: (item) => item.capture_to_command_ms ?? item.total_ms ?? item.inference_ms, color: "#b28dff" }],
+    },
+    {
+      label: analysisSpeedSourceLabel(analysisSpeedSeries()[0], true),
+      min: 0,
+      max: analysisSpeedMaximum(),
+      lines: [{ records: analysisSpeedSeries(), value: (item) => item.value ?? item.speed_mps, color: "#e7b84b" }],
+    },
+  ];
+  const controlTracks = [
     {
       label: "STEER GT/PRED",
       min: -1,
@@ -4732,7 +4850,10 @@ function drawAnalysisTimeline() {
       max: analysisSpeedMaximum(),
       lines: [{ records: analysisSpeedSeries(), value: (item) => item.value ?? item.speed_mps, color: "#e7b84b" }],
     },
-  ] : [
+  ];
+  const tracks = e2e
+    ? (e2e.task === "trajectory" ? trajectoryTracks : controlTracks)
+    : [
     { label: "STEER", min: -1, max: 1, lines: [{ records: timeline.controls || [], value: (item) => item.steering, color: "#5aa8ff" }] },
     { label: "PEDALS", min: 0, max: 1, lines: [{ records: timeline.controls || [], value: (item) => item.throttle, color: "#45c478" }, { records: timeline.controls || [], value: (item) => item.brake, color: "#f26d6d" }] },
     { label: analysisSpeedSourceLabel(analysisSpeedSeries()[0], true), min: 0, max: analysisSpeedMaximum(), lines: [{ records: analysisSpeedSeries(), value: (item) => item.value ?? item.speed_mps, color: "#e7b84b" }] },
@@ -5094,6 +5215,101 @@ function analysisAggressionColor(score) {
   const fraction = Math.max(0, Math.min(1, Number(score || 0) / 100));
   const hue = 135 - fraction * 135;
   return `hsl(${hue.toFixed(0)} 86% 57%)`;
+}
+
+function drawE2ETrajectory() {
+  const canvas = $("analysis-e2e-trajectory-canvas");
+  const timeline = state.analysis.timeline;
+  if (!canvas || timeline?.e2e?.task !== "trajectory") return;
+  const prepared = analysisCanvasContext(canvas, 360);
+  if (!prepared) return;
+  const { ctx, width, height } = prepared;
+  const sample = timedRecordAt(timeline.e2e.predictions || [], state.analysis.currentTime);
+  const predicted = Array.isArray(sample?.trajectory_pred) ? sample.trajectory_pred : [];
+  const groundTruth = Array.isArray(sample?.trajectory_gt) ? sample.trajectory_gt : [];
+  const all = [[0, 0], ...predicted, ...groundTruth].filter(
+    (point) => Array.isArray(point) && point.length >= 2 && point.every((value) => Number.isFinite(Number(value))),
+  );
+
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = "#080a0d";
+  ctx.fillRect(0, 0, width, height);
+  const pad = 42;
+  const maxForward = Math.max(1, ...all.map((point) => Number(point[0]))) * 1.15;
+  const lateralExtent = Math.max(0.75, ...all.map((point) => Math.abs(Number(point[1])))) * 1.2;
+  const scale = Math.min(
+    (height - pad * 1.7) / maxForward,
+    (width - pad * 2) / (lateralExtent * 2),
+  );
+  const originX = width / 2;
+  const originY = height - pad;
+  const toPixel = (point) => [
+    originX - Number(point[1]) * scale,
+    originY - Number(point[0]) * scale,
+  ];
+
+  ctx.font = "10px ui-sans-serif, system-ui";
+  ctx.textBaseline = "middle";
+  for (let meter = 0; meter <= Math.ceil(maxForward); meter += 1) {
+    const y = originY - meter * scale;
+    ctx.strokeStyle = "rgba(255,255,255,0.08)";
+    ctx.beginPath();
+    ctx.moveTo(pad, y);
+    ctx.lineTo(width - pad, y);
+    ctx.stroke();
+    ctx.fillStyle = "#71808d";
+    ctx.textAlign = "right";
+    ctx.fillText(`${meter}m`, pad - 6, y);
+  }
+  for (let meter = -Math.floor(lateralExtent); meter <= Math.floor(lateralExtent); meter += 1) {
+    const x = originX - meter * scale;
+    ctx.strokeStyle = meter === 0 ? "rgba(255,255,255,0.2)" : "rgba(255,255,255,0.06)";
+    ctx.beginPath();
+    ctx.moveTo(x, pad / 2);
+    ctx.lineTo(x, originY);
+    ctx.stroke();
+  }
+
+  const drawLocalPath = (points, color, widthPx) => {
+    const pixels = [[0, 0], ...points].map(toPixel);
+    if (pixels.length < 2) return;
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
+    ctx.lineWidth = widthPx;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.beginPath();
+    pixels.forEach(([x, y], index) => index ? ctx.lineTo(x, y) : ctx.moveTo(x, y));
+    ctx.stroke();
+    pixels.slice(1).forEach(([x, y]) => {
+      ctx.beginPath();
+      ctx.arc(x, y, 3, 0, Math.PI * 2);
+      ctx.fill();
+    });
+  };
+  drawLocalPath(groundTruth, "#d8dee9", 3);
+  drawLocalPath(predicted, "#5aa8ff", 3);
+
+  ctx.save();
+  ctx.translate(originX, originY);
+  ctx.fillStyle = "#45c478";
+  ctx.strokeStyle = "#071018";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(0, -13);
+  ctx.lineTo(-7, 8);
+  ctx.lineTo(0, 5);
+  ctx.lineTo(7, 8);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  ctx.restore();
+
+  if (!sample || (!predicted.length && !groundTruth.length)) {
+    ctx.fillStyle = "#98a2ad";
+    ctx.textAlign = "center";
+    ctx.fillText("No trajectory prediction at this time", width / 2, height / 2);
+  }
 }
 
 function drawAnalysisMap(backgroundImage = undefined) {

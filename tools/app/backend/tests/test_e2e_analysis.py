@@ -10,7 +10,9 @@ from jetpilot_console.e2e_analysis_worker import (
     _attach_pose_context,
     _enrich_control_dynamics,
     _enrich_trajectory_dynamics,
+    _relative_future_trajectory,
     _teacher_free_metrics,
+    trajectory_error_summary,
 )
 
 
@@ -65,6 +67,47 @@ class E2EAnalysisMetricTests(unittest.TestCase):
         self.assertGreaterEqual(oscillations, 1)
         self.assertTrue(events)
         self.assertIn("steering rate", events[0]["reasons"])
+
+    def test_relative_future_trajectory_is_expressed_in_vehicle_frame(self) -> None:
+        trajectory = [
+            {"t": 0.0, "x": 10.0, "y": 5.0, "yaw": math.pi / 2.0},
+            {"t": 0.5, "x": 10.0, "y": 6.0, "yaw": math.pi / 2.0},
+            {"t": 1.0, "x": 9.0, "y": 7.0, "yaw": math.pi / 2.0},
+        ]
+
+        local = _relative_future_trajectory(
+            trajectory,
+            [0.0, 0.5, 1.0],
+            stamp=0.0,
+            points=2,
+            horizon_sec=1.0,
+            max_dt_sec=0.01,
+        )
+
+        self.assertIsNotNone(local)
+        self.assertAlmostEqual(local[0][0], 1.0)
+        self.assertAlmostEqual(local[0][1], 0.0)
+        self.assertAlmostEqual(local[1][0], 2.0)
+        self.assertAlmostEqual(local[1][1], 1.0)
+
+    def test_trajectory_error_summary_reports_ade_and_fde(self) -> None:
+        summary = trajectory_error_summary(
+            [
+                {
+                    "trajectory_point_errors_m": [0.1, 0.3],
+                    "trajectory_fde_m": 0.3,
+                },
+                {
+                    "trajectory_point_errors_m": [0.2, 0.4],
+                    "trajectory_fde_m": 0.4,
+                },
+            ]
+        )
+
+        self.assertEqual(summary["sample_count"], 2)
+        self.assertEqual(summary["point_count"], 4)
+        self.assertEqual(summary["ade_m"], 0.25)
+        self.assertEqual(summary["fde_m"], 0.35)
 
 
 if __name__ == "__main__":

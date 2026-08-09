@@ -7,7 +7,7 @@ import json
 import math
 import time
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 from .analysis_worker import Progress, _atomic_json, _update_json_object, _utc_now
 from .e2e_analysis import control_error_summary, finite_summary
@@ -109,6 +109,53 @@ def _provider(requested: str, available: Sequence[str]) -> list[str]:
     return ["CPUExecutionProvider"]
 
 
+def _relative_future_trajectory(
+    trajectory: list[dict[str, Any]],
+    times: list[float],
+    stamp: float,
+    points: int,
+    horizon_sec: float,
+    max_dt_sec: float,
+) -> list[list[float]] | None:
+    origin = _nearest(trajectory, times, stamp, max_dt_sec)
+    if origin is None:
+        return None
+    yaw = _finite(origin.get("yaw")) or 0.0
+    cosine, sine = math.cos(yaw), math.sin(yaw)
+    result: list[list[float]] = []
+    for index in range(1, points + 1):
+        target_time = stamp + horizon_sec * index / points
+        target = _nearest(trajectory, times, target_time, max_dt_sec)
+        if target is None:
+            return None
+        dx = (_finite(target.get("x")) or 0.0) - (_finite(origin.get("x")) or 0.0)
+        dy = (_finite(target.get("y")) or 0.0) - (_finite(origin.get("y")) or 0.0)
+        result.append([cosine * dx + sine * dy, -sine * dx + cosine * dy])
+    return result
+
+
+def trajectory_error_summary(samples: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
+    point_errors = [
+        float(error)
+        for sample in samples
+        for error in sample.get("trajectory_point_errors_m", [])
+        if _finite(error) is not None
+    ]
+    final_errors = [
+        float(sample["trajectory_fde_m"])
+        for sample in samples
+        if _finite(sample.get("trajectory_fde_m")) is not None
+    ]
+    return {
+        "sample_count": len(final_errors),
+        "point_count": len(point_errors),
+        "ade_m": round(sum(point_errors) / len(point_errors), 8) if point_errors else None,
+        "fde_m": round(sum(final_errors) / len(final_errors), 8) if final_errors else None,
+        "point_error_m": finite_summary(point_errors),
+        "final_error_m": finite_summary(final_errors),
+    }
+
+
 def _supervised_predictions(
     analysis_dir: Path,
     timeline: dict[str, Any],
@@ -126,9 +173,21 @@ def _supervised_predictions(
     frames = _timed(timeline.get("frames"))
     teachers = _timed(timeline.get("controls"))
     modes = _timed(timeline.get("modes"))
+    trajectory = _timed(
+        timeline.get("trajectory", {}).get("samples")
+        if isinstance(timeline.get("trajectory"), dict)
+        else []
+    )
+    imu_records = _timed(timeline.get("imu"))
     teacher_times = [float(item["t"]) for item in teachers]
     mode_times = [float(item["t"]) for item in modes]
+    trajectory_times = [float(item["t"]) for item in trajectory]
+    imu_times = [float(item["t"]) for item in imu_records]
     metadata = _metadata(model_path)
+    task = str(metadata.get("task") or metadata.get("output", {}).get("task") or "control")
+    architecture = metadata.get("architecture") if isinstance(metadata.get("architecture"), dict) else {}
+    sequence_length = max(1, int(architecture.get("sequence_length") or 1))
+    use_imu = bool(architecture.get("use_imu", False))
     model_input = metadata.get("input") if isinstance(metadata.get("input"), dict) else {}
     output_fields = (
         metadata.get("output", {}).get("fields")
@@ -140,15 +199,24 @@ def _supervised_predictions(
     session_started = time.perf_counter_ns()
     session = ort.InferenceSession(str(model_path), providers=providers)
     session_init_ms = (time.perf_counter_ns() - session_started) / 1.0e6
-    input_name = session.get_inputs()[0].name
+    session_inputs = session.get_inputs()
+    input_name = session_inputs[0].name
 
     warmup_frame = next((analysis_dir / str(frame.get("path")) for frame in frames if frame.get("path")), None)
     if warmup_frame and warmup_frame.is_file():
         warmup_image = cv2.imread(str(warmup_frame), cv2.IMREAD_COLOR)
         if warmup_image is not None:
             warmup_tensor = _preprocess(warmup_image, model_input)
+            if len(session_inputs[0].shape) == 5:
+                warmup_tensor = np.repeat(warmup_tensor[:, None, ...], sequence_length, axis=1)
+            warmup_feed = {input_name: warmup_tensor}
+            if use_imu and len(session_inputs) > 1:
+                imu_shape = [int(value) for value in session_inputs[1].shape if isinstance(value, int)]
+                warmup_feed[session_inputs[1].name] = np.zeros(
+                    tuple(imu_shape) if len(imu_shape) == 3 else (1, 10, 7), dtype=np.float32
+                )
             for _ in range(5):
-                session.run(None, {input_name: warmup_tensor})
+                session.run(None, warmup_feed)
 
     samples: list[dict[str, Any]] = []
     excluded_mode = 0
@@ -164,18 +232,49 @@ def _supervised_predictions(
             frame_path.relative_to(analysis_dir.resolve())
         except ValueError:
             continue
-        image = cv2.imread(str(frame_path), cv2.IMREAD_COLOR)
-        if image is None:
+        sequence_tensors = []
+        for sequence_index in range(max(0, index - sequence_length + 1), index + 1):
+            sequence_path = (analysis_dir / str(frames[sequence_index].get("path") or "")).resolve(strict=False)
+            sequence_image = cv2.imread(str(sequence_path), cv2.IMREAD_COLOR)
+            if sequence_image is not None:
+                sequence_tensors.append(_preprocess(sequence_image, model_input)[0])
+        if not sequence_tensors:
             continue
+        while len(sequence_tensors) < sequence_length:
+            sequence_tensors.insert(0, sequence_tensors[0])
         started = time.perf_counter_ns()
-        tensor = _preprocess(image, model_input)
+        tensor = np.stack(sequence_tensors[-sequence_length:], axis=0)[None, ...]
+        if len(session_inputs[0].shape) == 4:
+            tensor = tensor[:, -1]
+        feed = {input_name: tensor.astype(np.float32)}
+        if use_imu and len(session_inputs) > 1:
+            imu_shape = session_inputs[1].shape
+            imu_count = int(imu_shape[-2]) if isinstance(imu_shape[-2], int) else 10
+            imu_feature_count = int(imu_shape[-1]) if isinstance(imu_shape[-1], int) else 7
+            config_data = metadata.get("config", {}).get("data", {}) if isinstance(metadata.get("config"), dict) else {}
+            imu_window_sec = float(config_data.get("imu_window_sec") or 0.5)
+            imu_values = np.zeros((imu_count, imu_feature_count), dtype=np.float32)
+            for imu_index in range(imu_count):
+                sample_time = t - imu_window_sec * (1.0 - imu_index / max(imu_count - 1, 1))
+                position = bisect.bisect_right(imu_times, sample_time) - 1
+                if position < 0 or sample_time - imu_times[position] > max(0.1, imu_window_sec):
+                    continue
+                sample = imu_records[position]
+                values = [
+                    sample.get("accel_x"), sample.get("accel_y"), sample.get("accel_z"),
+                    sample.get("gyro_x"), sample.get("gyro_y"), sample.get("gyro_z"),
+                    sample.get("valid", 1.0),
+                ]
+                for feature_index, value in enumerate(values[:imu_feature_count]):
+                    imu_values[imu_index, feature_index] = float(_finite(value) or 0.0)
+            feed[session_inputs[1].name] = imu_values[None, ...]
         preprocessed = time.perf_counter_ns()
-        outputs = session.run(None, {input_name: tensor})
+        outputs = session.run(None, feed)
         finished = time.perf_counter_ns()
         flat = np.asarray(outputs[0], dtype=np.float32).reshape(-1)
         decoded = {field: float(flat[field_index]) for field_index, field in enumerate(fields) if field_index < flat.size}
         teacher = _nearest(teachers, teacher_times, t, max_control_dt_s)
-        if teacher is None:
+        if task == "control" and teacher is None:
             missing_teacher += 1
         steering_gt = _finite(teacher.get("steering")) if teacher else None
         throttle_gt = _finite(teacher.get("throttle")) if teacher else None
@@ -184,8 +283,7 @@ def _supervised_predictions(
         preprocess_ms = (preprocessed - started) / 1.0e6
         inference_ms = (finished - preprocessed) / 1.0e6
         total_ms = (finished - started) / 1.0e6
-        samples.append(
-            {
+        sample = {
                 "t": round(t, 9),
                 "stamp": str(frame.get("_timestamp_ns") or frame.get("stamp") or ""),
                 "frame_path": str(frame.get("path") or ""),
@@ -212,7 +310,37 @@ def _supervised_predictions(
                 "total_ms": round(total_ms, 6),
                 "missed_deadline": total_ms > deadline_ms,
             }
-        )
+        if task == "trajectory":
+            output_metadata = metadata.get("output") if isinstance(metadata.get("output"), dict) else {}
+            point_count = int(output_metadata.get("points") or max(1, flat.size // 2))
+            scale_m = float(output_metadata.get("scale_m") or 1.0)
+            horizon_sec = float(output_metadata.get("horizon_sec") or 1.5)
+            predicted = (flat[: point_count * 2].reshape(point_count, 2) * scale_m).tolist()
+            ground_truth = _relative_future_trajectory(
+                trajectory,
+                trajectory_times,
+                t,
+                point_count,
+                horizon_sec,
+                max(max_control_dt_s, horizon_sec / point_count),
+            )
+            errors = (
+                [math.hypot(pred[0] - gt[0], pred[1] - gt[1]) for pred, gt in zip(predicted, ground_truth)]
+                if ground_truth is not None
+                else []
+            )
+            sample.update(
+                {
+                    "trajectory_pred": [[round(float(x), 6), round(float(y), 6)] for x, y in predicted],
+                    "trajectory_gt": ground_truth,
+                    "trajectory_point_errors_m": [round(value, 6) for value in errors],
+                    "trajectory_ade_m": round(sum(errors) / len(errors), 6) if errors else None,
+                    "trajectory_fde_m": round(errors[-1], 6) if errors else None,
+                }
+            )
+            if ground_truth is None:
+                missing_teacher += 1
+        samples.append(sample)
         if index and index % 100 == 0:
             progress.update(
                 "e2e_inference",
@@ -227,6 +355,7 @@ def _supervised_predictions(
         "missing_teacher": missing_teacher,
         "steering": control_error_summary(samples, "steering"),
         "throttle": control_error_summary(samples, "throttle"),
+        "trajectory": trajectory_error_summary(samples),
         "preprocess_ms": finite_summary(item["preprocess_ms"] for item in samples),
         "inference_ms": finite_summary(item["inference_ms"] for item in samples),
         "total_ms": finite_summary(item["total_ms"] for item in samples),
@@ -237,6 +366,8 @@ def _supervised_predictions(
         ),
         "session_init_ms": round(session_init_ms, 6),
         "provider": session.get_providers(),
+        "task": task,
+        "architecture": architecture,
     }
     return samples, metrics
 
@@ -640,45 +771,58 @@ def _aggressive_events(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return events
 
 
-def _section_metrics(records: list[dict[str, Any]], trajectory: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _section_metrics(
+    records: list[dict[str, Any]],
+    trajectory: list[dict[str, Any]],
+    task: str,
+) -> list[dict[str, Any]]:
     sections = sorted({str(item.get("section")) for item in [*records, *trajectory] if item.get("section")})
     output: list[dict[str, Any]] = []
     for section in sections:
         control_rows = [item for item in records if str(item.get("section")) == section]
         pose_rows = [item for item in trajectory if str(item.get("section")) == section]
-        output.append(
-            {
-                "section": section,
-                "t_start": min(
-                    (float(item["t"]) for item in [*control_rows, *pose_rows]),
-                    default=None,
-                ),
-                "t_end": max(
-                    (float(item["t"]) for item in [*control_rows, *pose_rows]),
-                    default=None,
-                ),
-                "sample_count": len(control_rows),
-                "pose_count": len(pose_rows),
-                "steering": control_error_summary(control_rows, "steering"),
-                "throttle": control_error_summary(control_rows, "throttle"),
-                "steering_applied": control_error_summary(
-                    control_rows, "steering_applied"
-                ),
-                "throttle_applied": control_error_summary(
-                    control_rows, "throttle_applied"
-                ),
-                "inference_ms": finite_summary(item.get("inference_ms") for item in control_rows),
-                "pipeline_latency_ms": finite_summary(item.get("pipeline_latency_ms") for item in control_rows),
-                "cross_track_error_m": finite_summary(item.get("cross_track_error_m") for item in pose_rows),
-                "speed_mps": finite_summary(item.get("speed_mps") for item in pose_rows),
-                "teacher_free": _teacher_free_metrics(control_rows, pose_rows),
-                "aggressive_event_count": sum(
-                    (_finite(item.get("aggressiveness_score")) or 0.0) >= 60.0
-                    for item in control_rows
-                ),
-                "laps": sorted({int(item.get("lap") or 0) for item in [*control_rows, *pose_rows]}),
-            }
-        )
+        metrics = {
+            "section": section,
+            "t_start": min(
+                (float(item["t"]) for item in [*control_rows, *pose_rows]),
+                default=None,
+            ),
+            "t_end": max(
+                (float(item["t"]) for item in [*control_rows, *pose_rows]),
+                default=None,
+            ),
+            "sample_count": len(control_rows),
+            "pose_count": len(pose_rows),
+            "steering": control_error_summary(control_rows, "steering"),
+            "throttle": control_error_summary(control_rows, "throttle"),
+            "steering_applied": control_error_summary(
+                control_rows, "steering_applied"
+            ),
+            "throttle_applied": control_error_summary(
+                control_rows, "throttle_applied"
+            ),
+            "inference_ms": finite_summary(
+                item.get("inference_ms") for item in control_rows
+            ),
+            "pipeline_latency_ms": finite_summary(
+                item.get("pipeline_latency_ms") for item in control_rows
+            ),
+            "cross_track_error_m": finite_summary(
+                item.get("cross_track_error_m") for item in pose_rows
+            ),
+            "speed_mps": finite_summary(item.get("speed_mps") for item in pose_rows),
+            "trajectory": trajectory_error_summary(control_rows),
+            "aggressive_event_count": sum(
+                (_finite(item.get("aggressiveness_score")) or 0.0) >= 60.0
+                for item in control_rows
+            ),
+            "laps": sorted(
+                {int(item.get("lap") or 0) for item in [*control_rows, *pose_rows]}
+            ),
+        }
+        if task == "control":
+            metrics["teacher_free"] = _teacher_free_metrics(control_rows, pose_rows)
+        output.append(metrics)
     return output
 
 
@@ -693,6 +837,8 @@ def _write_predictions(path: Path, records: list[dict[str, Any]]) -> None:
         "steering_rate_per_s", "throttle_rate_per_s", "speed_mps",
         "longitudinal_accel_mps2", "jerk_mps3", "yaw_rate_radps",
         "lateral_accel_mps2", "aggressiveness_score", "aggressive",
+        "trajectory_pred", "trajectory_gt", "trajectory_point_errors_m",
+        "trajectory_ade_m", "trajectory_fde_m",
     ]
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore")
@@ -763,31 +909,36 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             ),
             "deadline_miss_count": sum(bool(item.get("missed_deadline")) for item in diagnostics),
         }
+    task = str(metrics.get("task") or "control")
     applied_controls = _timed(timeline.get("comparison_controls"))
-    _attach_applied_controls(records, applied_controls)
-    metrics["steering_applied"] = control_error_summary(
-        records, "steering_applied"
-    )
-    metrics["throttle_applied"] = control_error_summary(
-        records, "throttle_applied"
-    )
+    if task == "control":
+        _attach_applied_controls(records, applied_controls)
+        metrics["steering_applied"] = control_error_summary(
+            records, "steering_applied"
+        )
+        metrics["throttle_applied"] = control_error_summary(
+            records, "throttle_applied"
+        )
     _attach_pose_context(records, trajectory)
     recorded_sections = _timed(timeline.get("sections"))
     _attach_recorded_sections(trajectory, recorded_sections)
     _attach_recorded_sections(records, recorded_sections)
-    oscillations = _enrich_control_dynamics(records)
-    for record in records:
-        record["aggressiveness_score"] = _aggressiveness_score(record)
-        record["aggressive"] = record["aggressiveness_score"] >= 60.0
-    _attach_aggressiveness_to_trajectory(trajectory, records)
-    teacher_free = _teacher_free_metrics(records, trajectory, oscillations)
-    events = _aggressive_events(records)
-    teacher_free["event_count"] = len(events)
-    metrics["teacher_free"] = teacher_free
-    sections = _section_metrics(records, trajectory)
+    events: list[dict[str, Any]] = []
+    if task == "control":
+        oscillations = _enrich_control_dynamics(records)
+        for record in records:
+            record["aggressiveness_score"] = _aggressiveness_score(record)
+            record["aggressive"] = record["aggressiveness_score"] >= 60.0
+        _attach_aggressiveness_to_trajectory(trajectory, records)
+        teacher_free = _teacher_free_metrics(records, trajectory, oscillations)
+        events = _aggressive_events(records)
+        teacher_free["event_count"] = len(events)
+        metrics["teacher_free"] = teacher_free
+    sections = _section_metrics(records, trajectory, task)
     e2e_payload = {
         "schema_version": 2,
         "mode": args.mode,
+        "task": task,
         "model": str(Path(args.model).resolve()) if args.model else "",
         "provider": args.provider,
         "teacher_topic": args.teacher_topic,

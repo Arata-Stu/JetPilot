@@ -151,6 +151,20 @@ def _pose_payload(pose: Any) -> dict[str, float]:
     }
 
 
+def _imu_payload(message: Any) -> dict[str, float]:
+    acceleration = getattr(message, "linear_acceleration", None)
+    angular = getattr(message, "angular_velocity", None)
+    return {
+        "accel_x": _finite(getattr(acceleration, "x", 0.0)) / 9.80665,
+        "accel_y": _finite(getattr(acceleration, "y", 0.0)) / 9.80665,
+        "accel_z": _finite(getattr(acceleration, "z", 0.0)) / 9.80665,
+        "gyro_x": _finite(getattr(angular, "x", 0.0)) / 5.0,
+        "gyro_y": _finite(getattr(angular, "y", 0.0)) / 5.0,
+        "gyro_z": _finite(getattr(angular, "z", 0.0)) / 5.0,
+        "valid": 1.0,
+    }
+
+
 def _speed_from_twist(twist: Any) -> float | None:
     if twist is None:
         return None
@@ -1056,6 +1070,7 @@ class AnalysisOptions:
     comparison_control_topic: str = ""
     section_topic: str = ""
     e2e_diagnostic_topic: str = ""
+    imu_topic: str = ""
     map_dir: Path | None = None
     trajectory_snapshot: Path | None = None
     status_file: Path | None = None
@@ -1193,6 +1208,7 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
         options.speed_topic,
         options.section_topic,
         options.e2e_diagnostic_topic,
+        options.imu_topic,
     ):
         if topic:
             requested.add(topic)
@@ -1218,6 +1234,7 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
     modes: list[dict[str, object]] = []
     sections: list[dict[str, object]] = []
     e2e_diagnostics: list[dict[str, object]] = []
+    imu_samples: list[dict[str, object]] = []
     speeds: list[dict[str, object]] = []
     trajectory: list[dict[str, object]] = []
     jetson_samples: list[dict[str, object]] = []
@@ -1349,6 +1366,8 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
             payload = _e2e_diagnostic_payload(message)
             if payload is not None:
                 e2e_diagnostics.append({**common, **payload})
+        if options.imu_topic and topic == options.imu_topic:
+            imu_samples.append({**common, **_imu_payload(message)})
         if options.speed_topic and topic == options.speed_topic:
             value = _explicit_speed(message)
             if value is not None:
@@ -1416,6 +1435,7 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
         modes,
         sections,
         e2e_diagnostics,
+        imu_samples,
         speeds,
         trajectory,
         jetson_samples,
@@ -1438,6 +1458,7 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
     modes = _downsample(modes)
     sections = _downsample(sections)
     e2e_diagnostics = _downsample(e2e_diagnostics)
+    imu_samples = _downsample(imu_samples)
     speeds = _downsample(speeds)
     jetson_series_by_id: dict[str, dict[str, object]] = {}
     for sample in jetson_samples:
@@ -1560,6 +1581,7 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
         "modes": modes,
         "sections": sections,
         "e2e_diagnostics": e2e_diagnostics,
+        "imu": imu_samples,
         "speeds": speeds,
         "trajectory": {
             "source": trajectory_source,
@@ -1601,6 +1623,7 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
                 "mode": options.mode_topic,
                 "section": options.section_topic,
                 "e2e_diagnostics": options.e2e_diagnostic_topic,
+                "imu": options.imu_topic,
                 "pose": options.pose_topic,
                 "speed": options.speed_topic,
                 "jetson_stats": jetson_diagnostic_topics,
@@ -1619,6 +1642,7 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
                 "modes": len(modes),
                 "sections": len(sections),
                 "e2e_diagnostics": len(e2e_diagnostics),
+                "imu": len(imu_samples),
                 "speeds": len(speeds),
                 "trajectory": len(trajectory),
                 "jetson_stats": sum(
@@ -1767,6 +1791,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--comparison-control-topic", default="")
     parser.add_argument("--section-topic", default="")
     parser.add_argument("--e2e-diagnostic-topic", default="")
+    parser.add_argument("--imu-topic", default="")
     parser.add_argument("--map-dir", default="")
     parser.add_argument("--trajectory-snapshot", default="")
     parser.add_argument("--status-file", default="")
@@ -1828,6 +1853,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     comparison_control_topic=args.comparison_control_topic,
                     section_topic=args.section_topic,
                     e2e_diagnostic_topic=args.e2e_diagnostic_topic,
+                    imu_topic=args.imu_topic,
                     map_dir=Path(args.map_dir).expanduser().resolve() if args.map_dir else None,
                     trajectory_snapshot=(
                         Path(args.trajectory_snapshot).expanduser().resolve()
