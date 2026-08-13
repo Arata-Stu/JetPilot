@@ -79,13 +79,28 @@ Jetson 固有の監視ツール、電力・パフォーマンスモード、Wi-F
 ### 4.1 jetson-stats (`jtop`)
 
 Jetson の状態確認に使用する `jetson-stats` をインストールします。
+ホスト上のサービスとコンテナ内のクライアントは `/run/jtop.sock` 経由で通信するため、
+Dockerfile と同じ不変コミットに固定します。`master` やブランチは使用しないでください。
 
 ```bash
-sudo pip3 install --break-system-packages git+https://github.com/rbonghi/jetson_stats.git
+JETSON_STATS_REF=3c1ba9ac49a1307c9d7c53646bb70ba8c16b8759
+sudo python3 -m pip install --break-system-packages --force-reinstall \
+  "jetson-stats @ git+https://github.com/rbonghi/jetson_stats.git@${JETSON_STATS_REF}"
+python3 -c 'import jtop; print(jtop.__version__)'  # 7.2.0
+
+# ホストサービスへ更新を反映します。
+sudo systemctl restart jtop.service
 
 # インストール後、必要に応じて再ログインまたは再起動してから確認します。
 jtop
 ```
+
+このコミットは `jetson-stats` のタグ `7.2.0` が指すリビジョンです。コンテナ側では、
+VPI の任意依存ライブラリが存在しない場合にも診断ノードを継続できる限定的なパッチを
+適用しています。通信プロトコル上のバージョンはホストと同じ `7.2.0` のままです。
+また、Docker の JetPack 7.2 Orin レイヤーは、ホストに合わせて
+`nvidia-l4t-core` と `nvidia-l4t-multimedia-utils` を
+`39.2.0-20260601141651`、`libnvvpi4` を `4.1.3` に固定しています。
 
 ### 4.2 パフォーマンスモードの変更
 
