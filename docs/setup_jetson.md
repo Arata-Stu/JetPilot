@@ -84,7 +84,7 @@ Dockerfile と同じ不変コミットに固定します。`master` やブラン
 
 ```bash
 JETSON_STATS_REF=3c1ba9ac49a1307c9d7c53646bb70ba8c16b8759
-sudo python3 -m pip install --break-system-packages --force-reinstall \
+sudo python3 -m pip install --break-system-packages --force-reinstall --no-deps \
   "jetson-stats @ git+https://github.com/rbonghi/jetson_stats.git@${JETSON_STATS_REF}"
 python3 -c 'import jtop; print(jtop.__version__)'  # 7.2.0
 
@@ -94,6 +94,9 @@ sudo systemctl restart jtop.service
 # インストール後、必要に応じて再ログインまたは再起動してから確認します。
 jtop
 ```
+
+`--no-deps` は、APTで導入された `python3-distro` などをpipが上書き・削除しようとするのを
+防ぎます。JetsonホストではOS管理のPython依存パッケージをそのまま使用します。
 
 このコミットは `jetson-stats` のタグ `7.2.0` が指すリビジョンです。コンテナ側では、
 VPI の任意依存ライブラリが存在しない場合にも診断ノードを継続できる限定的なパッチを
