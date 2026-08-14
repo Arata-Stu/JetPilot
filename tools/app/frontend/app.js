@@ -262,6 +262,7 @@ const state = {
     pendingFrameKey: "",
     frameRequestSerial: 0,
     channelRender: {},
+    visualFailures: {},
     jetsonSelectedSeries: [],
     e2eMode: "supervised",
     e2eModelPath: "",
@@ -3266,7 +3267,7 @@ function renderAnalysisCards(items) {
         ${mapPath ? `<div class="path" title="${esc(mapPath)}">Map: ${esc(mapPath)}</div>` : ""}
         ${missing.length ? `<div class="analysis-missing"><strong>Missing / degraded data</strong>${missing.slice(0, 4).map((message) => `<span>${esc(message)}</span>`).join("")}</div>` : ""}
         <div class="actions">
-          <button class="${status === "success" ? "primary" : ""}" onclick="openAnalysisResult(${js(id)})" ${id && canOpen ? "" : "disabled"}>${selected && state.analysis.timeline ? "Viewing" : canOpen ? "Open" : "Processing"}</button>
+          <button class="${status === "success" ? "primary" : ""}" onclick="focusAnalysisResult(${js(id)})" ${id && canOpen && !(selected && state.analysis.loadingResult) ? "" : "disabled"}>${selected && state.analysis.loadingResult ? "Loading..." : selected && state.analysis.timeline ? "Viewing" : canOpen ? "Open" : "Processing"}</button>
           ${taskId ? `<button onclick="openTaskLog(${js(taskId)})">Log</button><button class="danger ${actionBusy(`task:stop:${taskId}`) ? "is-busy" : ""}" onclick="stopTask(${js(taskId)})" ${["running", "queued"].includes(status) ? "" : "disabled"} ${actionButtonAttrs(`task:stop:${taskId}`, "Stop request is being sent...")}>${esc(actionButtonLabel(`task:stop:${taskId}`, "Stop", "Stopping..."))}</button>` : ""}
           <button class="danger" onclick="deleteAnalysis(${js(id)})" ${["running", "queued"].includes(status) ? "disabled" : ""} title="Delete this analysis and all its data">Delete</button>
         </div>
@@ -3855,6 +3856,15 @@ async function openAnalysisResult(id) {
   const selectedId = String(id || "");
   if (!selectedId) return;
   const selectedRecord = state.analysis.analyses.find((item) => analysisRecordId(item) === selectedId);
+  const previousResult = {
+    selectedId: state.analysis.selectedId,
+    detail: state.analysis.detail,
+    timeline: state.analysis.timeline,
+    mapDetail: state.analysis.mapDetail,
+    currentTime: state.analysis.currentTime,
+    visualFailures: state.analysis.visualFailures,
+  };
+  let loadError = null;
   pauseAnalysisPlayback();
   state.analysis.selectedId = selectedId;
   state.analysis.loadingResult = true;
@@ -3862,6 +3872,7 @@ async function openAnalysisResult(id) {
   state.analysis.timeline = null;
   state.analysis.mapDetail = null;
   state.analysis.currentTime = 0;
+  state.analysis.visualFailures = {};
   resetAnalysisFrameRenderState();
   state.tab = analysisRecordKind(selectedRecord) === "e2e" ? "e2e-analysis" : "bag-analysis";
   render();
@@ -3885,14 +3896,40 @@ async function openAnalysisResult(id) {
     }
   } catch (error) {
     if (state.analysis.selectedId === selectedId) {
-      toast(`Analysis result is not ready: ${error.message}`, "error");
+      loadError = error;
+      if (previousResult.timeline) {
+        state.analysis.selectedId = previousResult.selectedId;
+        state.analysis.detail = previousResult.detail;
+        state.analysis.timeline = previousResult.timeline;
+        state.analysis.mapDetail = previousResult.mapDetail;
+        state.analysis.currentTime = previousResult.currentTime;
+        state.analysis.visualFailures = previousResult.visualFailures;
+      }
     }
   } finally {
     if (state.analysis.selectedId === selectedId) {
       state.analysis.loadingResult = false;
+      if (isAnalysisTab()) {
+        render();
+        if (state.analysis.timeline) {
+          requestAnimationFrame(() => $("analysis-viewer-body")?.scrollIntoView({ behavior: "smooth", block: "start" }));
+        }
+      }
+    } else if (state.analysis.selectedId === previousResult.selectedId) {
+      state.analysis.loadingResult = false;
       if (isAnalysisTab()) render();
     }
+    if (loadError) toast(`Analysis result is not ready: ${loadError.message}`, "error");
   }
+}
+
+function focusAnalysisResult(id) {
+  const selectedId = String(id || "");
+  if (selectedId && selectedId === state.analysis.selectedId && state.analysis.timeline) {
+    $("analysis-viewer-body")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    return;
+  }
+  return openAnalysisResult(selectedId);
 }
 
 function reloadAnalysisResult() {
@@ -3979,7 +4016,7 @@ function normalizeJetsonStats(raw) {
         .map((sample) => ({ t: sample.t, value: Number(sample.value) }))
         .filter((sample) => Number.isFinite(sample.value));
       if (!samples.length) return null;
-      const values = samples.map((sample) => sample.value);
+      const range = finiteNumberRange(samples, (sample) => sample.value);
       return {
         id: String(item.id || item.label || ""),
         label: String(item.label || item.id || ""),
@@ -3988,8 +4025,8 @@ function normalizeJetsonStats(raw) {
         source: String(item.source || ""),
         key: String(item.key || ""),
         order: Number(item.order) || 99,
-        min: Number.isFinite(Number(item.min)) ? Number(item.min) : Math.min(...values),
-        max: Number.isFinite(Number(item.max)) ? Number(item.max) : Math.max(...values),
+        min: Number.isFinite(Number(item.min)) ? Number(item.min) : range.min,
+        max: Number.isFinite(Number(item.max)) ? Number(item.max) : range.max,
         samples,
       };
     })
@@ -4027,6 +4064,26 @@ function normalizeTimedRecords(raw) {
     })
     .filter((item) => item && Number.isFinite(item.t))
     .sort((a, b) => a.t - b.t);
+}
+
+function finiteNumberRange(records, valueOf) {
+  return (records || []).reduce((range, record) => {
+    const raw = valueOf(record);
+    const values = Array.isArray(raw) ? raw : [raw];
+    values.forEach((value) => {
+      const number = Number(value);
+      if (!Number.isFinite(number)) return;
+      range.min = Math.min(range.min, number);
+      range.max = Math.max(range.max, number);
+      range.count += 1;
+    });
+    return range;
+  }, { min: Infinity, max: -Infinity, count: 0 });
+}
+
+function finiteNumberMaximum(records, valueOf, fallback = 0) {
+  const range = finiteNumberRange(records, valueOf);
+  return range.count ? Math.max(fallback, range.max) : fallback;
 }
 
 function analysisFrames(timeline = state.analysis.timeline || {}) {
@@ -4180,9 +4237,14 @@ function analysisPlaybackTick(now) {
   const duration = analysisDuration();
   state.analysis.currentTime = Math.min(duration, state.analysis.currentTime + elapsed * state.analysis.playbackRate);
   if (state.analysis.currentTime >= duration) state.analysis.playing = false;
-  updateAnalysisPlaybackDom();
-  if (state.analysis.playing) state.analysis.rafId = requestAnimationFrame(analysisPlaybackTick);
-  else stopAnalysisAnimationFrame();
+  try {
+    updateAnalysisPlaybackDom();
+  } catch (error) {
+    handleAnalysisPlaybackError(error);
+  } finally {
+    if (state.analysis.playing) state.analysis.rafId = requestAnimationFrame(analysisPlaybackTick);
+    else stopAnalysisAnimationFrame();
+  }
 }
 
 function toggleAnalysisPlayback() {
@@ -4192,11 +4254,29 @@ function toggleAnalysisPlayback() {
     return;
   }
   const duration = analysisDuration();
+  if (!(duration > 0)) {
+    toast("This analysis has no playable timeline.", "error");
+    return;
+  }
   if (state.analysis.currentTime >= duration) state.analysis.currentTime = 0;
   state.analysis.playing = true;
   state.analysis.lastTickMs = 0;
-  updateAnalysisPlaybackDom(true);
-  startAnalysisAnimationFrame();
+  try {
+    updateAnalysisPlaybackDom(true);
+    startAnalysisAnimationFrame();
+  } catch (error) {
+    handleAnalysisPlaybackError(error);
+  }
+}
+
+function handleAnalysisPlaybackError(error) {
+  state.analysis.playing = false;
+  stopAnalysisAnimationFrame();
+  const playButton = $("analysis-play-button");
+  if (playButton) playButton.textContent = "Play";
+  const message = error instanceof Error ? error.message : String(error || "unknown error");
+  console.error("Analysis playback stopped", error);
+  toast(`Playback stopped: ${message}`, "error");
 }
 
 function pauseAnalysisPlayback() {
@@ -4463,7 +4543,7 @@ function updateAnalysisMultiFrame(frames, index, time, channels, selectedChannel
       else if (delta) parts.push(`${delta >= 0 ? "+" : ""}${delta}ms`);
       captionMeta.textContent = parts.join(" / ");
     }
-    if (!targetImg || key === renderState.key || key === renderState.pendingKey) {
+    if (!targetImg || key === renderState.key || renderState.pendingKey) {
       state.analysis.channelRender[channel] = renderState;
       return;
     }
@@ -4512,7 +4592,7 @@ function updateAnalysisMultiFrame(frames, index, time, channels, selectedChannel
   }
 }
 
-function updateAnalysisFrame(time) {
+function updateAnalysisFrame(time, force = false) {
   const frames = analysisFrames();
   const imgA = $("analysis-frame-image-a");
   const imgB = $("analysis-frame-image-b");
@@ -4568,6 +4648,13 @@ function updateAnalysisFrame(time) {
 
   const url = analysisAssetUrl(currentFrame, selectedChannel);
   const frameKey = `${index}|${selectedChannel || ""}|${url}`;
+  if (state.analysis.pendingFrameKey && !force) {
+    const frameTime = $("analysis-frame-time");
+    if (frameTime) {
+      frameTime.textContent = `${formatAnalysisClock(time)} / frame ${index + 1} of ${frames.length} (loading)`;
+    }
+    return;
+  }
   if (
     url
     && frameKey !== state.analysis.renderedFrameKey
@@ -4672,7 +4759,7 @@ function updateAnalysisPlaybackDom(force = false) {
   if (clock) clock.textContent = `${formatAnalysisClock(time)} / ${formatAnalysisClock(duration)}`;
   const playButton = $("analysis-play-button");
   if (playButton) playButton.textContent = state.analysis.playing ? "Pause" : "Play";
-  updateAnalysisFrame(time);
+  updateAnalysisFrame(time, force);
 
   const timeline = state.analysis.timeline;
   const control = timedRecordAt(timeline.controls || [], time);
@@ -4715,10 +4802,10 @@ function updateAnalysisPlaybackDom(force = false) {
 
   const now = performance.now();
   if (force || now - state.analysis.lastVisualUpdateMs >= 32) {
-    drawAnalysisTimeline();
-    drawJetsonStatsChart();
-    drawAnalysisMap();
-    drawE2ETrajectory();
+    drawAnalysisVisual("timeline", drawAnalysisTimeline);
+    drawAnalysisVisual("Jetson chart", drawJetsonStatsChart);
+    drawAnalysisVisual("map", drawAnalysisMap);
+    drawAnalysisVisual("E2E trajectory", drawE2ETrajectory);
     state.analysis.lastVisualUpdateMs = now;
   }
 }
@@ -4744,8 +4831,22 @@ function analysisCanvasContext(canvas, fallbackHeight) {
     canvas.height = pixelHeight;
   }
   const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   return { ctx, width, height };
+}
+
+function drawAnalysisVisual(name, draw) {
+  state.analysis.visualFailures = state.analysis.visualFailures || {};
+  if (state.analysis.visualFailures[name]) return;
+  try {
+    draw();
+  } catch (error) {
+    state.analysis.visualFailures[name] = true;
+    console.error(`Analysis ${name} rendering failed`, error);
+    const message = error instanceof Error ? error.message : String(error || "unknown error");
+    toast(`${name} rendering disabled for this result: ${message}`, "error");
+  }
 }
 
 function drawAnalysisTimeline() {
@@ -4754,24 +4855,30 @@ function drawAnalysisTimeline() {
   if (!canvas || !timeline) return;
   const e2e = timeline.e2e?.mode ? timeline.e2e : null;
   const predictions = e2e?.predictions || [];
-  const errors = predictions.flatMap((item) => [Math.abs(Number(item.steering_error ?? item.steering_applied_error)), Math.abs(Number(item.throttle_error ?? item.throttle_applied_error))]).filter(Number.isFinite);
-  const errorMax = Math.max(0.1, ...errors) * 1.1;
+  const recordedAppliedControls = e2e?.recorded_applied_controls || [];
+  const errorMax = finiteNumberMaximum(predictions, (item) => [
+    Math.abs(Number(item.steering_error ?? item.steering_applied_error)),
+    Math.abs(Number(item.throttle_error ?? item.throttle_applied_error)),
+  ], 0.1) * 1.1;
   const latencyRecords = (e2e?.latency || []).length ? e2e.latency : predictions;
-  const latencyMax = Math.max(1, ...latencyRecords.map((item) => Number(item.capture_to_command_ms ?? item.total_ms ?? item.inference_ms)).filter(Number.isFinite)) * 1.08;
+  const latencyMax = finiteNumberMaximum(latencyRecords, (item) => item.capture_to_command_ms ?? item.total_ms ?? item.inference_ms, 1) * 1.08;
   const dynamicsRecords = analysisTrajectory(timeline).samples || [];
-  const dynamicsMax = Math.max(1, ...dynamicsRecords.flatMap((item) => [Math.abs(Number(item.longitudinal_accel_mps2)), Math.abs(Number(item.lateral_accel_mps2))]).filter(Number.isFinite)) * 1.08;
-  const jerkMax = Math.max(1, ...dynamicsRecords.map((item) => Math.abs(Number(item.jerk_mps3))).filter(Number.isFinite)) * 1.08;
+  const dynamicsMax = finiteNumberMaximum(dynamicsRecords, (item) => [
+    Math.abs(Number(item.longitudinal_accel_mps2)),
+    Math.abs(Number(item.lateral_accel_mps2)),
+  ], 1) * 1.08;
+  const jerkMax = finiteNumberMaximum(dynamicsRecords, (item) => Math.abs(Number(item.jerk_mps3)), 1) * 1.08;
   const trajectoryTracks = [
     {
       label: "TRAJECTORY ADE m",
       min: 0,
-      max: Math.max(0.1, ...predictions.map((item) => Number(item.trajectory_ade_m)).filter(Number.isFinite)) * 1.1,
+      max: finiteNumberMaximum(predictions, (item) => item.trajectory_ade_m, 0.1) * 1.1,
       lines: [{ records: predictions, value: (item) => item.trajectory_ade_m, color: "#5aa8ff" }],
     },
     {
       label: "TRAJECTORY FDE m",
       min: 0,
-      max: Math.max(0.1, ...predictions.map((item) => Number(item.trajectory_fde_m)).filter(Number.isFinite)) * 1.1,
+      max: finiteNumberMaximum(predictions, (item) => item.trajectory_fde_m, 0.1) * 1.1,
       lines: [{ records: predictions, value: (item) => item.trajectory_fde_m, color: "#f0b35a" }],
     },
     {
@@ -4795,7 +4902,7 @@ function drawAnalysisTimeline() {
       lines: [
         { records: predictions, value: (item) => item.steering_gt, color: "#d8dee9" },
         { records: predictions, value: (item) => item.steering_pred ?? item.steering, color: "#5aa8ff" },
-        { records: e2e.recorded_applied_controls || [], value: (item) => item.steering, color: "#bd93f9" },
+        { records: recordedAppliedControls, value: (item) => item.steering, color: "#bd93f9" },
       ],
     },
     {
@@ -4805,7 +4912,7 @@ function drawAnalysisTimeline() {
       lines: [
         { records: predictions, value: (item) => item.throttle_gt, color: "#d8dee9" },
         { records: predictions, value: (item) => item.throttle_pred ?? item.throttle, color: "#45c478" },
-        { records: e2e.recorded_applied_controls || [], value: (item) => item.throttle, color: "#bd93f9" },
+        { records: recordedAppliedControls, value: (item) => item.throttle, color: "#bd93f9" },
       ],
     },
     {
@@ -5107,9 +5214,16 @@ function drawJetsonStatsChart() {
     const y = top + index * trackHeight;
     const innerTop = y + 8;
     const innerHeight = Math.max(24, trackHeight - 18);
-    const values = trackSeries.flatMap((item) => item.samples.map((sample) => Number(sample.value))).filter(Number.isFinite);
-    let min = values.length ? Math.min(...values) : 0;
-    let max = values.length ? Math.max(...values) : 1;
+    const valueRange = trackSeries.reduce((range, item) => {
+      const itemRange = finiteNumberRange(item.samples, (sample) => sample.value);
+      if (!itemRange.count) return range;
+      range.min = Math.min(range.min, itemRange.min);
+      range.max = Math.max(range.max, itemRange.max);
+      range.count += itemRange.count;
+      return range;
+    }, { min: Infinity, max: -Infinity, count: 0 });
+    let min = valueRange.count ? valueRange.min : 0;
+    let max = valueRange.count ? valueRange.max : 1;
     if (unit === "%") {
       min = 0;
       max = Math.max(100, max);
@@ -5328,8 +5442,8 @@ function drawAnalysisMap(backgroundImage = undefined) {
     if (cached?.complete) image = cached.naturalWidth ? cached : null;
     else {
       const loading = cached || new Image();
-      loading.onload = () => drawAnalysisMap(loading);
-      loading.onerror = () => drawAnalysisMap(null);
+      loading.onload = () => drawAnalysisVisual("map", () => drawAnalysisMap(loading));
+      loading.onerror = () => drawAnalysisVisual("map", () => drawAnalysisMap(null));
       if (!cached) {
         mapPreviewImages.set(imageUrl, loading);
         loading.src = imageUrl;
@@ -10085,6 +10199,7 @@ window.refreshAnalysisData = refreshAnalysisData;
 window.startBagAnalysis = startBagAnalysis;
 window.startE2EAnalysis = startE2EAnalysis;
 window.openAnalysisResult = openAnalysisResult;
+window.focusAnalysisResult = focusAnalysisResult;
 window.reloadAnalysisResult = reloadAnalysisResult;
 window.deleteAnalysis = deleteAnalysis;
 window.deleteRosbag = deleteRosbag;
