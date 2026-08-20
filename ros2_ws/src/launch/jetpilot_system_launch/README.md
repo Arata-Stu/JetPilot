@@ -6,7 +6,7 @@ JetPilot 全体の bringup をまとめる launch package です。tool、operat
 
 | Launch | 用途 |
 | --- | --- |
-| `bringup.launch.py` | 実機・offline replay 共通の統合 bringup |
+| `bringup.launch.py` | 実機・offline replay 共通の統合bringupと独立したFoxglove bridge |
 | `tool.launch.py` | joy、teleop、bag manager、VSLAM snapshot recorder |
 | `control.launch.py` | `jetpilot_controller` を起動 |
 | `localization.launch.py` | Isaac ROS VSLAM/VGL、localization manager、HD map publisher |
@@ -65,6 +65,73 @@ SilkyEvCam/OpenEBを含むsensor kitでは、RAW記録機能が既定で待機�
 MCAPとRAWのduration分割は`config/tool/bag_manager.param.yaml`の`recording_split_duration_s`で一括指定します。統合launchにはRAW専用の分割引数を公開していないため、異なるdurationは指定できません。`0`は分割無効、例えば`600`は両方を約10分周期で分割します。
 
 Jetson 上の通常起動では `isaac_ros_jetson_stats` が既定で有効になり、診断情報を `/jetson/diagnostics` へ publish します。必要に応じて `enable_jetson_stats:=false` で無効化できます。x86 imageには同packageが配布されないため既定で無効になり、明示的な有効化も拒否します。`scripts/bringup.sh` のオフライン再生プリセットでは tool stack自体を停止するため、Jetson statsも起動しません。
+
+## Foxglove bridge
+
+Foxglove bridgeは既定OFFで、`enable_foxglove:=true`または`bringup.sh`の
+`foxglove` componentを選んだ場合だけ起動します。既定portは`8767`です。JetPilot Consoleの
+`8765`とJoy profile editorの`8766`を避けています。VSLAMのmap座標系に揃えたHD map表示と
+initial pose指定だけを含む
+最小構成は次のとおりです。
+
+```bash
+/workspaces/scripts/bringup.sh custom \
+  --components sensor,hd-map,foxglove \
+  --map /workspaces/map/course_a
+```
+
+既定のoutbound whitelistは`/tf`、`/tf_static`、`/clock`、末尾が`/diagnostics`のtopic、
+選択したlocalization stateとHD mapのmarker/path topic、
+VSLAM odometryの`/visual_slam/tracking/odometry`、VGL poseの
+`/visual_localization/pose`だけです。画像、point cloud、OccupancyGridのtopicは含めません。
+service呼び出しとparameter操作は無効です。Foxglove bridge独自のsysinfoも、jtop由来の
+`/jetson/diagnostics`と重複するため`false`にしています。
+後から接続したclientでも複数の`/tf_static` publisherからTFを受け取れるよう、QoS historyの
+上限は`25`を維持します。
+
+基準frameはIsaac ROS VSLAMの`map`です。HD mapも同じ座標系から生成されているため、
+OccupancyGridは使用しません。Foxgloveの3D panelではdisplay frameを`map`にし、
+`/hd_map/lane_markers`、`/hd_map/section_markers`、必要なら
+`/hd_map/primary_centerline_path`を表示します。initial poseはclick-to-publishの
+**2D pose estimate**を選び、publish先を`/initialpose`に設定します。
+map directoryには既定で`<map_dir>/<map_dir_name>_hd_map.yaml`が必要です。別の場所にある場合は
+`hd_map_yaml_path`を明示します。
+
+Foxglove Bridge 3.4.xには、`client_topic_whitelist`を読み込んでもclient publish時に適用しない
+上流不具合があります。initial pose入力のため`clientPublish`を有効にしているので、接続clientは
+実際には他のROS topicにもpublishできます。信頼できるclientだけで使用してください。
+`/initialpose`の設定値は将来の上流修正に備えて残しています。
+
+portとoutbound whitelistはbringup引数で変更できます。
+
+```bash
+/workspaces/scripts/bringup.sh custom \
+  --components hd-map,foxglove \
+  --map /workspaces/map/course_a \
+  --set foxglove_port:=8877 \
+  --set 'foxglove_topic_whitelist:=["^/tf$", "^/tf_static$", "^/hd_map/.*$"]'
+```
+
+既定の`foxglove_address:=0.0.0.0`は信頼できるLAN内だけで使用してください。bridgeを
+Jetsonのnetwork interfaceへ公開しない場合はloopbackへbindし、notebookからSSH tunnelを
+使用します。
+
+```bash
+# Jetson
+/workspaces/scripts/bringup.sh custom \
+  --components sensor,hd-map,foxglove \
+  --map /workspaces/map/course_a \
+  -- foxglove_address:=127.0.0.1
+
+# Notebook
+ssh -N -L 8767:127.0.0.1:8767 jetson@JETSON_IP
+```
+
+この場合はFoxgloveから`ws://localhost:8767`へ接続します。画像を購読しない構成では継続的な
+CPU負荷は小さい想定ですが、TFのrate、HD map markerの更新サイズ、接続client数に依存します。
+実機ではjtopを使い、bridge OFF、bridge ONかつ未接続、Foxglove接続後に実際のpanelとtopicを
+購読した状態の3条件を比較してください。静的HD map markerはpanelの購読開始時に一時的な転送負荷が
+発生することがあります。
 
 ## Topic flow
 

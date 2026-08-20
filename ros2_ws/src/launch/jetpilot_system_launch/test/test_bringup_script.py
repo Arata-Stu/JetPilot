@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import ast
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -585,6 +587,116 @@ def test_custom_components_can_be_selected_in_one_argument() -> None:
     assert "enable_vehicle:=true" in output
     assert "vehicle_interface_pkg:=jetpilot_vesc_interface" in output
     assert "enable_localization:=false" in output
+
+
+def test_foxglove_is_opt_in_with_hd_map_defaults() -> None:
+    default_output = run_launcher("sensor", "--dry-run").stdout
+    enabled_output = run_launcher(
+        "custom",
+        "--components",
+        "sensor,hd-map,foxglove",
+        "--map",
+        "/workspaces/map/course_a",
+        "--dry-run",
+    ).stdout
+
+    assert "enable_foxglove:=false" in default_output
+    assert "Foxglove     : disabled" in default_output
+    assert "enable_foxglove:=true" in enabled_output
+    assert "enable_hd_map_publisher:=true" in enabled_output
+    assert "foxglove_address:=0.0.0.0" in enabled_output
+    assert "foxglove_port:=8767" in enabled_output
+    assert "initialpose" in enabled_output
+    assert "lane_markers" in enabled_output
+    assert "diagnostics" in enabled_output
+    assert "Foxglove     : bind 0.0.0.0:8767" in enabled_output
+
+
+def test_foxglove_rejects_invalid_ports() -> None:
+    for port in ("0", "65536", "not-a-port"):
+        result = run_launcher(
+            "custom",
+            "--components",
+            "foxglove",
+            "--set",
+            f"foxglove_port:={port}",
+            "--dry-run",
+            check=False,
+        )
+
+        assert result.returncode != 0
+        assert "foxglove_port must be an integer between 1 and 65535" in result.stderr
+
+
+def test_foxglove_launch_contract_excludes_high_bandwidth_topics() -> None:
+    launch_path = (
+        PROJECT_ROOT
+        / "ros2_ws/src/launch/jetpilot_system_launch/launch/bringup.launch.py"
+    )
+    launch_source = launch_path.read_text(encoding="utf-8")
+    launcher_source = LAUNCHER.read_text(encoding="utf-8")
+    package_xml = launch_path.parents[1].joinpath("package.xml").read_text(
+        encoding="utf-8"
+    )
+    launch_tree = ast.parse(launch_source)
+    default_whitelist = None
+    for node in launch_tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if any(
+            isinstance(target, ast.Name)
+            and target.id == "_DEFAULT_FOXGLOVE_TOPIC_WHITELIST"
+            for target in node.targets
+        ):
+            default_whitelist = ast.literal_eval(node.value)
+            break
+
+    assert default_whitelist is not None
+    patterns = ast.literal_eval(default_whitelist)
+    assert "^/map$" not in patterns
+    assert "^/(.*/)?diagnostics$" in patterns
+    assert "^/visual_slam/tracking/odometry$" in patterns
+    assert (
+        "^/localization/(pose_hint_required|pose_hint_state|current_section|"
+        "current_section_marker)$"
+    ) in patterns
+    assert (
+        "^/hd_map/(lane_markers|section_markers|primary_centerline_path)$"
+        in patterns
+    )
+    assert all("image" not in pattern for pattern in patterns)
+    assert all(
+        "points" not in pattern and "landmarks" not in pattern
+        for pattern in patterns
+    )
+    compiled_patterns = [re.compile(pattern) for pattern in patterns]
+    for excluded_topic in (
+        "/realsense/color/image_raw",
+        "/visual_slam/vis/landmarks_cloud",
+        "/localization/debug/image",
+        "/hd_map/debug/points",
+    ):
+        assert not any(
+            pattern.fullmatch(excluded_topic) for pattern in compiled_patterns
+        )
+    assert (
+        f'FOXGLOVE_DEFAULT_TOPIC_WHITELIST="{default_whitelist}"'
+        in launcher_source
+    )
+    assert (
+        "'client_topic_whitelist': args.foxglove_client_topic_whitelist"
+        in launch_source
+    )
+    assert "Foxglove 3.4.x parses but does not enforce this whitelist" in (
+        launch_source
+    )
+    assert "'service_whitelist': \"['^$']\"" in launch_source
+    assert "'param_whitelist': \"['^$']\"" in launch_source
+    assert "'capabilities': '[clientPublish]'" in launch_source
+    assert "'max_qos_depth': '25'" in launch_source
+    assert "'sysinfo': 'false'" in launch_source
+    assert "'foxglove_bridge'," in launch_source
+    assert "<exec_depend>foxglove_bridge</exec_depend>" in package_xml
 
 
 def test_custom_control_enables_planning_and_pure_pursuit() -> None:

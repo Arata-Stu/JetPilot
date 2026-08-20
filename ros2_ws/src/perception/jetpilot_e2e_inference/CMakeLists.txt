@@ -14,7 +14,9 @@ ament_auto_add_library(${PROJECT_NAME}_control_decoder_node SHARED
   src/e2e_control_decoder_node.cpp
 )
 target_compile_features(${PROJECT_NAME}_control_decoder_node PUBLIC cxx_std_17)
-target_link_libraries(${PROJECT_NAME}_control_decoder_node PRIVATE CUDA::cudart)
+# ament_auto_add_library uses the plain target_link_libraries signature.
+# Keep later link additions plain as well; CMake rejects mixed signatures.
+target_link_libraries(${PROJECT_NAME}_control_decoder_node CUDA::cudart)
 rclcpp_components_register_node(${PROJECT_NAME}_control_decoder_node
   PLUGIN "jetpilot_e2e_inference::E2EControlDecoderNode"
   EXECUTABLE e2e_control_decoder_node
@@ -24,7 +26,7 @@ ament_auto_add_library(${PROJECT_NAME}_trajectory_decoder_node SHARED
   src/e2e_trajectory_decoder_node.cpp
 )
 target_compile_features(${PROJECT_NAME}_trajectory_decoder_node PUBLIC cxx_std_17)
-target_link_libraries(${PROJECT_NAME}_trajectory_decoder_node PRIVATE CUDA::cudart)
+target_link_libraries(${PROJECT_NAME}_trajectory_decoder_node CUDA::cudart)
 rclcpp_components_register_node(${PROJECT_NAME}_trajectory_decoder_node
   PLUGIN "jetpilot_e2e_inference::E2ETrajectoryDecoderNode"
   EXECUTABLE e2e_trajectory_decoder_node

@@ -13,6 +13,7 @@
 
   <exec_depend>custom_joy_node</exec_depend>
   <exec_depend>depthai_ros_driver_v3</exec_depend>
+  <exec_depend>foxglove_bridge</exec_depend>
   <exec_depend>jetpilot_bag_tools</exec_depend>
   <exec_depend>jetpilot_controller</exec_depend>
   <exec_depend>jetpilot_hdmap_publisher</exec_depend>

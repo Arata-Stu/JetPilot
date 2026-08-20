@@ -5,12 +5,21 @@ import re
 
 import isaac_ros_launch_utils as lu
 import isaac_ros_launch_utils.all_types as lut
+import yaml
 from launch.actions import OpaqueFunction
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, OrSubstitution
 
 
 _TRUE_VALUES = {'1', 'true', 'yes', 'on'}
+_DEFAULT_FOXGLOVE_TOPIC_WHITELIST = (
+    "['^/tf$', '^/tf_static$', '^/clock$', '^/(.*/)?diagnostics$', "
+    "'^/localization/(pose_hint_required|pose_hint_state|current_section|"
+    "current_section_marker)$', "
+    "'^/visual_slam/tracking/odometry$', '^/visual_localization/pose$', "
+    "'^/hd_map/(lane_markers|section_markers|primary_centerline_path)$']"
+)
+_DEFAULT_FOXGLOVE_CLIENT_TOPIC_WHITELIST = "['^/initialpose$']"
 _ABSOLUTE_TOPIC_PATTERN = re.compile(
     r'^/[A-Za-z_][A-Za-z0-9_]*(?:/[A-Za-z_][A-Za-z0-9_]*)*$')
 _REPLAY_ISOLATED_TOPICS = (
@@ -174,6 +183,47 @@ def _validate_replay_vehicle_safety(context):
             'allow_unsafe_replay_with_vehicle:=true.'
         )
 
+    return []
+
+
+def _validate_foxglove_whitelist(value: str, name: str) -> None:
+    try:
+        patterns = yaml.safe_load(value)
+    except yaml.YAMLError as error:
+        raise RuntimeError(
+            f'{name} must be a YAML list of regular-expression strings: {value!r}'
+        ) from error
+
+    if not isinstance(patterns, list) or not patterns or any(
+            not isinstance(pattern, str) or not pattern for pattern in patterns):
+        raise RuntimeError(
+            f'{name} must be a non-empty list of non-empty regular-expression strings')
+
+
+def _validate_foxglove_configuration(context):
+    if not _launch_bool(context, 'enable_foxglove'):
+        return []
+
+    address = LaunchConfiguration('foxglove_address').perform(context).strip()
+    port_value = LaunchConfiguration('foxglove_port').perform(context).strip()
+    if not address:
+        raise RuntimeError('foxglove_address must not be empty')
+    try:
+        port = int(port_value)
+    except ValueError as error:
+        raise RuntimeError(
+            'foxglove_port must be an integer between 1 and 65535') from error
+    if not 1 <= port <= 65535:
+        raise RuntimeError('foxglove_port must be an integer between 1 and 65535')
+
+    _validate_foxglove_whitelist(
+        LaunchConfiguration('foxglove_topic_whitelist').perform(context).strip(),
+        'foxglove_topic_whitelist',
+    )
+    _validate_foxglove_whitelist(
+        LaunchConfiguration('foxglove_client_topic_whitelist').perform(context).strip(),
+        'foxglove_client_topic_whitelist',
+    )
     return []
 
 
@@ -427,6 +477,18 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('vslam_snapshot_require_localized_map', False, cli=True)
     args.add_arg('vslam_snapshot_write_interval_s', '5.0', cli=True)
 
+    args.add_arg('enable_foxglove', False, cli=True)
+    args.add_arg('foxglove_address', '0.0.0.0', cli=True)
+    args.add_arg('foxglove_port', '8767', cli=True)
+    args.add_arg(
+        'foxglove_topic_whitelist',
+        _DEFAULT_FOXGLOVE_TOPIC_WHITELIST,
+        cli=True)
+    args.add_arg(
+        'foxglove_client_topic_whitelist',
+        _DEFAULT_FOXGLOVE_CLIENT_TOPIC_WHITELIST,
+        cli=True)
+
     args.add_arg('enable_rviz', False, cli=True)
     args.add_arg(
         'rviz_config_file',
@@ -435,6 +497,7 @@ def generate_launch_description() -> lut.LaunchDescription:
 
     actions = args.get_launch_actions()
     actions.append(OpaqueFunction(function=_validate_replay_vehicle_safety))
+    actions.append(OpaqueFunction(function=_validate_foxglove_configuration))
 
     rosbag_replay_enabled = lut.AndSubstitution(
         _LaunchBoolean(args.enable_rosbag_replay),
@@ -753,6 +816,33 @@ def generate_launch_description() -> lut.LaunchDescription:
                 'use_sim_time': args.use_sim_time,
             },
             condition=IfCondition(vehicle_launch_enabled),
+        ))
+
+    actions.append(
+        lu.include(
+            'foxglove_bridge',
+            'launch/foxglove_bridge_launch.xml',
+            launch_arguments={
+                'address': args.foxglove_address,
+                'port': args.foxglove_port,
+                'topic_whitelist': args.foxglove_topic_whitelist,
+                # Foxglove 3.4.x parses but does not enforce this whitelist.
+                # Keep the intended policy for a future upstream fix; access control
+                # must currently come from a trusted LAN or an SSH tunnel.
+                'client_topic_whitelist': args.foxglove_client_topic_whitelist,
+                'service_whitelist': "['^$']",
+                'param_whitelist': "['^$']",
+                'capabilities': '[clientPublish]',
+                # Preserve late-joiner history from multiple /tf_static publishers.
+                'max_qos_depth': '25',
+                'num_threads': '2',
+                'use_sim_time': args.use_sim_time,
+                'publish_client_count': 'false',
+                'sysinfo': 'false',
+                'message_backlog_size': '128',
+                'remote_access': 'false',
+            },
+            condition=IfCondition(args.enable_foxglove),
         ))
 
     actions.append(

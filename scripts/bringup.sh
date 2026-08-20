@@ -39,6 +39,8 @@ ARG_VALUES=()
 EXTRA_LAUNCH_ARGS=()
 CUSTOM_COMPONENTS=''
 SENSOR_KIT_RTP_TOPICS=()
+FOXGLOVE_DEFAULT_TOPIC_WHITELIST="['^/tf$', '^/tf_static$', '^/clock$', '^/(.*/)?diagnostics$', '^/localization/(pose_hint_required|pose_hint_state|current_section|current_section_marker)$', '^/visual_slam/tracking/odometry$', '^/visual_localization/pose$', '^/hd_map/(lane_markers|section_markers|primary_centerline_path)$']"
+FOXGLOVE_DEFAULT_CLIENT_TOPIC_WHITELIST="['^/initialpose$']"
 
 die() {
   printf 'error: %s\n' "$*" >&2
@@ -64,7 +66,7 @@ is_jetson_platform() {
   esac
 }
 
-is_valid_udp_port() {
+is_valid_port() {
   local port="${1:-}"
 
   [[ "$port" =~ ^[0-9]{1,5}$ ]] && ((10#$port >= 1 && 10#$port <= 65535))
@@ -116,7 +118,7 @@ Options:
       --rviz-config NAME_OR_PATH
                         Select RViz config: default, vslam-debug, or absolute path
       --components LIST
-                        Custom component list, e.g. sensor,joy,teleop,vehicle
+                        Custom component list, e.g. sensor,hd-map,foxglove
       --set ARG:=VALUE Override one bringup launch argument
       --dry-run        Print the exact command without running ROS
   -y, --yes            Skip the hardware launch confirmation
@@ -127,6 +129,8 @@ Examples:
   $(basename "$0") --preset vehicle --vehicle pca
   $(basename "$0") --preset drive --vehicle vesc
   $(basename "$0") --preset localization --map /workspaces/map/course_a
+  $(basename "$0") custom --components sensor,hd-map,foxglove \\
+    --map /workspaces/map/course_a
   $(basename "$0") replay-localization --bag /workspaces/record/run_01 \\
     --map /workspaces/map/course_a --rate 0.5
   $(basename "$0") offline-vslam --bag /workspaces/record/run_01 --rate 0.5
@@ -221,6 +225,11 @@ set_base_args() {
   set_arg enable_rc_serial false
   set_arg enable_jetson_stats "$enable_jetson_stats"
   set_arg enable_vslam_snapshot false
+  set_arg enable_foxglove false
+  set_arg foxglove_address 0.0.0.0
+  set_arg foxglove_port 8767
+  set_arg foxglove_topic_whitelist "$FOXGLOVE_DEFAULT_TOPIC_WHITELIST"
+  set_arg foxglove_client_topic_whitelist "$FOXGLOVE_DEFAULT_CLIENT_TOPIC_WHITELIST"
   set_arg enable_operation false
   set_arg enable_planning false
   set_arg enable_raceline_publisher false
@@ -729,6 +738,9 @@ apply_custom_component_token() {
     tool)
       set_arg enable_tool true
       ;;
+    foxglove)
+      set_arg enable_foxglove true
+      ;;
     bag-manager)
       set_arg enable_tool true
       set_arg enable_bag_manager true
@@ -906,6 +918,7 @@ interactive_custom() {
     'hd-map             HD map publisher'
     'section-localizer  Section localizer'
     'tool               Tool container only'
+    'foxglove           Foxglove WebSocket bridge'
     'bag-manager        Bag manager'
     'joy                Joy node'
     'teleop             Teleop node'
@@ -1002,7 +1015,7 @@ configure_rtp_interactively() {
   port="${port:-5004}"
   while true; do
     port="$(prompt_value 'RTP送信先UDP port' "$port")"
-    if is_valid_udp_port "$port"; then
+    if is_valid_port "$port"; then
       break
     fi
     printf 'UDP portは1〜65535の整数で入力してください。\n' >&2
@@ -1144,8 +1157,18 @@ validate_configuration() {
     && is_true "$(get_arg sensor_kit_enable_rtp_stream 2>/dev/null || true)"; then
     [[ -n "$(get_arg sensor_kit_rtp_host 2>/dev/null || true)" ]] \
       || die 'sensor_kit_enable_rtp_stream=true requires sensor_kit_rtp_host'
-    is_valid_udp_port "$(get_arg sensor_kit_rtp_port 2>/dev/null || true)" \
+    is_valid_port "$(get_arg sensor_kit_rtp_port 2>/dev/null || true)" \
       || die 'sensor_kit_rtp_port must be an integer between 1 and 65535'
+  fi
+  if is_true "$(get_arg enable_foxglove)"; then
+    [[ -n "$(get_arg foxglove_address 2>/dev/null || true)" ]] \
+      || die 'foxglove_address must not be empty'
+    is_valid_port "$(get_arg foxglove_port 2>/dev/null || true)" \
+      || die 'foxglove_port must be an integer between 1 and 65535'
+    [[ -n "$(get_arg foxglove_topic_whitelist 2>/dev/null || true)" ]] \
+      || die 'foxglove_topic_whitelist must not be empty'
+    [[ -n "$(get_arg foxglove_client_topic_whitelist 2>/dev/null || true)" ]] \
+      || die 'foxglove_client_topic_whitelist must not be empty'
   fi
   if [[ -n "$MAP_DIR" ]]; then
     [[ "$DRY_RUN" == 'true' || -d "$MAP_DIR" ]] \
@@ -1207,6 +1230,9 @@ ensure_ros_environment() {
   if is_true "$(get_arg enable_localization)"; then
     packages+=(jetpilot_localization_manager)
   fi
+  if is_true "$(get_arg enable_foxglove)"; then
+    packages+=(foxglove_bridge)
+  fi
   if is_true "$(get_arg enable_planning)"; then
     packages+=(jetpilot_planning)
   fi
@@ -1253,6 +1279,12 @@ print_summary() {
     fi
   fi
   printf '  localization : %s\n' "$(get_arg enable_localization)"
+  if is_true "$(get_arg enable_foxglove)"; then
+    printf '  Foxglove     : bind %s:%s\n' \
+      "$(get_arg foxglove_address)" "$(get_arg foxglove_port)"
+  else
+    printf '  Foxglove     : disabled\n'
+  fi
   printf '  tool/teleop  : %s / %s\n' \
     "$(get_arg enable_tool)" "$(get_arg enable_teleop)"
   printf '  operation    : %s\n' "$(get_arg enable_operation)"
