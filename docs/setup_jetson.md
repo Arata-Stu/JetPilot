@@ -101,9 +101,11 @@ jtop
 このコミットは `jetson-stats` のタグ `7.2.0` が指すリビジョンです。コンテナ側では、
 VPI の任意依存ライブラリが存在しない場合にも診断ノードを継続できる限定的なパッチを
 適用しています。通信プロトコル上のバージョンはホストと同じ `7.2.0` のままです。
-また、Docker の JetPack 7.2 Orin レイヤーは、ホストに合わせて
-`nvidia-l4t-core` と `nvidia-l4t-multimedia-utils` を
-`39.2.0-20260601141651`、`libnvvpi4` を `4.1.3` に固定しています。
+
+Isaac ROS CLI v4.6 が JetPack 7.2 の CUDA 13.2、TensorRT 10.16、Jetson r39.2
+向けAPT設定を公式に提供するため、JetPilot独自の `jp72_orin` レイヤーは使用しません。
+公式との差分と実機確認項目は [Isaac ROS CLI v4.6 移行監査](isaac_ros_cli_v46_migration.md)
+にまとめています。
 
 ### 4.2 パフォーマンスモードの変更
 
@@ -181,7 +183,7 @@ cd "${RC_AS_ROOT}"
 
 作業用リポジトリをクローンし、環境変数の設定、および `isaac-ros-cli` のビルドとインストールを行います。
 
-このリポジトリで使用する `isaac-ros-cli` は、`${RC_AS_ROOT}/ros2_ws` を `/workspaces/ros2_ws` に mount します。あわせて `${RC_AS_ROOT}` 直下の `python_ws`、`record`、`map` も、それぞれ `/workspaces/python_ws`、`/workspaces/record`、`/workspaces/map` に mount されます。
+このリポジトリで使用する `isaac-ros-cli` は、`${RC_AS_ROOT}/ros2_ws` を `/workspaces/ros2_ws` に mount します。あわせて `${RC_AS_ROOT}` 直下の `scripts`、`tools`、`python_ws`、`record`、`map` も `/workspaces` 以下へ mount されます。
 
 ```bash
 mkdir -p "${HOME}/workspaces"
@@ -222,8 +224,8 @@ cat > "${ISAAC_ROS_WS}/.isaac-ros-cli/config.yaml" <<'EOF'
 docker:
   image:
     additional_image_keys:
-      - jp72_orin
       - realsense
+      - depthai
       - silky_evcam
       - additional_setting
 EOF

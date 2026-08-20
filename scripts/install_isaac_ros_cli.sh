@@ -6,8 +6,6 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 cd "${ISAAC_ROS_WS}/../tools/isaac-ros-cli"
 
-git pull
-
 sudo apt-get update
 sudo apt-get install -y build-essential dpkg-dev debhelper dh-python make
 

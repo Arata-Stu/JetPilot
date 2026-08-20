@@ -151,7 +151,7 @@ cd "${RC_AS_ROOT}"
 
 作業用リポジトリをクローンし、環境変数の設定、および `isaac-ros-cli` のビルドとインストールを行います。
 
-このリポジトリで使用する `isaac-ros-cli` は、`${RC_AS_ROOT}/ros2_ws` を `/workspaces/ros2_ws` に mount します。あわせて `${RC_AS_ROOT}` 直下の `python_ws`、`record`、`map` も、それぞれ `/workspaces/python_ws`、`/workspaces/record`、`/workspaces/map` に mount されます。
+このリポジトリで使用する `isaac-ros-cli` は、`${RC_AS_ROOT}/ros2_ws` を `/workspaces/ros2_ws` に mount します。あわせて `${RC_AS_ROOT}` 直下の `scripts`、`tools`、`python_ws`、`record`、`map` も `/workspaces` 以下へ mount されます。
 
 ```bash
 mkdir -p "${HOME}/workspaces"
@@ -192,6 +192,7 @@ docker:
   image:
     additional_image_keys:
       - realsense
+      - depthai
       - silky_evcam
       - additional_setting
 EOF
