@@ -20,14 +20,15 @@ Start it from the repository root:
 tools/app/scripts/start.sh --host 127.0.0.1 --port 8765
 ```
 
-When running inside the JetPilot Docker environment, use the `tools` mount:
+When running inside the JetPilot Docker environment, use the project-root mount:
 
 ```bash
 /workspaces/tools/app/scripts/start.sh --host 127.0.0.1 --port 8765
 ```
 
-The Docker launcher mounts the top-level `tools` directory to
-`/workspaces/tools` alongside `ros2_ws`, `python_ws`, `record`, and `map`.
+The Docker launcher mounts the complete JetPilot project root at `/workspaces`,
+so `tools` remains available at `/workspaces/tools` and future top-level
+directories require no additional mount configuration.
 The JetPilot container uses host networking, so the loopback bind is reachable
 from the Linux host without exposing the Console to the LAN.
 
@@ -445,7 +446,7 @@ Every long-running operation is represented as a task:
   "kind": "map_build",
   "title": "Build VGL/VSLAM map",
   "command": ["scripts/create_map.sh", "--stage", "build-map"],
-  "cwd": "/workspaces/JetPilot",
+  "cwd": "/workspaces",
   "status": "running",
   "pid": 12345,
   "pgid": 12345,

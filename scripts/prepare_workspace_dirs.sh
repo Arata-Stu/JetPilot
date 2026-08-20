@@ -11,7 +11,7 @@ usage() {
   printf '%s\n' \
     "Usage: scripts/prepare_workspace_dirs.sh [--check] [--quiet]" \
     "" \
-    "Create and verify host-side directories mounted into JetPilot Docker." \
+    "Prepare writable directories used through the JetPilot project-root mount." \
     "" \
     "Options:" \
     "  --check  Do not create missing directories; only verify them" \

@@ -45,8 +45,11 @@
 - コメントアウトされた旧package一覧とFoundationStereo build断片
 - install時の無条件 `git pull`
 
-scriptsのmount先は、文書とbringup commandに合わせて `/scripts` から
-`/workspaces/scripts` へ修正しました。
+JetPilotのproject root全体を `/workspaces` へ1回だけmountする構成に変更しました。
+これにより、既存directoryのpathを維持したまま、新しいトップレベルdirectoryも
+mount設定の追加なしでcontainerから参照できます。
+誤設定でホストの広い範囲を公開しないよう、mount前にproject rootの
+`packages.repos`を検証します。project rootは`.git`を含めて読み書き可能です。
 
 ## JetPilot固有として維持した内容
 
@@ -56,7 +59,7 @@ scriptsのmount先は、文書とbringup commandに合わせて `/scripts` か�
 - CycloneDDS profile、loopback multicast、ROS用network buffer設定
 - joystick、VESC、USB LiDAR向けdevice group設定
 - `/dev` bindによるhot-plugとudev symlink対応
-- `scripts`、`tools`、`python_ws`、`record`、`map` のworkspace mount
+- JetPilot project rootから `/workspaces` への単一mount
 - Dockerfileだけでなくローカル `COPY` / `ADD` 元も含めるimage hash
 - local imageの優先確認、cache tagを消さないretag、leaf-only local build
 - `jetson-stats` 7.2.0のcommit固定とoptional library probe patch

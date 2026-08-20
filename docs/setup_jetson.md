@@ -183,7 +183,15 @@ cd "${RC_AS_ROOT}"
 
 作業用リポジトリをクローンし、環境変数の設定、および `isaac-ros-cli` のビルドとインストールを行います。
 
-このリポジトリで使用する `isaac-ros-cli` は、`${RC_AS_ROOT}/ros2_ws` を `/workspaces/ros2_ws` に mount します。あわせて `${RC_AS_ROOT}` 直下の `scripts`、`tools`、`python_ws`、`record`、`map` も `/workspaces` 以下へ mount されます。
+このリポジトリで使用する `isaac-ros-cli` は、JetPilotのproject root `${RC_AS_ROOT}` を
+containerの `/workspaces` へ1回だけmountします。そのため `ros2_ws`、`python_ws`、
+`scripts`、`tools`、`record`、`map` に加え、今後追加するトップレベルdirectoryも
+同じ相対pathで自動的に参照できます。ROS 2 workspaceは従来どおり
+`/workspaces/ros2_ws` です。
+
+project rootは読み書き可能な状態でmountされるため、container内での変更は`.git`や文書を
+含めてホストへ反映されます。既に旧mount構成のcontainerが動いている場合は、終了してから
+再度起動してください。
 
 ```bash
 mkdir -p "${HOME}/workspaces"
@@ -238,9 +246,7 @@ cd "${RC_AS_ROOT}"
 dpkg -s isaac-ros-cli | grep Version
 grep -n "get_container_workspace_path" /usr/lib/isaac-ros-cli/run_dev.py
 grep -n "get_workspace_mount_args" /usr/lib/isaac-ros-cli/run_dev.py
-grep -n 'python_ws.*workspaces/python_ws' /usr/lib/isaac-ros-cli/run_dev.py
-grep -n 'record.*workspaces/record' /usr/lib/isaac-ros-cli/run_dev.py
-grep -n 'map.*workspaces/map' /usr/lib/isaac-ros-cli/run_dev.py
+grep -n 'project_root.*:/workspaces' /usr/lib/isaac-ros-cli/run_dev.py
 grep -n -- '-v /dev:/dev' /usr/lib/isaac-ros-cli/run_dev.py
 ls -l /etc/isaac-ros-cli/docker/Dockerfile.silky_evcam
 ls -l /etc/isaac-ros-cli/docker/Dockerfile.depthai
@@ -268,10 +274,12 @@ sudo isaac-ros init docker
 isaac-ros activate --build-local
 
 # コンテナ内で mount 先を確認
-ls -ld /workspaces/ros2_ws /workspaces/python_ws /workspaces/record /workspaces/map
+findmnt -T /workspaces
+ls -ld /workspaces /workspaces/ros2_ws /workspaces/python_ws \
+  /workspaces/scripts /workspaces/tools /workspaces/record /workspaces/map
 ```
 
 `record`、`map`、`ros2_ws/models/e2e`、E2E学習用の`datasets`と`outputs/e2e`は、
 空の骨組みだけをGitで管理しています。生成物自体はGit管理されません。
-Docker起動前に`prepare_workspace_dirs.sh`が実際の作成・書き込みを確認するため、
-Dockerによってmount元がroot所有で自動作成される問題を避けられます。
+Docker起動前に`prepare_workspace_dirs.sh`が必要な生成物directoryを作成し、
+ホストuserと同じUID/GIDで書き込めることを確認します。
