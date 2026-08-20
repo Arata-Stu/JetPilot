@@ -52,6 +52,18 @@ is_true() {
   esac
 }
 
+is_jetson_platform() {
+  if [[ -n "${ISAAC_ROS_PLATFORM:-}" ]]; then
+    [[ "$ISAAC_ROS_PLATFORM" == 'arm64-jetpack' ]]
+    return
+  fi
+
+  case "$(uname -m)" in
+    aarch64|arm64) [[ -f /etc/nv_tegra_release ]] ;;
+    *) return 1 ;;
+  esac
+}
+
 is_valid_udp_port() {
   local port="${1:-}"
 
@@ -190,6 +202,11 @@ parse_override() {
 }
 
 set_base_args() {
+  local enable_jetson_stats=false
+  if is_jetson_platform; then
+    enable_jetson_stats=true
+  fi
+
   set_arg use_sim_time false
   set_arg enable_rosbag_replay false
   set_arg rosbag ''
@@ -202,7 +219,7 @@ set_base_args() {
   set_arg enable_joy false
   set_arg enable_teleop false
   set_arg enable_rc_serial false
-  set_arg enable_jetson_stats true
+  set_arg enable_jetson_stats "$enable_jetson_stats"
   set_arg enable_vslam_snapshot false
   set_arg enable_operation false
   set_arg enable_planning false
@@ -1099,6 +1116,9 @@ validate_configuration() {
   if is_true "$(get_arg allow_unsafe_replay_control_topics)" \
     || is_true "$(get_arg allow_unsafe_replay_with_vehicle)"; then
     die 'unsafe replay overrides are intentionally unsupported by this launcher'
+  fi
+  if is_true "$(get_arg enable_jetson_stats)" && ! is_jetson_platform; then
+    die 'enable_jetson_stats is available only on Jetson (ISAAC_ROS_PLATFORM=arm64-jetpack)'
   fi
   if is_true "$replay" && is_true "$vehicle"; then
     die 'rosbag replay and vehicle hardware cannot be enabled together'

@@ -66,6 +66,16 @@ _REPLAY_ISOLATED_TOPICS = (
 )
 
 
+def is_jetson_platform() -> bool:
+    isaac_ros_platform = os.environ.get('ISAAC_ROS_PLATFORM', '')
+    if isaac_ros_platform:
+        return isaac_ros_platform == 'arm64-jetpack'
+    return (
+        os.uname().machine in {'aarch64', 'arm64'}
+        and os.path.exists('/etc/nv_tegra_release')
+    )
+
+
 def _as_bool(value) -> bool:
     return str(value).strip().lower() in _TRUE_VALUES
 
@@ -194,7 +204,7 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('enable_joy', True, cli=True)
     args.add_arg('enable_teleop', True, cli=True)
     args.add_arg('enable_rc_serial', False, cli=True)
-    args.add_arg('enable_jetson_stats', True, cli=True)
+    args.add_arg('enable_jetson_stats', is_jetson_platform(), cli=True)
     args.add_arg('jetson_stats_diagnostics_topic', '/jetson/diagnostics', cli=True)
     args.add_arg('jetson_stats_interval', '0.5', cli=True)
     args.add_arg('control_authority', 'hardware_mux', cli=True)

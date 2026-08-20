@@ -65,6 +65,12 @@ mount設定の追加なしでcontainerから参照できます。
 - `jetson-stats` 7.2.0のcommit固定とoptional library probe patch
 - x86_64学習環境の `onnxscript==0.7.1`
 
+`additional_setting`は基底の`isaac_ros` layerが登録する`release-4 / main`をそのまま使用します。
+APT sourceを追加layerで再登録しないことで、`main` componentの二重取得を防ぎます。
+4.6で廃止された`isaac_ros_nitros_camera_info_type`と旧`gxf_isaac_*` Debian packageは
+明示install一覧から除外しました。`isaac_ros_jetson_stats`はarm64でのみ配布されるため、
+Jetson imageだけに導入し、x86ではlaunchの既定値も無効になります。
+
 ## 実機で確認する保留事項
 
 独自 `jp72_orin` layerのCUDA／TensorRT部分は公式4.6と重複するため削除しました。

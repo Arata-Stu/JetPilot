@@ -8,6 +8,16 @@ from launch.actions import GroupAction
 from launch_ros.actions import SetRemap
 
 
+def is_jetson_platform() -> bool:
+    isaac_ros_platform = os.environ.get('ISAAC_ROS_PLATFORM', '')
+    if isaac_ros_platform:
+        return isaac_ros_platform == 'arm64-jetpack'
+    return (
+        os.uname().machine in {'aarch64', 'arm64'}
+        and os.path.exists('/etc/nv_tegra_release')
+    )
+
+
 def workspace_param_path(filename: str, fallback_package: str, fallback_package_path: str) -> str:
     ros2_ws = os.environ.get('ROS2_WS', '/workspaces/ros2_ws')
     generated_path = os.path.join(ros2_ws, 'joy_profiles', filename)
@@ -89,6 +99,11 @@ def add_nodes(args: lu.ArgumentContainer):
         ))
 
     if lu.is_true(args.enable_jetson_stats):
+        if not is_jetson_platform():
+            raise RuntimeError(
+                'enable_jetson_stats is available only on Jetson '
+                '(ISAAC_ROS_PLATFORM=arm64-jetpack)'
+            )
         actions.append(GroupAction([
             SetRemap(src='/diagnostics', dst=args.jetson_stats_diagnostics_topic),
             lu.include(
@@ -157,7 +172,7 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('enable_joy', False, cli=True)
     args.add_arg('enable_teleop', False, cli=True)
     args.add_arg('enable_rc_serial', False, cli=True)
-    args.add_arg('enable_jetson_stats', True, cli=True)
+    args.add_arg('enable_jetson_stats', is_jetson_platform(), cli=True)
     args.add_arg('jetson_stats_diagnostics_topic', '/jetson/diagnostics', cli=True)
     args.add_arg('jetson_stats_interval', '0.5', cli=True)
     args.add_arg('control_authority', 'hardware_mux', cli=True)

@@ -231,8 +231,10 @@ def test_vehicle_presets_select_matching_driver_configuration() -> None:
     assert "vesc_interface.param.yaml" in vesc
 
 
-def test_drive_presets_enable_live_sensor_teleop_and_vehicle() -> None:
-    output = run_launcher("drive-vesc", "--dry-run").stdout
+def test_drive_presets_enable_live_sensor_teleop_and_vehicle_on_jetson() -> None:
+    env = dict(os.environ)
+    env["ISAAC_ROS_PLATFORM"] = "arm64-jetpack"
+    output = run_launcher("drive-vesc", "--dry-run", env=env).stdout
 
     assert "enable_sensor_kit:=true" in output
     assert "enable_tool:=true" in output
@@ -244,6 +246,30 @@ def test_drive_presets_enable_live_sensor_teleop_and_vehicle() -> None:
     assert "enable_vehicle:=true" in output
     assert "vehicle_interface_pkg:=jetpilot_vesc_interface" in output
     assert "enable_localization:=false" in output
+
+
+def test_x86_disables_jetson_stats_by_default() -> None:
+    env = dict(os.environ)
+    env["ISAAC_ROS_PLATFORM"] = "amd64"
+    output = run_launcher("drive-vesc", "--dry-run", env=env).stdout
+
+    assert "enable_jetson_stats:=false" in output
+
+
+def test_x86_rejects_explicit_jetson_stats_enable() -> None:
+    env = dict(os.environ)
+    env["ISAAC_ROS_PLATFORM"] = "amd64"
+    result = run_launcher(
+        "drive-vesc",
+        "--set",
+        "enable_jetson_stats:=true",
+        "--dry-run",
+        check=False,
+        env=env,
+    )
+
+    assert result.returncode != 0
+    assert "enable_jetson_stats is available only on Jetson" in result.stderr
 
 
 def test_jetson_stats_can_be_disabled_explicitly() -> None:

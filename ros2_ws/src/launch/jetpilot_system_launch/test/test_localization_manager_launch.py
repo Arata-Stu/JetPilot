@@ -99,12 +99,16 @@ def test_configurable_localization_endpoints_are_wired_to_producers() -> None:
     assert "'tracking_mode': 1 if lu.is_true(args.vslam_enable_imu) else 0" in vslam_source
 
 
-def test_jetson_stats_is_enabled_by_default() -> None:
+def test_jetson_stats_default_is_platform_aware() -> None:
     bringup_source = BRINGUP_LAUNCH_PATH.read_text(encoding="utf-8")
     tool_source = TOOL_LAUNCH_PATH.read_text(encoding="utf-8")
 
     for source in (bringup_source, tool_source):
-        assert "args.add_arg('enable_jetson_stats', True, cli=True)" in source
+        assert "def is_jetson_platform() -> bool:" in source
+        assert (
+            "args.add_arg('enable_jetson_stats', is_jetson_platform(), cli=True)"
+            in source
+        )
 
 
 def test_fallback_joy_profile_exposes_localization_trigger() -> None:
