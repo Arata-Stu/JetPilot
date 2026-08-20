@@ -300,7 +300,7 @@ main() {
   fi
 
   if [[ "$BUILD_ENGINE" == true ]]; then
-    ssh "$remote_target" "set -e; /usr/src/tensorrt/bin/trtexec --onnx='$remote_model_dir/model.onnx' --saveEngine='$remote_model_dir/model.plan.building' --fp16 --dumpBindings > '$remote_model_dir/build_engine.log' 2>&1; mv -- '$remote_model_dir/model.plan.building' '$remote_model_dir/model.plan'"
+    ssh "$remote_target" "set -e; /usr/src/tensorrt/bin/trtexec --onnx='$remote_model_dir/model.onnx' --saveEngine='$remote_model_dir/model.plan.building' --fp16 > '$remote_model_dir/build_engine.log' 2>&1; mv -- '$remote_model_dir/model.plan.building' '$remote_model_dir/model.plan'"
   fi
   ssh "$remote_target" "ln -sfn -- '$model_name' '${REMOTE_ROOT%/}/latest'"
   echo "転送が完了しました: ${remote_target}:${remote_model_dir}"

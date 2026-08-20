@@ -27,7 +27,6 @@ args=(
   "$TRTEXEC"
   "--onnx=${ONNX_PATH}"
   "--saveEngine=${BUILDING_PATH}"
-  "--dumpBindings"
 )
 if [[ "$FP16" == "1" || "$FP16" == "true" ]]; then
   args+=("--fp16")

@@ -100,7 +100,6 @@ def generate_launch_description():
                 "use_sim_time": ParameterValue(
                     LaunchConfiguration("use_sim_time"), value_type=bool
                 ),
-                "nitros_tensor_format": LaunchConfiguration("decoder_tensor_format"),
             },
         ],
         remappings=[
@@ -121,7 +120,6 @@ def generate_launch_description():
                 "use_sim_time": ParameterValue(
                     LaunchConfiguration("use_sim_time"), value_type=bool
                 ),
-                "nitros_tensor_format": LaunchConfiguration("decoder_tensor_format"),
                 "trajectory_points": ParameterValue(
                     LaunchConfiguration("trajectory_points"), value_type=int
                 ),
@@ -225,10 +223,6 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "output_tensor_formats",
                 default_value="['nitros_tensor_list_nchw_rgb_f32']",
-            ),
-            DeclareLaunchArgument(
-                "decoder_tensor_format",
-                default_value="nitros_tensor_list_nchw_rgb_f32",
             ),
             ComposableNodeContainer(
                 name=container_name,

@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstring>
 #include <cstdint>
 #include <functional>
 #include <stdexcept>
@@ -14,7 +15,7 @@
 
 #include "diagnostic_msgs/msg/diagnostic_status.hpp"
 #include "diagnostic_msgs/msg/key_value.hpp"
-#include "isaac_ros_nitros_tensor_list_type/nitros_tensor_list.hpp"
+#include "isaac_ros_nitros/types/cuda_stream_pool.hpp"
 #include "rclcpp_components/register_node_macro.hpp"
 #include "std_msgs/msg/header.hpp"
 
@@ -33,13 +34,9 @@ diagnostic_msgs::msg::KeyValue diagnostic_value(
 }
 
 std_msgs::msg::Header make_header(
-  const nvidia::isaac_ros::nitros::NitrosTensorListView & message)
+  const nvidia::isaac_ros::nitros::NitrosTensorList & message)
 {
-  std_msgs::msg::Header header;
-  header.stamp.sec = message.GetTimestampSeconds();
-  header.stamp.nanosec = message.GetTimestampNanoseconds();
-  header.frame_id = message.GetFrameId();
-  return header;
+  return message.get_header();
 }
 
 }  // namespace
@@ -58,9 +55,6 @@ E2EControlDecoderNode::E2EControlDecoderNode(const rclcpp::NodeOptions & options
   deadline_ms_ = declare_parameter<double>("deadline_ms", 33.3);
   const auto diagnostics_topic =
     declare_parameter<std::string>("diagnostics_topic", "/e2e/diagnostics");
-  const auto nitros_tensor_format = declare_parameter<std::string>(
-    "nitros_tensor_format",
-    nvidia::isaac_ros::nitros::nitros_tensor_list_nchw_rgb_f32_t::supported_type_name);
 
   if (output_fields_.empty()) {
     throw std::invalid_argument("output_fields must not be empty");
@@ -78,13 +72,15 @@ E2EControlDecoderNode::E2EControlDecoderNode(const rclcpp::NodeOptions & options
   command_pub_ = create_publisher<jetpilot_msgs::msg::ControlCommand>("control_cmd", 10);
   diagnostics_pub_ =
     create_publisher<diagnostic_msgs::msg::DiagnosticArray>(diagnostics_topic, 10);
-  tensor_sub_ = std::make_shared<NitrosSubscriber>(
-    this, "tensor_sub", nitros_tensor_format,
+  rclcpp::SubscriptionOptions subscription_options;
+  subscription_options.use_intra_process_comm = rclcpp::IntraProcessSetting::Enable;
+  tensor_sub_ = create_subscription<TensorList>(
+    "tensor_sub", rclcpp::QoS(10),
     std::bind(&E2EControlDecoderNode::on_tensor, this, std::placeholders::_1),
-    nvidia::isaac_ros::nitros::NitrosDiagnosticsConfig{}, rclcpp::QoS(10));
+    subscription_options);
 }
 
-void E2EControlDecoderNode::on_tensor(const TensorListView & message)
+void E2EControlDecoderNode::on_tensor(TensorList::ConstSharedPtr message)
 {
   const auto callback_started = std::chrono::steady_clock::now();
   const auto publish_time = callback_started;
@@ -93,24 +89,58 @@ void E2EControlDecoderNode::on_tensor(const TensorListView & message)
     std::chrono::duration<double, std::milli>(publish_time - last_publish_time_).count() : 0.0;
 
   try {
-    const auto tensor = message.GetNamedTensor(output_tensor_name_);
-    if (tensor.GetElementType() != nvidia::gxf::PrimitiveType::kFloat32 ||
-      tensor.GetBytesPerElement() != sizeof(float))
+    const auto tensor = message->get_tensor_by_name(output_tensor_name_);
+    if (!tensor) {
+      RCLCPP_WARN(get_logger(), "Tensor '%s' was not found", output_tensor_name_.c_str());
+      return;
+    }
+    if (tensor->data_type() != nvidia::isaac_ros::nitros::NitrosDataType::kFloat32 ||
+      tensor->bytes_per_element() != sizeof(float))
     {
       RCLCPP_WARN(get_logger(), "Tensor '%s' is not float32", output_tensor_name_.c_str());
       return;
     }
-    if (tensor.GetElementCount() < output_fields_.size()) {
+    if (tensor->element_count() < output_fields_.size()) {
       RCLCPP_WARN(
         get_logger(), "Tensor '%s' has %lu values; expected at least %lu",
-        output_tensor_name_.c_str(), static_cast<unsigned long>(tensor.GetElementCount()),
+        output_tensor_name_.c_str(), static_cast<unsigned long>(tensor->element_count()),
         static_cast<unsigned long>(output_fields_.size()));
       return;
     }
 
     std::vector<float> values(output_fields_.size());
-    const auto cuda_status = cudaMemcpy(
-      values.data(), tensor.GetBuffer(), values.size() * sizeof(float), cudaMemcpyDefault);
+    auto stream_handle =
+      nvidia::isaac_ros::nitros::CudaStreamPool::instance().get_stream_handle();
+    auto read_handle = tensor->get_read_handle(stream_handle.get());
+    if (read_handle.get_ptr() == nullptr) {
+      RCLCPP_ERROR(get_logger(), "Control tensor buffer is null");
+      return;
+    }
+
+    auto cuda_status = cudaSuccess;
+    const auto storage_type = message->get_storage_type();
+    switch (storage_type) {
+      case cudaMemoryTypeDevice:
+        cuda_status = cudaMemcpyAsync(
+          values.data(), read_handle.get_ptr(), values.size() * sizeof(float),
+          cudaMemcpyDeviceToHost, stream_handle.get());
+        break;
+      case cudaMemoryTypeHost:
+        cuda_status = cudaStreamSynchronize(stream_handle.get());
+        if (cuda_status == cudaSuccess) {
+          std::memcpy(
+            values.data(), read_handle.get_ptr(), values.size() * sizeof(float));
+        }
+        break;
+      default:
+        RCLCPP_ERROR(
+          get_logger(), "Unsupported control tensor storage type: %d",
+          static_cast<int>(storage_type));
+        return;
+    }
+    if (cuda_status == cudaSuccess && storage_type == cudaMemoryTypeDevice) {
+      cuda_status = cudaStreamSynchronize(stream_handle.get());
+    }
     if (cuda_status != cudaSuccess) {
       RCLCPP_ERROR(
         get_logger(), "Failed to copy control tensor from CUDA: %s",
@@ -133,7 +163,7 @@ void E2EControlDecoderNode::on_tensor(const TensorListView & message)
     }
 
     jetpilot_msgs::msg::ControlCommand command;
-    command.header = make_header(message);
+    command.header = make_header(*message);
     if (command.header.frame_id.empty()) {
       command.header.frame_id = "base_link";
     }
@@ -149,7 +179,7 @@ void E2EControlDecoderNode::on_tensor(const TensorListView & message)
     const auto callback_finished = std::chrono::steady_clock::now();
     const double callback_ms =
       std::chrono::duration<double, std::milli>(callback_finished - callback_started).count();
-    publish_diagnostics(message, callback_ms, output_interval_ms, has_output_interval);
+    publish_diagnostics(*message, callback_ms, output_interval_ms, has_output_interval);
     last_publish_time_ = publish_time;
     has_last_publish_time_ = true;
   } catch (const std::exception & error) {
@@ -158,13 +188,13 @@ void E2EControlDecoderNode::on_tensor(const TensorListView & message)
 }
 
 void E2EControlDecoderNode::publish_diagnostics(
-  const TensorListView & message, const double callback_ms, const double output_interval_ms,
+  const TensorList & message, const double callback_ms, const double output_interval_ms,
   const bool has_output_interval)
 {
   const auto current_time = now();
   const std::int64_t stamp_ns =
-    static_cast<std::int64_t>(message.GetTimestampSeconds()) * 1000000000LL +
-    static_cast<std::int64_t>(message.GetTimestampNanoseconds());
+    static_cast<std::int64_t>(message.get_timestamp_sec()) * 1000000000LL +
+    static_cast<std::int64_t>(message.get_timestamp_nsec());
   const bool has_capture_stamp = stamp_ns > 0;
   const double capture_to_command_ms = has_capture_stamp ?
     std::max(0.0, static_cast<double>(current_time.nanoseconds() - stamp_ns) / 1.0e6) : 0.0;

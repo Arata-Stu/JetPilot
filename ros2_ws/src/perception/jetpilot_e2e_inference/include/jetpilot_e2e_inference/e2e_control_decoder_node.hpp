@@ -8,8 +8,7 @@
 #include <vector>
 
 #include "diagnostic_msgs/msg/diagnostic_array.hpp"
-#include "isaac_ros_managed_nitros/managed_nitros_subscriber.hpp"
-#include "isaac_ros_nitros_tensor_list_type/nitros_tensor_list_view.hpp"
+#include "isaac_ros_nitros_tensor_list_type/nitros_tensor_list.hpp"
 #include "jetpilot_msgs/msg/control_command.hpp"
 #include "rclcpp/rclcpp.hpp"
 
@@ -23,13 +22,11 @@ public:
     const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
 
 private:
-  using TensorListView = nvidia::isaac_ros::nitros::NitrosTensorListView;
-  using NitrosSubscriber =
-    nvidia::isaac_ros::nitros::ManagedNitrosSubscriber<TensorListView>;
+  using TensorList = nvidia::isaac_ros::nitros::NitrosTensorList;
 
-  void on_tensor(const TensorListView & message);
+  void on_tensor(TensorList::ConstSharedPtr message);
   void publish_diagnostics(
-    const TensorListView & message, double callback_ms, double output_interval_ms,
+    const TensorList & message, double callback_ms, double output_interval_ms,
     bool has_output_interval);
 
   std::string output_tensor_name_;
@@ -46,7 +43,7 @@ private:
 
   rclcpp::Publisher<jetpilot_msgs::msg::ControlCommand>::SharedPtr command_pub_;
   rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr diagnostics_pub_;
-  std::shared_ptr<NitrosSubscriber> tensor_sub_;
+  rclcpp::Subscription<TensorList>::SharedPtr tensor_sub_;
 };
 
 }  // namespace jetpilot_e2e_inference

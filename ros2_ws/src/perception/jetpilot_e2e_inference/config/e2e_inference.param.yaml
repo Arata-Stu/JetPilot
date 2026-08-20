@@ -1,7 +1,6 @@
 e2e_control_decoder:
   ros__parameters:
     output_tensor_name: output_tensor
-    nitros_tensor_format: nitros_tensor_list_nchw_rgb_f32
     output_fields: [steering, throttle]
     steering_min: -1.0
     steering_max: 1.0

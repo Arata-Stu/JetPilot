@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <cstdint>
 #include <functional>
 #include <stdexcept>
@@ -13,7 +14,7 @@
 
 #include "geometry_msgs/msg/pose_stamped.hpp"
 #include "geometry_msgs/msg/quaternion.hpp"
-#include "isaac_ros_nitros_tensor_list_type/nitros_tensor_list.hpp"
+#include "isaac_ros_nitros/types/cuda_stream_pool.hpp"
 #include "rclcpp_components/register_node_macro.hpp"
 #include "std_msgs/msg/header.hpp"
 
@@ -29,12 +30,10 @@ struct Point2D
 };
 
 std_msgs::msg::Header make_header(
-  const nvidia::isaac_ros::nitros::NitrosTensorListView & message,
+  const nvidia::isaac_ros::nitros::NitrosTensorList & message,
   const std::string & frame_id)
 {
-  std_msgs::msg::Header header;
-  header.stamp.sec = message.GetTimestampSeconds();
-  header.stamp.nanosec = message.GetTimestampNanoseconds();
+  auto header = message.get_header();
   header.frame_id = frame_id;
   return header;
 }
@@ -59,9 +58,6 @@ E2ETrajectoryDecoderNode::E2ETrajectoryDecoderNode(const rclcpp::NodeOptions & o
   frame_id_ = declare_parameter<std::string>("frame_id", "base_link");
   target_speed_mps_ = declare_parameter<double>("target_speed_mps", 0.8);
   max_point_distance_m_ = declare_parameter<double>("max_point_distance_m", 8.0);
-  const auto nitros_tensor_format = declare_parameter<std::string>(
-    "nitros_tensor_format",
-    nvidia::isaac_ros::nitros::nitros_tensor_list_nchw_rgb_f32_t::supported_type_name);
 
   if (trajectory_points <= 0) {
     throw std::invalid_argument("trajectory_points must be positive");
@@ -78,18 +74,26 @@ E2ETrajectoryDecoderNode::E2ETrajectoryDecoderNode(const rclcpp::NodeOptions & o
   trajectory_pub_ = create_publisher<nav_msgs::msg::Path>("trajectory", output_qos);
   target_speed_pub_ = create_publisher<std_msgs::msg::Float32>("target_speed", output_qos);
   ready_pub_ = create_publisher<std_msgs::msg::Bool>("planning_ready", output_qos);
-  tensor_sub_ = std::make_shared<NitrosSubscriber>(
-    this, "tensor_sub", nitros_tensor_format,
+  rclcpp::SubscriptionOptions subscription_options;
+  subscription_options.use_intra_process_comm = rclcpp::IntraProcessSetting::Enable;
+  tensor_sub_ = create_subscription<TensorList>(
+    "tensor_sub", rclcpp::QoS(10),
     std::bind(&E2ETrajectoryDecoderNode::on_tensor, this, std::placeholders::_1),
-    nvidia::isaac_ros::nitros::NitrosDiagnosticsConfig{}, rclcpp::QoS(10));
+    subscription_options);
 }
 
-void E2ETrajectoryDecoderNode::on_tensor(const TensorListView & message)
+void E2ETrajectoryDecoderNode::on_tensor(TensorList::ConstSharedPtr message)
 {
   try {
-    const auto tensor = message.GetNamedTensor(output_tensor_name_);
-    if (tensor.GetElementType() != nvidia::gxf::PrimitiveType::kFloat32 ||
-      tensor.GetBytesPerElement() != sizeof(float))
+    const auto tensor = message->get_tensor_by_name(output_tensor_name_);
+    if (!tensor) {
+      RCLCPP_WARN(
+        get_logger(), "Trajectory tensor '%s' was not found", output_tensor_name_.c_str());
+      publish_ready(false);
+      return;
+    }
+    if (tensor->data_type() != nvidia::isaac_ros::nitros::NitrosDataType::kFloat32 ||
+      tensor->bytes_per_element() != sizeof(float))
     {
       RCLCPP_WARN(
         get_logger(), "Trajectory tensor '%s' is not float32", output_tensor_name_.c_str());
@@ -98,18 +102,50 @@ void E2ETrajectoryDecoderNode::on_tensor(const TensorListView & message)
     }
 
     const std::size_t required_values = trajectory_points_ * 2U;
-    if (tensor.GetElementCount() < required_values) {
+    if (tensor->element_count() < required_values) {
       RCLCPP_WARN(
         get_logger(), "Trajectory tensor '%s' has %lu values; expected at least %lu",
-        output_tensor_name_.c_str(), static_cast<unsigned long>(tensor.GetElementCount()),
+        output_tensor_name_.c_str(), static_cast<unsigned long>(tensor->element_count()),
         static_cast<unsigned long>(required_values));
       publish_ready(false);
       return;
     }
 
     std::vector<float> values(required_values);
-    const auto cuda_status = cudaMemcpy(
-      values.data(), tensor.GetBuffer(), values.size() * sizeof(float), cudaMemcpyDefault);
+    auto stream_handle =
+      nvidia::isaac_ros::nitros::CudaStreamPool::instance().get_stream_handle();
+    auto read_handle = tensor->get_read_handle(stream_handle.get());
+    if (read_handle.get_ptr() == nullptr) {
+      RCLCPP_ERROR(get_logger(), "Trajectory tensor buffer is null");
+      publish_ready(false);
+      return;
+    }
+
+    auto cuda_status = cudaSuccess;
+    const auto storage_type = message->get_storage_type();
+    switch (storage_type) {
+      case cudaMemoryTypeDevice:
+        cuda_status = cudaMemcpyAsync(
+          values.data(), read_handle.get_ptr(), values.size() * sizeof(float),
+          cudaMemcpyDeviceToHost, stream_handle.get());
+        break;
+      case cudaMemoryTypeHost:
+        cuda_status = cudaStreamSynchronize(stream_handle.get());
+        if (cuda_status == cudaSuccess) {
+          std::memcpy(
+            values.data(), read_handle.get_ptr(), values.size() * sizeof(float));
+        }
+        break;
+      default:
+        RCLCPP_ERROR(
+          get_logger(), "Unsupported trajectory tensor storage type: %d",
+          static_cast<int>(storage_type));
+        publish_ready(false);
+        return;
+    }
+    if (cuda_status == cudaSuccess && storage_type == cudaMemoryTypeDevice) {
+      cuda_status = cudaStreamSynchronize(stream_handle.get());
+    }
     if (cuda_status != cudaSuccess) {
       RCLCPP_ERROR(
         get_logger(), "Failed to copy trajectory tensor from CUDA: %s",
@@ -136,7 +172,7 @@ void E2ETrajectoryDecoderNode::on_tensor(const TensorListView & message)
     }
 
     nav_msgs::msg::Path path;
-    path.header = make_header(message, frame_id_);
+    path.header = make_header(*message, frame_id_);
     path.poses.reserve(points.size());
     for (std::size_t index = 0U; index < points.size(); ++index) {
       geometry_msgs::msg::PoseStamped pose;

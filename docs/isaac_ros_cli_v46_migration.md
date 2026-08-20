@@ -1,6 +1,6 @@
 # Isaac ROS CLI v4.6 移行監査
 
-更新日: 2026-08-20
+更新日: 2026-08-21
 
 ## 比較基準
 
@@ -19,6 +19,8 @@
 - [公式 v4.6-0 release](https://github.com/NVIDIA-ISAAC-ROS/isaac-ros-cli/releases/tag/v4.6-0)
 - [公式 v4.5-0...v4.6-0 の比較](https://github.com/NVIDIA-ISAAC-ROS/isaac-ros-cli/compare/v4.5-0...v4.6-0)
 - [Orin向けTensorRT 10.13問題の公式issue](https://github.com/NVIDIA-ISAAC-ROS/isaac-ros-cli/issues/22)
+- [Isaac ROS 4.6 Managed NITROS subscriber](https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_nitros/blob/623f0e16c0b16f2916d84d9f40ef086e0ade3c3e/isaac_ros_managed_nitros/include/isaac_ros_managed_nitros/managed_nitros_subscriber.hpp)
+- [TensorRT engine互換性](https://docs.nvidia.com/deeplearning/tensorrt/latest/inference-library/engine-compatibility.html)
 
 ## 公式4.6から採用した内容
 
@@ -89,6 +91,21 @@ RealSenseの独自 `--no_cuda` も公式設定へ戻しました。実機build�
 DepthAI layerはOAK-D用として有効化しましたが、testing repositoryとDepthAI Python packageの
 version上書きを含むため、Jetson実機でcamera起動まで確認します。
 
+## E2E NITROS／TensorRT移行
+
+Isaac ROS 4.6の`ManagedNitrosSubscriber`はdeprecatedで、同じ4.6に存在しない
+`nitros_type_view.hpp`をincludeします。`NitrosTensorListView`も削除済みheaderへ依存するため、
+欠落headerを追加せず、E2E control／trajectory decoderを
+`rclcpp::Subscription<NitrosTensorList>`の直接intra-process購読へ移行しました。
+
+Tensor bufferは4.6の同期契約に従い、consumer用CUDA stream上で`get_read_handle()`、
+非同期GPU-to-CPU copy、stream同期の順に読みます。decoder固有の`nitros_tensor_format`は
+削除し、CUDA toolkitと`CUDA::cudart`の直接依存を明示しました。
+
+TensorRT 10.16で廃止された`trtexec --dumpBindings`は、container内のengine生成scriptと
+x86からJetsonへdeployするscriptの両方から削除しました。TensorRT 10.13系で生成した
+既存`.plan`は再利用せず、4.6環境の対象Jetson上で再生成します。
+
 ## Jetsonでの確認順序
 
 1. CLI Debian packageをbuildし、versionが `2.5.0-1` 系であることを確認する。
@@ -99,6 +116,7 @@ version上書きを含むため、Jetson実機でcamera起動まで確認しま�
 6. RealSense、OAK-D、SilkyEvCamを個別に起動する。
 7. `jtop` socket連携とIsaac ROS diagnosticsを確認する。
 8. VPI利用nodeで `libnvbufsurface_nvsci` 関連errorがないことを確認する。
+9. clean build後にE2E control／trajectory decoderを起動し、TensorRT engineを再生成する。
 
 ## 公開時の作業
 

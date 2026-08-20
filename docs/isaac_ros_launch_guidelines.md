@@ -1,6 +1,6 @@
 # Isaac ROS Launch Guidelines
 
-JetPilot の launch ファイルでは Isaac ROS 4.5 の `isaac_ros_launch_utils`
+JetPilot の launch ファイルでは Isaac ROS 4.6 の `isaac_ros_launch_utils`
 を使う。特に `ArgumentContainer.add_opaque_function()` の内側では、launch
 引数が `LaunchConfiguration` ではなく Python の値へ評価済みになる点に注意する。
 
@@ -99,7 +99,9 @@ Action が期待する型の境界をまたいでいる。
 - 画像の前処理からTensorRTまでにPython/OpenCV/NumPyノードを挟まない。
   GPU上のNITROS tensor経路を維持する。
 - TensorRT出力のdecoderもC++ Composable Nodeとし、同じコンテナ内で
-  `ManagedNitrosSubscriber<NitrosTensorListView>`を使用する。
+  `rclcpp::Subscription<NitrosTensorList>`をintra-processで直接使用する。
+- decoderがCUDA bufferを読むときはconsumer用streamを取得し、同じstreamで
+  `get_read_handle()`、非同期GPU-to-CPU copy、stream同期を行う。
 - 通常のCPUメモリをpublishするカメラでは、GPU入口の転送自体は残る。
   同一コンテナ化だけでカメラ取得時点から完全なzero-copyにはならない。
 - camera driverからimage encoderまではrclcpp intra-process、image encoderから
@@ -110,5 +112,5 @@ Action が期待する型の境界をまたいでいる。
 
 - `isaac_ros_launch_utils.core.ArgumentContainer.add_opaque_function()`
 - `isaac_ros_launch_utils.core.include()`
-- Isaac ROS 4.5 `isaac_mapping_ros/launch/algorithms/vslam.launch.py`
-- Isaac ROS 4.5 `isaac_mapping_ros/launch/localize_realsense.launch.py`
+- Isaac ROS 4.6 `isaac_mapping_ros/launch/algorithms/vslam.launch.py`
+- Isaac ROS 4.6 `isaac_mapping_ros/launch/localize_realsense.launch.py`

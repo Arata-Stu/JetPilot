@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.8)
+cmake_minimum_required(VERSION 3.22.1)
 project(jetpilot_e2e_inference)
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
@@ -7,12 +7,14 @@ endif()
 
 find_package(ament_cmake_auto REQUIRED)
 find_package(ament_cmake_python REQUIRED)
+find_package(CUDAToolkit REQUIRED)
 ament_auto_find_build_dependencies()
 
 ament_auto_add_library(${PROJECT_NAME}_control_decoder_node SHARED
   src/e2e_control_decoder_node.cpp
 )
 target_compile_features(${PROJECT_NAME}_control_decoder_node PUBLIC cxx_std_17)
+target_link_libraries(${PROJECT_NAME}_control_decoder_node PRIVATE CUDA::cudart)
 rclcpp_components_register_node(${PROJECT_NAME}_control_decoder_node
   PLUGIN "jetpilot_e2e_inference::E2EControlDecoderNode"
   EXECUTABLE e2e_control_decoder_node
@@ -22,6 +24,7 @@ ament_auto_add_library(${PROJECT_NAME}_trajectory_decoder_node SHARED
   src/e2e_trajectory_decoder_node.cpp
 )
 target_compile_features(${PROJECT_NAME}_trajectory_decoder_node PUBLIC cxx_std_17)
+target_link_libraries(${PROJECT_NAME}_trajectory_decoder_node PRIVATE CUDA::cudart)
 rclcpp_components_register_node(${PROJECT_NAME}_trajectory_decoder_node
   PLUGIN "jetpilot_e2e_inference::E2ETrajectoryDecoderNode"
   EXECUTABLE e2e_trajectory_decoder_node

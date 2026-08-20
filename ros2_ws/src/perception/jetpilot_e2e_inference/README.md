@@ -32,12 +32,12 @@ TensorRT、decoderまではNITROS形式で同じプロセス内を流れます�
 ROSメッセージを作るために、必要な少数のfloatだけをGPUからCPUへコピーします。
 
 control / trajectory decoderはC++ Composable Nodeです。TensorRTと同じcontainerで
-Managed NITROS subscriberを使用し、通常のROS TensorListへの変換を挟みません。
+`NitrosTensorList`をintra-process購読し、通常のROS TensorListへの変換を挟みません。
 推論結果のCUDA bufferから、出力に必要な小さなfloat列だけをCPUへコピーして
 `ControlCommand`または`Path`へ変換します。
-既定の出力formatは学習側の`metadata.json`と同じ
-`nitros_tensor_list_nchw_rgb_f32`です。launchで変更する場合は
-`output_tensor_formats`と`decoder_tensor_format`を同じformatにしてください。
+launchには学習側の`metadata.json`と同じ`nitros_tensor_list_nchw_rgb_f32`を
+TensorRTの既定出力formatとして残しています。decoder固有のformat設定は持たず、
+受信した`NitrosTensor`がfloat32かを実データから検証します。
 
 ## モデル契約
 
@@ -81,6 +81,9 @@ ros2 run jetpilot_e2e_inference build_tensorrt_engine.sh \
   /workspaces/ros2_ws/models/e2e/latest/model.onnx \
   /workspaces/ros2_ws/models/e2e/latest/model.plan
 ```
+
+Isaac ROSまたはTensorRTを更新した後は、以前の`model.plan`を再利用せず、対象Jetsonの
+現在のcontainer内でこのcommandを再実行してください。
 
 Jetson上でアップロード済みモデルを対話的に選ぶ場合は、fzf対応TUIを使用できます。
 fzfがない環境では番号選択へ自動的に切り替わります。

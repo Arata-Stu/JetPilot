@@ -9,9 +9,11 @@
   <buildtool_depend>ament_cmake_auto</buildtool_depend>
   <buildtool_depend>ament_cmake_python</buildtool_depend>
 
+  <depend>cuda-toolkit</depend>
   <depend>diagnostic_msgs</depend>
   <depend>geometry_msgs</depend>
-  <depend>isaac_ros_managed_nitros</depend>
+  <depend>isaac_ros_common</depend>
+  <depend>isaac_ros_nitros</depend>
   <depend>isaac_ros_nitros_tensor_list_type</depend>
   <depend>isaac_ros_tensor_list_interfaces</depend>
   <depend>jetpilot_msgs</depend>

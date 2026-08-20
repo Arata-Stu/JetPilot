@@ -5,8 +5,7 @@
 #include <memory>
 #include <string>
 
-#include "isaac_ros_managed_nitros/managed_nitros_subscriber.hpp"
-#include "isaac_ros_nitros_tensor_list_type/nitros_tensor_list_view.hpp"
+#include "isaac_ros_nitros_tensor_list_type/nitros_tensor_list.hpp"
 #include "nav_msgs/msg/path.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "std_msgs/msg/bool.hpp"
@@ -22,11 +21,9 @@ public:
     const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
 
 private:
-  using TensorListView = nvidia::isaac_ros::nitros::NitrosTensorListView;
-  using NitrosSubscriber =
-    nvidia::isaac_ros::nitros::ManagedNitrosSubscriber<TensorListView>;
+  using TensorList = nvidia::isaac_ros::nitros::NitrosTensorList;
 
-  void on_tensor(const TensorListView & message);
+  void on_tensor(TensorList::ConstSharedPtr message);
   void publish_ready(bool ready);
 
   std::string output_tensor_name_;
@@ -39,7 +36,7 @@ private:
   rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr trajectory_pub_;
   rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr target_speed_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr ready_pub_;
-  std::shared_ptr<NitrosSubscriber> tensor_sub_;
+  rclcpp::Subscription<TensorList>::SharedPtr tensor_sub_;
 };
 
 }  // namespace jetpilot_e2e_inference
