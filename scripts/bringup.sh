@@ -30,6 +30,7 @@ ASSUME_YES=false
 INTERACTIVE=false
 CLI_BAG_MANAGER=''
 CLI_SENSOR_KIT=''
+CLI_LOCALIZATION_INIT=''
 REQUIRES_MAP=false
 REQUIRES_ROSBAG=false
 REQUIRES_RACELINE=false
@@ -72,12 +73,22 @@ is_valid_port() {
   [[ "$port" =~ ^[0-9]{1,5}$ ]] && ((10#$port >= 1 && 10#$port <= 65535))
 }
 
+has_cuvslam_database() {
+  local candidate
+  local map_database_dir="$1"
+
+  for candidate in "${map_database_dir%/}"/*.mdb; do
+    [[ -f "$candidate" ]] && return 0
+  done
+  return 1
+}
+
 print_presets() {
   cat <<'EOF'
 sensor               Sensor kit + camera TF only (no actuator)
-localization-only    Localization stack; camera input is already running
-localization         Sensor kit + localization + RViz (map required)
-localize-live        Sensor kit + localization + RViz (alias of localization)
+localization-only    Localization + Foxglove pose fallback; camera is already running
+localization         Sensor + localization + Foxglove pose fallback + RViz (map required)
+localize-live        Sensor + localization + Foxglove pose fallback + RViz (alias)
 replay-localization  Safe rosbag replay + localization + RViz (bag/map required)
 offline-vslam        Rosbag replay + VSLAM visualization + RViz (bag required)
 offline-vslam-map    Rosbag replay + VSLAM mapping debug + RViz (bag/map required)
@@ -85,7 +96,7 @@ offline-localization Rosbag replay + VGL/VSLAM localization + RViz (bag/map requ
 vehicle              Selected vehicle interface only
 teleop               Joy/teleop/operation + selected vehicle interface
 drive                Live sensor + joy/teleop/operation + selected vehicle interface
-runtime              Live sensor/localization/teleop + selected vehicle interface (map required)
+runtime              Live sensor/localization/teleop + Foxglove pose fallback + vehicle (map required)
 custom               Interactive component selection; all components start OFF
 EOF
 }
@@ -117,6 +128,10 @@ Options:
                         Select a discovered sensor kit profile
       --rviz-config NAME_OR_PATH
                         Select RViz config: default, vslam-debug, or absolute path
+      --localization-init MODE
+                        VSLAM initialization: pose-hint (default) or map-origin
+      --pose-hint      Alias for --localization-init pose-hint
+      --no-pose-hint  Alias for --localization-init map-origin
       --components LIST
                         Custom component list, e.g. sensor,hd-map,foxglove
       --set ARG:=VALUE Override one bringup launch argument
@@ -129,6 +144,8 @@ Examples:
   $(basename "$0") --preset vehicle --vehicle pca
   $(basename "$0") --preset drive --vehicle vesc
   $(basename "$0") --preset localization --map /workspaces/map/course_a
+  $(basename "$0") --preset localization --map /workspaces/map/course_a \
+    --localization-init map-origin
   $(basename "$0") custom --components sensor,hd-map,foxglove \\
     --map /workspaces/map/course_a
   $(basename "$0") replay-localization --bag /workspaces/record/run_01 \\
@@ -237,6 +254,8 @@ set_base_args() {
   set_arg enable_sensor_kit false
   set_arg enable_localization false
   set_arg enable_vslam true
+  set_arg vslam_enable_slam true
+  set_arg vslam_localize_on_startup false
   set_arg enable_localization_manager true
   set_arg enable_vgl true
   set_arg enable_occupancy_map_server false
@@ -430,6 +449,31 @@ enable_localization_stack() {
   set_arg publish_vehicle_description true
 }
 
+enable_live_localization_stack() {
+  enable_localization_stack
+  # Keep a low-overhead manual pose path ready when VGL is unavailable or fails.
+  set_arg enable_foxglove true
+}
+
+set_localization_init_mode() {
+  case "$1" in
+    pose-hint)
+      set_arg vslam_localize_on_startup false
+      ;;
+    map-origin)
+      set_arg vslam_localize_on_startup true
+      ;;
+    *) die "localization initialization must be pose-hint or map-origin: $1" ;;
+  esac
+}
+
+normalize_localization_init_mode() {
+  if is_true "$(get_arg vslam_localize_on_startup)"; then
+    # Origin startup and VGL both initiate localization and must not race.
+    set_arg enable_vgl false
+  fi
+}
+
 enable_offline_replay_stack() {
   set_arg enable_rosbag_replay true
   set_arg use_sim_time true
@@ -458,12 +502,12 @@ apply_preset() {
       set_arg publish_vehicle_description true
       ;;
     localization-only)
-      enable_localization_stack
+      enable_live_localization_stack
       REQUIRES_MAP=true
       ;;
     localization|localize-live)
       set_arg enable_sensor_kit true
-      enable_localization_stack
+      enable_live_localization_stack
       set_arg enable_rviz true
       REQUIRES_MAP=true
       ;;
@@ -500,9 +544,9 @@ apply_preset() {
       enable_localization_stack
       set_arg enable_vslam true
       set_arg enable_vgl true
-      set_arg vslam_enable_slam false
+      set_arg vslam_enable_slam true
       set_arg vslam_enable_visualization true
-      set_arg vslam_localize_on_startup true
+      set_arg vslam_localize_on_startup false
       REQUIRES_MAP=true
       ;;
     vehicle)
@@ -520,7 +564,7 @@ apply_preset() {
     runtime)
       enable_teleop_stack
       set_arg enable_sensor_kit true
-      enable_localization_stack
+      enable_live_localization_stack
       REQUIRES_VEHICLE=true
       REQUIRES_MAP=true
       ;;
@@ -551,14 +595,14 @@ apply_preset() {
     runtime-pca)
       enable_teleop_stack
       set_arg enable_sensor_kit true
-      enable_localization_stack
+      enable_live_localization_stack
       apply_vehicle pca
       REQUIRES_MAP=true
       ;;
     runtime-vesc)
       enable_teleop_stack
       set_arg enable_sensor_kit true
-      enable_localization_stack
+      enable_live_localization_stack
       apply_vehicle vesc
       REQUIRES_MAP=true
       ;;
@@ -1109,6 +1153,7 @@ normalize_rosbag_path() {
 
 validate_configuration() {
   local configured_path
+  local origin_startup
   local replay
   local vehicle
 
@@ -1124,6 +1169,7 @@ validate_configuration() {
   fi
   replay="$(get_arg enable_rosbag_replay)"
   vehicle="$(get_arg enable_vehicle)"
+  origin_startup="$(get_arg vslam_localize_on_startup)"
   normalize_rosbag_path
 
   if is_true "$(get_arg allow_unsafe_replay_control_topics)" \
@@ -1143,6 +1189,17 @@ validate_configuration() {
     && is_true "$(get_arg enable_localization)" \
     && [[ -z "$MAP_DIR" ]]; then
     die "preset '$PRESET' requires --map PATH"
+  fi
+  if is_true "$origin_startup"; then
+    is_true "$(get_arg enable_localization)" \
+      || die 'map-origin initialization requires enable_localization=true'
+    is_true "$(get_arg enable_vslam)" \
+      || die 'map-origin initialization requires enable_vslam=true'
+    is_true "$(get_arg vslam_enable_slam)" \
+      || die 'map-origin initialization requires vslam_enable_slam=true'
+    is_true "$(get_arg enable_localization_manager)" \
+      || die 'map-origin initialization requires the localization manager for safety status'
+    [[ -n "$MAP_DIR" ]] || die 'map-origin initialization requires --map PATH'
   fi
   if [[ "$REQUIRES_ROSBAG" == 'true' ]] \
     && is_true "$replay" \
@@ -1173,6 +1230,14 @@ validate_configuration() {
   if [[ -n "$MAP_DIR" ]]; then
     [[ "$DRY_RUN" == 'true' || -d "$MAP_DIR" ]] \
       || die "map directory does not exist: $MAP_DIR"
+    if is_true "$origin_startup"; then
+      [[ "$DRY_RUN" == 'true' || -d "${MAP_DIR%/}/cuvslam_map" ]] \
+        || die "map-origin initialization requires a saved cuVSLAM map: ${MAP_DIR%/}/cuvslam_map"
+      if [[ "$DRY_RUN" != 'true' ]]; then
+        has_cuvslam_database "${MAP_DIR%/}/cuvslam_map" \
+          || die "map-origin initialization requires a cuVSLAM .mdb database in: ${MAP_DIR%/}/cuvslam_map"
+      fi
+    fi
     set_arg map_dir "$MAP_DIR"
   fi
   if [[ -n "$ROSBAG" ]]; then
@@ -1279,6 +1344,13 @@ print_summary() {
     fi
   fi
   printf '  localization : %s\n' "$(get_arg enable_localization)"
+  if is_true "$(get_arg enable_localization)"; then
+    if is_true "$(get_arg vslam_localize_on_startup)"; then
+      printf '  VSLAM init   : map-origin (VGL off; restart with pose-hint on failure)\n'
+    else
+      printf '  VSLAM init   : pose-hint\n'
+    fi
+  fi
   if is_true "$(get_arg enable_foxglove)"; then
     printf '  Foxglove     : bind %s:%s\n' \
       "$(get_arg foxglove_address)" "$(get_arg foxglove_port)"
@@ -1366,6 +1438,14 @@ while (($# > 0)); do
       shift 2
       ;;
     --rviz-config=*) RVIZ_CONFIG="${1#*=}"; shift ;;
+    --localization-init)
+      (($# >= 2)) || die '--localization-init requires pose-hint or map-origin'
+      CLI_LOCALIZATION_INIT="$2"
+      shift 2
+      ;;
+    --localization-init=*) CLI_LOCALIZATION_INIT="${1#*=}"; shift ;;
+    --pose-hint) CLI_LOCALIZATION_INIT='pose-hint'; shift ;;
+    --no-pose-hint|--map-origin) CLI_LOCALIZATION_INIT='map-origin'; shift ;;
     --components)
       (($# >= 2)) || die '--components requires a comma-separated list'
       CUSTOM_COMPONENTS="$2"
@@ -1407,6 +1487,10 @@ if [[ -z "$PRESET" ]]; then
 fi
 known_preset "$PRESET" || die "unknown preset: $PRESET (use --list-presets)"
 apply_preset "$PRESET"
+
+if [[ -n "$CLI_LOCALIZATION_INIT" ]]; then
+  set_localization_init_mode "$CLI_LOCALIZATION_INIT"
+fi
 
 if [[ "$PRESET" == 'custom' ]]; then
   if [[ -n "$CUSTOM_COMPONENTS" ]]; then
@@ -1473,6 +1557,7 @@ if ((${#EXTRA_LAUNCH_ARGS[@]} > 0)); then
     parse_override "$override"
   done
 fi
+normalize_localization_init_mode
 validate_configuration
 print_summary
 

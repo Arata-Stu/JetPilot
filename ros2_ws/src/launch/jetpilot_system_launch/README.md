@@ -66,10 +66,51 @@ MCAPとRAWのduration分割は`config/tool/bag_manager.param.yaml`の`recording_
 
 Jetson 上の通常起動では `isaac_ros_jetson_stats` が既定で有効になり、診断情報を `/jetson/diagnostics` へ publish します。必要に応じて `enable_jetson_stats:=false` で無効化できます。x86 imageには同packageが配布されないため既定で無効になり、明示的な有効化も拒否します。`scripts/bringup.sh` のオフライン再生プリセットでは tool stack自体を停止するため、Jetson statsも起動しません。
 
+## VSLAM初期位置モード
+
+`bringup.sh`の`--localization-init`で、VSLAM起動時の初期位置推定経路を選択できます。
+
+| mode | 起動時の動作 | VGL | 手動fallback |
+| --- | --- | --- | --- |
+| `pose-hint`（既定） | VGLまたは`/initialpose`をManagerからVSLAMへ送る | 設定に従う。実機presetではON | 使用可能 |
+| `map-origin` | 保存VSLAM mapの原点から推定する | 強制OFF | 失敗時は`pose-hint`で再起動 |
+
+```bash
+# VGL→Foxglove fallbackを使う既定動作
+/workspaces/scripts/bringup.sh localization \
+  --map /workspaces/map/course_a \
+  --localization-init pose-hint
+
+# 外部pose hintを送らず、保存mapの原点から開始
+/workspaces/scripts/bringup.sh localization \
+  --map /workspaces/map/course_a \
+  --localization-init map-origin
+```
+
+`map-origin`には`<map_dir>/cuvslam_map`直下の`*.mdb` databaseとVSLAMの
+localization/mapping modeが必要です。Isaac ROS内部では
+`localize_on_startup=true`として実装され、`map` frameのidentity poseを内部hintとして探索します。
+起動時に外部`/localization/pose_hint`はpublishしません。Managerは停止せずVSLAM diagnosticsを監視し、
+成功後にcontroller向けの`localized` stateをpublishします。原点探索中は競合防止のため
+`/initialpose`とrelocalize要求を受け付けません。Isaac ROSは別threadで動く原点探索のcancelや明確な
+完了signalを公開していないため、ManagerのtimeoutだけではFoxglove入力を解禁しません。
+`map_origin_restart_required`を通知したら、`pose-hint` modeでlocalization stackを再起動してから
+`/initialpose`を送ります。再起動前に遅れて成功diagnosticsが届いた場合は成功として受理します。
+timeoutの計測はManager起動時ではなく、最初の有効なVSLAM localization diagnosticsを受けてから開始します。
+有効なdiagnosticsが一度も届かない場合は、別の120秒readiness watchdogが同じ再起動要求を通知します。
+この切替は起動時設定なので、走行中の変更にはlocalization stackの再起動が必要です。
+
+`--no-pose-hint`は`--localization-init map-origin`、`--pose-hint`は`pose-hint`のaliasです。
+VGLを使わず最初からFoxgloveの手動poseを待つ場合は、`pose-hint`のまま
+`--set enable_vgl:=false`を追加します。
+
 ## Foxglove bridge
 
-Foxglove bridgeは既定OFFで、`enable_foxglove:=true`または`bringup.sh`の
-`foxglove` componentを選んだ場合だけ起動します。既定portは`8767`です。JetPilot Consoleの
+`bringup.launch.py`単体の`enable_foxglove`は既定OFFです。一方、実機用の
+`localization-only`、`localization`／`localize-live`、`runtime` presetでは、VGLが使えない
+場合の手動pose入力を常に確保するためFoxglove bridgeを待機起動します。replay／offline presetは
+OFFのままです。`custom`では`foxglove` componentまたは`enable_foxglove:=true`を明示した場合だけ
+起動します。既定portは`8767`です。JetPilot Consoleの
 `8765`とJoy profile editorの`8766`を避けています。VSLAMのmap座標系に揃えたHD map表示と
 initial pose指定だけを含む
 最小構成は次のとおりです。
@@ -96,6 +137,19 @@ OccupancyGridは使用しません。Foxgloveの3D panelではdisplay frameを`m
 **2D pose estimate**を選び、publish先を`/initialpose`に設定します。
 map directoryには既定で`<map_dir>/<map_dir_name>_hd_map.yaml`が必要です。別の場所にある場合は
 `hd_map_yaml_path`を明示します。
+実機用localization presetが自動で起動するのはbridgeまでで、HD map publisherは自動では有効に
+なりません。コース外形を見ながらposeを置く場合は`--set enable_hd_map_publisher:=true`を追加するか、
+`custom`で`hd-map`と`foxglove`を両方選択します。
+
+初期位置推定では、VGLの`/visual_localization/pose`とFoxgloveの`/initialpose`を
+localization managerが受け、VSLAMの`map` frameとして検証した後、
+`/localization/pose_hint`へ転送します。VSLAMの準備前にposeを受けた場合は準備完了まで保持します。
+手動poseは保留中のVGL結果より優先され、後から届いたVGL結果は無視されます。ただし、すでに開始した
+VGL推論の計算処理そのものは中断しません。VGLの計算負荷自体を避ける場合は
+`--set enable_vgl:=false`を指定し、Foxgloveの手動経路だけを使用します。
+`/localization/pose_hint_required`と`/localization/pose_hint_state`を確認すると、手動入力が必要な
+状態を判断できます。
+特定の実機runでbridgeを待機させたくない場合は`--set enable_foxglove:=false`で停止できます。
 
 Foxglove Bridge 3.4.xには、`client_topic_whitelist`を読み込んでもclient publish時に適用しない
 上流不具合があります。initial pose入力のため`clientPublish`を有効にしているので、接続clientは
@@ -127,8 +181,9 @@ Jetsonのnetwork interfaceへ公開しない場合はloopbackへbindし、notebo
 ssh -N -L 8767:127.0.0.1:8767 jetson@JETSON_IP
 ```
 
-この場合はFoxgloveから`ws://localhost:8767`へ接続します。画像を購読しない構成では継続的な
-CPU負荷は小さい想定ですが、TFのrate、HD map markerの更新サイズ、接続client数に依存します。
+この場合はFoxgloveから`ws://localhost:8767`へ接続します。実機presetではclient未接続でもbridge
+processが待機します。画像を購読しない構成では待機中および接続後の継続的なCPU負荷は小さい想定ですが、
+TFのrate、HD map markerの更新サイズ、接続client数に依存します。
 実機ではjtopを使い、bridge OFF、bridge ONかつ未接続、Foxglove接続後に実際のpanelとtopicを
 購読した状態の3条件を比較してください。静的HD map markerはpanelの購読開始時に一時的な転送負荷が
 発生することがあります。

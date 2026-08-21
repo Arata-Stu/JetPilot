@@ -29,6 +29,11 @@ Common presets:
 /workspaces/scripts/bringup.sh localization \
   --map /workspaces/map/course_a
 
+# Start at the saved VSLAM map origin without an external startup hint
+/workspaces/scripts/bringup.sh localization \
+  --map /workspaces/map/course_a \
+  --localization-init map-origin
+
 # Full live runtime; autonomous control remains OFF until explicitly requested
 /workspaces/scripts/bringup.sh runtime --vehicle pca \
   --map /workspaces/map/course_a
@@ -40,7 +45,7 @@ Common presets:
 
 # Map localization + HD map + lane planning + Pure Pursuit
 /workspaces/scripts/bringup.sh custom \
-  --components sensor,localization,hd-map,control,vehicle \
+  --components sensor,localization,hd-map,foxglove,control,vehicle \
   --vehicle vesc \
   --map /workspaces/map/course_a \
   --raceline /workspaces/map/course_a/course_a_raceline.csv
@@ -71,6 +76,35 @@ Vehicle interface and sensor kit choices are loaded dynamically from JSON profil
 `--list-vehicles`, `--list-sensor-kits`, and `--validate-profiles` to inspect them. Adding a new
 hardware profile does not require editing `scripts/bringup.sh`; follow
 [Bringup profile追加ルール](bringup_profile_rules.md).
+
+## VSLAM initialization mode
+
+`--localization-init` selects the startup localization path. It is a startup setting; changing it
+while VSLAM is running requires restarting the localization stack.
+
+| Mode | Startup behavior | VGL | Manual fallback |
+| --- | --- | --- | --- |
+| `pose-hint` (default) | Localization manager sends a VGL or `/initialpose` hint | Configurable; ON in live presets | Available |
+| `map-origin` | VSLAM localizes with the saved map's identity pose | Forced OFF | Restart in `pose-hint` mode if origin localization fails |
+
+`map-origin` requires a direct child `*.mdb` database in `<map_dir>/cuvslam_map` and VSLAM
+localization/mapping mode to be enabled.
+Strictly speaking, Isaac ROS implements this as
+`localize_on_startup=true`, which uses the identity pose in the `map` frame as an internal hint; no
+external `/localization/pose_hint` is sent at startup. The localization manager remains active so
+the controller still receives `/localization/pose_hint_state`. It reports `localized` after VSLAM
+diagnostics confirm success. During the origin attempt, manual pose and relocalize requests are
+blocked to avoid two localization jobs racing. Isaac ROS does not expose cancellation or a definite
+completion signal for its detached origin-localization job, so a manager timeout does not unlock
+`/initialpose`. It reports `map_origin_restart_required`; restart the localization stack in
+`pose-hint` mode before sending a Foxglove pose. A late origin-success diagnostic is still accepted
+until the restart. The confirmation timeout starts after the first valid VSLAM localization
+diagnostic rather than at Manager process startup. If no valid diagnostic arrives at all, a
+separate 120-second readiness watchdog reports the same restart-required state.
+
+`--no-pose-hint` is an alias for `--localization-init map-origin`; `--pose-hint` selects the default
+mode explicitly. To skip VGL while still requiring a manual pose from the start, keep `pose-hint`
+mode and add `--set enable_vgl:=false`.
 
 The first selector chooses one preset with arrow keys and Enter. For `vehicle`, `teleop`, `drive`,
 and `runtime`, the next selector lists the discovered vehicle interface profiles. Presets that enable
@@ -106,8 +140,11 @@ selected automatically.
 
 ## Foxglove bridge
 
-Foxglove is OFF by default and starts only when the `foxglove` custom component or
-`enable_foxglove:=true` is selected. It listens on port `8767`; ports `8765` and `8766` are reserved
+The underlying `bringup.launch.py` argument remains OFF by default. Live `localization-only`,
+`localization`/`localize-live`, and `runtime` presets enable Foxglove automatically as a standby
+manual-pose path for production. Replay/offline presets keep it OFF, and `custom` enables it only
+when the `foxglove` component or `enable_foxglove:=true` is selected. It listens on port `8767`;
+ports `8765` and `8766` are reserved
 for the JetPilot Console and Joy profile editor. The default outbound allowlist contains only
 `/tf`, `/tf_static`, `/clock`, topics ending in `/diagnostics`, selected localization state and
 HD-map marker/path topics, `/visual_slam/tracking/odometry`, and `/visual_localization/pose`.
@@ -124,6 +161,19 @@ no OccupancyGrid is needed. In Foxglove's 3D panel, select `map` as the display 
 `/initialpose`.
 The map directory must contain `<map_dir>/<map_dir_name>_hd_map.yaml`, unless
 `hd_map_yaml_path` is set explicitly.
+The live localization presets start the bridge but do not enable the HD-map publisher by
+themselves. To see the course outline while placing the pose, add
+`--set enable_hd_map_publisher:=true` or select both `hd-map` and `foxglove` in `custom`.
+
+The localization manager accepts both `/visual_localization/pose` from VGL and `/initialpose`
+from Foxglove. It validates either pose in the VSLAM `map` frame, waits until Isaac ROS VSLAM is
+ready when necessary, and forwards the selected pose to `/localization/pose_hint`. A manual pose
+supersedes the pending VGL result, and a late VGL result is ignored. This does not cancel VGL
+inference that is already running. Use `--set enable_vgl:=false` when the VGL compute cost itself
+must be avoided; the Foxglove manual path remains available. Monitor
+`/localization/pose_hint_required` and `/localization/pose_hint_state` in Foxglove to decide when
+manual input is required.
+Use `--set enable_foxglove:=false` if a particular live run must not start the standby bridge.
 
 Foxglove Bridge 3.4.x currently parses `client_topic_whitelist` but does not enforce it. With the
 `clientPublish` capability enabled for initial-pose input, a connected client can therefore publish
@@ -154,10 +204,11 @@ on the Jetson network interfaces, bind it to loopback and forward the port from 
 ssh -N -L 8767:127.0.0.1:8767 jetson@JETSON_IP
 ```
 
-Foxglove then connects to `ws://localhost:8767`. Without image topics, the expected continuous CPU
-cost is small, although it still depends on TF rate, HD-map marker update size, and the number
-of connected clients. Check the actual target with jtop in three states: bridge OFF, bridge ON with
-no client, and Foxglove connected with the intended panels and topics subscribed. Static HD-map
+Foxglove then connects to `ws://localhost:8767`. The production presets may leave the bridge process
+running with no client connected. Without image topics, its standby and continuous forwarding cost
+is expected to be small, although it still depends on TF rate, HD-map marker update size, and the
+number of connected clients. Check the actual target with jtop in three states: bridge OFF, bridge ON
+with no client, and Foxglove connected with the intended panels and topics subscribed. Static HD-map
 markers may cause a short transfer spike when their panel first subscribes.
 
 ## Safety behavior

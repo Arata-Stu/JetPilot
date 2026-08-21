@@ -39,7 +39,9 @@ private:
     kAwaitingVslam,
     kLocalized,
     kLocalizedUnconfirmed,
+    kUnlocalized,
     kWaitingForManual,
+    kMapOriginRestartRequired,
   };
 
   double nonnegative_parameter(const std::string & name, double default_value);
@@ -49,6 +51,7 @@ private:
   void set_deadline(double timeout_sec);
   bool vslam_subscriber_ready() const;
   bool can_forward_pose() const;
+  bool map_origin_job_may_be_running() const;
   void transition(State state, std::string reason);
   void begin_localization(const std::string & source);
   void start_attempt();
@@ -72,11 +75,13 @@ private:
 
   bool use_vgl_{false};
   bool autostart_{false};
+  bool origin_startup_{false};
   bool wait_for_vslam_subscriber_{true};
   bool wait_for_vslam_diagnostics_{true};
   double dependency_wait_timeout_sec_{30.0};
   double vgl_response_timeout_sec_{30.0};
   double vslam_confirmation_timeout_sec_{60.0};
+  double origin_diagnostics_timeout_sec_{120.0};
   double retry_backoff_sec_{1.0};
   double poll_period_sec_{0.1};
   double status_publish_period_sec_{0.5};
@@ -111,6 +116,7 @@ private:
   SteadyTime steady_now_;
   SteadyTime last_status_publish_{};
   std::optional<SteadyTime> deadline_;
+  std::optional<SteadyTime> origin_diagnostics_deadline_;
   std::optional<std::int64_t> pending_vgl_request_id_;
 
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr pose_hint_required_pub_;

@@ -15,6 +15,21 @@ Global Localization (VGL), Isaac ROS Visual SLAM (VSLAM), RViz, joystick input, 
 5. If VSLAM publishes `/visual_slam/trigger_hint`, VGL is retried with bounded backoff.
 6. After timeouts or exhausted attempts, the manager waits for a valid `/initialpose` message.
 
+When `origin_startup=true`, VSLAM performs its own identity-pose localization against the saved
+map. The launch layer requires at least one direct-child `*.mdb` database in `cuvslam_map/`,
+matching cuVSLAM's own loader check. The manager does not start VGL or publish a pose hint. It
+keeps publishing safety status,
+accepts a fresh `localized_in_exist_map=Yes` diagnostic as success, and blocks manual
+`/initialpose` and relocalize requests while that startup job may still be running. Isaac ROS does
+not expose cancellation or an unambiguous completion signal for the detached origin-localization
+job. A manager timeout therefore enters `map_origin_restart_required`; restart the localization
+stack with `origin_startup=false` before sending a pose hint. A late success diagnostic is still
+accepted while restart is pending. The confirmation timeout starts only after the first valid
+VSLAM localization diagnostic, so component and camera cold-start time is not mistaken for an
+origin-localization timeout. A separate 120-second diagnostics-readiness watchdog prevents a
+missing or broken VSLAM diagnostic stream from leaving startup pending forever; it also requires a
+restart and never unlocks an in-process manual pose.
+
 When `vslam_save_map_folder_path` is set, the system launch treats the run as mapping: it does not
 load an existing cuVSLAM map and does not start this manager. With a saved cuVSLAM map but no VGL
 map, autostart instead enters the manual `/initialpose` fallback immediately.
@@ -51,14 +66,19 @@ Publishing a pose hint is **not** reported as successful localization. The manag
 request is running, so an isolated `Yes` is deliberately not accepted as proof of the new request.
 VSLAM's `trigger_hint` remains the authoritative retry signal.
 
+After a confirmed success, a later `localized_in_exist_map=No` immediately changes the manager
+state to `unlocalized` and sets `pose_hint_required=true`. This fail-closed transition prevents the
+controller from continuing on a stale `localized` status while VSLAM has lost the saved map.
+
 An `awaiting_vslam` deadline prevents the UI from hanging forever. If VSLAM still reports `Yes`
 without a request-specific `No -> Yes` transition, the state becomes `localized_unconfirmed` rather
 than claiming a confirmed success. A missing/negative result retries VGL or falls back to manual
 pose input. A late valid VGL pose is still accepted while manual fallback is waiting, because the
 upstream VGL service has no cancellation API.
 
-The JSON status contains `state`, `pose_hint_required`, request source, readiness, attempt counts,
-last hint source, and the latest reason. The status publishers use reliable transient-local QoS.
+The JSON status contains `state`, `pose_hint_required`, request source, `origin_startup`,
+`restart_required`, readiness, attempt counts, last hint source, and the latest reason. The status
+publishers use reliable transient-local QoS.
 
 ## Build and test
 

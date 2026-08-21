@@ -65,18 +65,28 @@ def camera_optical_frames_from_topic_config(topic_config_file: str) -> str:
 
 
 def saved_localization_map_availability(map_dir: str) -> tuple[bool, bool]:
-    """Return whether the saved cuVGL and cuVSLAM map directories are available."""
+    """Return whether the saved cuVGL directory and cuVSLAM database are available."""
     if not map_dir:
         return False, False
 
     cuvgl_map_dir = os.path.join(map_dir, 'cuvgl_map')
     cuvslam_map_dir = os.path.join(map_dir, 'cuvslam_map')
-    return os.path.isdir(cuvgl_map_dir), os.path.isdir(cuvslam_map_dir)
+    cuvslam_database_available = False
+    if os.path.isdir(cuvslam_map_dir):
+        try:
+            with os.scandir(cuvslam_map_dir) as entries:
+                cuvslam_database_available = any(
+                    entry.is_file() and os.path.splitext(entry.name)[1] == '.mdb'
+                    for entry in entries)
+        except OSError:
+            cuvslam_database_available = False
+    return os.path.isdir(cuvgl_map_dir), cuvslam_database_available
 
 
 def add_nodes(args: lu.ArgumentContainer):
     use_sim_time = lu.is_true(args.use_sim_time)
-    enable_vgl = lu.is_true(args.enable_vgl)
+    origin_startup_requested = lu.is_true(args.vslam_localize_on_startup)
+    enable_vgl_requested = lu.is_true(args.enable_vgl)
     enable_vslam = lu.is_true(args.enable_vslam)
     enable_localization_manager = lu.is_true(args.enable_localization_manager)
     enable_occupancy_map_server = lu.is_true(args.enable_occupancy_map_server)
@@ -89,9 +99,30 @@ def add_nodes(args: lu.ArgumentContainer):
     cuvgl_map_available, cuvslam_map_available = saved_localization_map_availability(
         args.map_dir)
     mapping_mode = bool(args.vslam_save_map_folder_path)
+    if origin_startup_requested and mapping_mode:
+        raise RuntimeError(
+            'map-origin localization cannot be combined with VSLAM mapping output')
+    origin_startup = origin_startup_requested and not mapping_mode
+    enable_vgl = enable_vgl_requested and not origin_startup
     vgl_started = False
 
+    if origin_startup and not enable_vslam:
+        raise RuntimeError('map-origin localization requires VSLAM to be enabled')
+    if origin_startup and not lu.is_true(args.vslam_enable_slam):
+        raise RuntimeError(
+            'map-origin localization requires vslam_enable_slam=true '
+            '(Isaac ROS enable_localization_n_mapping)')
+    if origin_startup and not cuvslam_map_available:
+        raise RuntimeError(
+            'map-origin localization requires a saved cuVSLAM .mdb database at '
+            f'{os.path.join(args.map_dir, "cuvslam_map") if args.map_dir else "<unset>"}')
+
     actions = []
+    if origin_startup:
+        actions.append(
+            lu.log_info(
+                'VSLAM map-origin initialization selected: VGL startup is disabled and '
+                'a failed attempt requires restart in pose-hint mode.'))
     if lu.is_true(args.run_standalone):
         actions.append(localization_component_container(args.container_name))
 
@@ -144,7 +175,7 @@ def add_nodes(args: lu.ArgumentContainer):
             'vslam_publish_map_to_odom_tf': True,
             'vslam_enable_slam': lu.is_true(args.vslam_enable_slam),
             'vslam_enable_visualization': lu.is_true(args.vslam_enable_visualization),
-            'vslam_localize_on_startup': lu.is_true(args.vslam_localize_on_startup),
+            'vslam_localize_on_startup': origin_startup,
             'vslam_enable_ground_constraint_in_odometry':
                 lu.is_true(args.vslam_enable_ground_constraint_in_odometry),
             'vslam_enable_ground_constraint_in_slam':
@@ -186,7 +217,8 @@ def add_nodes(args: lu.ArgumentContainer):
         if enable_localization_manager and not mapping_mode:
             localization_manager_params = [{
                 'use_vgl': vgl_started,
-                'autostart': cuvslam_map_available and not mapping_mode,
+                'autostart': cuvslam_map_available and not origin_startup,
+                'origin_startup': origin_startup,
                 'use_sim_time': use_sim_time,
                 'vslam_hint_request_topic': args.vslam_hint_request_topic,
                 'vslam_pose_hint_topic': args.vslam_pose_hint_topic,

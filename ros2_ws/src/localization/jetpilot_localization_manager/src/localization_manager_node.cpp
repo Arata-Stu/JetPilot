@@ -20,11 +20,19 @@ LocalizationManagerNode::LocalizationManagerNode()
 {
   use_vgl_ = declare_parameter<bool>("use_vgl", false);
   autostart_ = declare_parameter<bool>("autostart", false);
+  origin_startup_ = declare_parameter<bool>("origin_startup", false);
+  if (origin_startup_)
+  {
+    use_vgl_ = false;
+    autostart_ = false;
+  }
   wait_for_vslam_subscriber_ = declare_parameter<bool>("wait_for_vslam_subscriber", true);
   wait_for_vslam_diagnostics_ = declare_parameter<bool>("wait_for_vslam_diagnostics", true);
   dependency_wait_timeout_sec_ = nonnegative_parameter("dependency_wait_timeout_sec", 30.0);
   vgl_response_timeout_sec_ = nonnegative_parameter("vgl_response_timeout_sec", 30.0);
   vslam_confirmation_timeout_sec_ = nonnegative_parameter("vslam_confirmation_timeout_sec", 60.0);
+  origin_diagnostics_timeout_sec_ =
+    nonnegative_parameter("origin_diagnostics_timeout_sec", 120.0);
   retry_backoff_sec_ = nonnegative_parameter("retry_backoff_sec", 1.0);
   const auto max_attempts_parameter =
     std::max<std::int64_t>(0, declare_parameter<std::int64_t>("max_attempts", 3));
@@ -99,10 +107,23 @@ LocalizationManagerNode::LocalizationManagerNode()
 
   RCLCPP_INFO(get_logger(),
               "Localization manager started (use_vgl=%s, autostart=%s, "
-              "max_attempts=%d)",
-              use_vgl_ ? "true" : "false", autostart_ ? "true" : "false", max_attempts_);
+              "origin_startup=%s, max_attempts=%d)",
+              use_vgl_ ? "true" : "false", autostart_ ? "true" : "false",
+              origin_startup_ ? "true" : "false", max_attempts_);
 
-  if (autostart_)
+  if (origin_startup_)
+  {
+    request_source_ = "map_origin";
+    pose_hint_required_ = false;
+    transition(State::kAwaitingVslam, "waiting_for_map_origin_vslam_diagnostics");
+    if (origin_diagnostics_timeout_sec_ > 0.0)
+    {
+      origin_diagnostics_deadline_ =
+        steady_now_ + std::chrono::duration_cast<SteadyClock::duration>(
+                        std::chrono::duration<double>(origin_diagnostics_timeout_sec_));
+    }
+  }
+  else if (autostart_)
   {
     begin_localization("autostart");
   }
@@ -142,8 +163,12 @@ const char * LocalizationManagerNode::state_name(State state)
       return "localized";
     case State::kLocalizedUnconfirmed:
       return "localized_unconfirmed";
+    case State::kUnlocalized:
+      return "unlocalized";
     case State::kWaitingForManual:
       return "waiting_for_manual";
+    case State::kMapOriginRestartRequired:
+      return "map_origin_restart_required";
   }
   return "unknown";
 }
@@ -217,6 +242,12 @@ bool LocalizationManagerNode::can_forward_pose() const
   const bool subscriber_ready = !wait_for_vslam_subscriber_ || vslam_subscriber_ready();
   const bool diagnostics_ready = !wait_for_vslam_diagnostics_ || saw_vslam_diagnostics_;
   return subscriber_ready && diagnostics_ready;
+}
+
+bool LocalizationManagerNode::map_origin_job_may_be_running() const
+{
+  return origin_startup_ && request_source_ == "map_origin" &&
+         (state_ == State::kAwaitingVslam || state_ == State::kMapOriginRestartRequired);
 }
 
 void LocalizationManagerNode::transition(State state, std::string reason)
@@ -391,6 +422,13 @@ void LocalizationManagerNode::forward_pending_pose()
 
 void LocalizationManagerNode::on_vslam_hint_request(const Pose::SharedPtr /* message */)
 {
+  if (map_origin_job_may_be_running())
+  {
+    reason_ = "ignored_hint_request_while_map_origin_job_may_be_running";
+    publish_status();
+    return;
+  }
+
   request_source_ = "vslam";
   pose_hint_required_ = true;
   RCLCPP_WARN(get_logger(), "VSLAM requested another localization hint");
@@ -402,6 +440,7 @@ void LocalizationManagerNode::on_vslam_hint_request(const Pose::SharedPtr /* mes
   }
 
   if (state_ == State::kIdle || state_ == State::kLocalized ||
+      state_ == State::kUnlocalized ||
       state_ == State::kLocalizedUnconfirmed)
   {
     begin_localization("vslam");
@@ -418,6 +457,16 @@ void LocalizationManagerNode::on_vslam_hint_request(const Pose::SharedPtr /* mes
 
 void LocalizationManagerNode::on_manual_pose(const Pose::SharedPtr message)
 {
+  if (map_origin_job_may_be_running())
+  {
+    reason_ = "manual_pose_requires_restart_in_pose_hint_mode";
+    publish_status();
+    RCLCPP_WARN(get_logger(),
+                "Ignoring manual pose because the map-origin job cannot be cancelled; "
+                "restart localization in pose-hint mode");
+    return;
+  }
+
   const auto validation = validate_pose(*message, validation_options_, now().nanoseconds());
   if (!validation.valid)
   {
@@ -473,12 +522,28 @@ void LocalizationManagerNode::on_localization_trigger(const std_msgs::msg::Bool:
   {
     return;
   }
+  if (map_origin_job_may_be_running())
+  {
+    reason_ = "localization_trigger_requires_restart_in_pose_hint_mode";
+    publish_status();
+    return;
+  }
   begin_localization("topic");
 }
 
 void LocalizationManagerNode::on_relocalize_service(const Trigger::Request::SharedPtr /* request */,
                                                     Trigger::Response::SharedPtr response)
 {
+  if (map_origin_job_may_be_running())
+  {
+    reason_ = "relocalize_requires_restart_in_pose_hint_mode";
+    publish_status();
+    response->success = false;
+    response->message =
+      "Map-origin localization cannot be cancelled; restart in pose-hint mode";
+    return;
+  }
+
   begin_localization("service");
   response->success = use_vgl_;
   response->message =
@@ -517,6 +582,52 @@ void LocalizationManagerNode::on_diagnostics(
 
   saw_vslam_diagnostics_ = true;
   last_vslam_localized_ = localized;
+  origin_diagnostics_deadline_.reset();
+  const bool awaiting_map_origin =
+    origin_startup_ && request_source_ == "map_origin" &&
+    (state_ == State::kAwaitingVslam || state_ == State::kMapOriginRestartRequired);
+  if (awaiting_map_origin)
+  {
+    if (localized.value())
+    {
+      pose_hint_required_ = false;
+      deadline_.reset();
+      transition(State::kLocalized, "vslam_localized_from_map_origin");
+      RCLCPP_INFO(get_logger(), "VSLAM localized from the saved map origin");
+    }
+    else if (state_ == State::kAwaitingVslam)
+    {
+      pose_hint_required_ = false;
+      if (!deadline_.has_value())
+      {
+        transition(State::kAwaitingVslam, "waiting_for_map_origin_localization");
+        set_deadline(vslam_confirmation_timeout_sec_);
+      }
+      else
+      {
+        reason_ = "waiting_for_map_origin_localization";
+        publish_status();
+      }
+    }
+    else
+    {
+      publish_status();
+    }
+    return;
+  }
+
+  if (!localized.value() &&
+      (state_ == State::kLocalized || state_ == State::kLocalizedUnconfirmed))
+  {
+    pose_hint_required_ = true;
+    deadline_.reset();
+    transition(State::kUnlocalized, "vslam_lost_saved_map_localization");
+    RCLCPP_ERROR(get_logger(),
+                 "VSLAM reports that saved-map localization was lost; closing the "
+                 "controller localization gate");
+    return;
+  }
+
   if (state_ != State::kAwaitingVslam)
   {
     publish_status();
@@ -551,6 +662,20 @@ void LocalizationManagerNode::on_diagnostics(
 void LocalizationManagerNode::on_tick()
 {
   steady_now_ = SteadyClock::now();
+
+  if (origin_startup_ && request_source_ == "map_origin" &&
+      state_ == State::kAwaitingVslam && !saw_vslam_diagnostics_ &&
+      origin_diagnostics_deadline_.has_value() &&
+      steady_now_ >= origin_diagnostics_deadline_.value())
+  {
+    pose_hint_required_ = false;
+    origin_diagnostics_deadline_.reset();
+    transition(State::kMapOriginRestartRequired,
+               "map_origin_diagnostics_timeout_restart_in_pose_hint_mode");
+    RCLCPP_ERROR(get_logger(),
+                 "No valid VSLAM localization diagnostic arrived during map-origin startup; "
+                 "restart localization in pose-hint mode");
+  }
 
   switch (state_)
   {
@@ -620,7 +745,17 @@ void LocalizationManagerNode::on_tick()
     case State::kAwaitingVslam:
       if (deadline_expired())
       {
-        if (last_vslam_localized_.value_or(false))
+        if (origin_startup_ && request_source_ == "map_origin")
+        {
+          pose_hint_required_ = false;
+          deadline_.reset();
+          transition(State::kMapOriginRestartRequired,
+                     "map_origin_timeout_restart_in_pose_hint_mode");
+          RCLCPP_ERROR(get_logger(),
+                       "Map-origin localization timed out. The upstream job cannot be "
+                       "cancelled; restart localization in pose-hint mode before sending a pose");
+        }
+        else if (last_vslam_localized_.value_or(false))
         {
           pose_hint_required_ = false;
           transition(State::kLocalizedUnconfirmed,
@@ -661,6 +796,9 @@ void LocalizationManagerNode::publish_status()
        << "\"request_source\":\"" << json_escape(request_source_) << "\","
        << "\"use_vgl\":" << (use_vgl_ ? "true" : "false") << ","
        << "\"autostart\":" << (autostart_ ? "true" : "false") << ","
+       << "\"origin_startup\":" << (origin_startup_ ? "true" : "false") << ","
+       << "\"restart_required\":"
+       << (state_ == State::kMapOriginRestartRequired ? "true" : "false") << ","
        << "\"vgl_available\":" << (vgl_trigger_client_->service_is_ready() ? "true" : "false")
        << ","
        << "\"vgl_service_ready\":" << (vgl_trigger_client_->service_is_ready() ? "true" : "false")

@@ -589,8 +589,16 @@ def test_custom_components_can_be_selected_in_one_argument() -> None:
     assert "enable_localization:=false" in output
 
 
-def test_foxglove_is_opt_in_with_hd_map_defaults() -> None:
+def test_foxglove_custom_component_uses_hd_map_defaults() -> None:
     default_output = run_launcher("sensor", "--dry-run").stdout
+    custom_without_foxglove = run_launcher(
+        "custom",
+        "--components",
+        "sensor,localization,hd-map",
+        "--map",
+        "/workspaces/map/course_a",
+        "--dry-run",
+    ).stdout
     enabled_output = run_launcher(
         "custom",
         "--components",
@@ -602,6 +610,10 @@ def test_foxglove_is_opt_in_with_hd_map_defaults() -> None:
 
     assert "enable_foxglove:=false" in default_output
     assert "Foxglove     : disabled" in default_output
+    assert "enable_localization:=true" in custom_without_foxglove
+    assert "enable_hd_map_publisher:=true" in custom_without_foxglove
+    assert "enable_foxglove:=false" in custom_without_foxglove
+    assert "Foxglove     : disabled" in custom_without_foxglove
     assert "enable_foxglove:=true" in enabled_output
     assert "enable_hd_map_publisher:=true" in enabled_output
     assert "foxglove_address:=0.0.0.0" in enabled_output
@@ -610,6 +622,201 @@ def test_foxglove_is_opt_in_with_hd_map_defaults() -> None:
     assert "lane_markers" in enabled_output
     assert "diagnostics" in enabled_output
     assert "Foxglove     : bind 0.0.0.0:8767" in enabled_output
+
+
+def test_live_localization_presets_start_foxglove_pose_fallback() -> None:
+    cases = (
+        ("localization-only", "--map", "/workspaces/map/course_a", "--dry-run"),
+        ("localization", "--map", "/workspaces/map/course_a", "--dry-run"),
+        ("localize-live", "--map", "/workspaces/map/course_a", "--dry-run"),
+        (
+            "runtime",
+            "--vehicle",
+            "vesc",
+            "--map",
+            "/workspaces/map/course_a",
+            "--dry-run",
+        ),
+        ("runtime-pca", "--map", "/workspaces/map/course_a", "--dry-run"),
+        ("runtime-vesc", "--map", "/workspaces/map/course_a", "--dry-run"),
+    )
+
+    for arguments in cases:
+        output = run_launcher(*arguments).stdout
+
+        assert "enable_localization:=true" in output
+        assert "enable_localization_manager:=true" in output
+        assert "vslam_localize_on_startup:=false" in output
+        assert "enable_vgl:=true" in output
+        assert "enable_foxglove:=true" in output
+        assert "VSLAM init   : pose-hint" in output
+        assert "Foxglove     : bind 0.0.0.0:8767" in output
+
+
+def test_map_origin_initialization_disables_vgl_but_keeps_safety_status() -> None:
+    output = run_launcher(
+        "localization",
+        "--map",
+        "/workspaces/map/course_a",
+        "--localization-init",
+        "map-origin",
+        "--set",
+        "enable_vgl:=true",
+        "--dry-run",
+    ).stdout
+
+    assert "vslam_localize_on_startup:=true" in output
+    assert output.count("enable_vgl:=false") == 1
+    assert "enable_vgl:=true" not in output
+    assert "enable_localization_manager:=true" in output
+    assert "enable_foxglove:=true" in output
+    assert "VSLAM init   : map-origin (VGL off; restart with pose-hint on failure)" in output
+
+
+def test_pose_hint_mode_can_use_foxglove_without_vgl() -> None:
+    output = run_launcher(
+        "localization",
+        "--map",
+        "/workspaces/map/course_a",
+        "--pose-hint",
+        "--set",
+        "enable_vgl:=false",
+        "--dry-run",
+    ).stdout
+
+    assert "vslam_localize_on_startup:=false" in output
+    assert "enable_vgl:=false" in output
+    assert "enable_localization_manager:=true" in output
+    assert "enable_foxglove:=true" in output
+    assert "VSLAM init   : pose-hint" in output
+
+
+def test_localization_init_rejects_invalid_mode() -> None:
+    result = run_launcher(
+        "localization",
+        "--map",
+        "/workspaces/map/course_a",
+        "--localization-init",
+        "unknown",
+        "--dry-run",
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "localization initialization must be pose-hint or map-origin" in result.stderr
+
+
+def test_map_origin_requires_localization_manager() -> None:
+    result = run_launcher(
+        "localization",
+        "--map",
+        "/workspaces/map/course_a",
+        "--no-pose-hint",
+        "--set",
+        "enable_localization_manager:=false",
+        "--dry-run",
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "requires the localization manager for safety status" in result.stderr
+
+
+def test_map_origin_requires_vslam_localization_mode() -> None:
+    result = run_launcher(
+        "localization",
+        "--map",
+        "/workspaces/map/course_a",
+        "--no-pose-hint",
+        "--set",
+        "vslam_enable_slam:=false",
+        "--dry-run",
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "requires vslam_enable_slam=true" in result.stderr
+
+
+def test_map_origin_requires_saved_cuvslam_map(tmp_path: Path) -> None:
+    missing_directory = run_launcher(
+        "localization",
+        "--map",
+        str(tmp_path),
+        "--no-pose-hint",
+        check=False,
+    )
+
+    assert missing_directory.returncode != 0
+    assert "map-origin initialization requires a saved cuVSLAM map" in (
+        missing_directory.stderr
+    )
+
+    cuvslam_map = tmp_path / "cuvslam_map"
+    cuvslam_map.mkdir()
+    (cuvslam_map / "not_a_map.txt").write_text("invalid", encoding="utf-8")
+    missing_database = run_launcher(
+        "localization",
+        "--map",
+        str(tmp_path),
+        "--no-pose-hint",
+        check=False,
+    )
+
+    assert missing_database.returncode != 0
+    assert "requires a cuVSLAM .mdb database" in missing_database.stderr
+
+
+def test_replay_and_offline_presets_keep_foxglove_disabled() -> None:
+    cases = (
+        (
+            "replay-localization",
+            "--bag",
+            "/workspaces/record/run_01",
+            "--map",
+            "/workspaces/map/course_a",
+            "--dry-run",
+        ),
+        (
+            "offline-localization",
+            "--bag",
+            "/workspaces/record/run_01",
+            "--map",
+            "/workspaces/map/course_a",
+            "--dry-run",
+        ),
+        ("offline-vslam", "--bag", "/workspaces/record/run_01", "--dry-run"),
+        (
+            "offline-vslam-map",
+            "--bag",
+            "/workspaces/record/run_01",
+            "--map",
+            "/workspaces/map/course_a",
+            "--dry-run",
+        ),
+    )
+
+    for arguments in cases:
+        output = run_launcher(*arguments).stdout
+
+        assert "enable_localization:=true" in output
+        assert "enable_foxglove:=false" in output
+        assert "Foxglove     : disabled" in output
+
+
+def test_live_localization_can_disable_foxglove_explicitly() -> None:
+    output = run_launcher(
+        "localization",
+        "--map",
+        "/workspaces/map/course_a",
+        "--set",
+        "enable_foxglove:=false",
+        "--dry-run",
+    ).stdout
+
+    assert output.count("enable_foxglove:=false") == 1
+    assert "enable_foxglove:=true" not in output
+    assert "Foxglove     : disabled" in output
 
 
 def test_foxglove_rejects_invalid_ports() -> None:
@@ -943,7 +1150,8 @@ def test_offline_localization_uses_vgl_and_vslam_with_map(tmp_path: Path) -> Non
     assert "enable_rosbag_replay:=true" in output
     assert "enable_vslam:=true" in output
     assert "enable_vgl:=true" in output
-    assert "vslam_localize_on_startup:=true" in output
+    assert "vslam_enable_slam:=true" in output
+    assert "vslam_localize_on_startup:=false" in output
     assert "enable_vehicle:=false" in output
 
 

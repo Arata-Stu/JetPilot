@@ -3,6 +3,9 @@
     # localization.launch.py should set use_vgl/autostart from actual map availability.
     use_vgl: false
     autostart: false
+    # true: monitor VSLAM's identity-pose startup localization without sending a hint.
+    # On timeout, restart the localization stack with origin_startup=false before sending a pose.
+    origin_startup: false
 
     # A request waits for the VGL service, a VSLAM pose-hint subscriber, and the
     # first VSLAM localization diagnostic before forwarding a pose.
@@ -11,6 +14,8 @@
     dependency_wait_timeout_sec: 30.0
     vgl_response_timeout_sec: 30.0
     vslam_confirmation_timeout_sec: 60.0
+    # Separate readiness watchdog; 0 disables it. It never unlocks manual pose in-process.
+    origin_diagnostics_timeout_sec: 120.0
     retry_backoff_sec: 1.0
     max_attempts: 3
     poll_period_sec: 0.1

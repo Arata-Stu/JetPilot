@@ -23,7 +23,7 @@ LOCALIZATION = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(LOCALIZATION)
 
 
-def test_saved_map_availability_requires_both_directories(tmp_path: Path) -> None:
+def test_saved_map_availability_requires_cuvslam_database(tmp_path: Path) -> None:
     assert LOCALIZATION.saved_localization_map_availability("") == (False, False)
     assert LOCALIZATION.saved_localization_map_availability(str(tmp_path)) == (
         False,
@@ -39,6 +39,12 @@ def test_saved_map_availability_requires_both_directories(tmp_path: Path) -> Non
     (tmp_path / "cuvslam_map").mkdir()
     assert LOCALIZATION.saved_localization_map_availability(str(tmp_path)) == (
         True,
+        False,
+    )
+
+    (tmp_path / "cuvslam_map" / "course_map.mdb").write_bytes(b"map")
+    assert LOCALIZATION.saved_localization_map_availability(str(tmp_path)) == (
+        True,
         True,
     )
 
@@ -50,9 +56,21 @@ def test_localization_manager_launch_contract_is_wired_statically() -> None:
     assert "package='jetpilot_localization_manager'" in localization_source
     assert "executable='jetpilot_localization_manager_node'" in localization_source
     assert "mapping_mode = bool(args.vslam_save_map_folder_path)" in localization_source
+    assert "origin_startup_requested = lu.is_true(args.vslam_localize_on_startup)" in (
+        localization_source
+    )
+    assert (
+        "enable_vgl = enable_vgl_requested and not origin_startup"
+        in localization_source
+    )
+    assert "map-origin localization cannot be combined with VSLAM mapping output" in (
+        localization_source
+    )
     assert "if cuvslam_map_available and not mapping_mode" in localization_source
     assert "if enable_localization_manager and not mapping_mode" in localization_source
-    assert "'autostart': cuvslam_map_available and not mapping_mode" in localization_source
+    assert "'vslam_localize_on_startup': origin_startup" in localization_source
+    assert "'autostart': cuvslam_map_available and not origin_startup" in localization_source
+    assert "'origin_startup': origin_startup" in localization_source
     for parameter in (
         "'use_vgl': vgl_started",
         "'vslam_hint_request_topic': args.vslam_hint_request_topic",
@@ -72,6 +90,38 @@ def test_localization_manager_launch_contract_is_wired_statically() -> None:
 
     assert "'enable_localization_manager': args.enable_localization_manager" in bringup_source
     assert "'localization_manager_param': args.localization_manager_param" in bringup_source
+
+
+def test_map_origin_manager_contract_preserves_controller_safety_status() -> None:
+    localization_source = LOCALIZATION_LAUNCH_PATH.read_text(encoding="utf-8")
+    manager_source = (
+        PACKAGE_ROOT.parents[1]
+        / "localization/jetpilot_localization_manager/src/localization_manager_node.cpp"
+    ).read_text(encoding="utf-8")
+
+    assert "map-origin localization requires a saved cuVSLAM .mdb database" in (
+        localization_source
+    )
+    assert "map-origin localization requires VSLAM to be enabled" in localization_source
+    assert "map-origin localization requires vslam_enable_slam=true" in localization_source
+    assert 'declare_parameter<bool>("origin_startup", false)' in manager_source
+    assert 'request_source_ = "map_origin"' in manager_source
+    assert 'transition(State::kAwaitingVslam, "waiting_for_map_origin_localization")' in (
+        manager_source
+    )
+    assert 'transition(State::kLocalized, "vslam_localized_from_map_origin")' in (
+        manager_source
+    )
+    assert "State::kMapOriginRestartRequired" in manager_source
+    assert "map_origin_timeout_restart_in_pose_hint_mode" in manager_source
+    assert "map_origin_diagnostics_timeout_restart_in_pose_hint_mode" in manager_source
+    assert 'nonnegative_parameter("origin_diagnostics_timeout_sec", 120.0)' in manager_source
+    assert "manual_pose_requires_restart_in_pose_hint_mode" in manager_source
+    assert '<< "\\\"restart_required\\\":"' in manager_source
+    assert 'transition(State::kUnlocalized, "vslam_lost_saved_map_localization")' in (
+        manager_source
+    )
+    assert '<< "\\\"origin_startup\\\":"' in manager_source
 
 
 def test_configurable_localization_endpoints_are_wired_to_producers() -> None:
