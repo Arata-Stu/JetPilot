@@ -85,7 +85,23 @@ while VSLAM is running requires restarting the localization stack.
 | Mode | Startup behavior | VGL | Manual fallback |
 | --- | --- | --- | --- |
 | `pose-hint` (default) | Localization manager sends a VGL or `/initialpose` hint | Configurable; ON in live presets | Available |
+| `foxglove` | Manager waits for Foxglove `/initialpose` immediately | Forced OFF | Required at startup |
 | `map-origin` | VSLAM localizes with the saved map's identity pose | Forced OFF | Restart in `pose-hint` mode if origin localization fails |
+
+Use `foxglove` when VGL should not be loaded or triggered:
+
+```bash
+/workspaces/scripts/bringup.sh localization \
+  --map /workspaces/map/course_a \
+  --localization-init foxglove \
+  --set enable_hd_map_publisher:=true
+```
+
+This mode forces the Foxglove bridge ON, keeps `localize_on_startup=false`, and starts
+the manager in `waiting_for_manual`. Send a `map`-frame 2D Pose Estimate to `/initialpose`; it is
+validated and forwarded to `/localization/pose_hint`. A direct-child `*.mdb` database in
+`<map_dir>/cuvslam_map` is required. It cannot be combined with `vslam_save_map_folder_path`;
+use the dedicated mapping workflow when creating a map.
 
 `map-origin` requires a direct child `*.mdb` database in `<map_dir>/cuvslam_map` and VSLAM
 localization/mapping mode to be enabled.
@@ -103,8 +119,8 @@ diagnostic rather than at Manager process startup. If no valid diagnostic arrive
 separate 120-second readiness watchdog reports the same restart-required state.
 
 `--no-pose-hint` is an alias for `--localization-init map-origin`; `--pose-hint` selects the default
-mode explicitly. To skip VGL while still requiring a manual pose from the start, keep `pose-hint`
-mode and add `--set enable_vgl:=false`.
+mode explicitly. The older combination `pose-hint --set enable_vgl:=false` remains available, but
+`--localization-init foxglove` is the explicit and self-contained form for Foxglove-only startup.
 
 The first selector chooses one preset with arrow keys and Enter. For `vehicle`, `teleop`, `drive`,
 and `runtime`, the next selector lists the discovered vehicle interface profiles. Presets that enable
@@ -143,7 +159,8 @@ selected automatically.
 The underlying `bringup.launch.py` argument remains OFF by default. Live `localization-only`,
 `localization`/`localize-live`, and `runtime` presets enable Foxglove automatically as a standby
 manual-pose path for production. Replay/offline presets keep it OFF, and `custom` enables it only
-when the `foxglove` component or `enable_foxglove:=true` is selected. It listens on port `8767`;
+when the `foxglove` component, `enable_foxglove:=true`, or the explicit
+`--localization-init foxglove` mode is selected. It listens on port `8767`;
 ports `8765` and `8766` are reserved
 for the JetPilot Console and Joy profile editor. The default outbound allowlist contains only
 `/tf`, `/tf_static`, `/clock`, topics ending in `/diagnostics`, selected localization state and
@@ -173,7 +190,13 @@ inference that is already running. Use `--set enable_vgl:=false` when the VGL co
 must be avoided; the Foxglove manual path remains available. Monitor
 `/localization/pose_hint_required` and `/localization/pose_hint_state` in Foxglove to decide when
 manual input is required.
-Use `--set enable_foxglove:=false` if a particular live run must not start the standby bridge.
+Use `--set enable_foxglove:=false` if a regular `pose-hint` live run must not start the standby
+bridge. The explicit `--localization-init foxglove` mode requires the bridge and therefore takes
+precedence over that generic override.
+
+Replay/offline presets remain bridge-OFF by default. Explicitly selecting
+`--localization-init foxglove` during `replay-localization` or `offline-localization` enables live
+`/initialpose` input, so that replay is intentionally interactive rather than deterministic.
 
 Foxglove Bridge 3.4.x currently parses `client_topic_whitelist` but does not enforce it. With the
 `clientPublish` capability enabled for initial-pose input, a connected client can therefore publish

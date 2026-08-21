@@ -691,6 +691,51 @@ def test_pose_hint_mode_can_use_foxglove_without_vgl() -> None:
     assert "VSLAM init   : pose-hint" in output
 
 
+def test_foxglove_initialization_waits_for_manual_pose_without_vgl() -> None:
+    output = run_launcher(
+        "localization",
+        "--map",
+        "/workspaces/map/course_a",
+        "--localization-init",
+        "foxglove",
+        "--set",
+        "enable_vgl:=true",
+        "--set",
+        "enable_foxglove:=false",
+        "--set",
+        "vslam_localize_on_startup:=true",
+        "--dry-run",
+    ).stdout
+
+    assert "vslam_localize_on_startup:=false" in output
+    assert output.count("enable_vgl:=false") == 1
+    assert "enable_vgl:=true" not in output
+    assert output.count("enable_foxglove:=true") == 1
+    assert "enable_foxglove:=false" not in output
+    assert "enable_localization_manager:=true" in output
+    assert "VSLAM init   : foxglove (/initialpose required; VGL off)" in output
+    assert "Foxglove     : bind 0.0.0.0:8767" in output
+
+
+def test_foxglove_initialization_survives_custom_component_selection() -> None:
+    output = run_launcher(
+        "custom",
+        "--components",
+        "localization",
+        "--map",
+        "/workspaces/map/course_a",
+        "--localization-init",
+        "foxglove",
+        "--dry-run",
+    ).stdout
+
+    assert "enable_localization:=true" in output
+    assert "enable_localization_manager:=true" in output
+    assert "vslam_localize_on_startup:=false" in output
+    assert "enable_vgl:=false" in output
+    assert "enable_foxglove:=true" in output
+
+
 def test_localization_init_rejects_invalid_mode() -> None:
     result = run_launcher(
         "localization",
@@ -703,7 +748,9 @@ def test_localization_init_rejects_invalid_mode() -> None:
     )
 
     assert result.returncode != 0
-    assert "localization initialization must be pose-hint or map-origin" in result.stderr
+    assert "localization initialization must be pose-hint, foxglove, or map-origin" in (
+        result.stderr
+    )
 
 
 def test_map_origin_requires_localization_manager() -> None:
@@ -738,6 +785,24 @@ def test_map_origin_requires_vslam_localization_mode() -> None:
     assert "requires vslam_enable_slam=true" in result.stderr
 
 
+def test_external_localization_modes_reject_mapping_output() -> None:
+    for mode in ("map-origin", "foxglove"):
+        result = run_launcher(
+            "localization",
+            "--map",
+            "/workspaces/map/course_a",
+            "--localization-init",
+            mode,
+            "--set",
+            "vslam_save_map_folder_path:=/workspaces/map/new_map/cuvslam_map",
+            "--dry-run",
+            check=False,
+        )
+
+        assert result.returncode != 0
+        assert "cannot be combined with vslam_save_map_folder_path" in result.stderr
+
+
 def test_map_origin_requires_saved_cuvslam_map(tmp_path: Path) -> None:
     missing_directory = run_launcher(
         "localization",
@@ -765,6 +830,54 @@ def test_map_origin_requires_saved_cuvslam_map(tmp_path: Path) -> None:
 
     assert missing_database.returncode != 0
     assert "requires a cuVSLAM .mdb database" in missing_database.stderr
+
+
+def test_foxglove_initialization_requires_saved_map(tmp_path: Path) -> None:
+    missing_map = run_launcher(
+        "localization",
+        "--map",
+        str(tmp_path),
+        "--localization-init",
+        "foxglove",
+        check=False,
+    )
+
+    assert missing_map.returncode != 0
+    assert "foxglove initialization requires a saved cuVSLAM map" in missing_map.stderr
+
+    cuvslam_map = tmp_path / "cuvslam_map"
+    cuvslam_map.mkdir()
+    (cuvslam_map / "not_a_map.txt").write_text("invalid", encoding="utf-8")
+    missing_database = run_launcher(
+        "localization",
+        "--map",
+        str(tmp_path),
+        "--localization-init",
+        "foxglove",
+        check=False,
+    )
+
+    assert missing_database.returncode != 0
+    assert "requires a cuVSLAM .mdb database" in missing_database.stderr
+
+
+def test_replay_enables_foxglove_only_when_mode_is_explicit() -> None:
+    explicit_output = run_launcher(
+        "replay-localization",
+        "--bag",
+        "/workspaces/record/run_01",
+        "--map",
+        "/workspaces/map/course_a",
+        "--localization-init",
+        "foxglove",
+        "--dry-run",
+    ).stdout
+
+    assert "enable_rosbag_replay:=true" in explicit_output
+    assert "vslam_localize_on_startup:=false" in explicit_output
+    assert "enable_vgl:=false" in explicit_output
+    assert "enable_foxglove:=true" in explicit_output
+    assert "VSLAM init   : foxglove (/initialpose required; VGL off)" in explicit_output
 
 
 def test_replay_and_offline_presets_keep_foxglove_disabled() -> None:

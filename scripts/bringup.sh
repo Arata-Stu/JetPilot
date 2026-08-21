@@ -31,6 +31,7 @@ INTERACTIVE=false
 CLI_BAG_MANAGER=''
 CLI_SENSOR_KIT=''
 CLI_LOCALIZATION_INIT=''
+LOCALIZATION_INIT_MODE='pose-hint'
 REQUIRES_MAP=false
 REQUIRES_ROSBAG=false
 REQUIRES_RACELINE=false
@@ -129,7 +130,7 @@ Options:
       --rviz-config NAME_OR_PATH
                         Select RViz config: default, vslam-debug, or absolute path
       --localization-init MODE
-                        VSLAM initialization: pose-hint (default) or map-origin
+                        VSLAM initialization: pose-hint (default), foxglove, or map-origin
       --pose-hint      Alias for --localization-init pose-hint
       --no-pose-hint  Alias for --localization-init map-origin
       --components LIST
@@ -146,6 +147,8 @@ Examples:
   $(basename "$0") --preset localization --map /workspaces/map/course_a
   $(basename "$0") --preset localization --map /workspaces/map/course_a \
     --localization-init map-origin
+  $(basename "$0") --preset localization --map /workspaces/map/course_a \
+    --localization-init foxglove
   $(basename "$0") custom --components sensor,hd-map,foxglove \\
     --map /workspaces/map/course_a
   $(basename "$0") replay-localization --bag /workspaces/record/run_01 \\
@@ -456,22 +459,44 @@ enable_live_localization_stack() {
 }
 
 set_localization_init_mode() {
+  LOCALIZATION_INIT_MODE="$1"
   case "$1" in
     pose-hint)
       set_arg vslam_localize_on_startup false
       ;;
+    foxglove)
+      set_arg vslam_localize_on_startup false
+      set_arg enable_vgl false
+      set_arg enable_foxglove true
+      ;;
     map-origin)
       set_arg vslam_localize_on_startup true
       ;;
-    *) die "localization initialization must be pose-hint or map-origin: $1" ;;
+    *) die "localization initialization must be pose-hint, foxglove, or map-origin: $1" ;;
   esac
 }
 
 normalize_localization_init_mode() {
-  if is_true "$(get_arg vslam_localize_on_startup)"; then
-    # Origin startup and VGL both initiate localization and must not race.
-    set_arg enable_vgl false
+  if [[ -n "$CLI_LOCALIZATION_INIT" ]]; then
+    # A named mode is authoritative over contradictory generic --set overrides.
+    set_localization_init_mode "$CLI_LOCALIZATION_INIT"
+  elif is_true "$(get_arg vslam_localize_on_startup)"; then
+    LOCALIZATION_INIT_MODE='map-origin'
+  else
+    LOCALIZATION_INIT_MODE='pose-hint'
   fi
+
+  case "$LOCALIZATION_INIT_MODE" in
+    map-origin)
+      # Origin startup and VGL both initiate localization and must not race.
+      set_arg enable_vgl false
+      ;;
+    foxglove)
+      set_arg vslam_localize_on_startup false
+      set_arg enable_vgl false
+      set_arg enable_foxglove true
+      ;;
+  esac
 }
 
 enable_offline_replay_stack() {
@@ -1153,6 +1178,8 @@ normalize_rosbag_path() {
 
 validate_configuration() {
   local configured_path
+  local foxglove_startup=false
+  local mapping_output
   local origin_startup
   local replay
   local vehicle
@@ -1170,6 +1197,10 @@ validate_configuration() {
   replay="$(get_arg enable_rosbag_replay)"
   vehicle="$(get_arg enable_vehicle)"
   origin_startup="$(get_arg vslam_localize_on_startup)"
+  mapping_output="$(get_arg vslam_save_map_folder_path 2>/dev/null || true)"
+  if [[ "$LOCALIZATION_INIT_MODE" == 'foxglove' ]]; then
+    foxglove_startup=true
+  fi
   normalize_rosbag_path
 
   if is_true "$(get_arg allow_unsafe_replay_control_topics)" \
@@ -1190,16 +1221,22 @@ validate_configuration() {
     && [[ -z "$MAP_DIR" ]]; then
     die "preset '$PRESET' requires --map PATH"
   fi
-  if is_true "$origin_startup"; then
+  if is_true "$origin_startup" || is_true "$foxglove_startup"; then
     is_true "$(get_arg enable_localization)" \
-      || die 'map-origin initialization requires enable_localization=true'
+      || die "${LOCALIZATION_INIT_MODE} initialization requires enable_localization=true"
     is_true "$(get_arg enable_vslam)" \
-      || die 'map-origin initialization requires enable_vslam=true'
+      || die "${LOCALIZATION_INIT_MODE} initialization requires enable_vslam=true"
     is_true "$(get_arg vslam_enable_slam)" \
-      || die 'map-origin initialization requires vslam_enable_slam=true'
+      || die "${LOCALIZATION_INIT_MODE} initialization requires vslam_enable_slam=true"
     is_true "$(get_arg enable_localization_manager)" \
-      || die 'map-origin initialization requires the localization manager for safety status'
-    [[ -n "$MAP_DIR" ]] || die 'map-origin initialization requires --map PATH'
+      || die "${LOCALIZATION_INIT_MODE} initialization requires the localization manager for safety status"
+    [[ -n "$MAP_DIR" ]] || die "${LOCALIZATION_INIT_MODE} initialization requires --map PATH"
+    [[ -z "$mapping_output" ]] \
+      || die "${LOCALIZATION_INIT_MODE} initialization cannot be combined with vslam_save_map_folder_path"
+  fi
+  if is_true "$foxglove_startup"; then
+    is_true "$(get_arg enable_foxglove)" \
+      || die 'foxglove initialization requires enable_foxglove=true'
   fi
   if [[ "$REQUIRES_ROSBAG" == 'true' ]] \
     && is_true "$replay" \
@@ -1230,12 +1267,12 @@ validate_configuration() {
   if [[ -n "$MAP_DIR" ]]; then
     [[ "$DRY_RUN" == 'true' || -d "$MAP_DIR" ]] \
       || die "map directory does not exist: $MAP_DIR"
-    if is_true "$origin_startup"; then
+    if is_true "$origin_startup" || is_true "$foxglove_startup"; then
       [[ "$DRY_RUN" == 'true' || -d "${MAP_DIR%/}/cuvslam_map" ]] \
-        || die "map-origin initialization requires a saved cuVSLAM map: ${MAP_DIR%/}/cuvslam_map"
+        || die "${LOCALIZATION_INIT_MODE} initialization requires a saved cuVSLAM map: ${MAP_DIR%/}/cuvslam_map"
       if [[ "$DRY_RUN" != 'true' ]]; then
         has_cuvslam_database "${MAP_DIR%/}/cuvslam_map" \
-          || die "map-origin initialization requires a cuVSLAM .mdb database in: ${MAP_DIR%/}/cuvslam_map"
+          || die "${LOCALIZATION_INIT_MODE} initialization requires a cuVSLAM .mdb database in: ${MAP_DIR%/}/cuvslam_map"
       fi
     fi
     set_arg map_dir "$MAP_DIR"
@@ -1345,11 +1382,15 @@ print_summary() {
   fi
   printf '  localization : %s\n' "$(get_arg enable_localization)"
   if is_true "$(get_arg enable_localization)"; then
-    if is_true "$(get_arg vslam_localize_on_startup)"; then
-      printf '  VSLAM init   : map-origin (VGL off; restart with pose-hint on failure)\n'
-    else
-      printf '  VSLAM init   : pose-hint\n'
-    fi
+    case "$LOCALIZATION_INIT_MODE" in
+      map-origin)
+        printf '  VSLAM init   : map-origin (VGL off; restart with pose-hint on failure)\n'
+        ;;
+      foxglove)
+        printf '  VSLAM init   : foxglove (/initialpose required; VGL off)\n'
+        ;;
+      *) printf '  VSLAM init   : pose-hint\n' ;;
+    esac
   fi
   if is_true "$(get_arg enable_foxglove)"; then
     printf '  Foxglove     : bind %s:%s\n' \
@@ -1439,7 +1480,7 @@ while (($# > 0)); do
       ;;
     --rviz-config=*) RVIZ_CONFIG="${1#*=}"; shift ;;
     --localization-init)
-      (($# >= 2)) || die '--localization-init requires pose-hint or map-origin'
+      (($# >= 2)) || die '--localization-init requires pose-hint, foxglove, or map-origin'
       CLI_LOCALIZATION_INIT="$2"
       shift 2
       ;;

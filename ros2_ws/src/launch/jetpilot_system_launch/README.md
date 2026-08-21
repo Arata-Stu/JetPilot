@@ -73,6 +73,7 @@ Jetson 上の通常起動では `isaac_ros_jetson_stats` が既定で有効に�
 | mode | 起動時の動作 | VGL | 手動fallback |
 | --- | --- | --- | --- |
 | `pose-hint`（既定） | VGLまたは`/initialpose`をManagerからVSLAMへ送る | 設定に従う。実機presetではON | 使用可能 |
+| `foxglove` | 最初からFoxgloveの`/initialpose`を待つ | 強制OFF | 起動時に必須 |
 | `map-origin` | 保存VSLAM mapの原点から推定する | 強制OFF | 失敗時は`pose-hint`で再起動 |
 
 ```bash
@@ -85,7 +86,19 @@ Jetson 上の通常起動では `isaac_ros_jetson_stats` が既定で有効に�
 /workspaces/scripts/bringup.sh localization \
   --map /workspaces/map/course_a \
   --localization-init map-origin
+
+# VGLと原点推定を使わず、最初からFoxglove poseを待つ
+/workspaces/scripts/bringup.sh localization \
+  --map /workspaces/map/course_a \
+  --localization-init foxglove \
+  --set enable_hd_map_publisher:=true
 ```
+
+`foxglove` modeはVGLを読み込まず、`localize_on_startup=false`のままManagerを
+`waiting_for_manual`へ移行させ、Foxglove bridgeを強制ONにします。Foxgloveの2D Pose Estimateを
+`map` frame・`/initialpose`へ送ると、検証後に`/localization/pose_hint`へ転送します。
+`<map_dir>/cuvslam_map`直下の`*.mdb`が必要です。`vslam_save_map_folder_path`とは併用できないため、
+map生成時は専用のmapping workflowを使用してください。
 
 `map-origin`には`<map_dir>/cuvslam_map`直下の`*.mdb` databaseとVSLAMの
 localization/mapping modeが必要です。Isaac ROS内部では
@@ -101,8 +114,8 @@ timeoutの計測はManager起動時ではなく、最初の有効なVSLAM locali
 この切替は起動時設定なので、走行中の変更にはlocalization stackの再起動が必要です。
 
 `--no-pose-hint`は`--localization-init map-origin`、`--pose-hint`は`pose-hint`のaliasです。
-VGLを使わず最初からFoxgloveの手動poseを待つ場合は、`pose-hint`のまま
-`--set enable_vgl:=false`を追加します。
+従来の`pose-hint --set enable_vgl:=false`も使用できますが、Foxgloveだけで開始する意図を
+明示する場合は`--localization-init foxglove`を使用してください。
 
 ## Foxglove bridge
 
@@ -110,7 +123,8 @@ VGLを使わず最初からFoxgloveの手動poseを待つ場合は、`pose-hint`
 `localization-only`、`localization`／`localize-live`、`runtime` presetでは、VGLが使えない
 場合の手動pose入力を常に確保するためFoxglove bridgeを待機起動します。replay／offline presetは
 OFFのままです。`custom`では`foxglove` componentまたは`enable_foxglove:=true`を明示した場合だけ
-起動します。既定portは`8767`です。JetPilot Consoleの
+起動します。ただし、明示的に`--localization-init foxglove`を選んだ場合はpresetに関係なく
+bridgeを起動します。既定portは`8767`です。JetPilot Consoleの
 `8765`とJoy profile editorの`8766`を避けています。VSLAMのmap座標系に揃えたHD map表示と
 initial pose指定だけを含む
 最小構成は次のとおりです。
@@ -149,7 +163,14 @@ VGL推論の計算処理そのものは中断しません。VGLの計算負荷�
 `--set enable_vgl:=false`を指定し、Foxgloveの手動経路だけを使用します。
 `/localization/pose_hint_required`と`/localization/pose_hint_state`を確認すると、手動入力が必要な
 状態を判断できます。
-特定の実機runでbridgeを待機させたくない場合は`--set enable_foxglove:=false`で停止できます。
+通常の`pose-hint`実機runでbridgeを待機させたくない場合は
+`--set enable_foxglove:=false`で停止できます。`--localization-init foxglove`はbridgeが必須のため、
+この汎用overrideより優先されます。
+
+replay／offline presetは既定ではbridgeを起動しません。`replay-localization`または
+`offline-localization`で明示的に`--localization-init foxglove`を選ぶとliveの
+`/initialpose`入力が有効になるため、そのrunは再現性を目的としたreplayではなく対話的な
+デバッグになります。
 
 Foxglove Bridge 3.4.xには、`client_topic_whitelist`を読み込んでもclient publish時に適用しない
 上流不具合があります。initial pose入力のため`clientPublish`を有効にしているので、接続clientは
