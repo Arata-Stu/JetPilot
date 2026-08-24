@@ -233,7 +233,6 @@ docker:
   image:
     additional_image_keys:
       - realsense
-      - depthai
       - silky_evcam
       - additional_setting
 EOF
