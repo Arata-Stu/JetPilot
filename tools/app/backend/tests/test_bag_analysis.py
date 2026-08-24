@@ -229,13 +229,63 @@ class AnalysisPreflightTests(unittest.TestCase):
         self.assertEqual(self.check(result, "analysis.control_topic")["status"], WARNING)
         self.assertEqual(self.check(result, "analysis.mode_topic")["status"], WARNING)
 
+    def test_offline_object_detection_requires_raw_image_camera_info_and_model(self) -> None:
+        detector_launch = (
+            self.ros2_ws
+            / "install/jetpilot_object_detection/share/jetpilot_object_detection/launch/yolov8_tensor_rt.launch.py"
+        )
+        detector_launch.parent.mkdir(parents=True)
+        detector_launch.write_text("", encoding="utf-8")
+        bag = write_bag(
+            self.record_root / "detection-run",
+            {
+                "/realsense/color/image_raw": ("sensor_msgs/msg/Image", 30),
+                "/realsense/color/camera_info": ("sensor_msgs/msg/CameraInfo", 30),
+            },
+        )
+        model_root = self.ros2_ws / "models/yolov8/test-model"
+        model_root.mkdir(parents=True)
+        (model_root / "model.onnx").write_bytes(b"onnx")
+        result = evaluate_preflight(
+            self.config,
+            "analyze-rosbag",
+            {
+                "rosbag": str(bag),
+                "image_topic": "/realsense/color/image_raw",
+                "trajectory_mode": "none",
+                "offline_object_detection": True,
+                "object_detection_model_root": str(model_root),
+                "object_detection_image_topic": "/realsense/color/image_raw",
+                "object_detection_camera_info_topic": "/realsense/color/camera_info",
+            },
+        )
+
+        self.assertTrue(result["ready"])
+        self.assertTrue(result["resolved"]["offline_object_detection"])
+        self.assertEqual(
+            result["resolved"]["object_detection_model_root"], str(model_root.resolve())
+        )
+        self.assertEqual(
+            self.check(result, "analysis.object_detection_model")["status"], PASS
+        )
+
         blocked = evaluate_preflight(
             self.config,
             "analyze-rosbag",
-            {"rosbag": str(bag), "trajectory_mode": "none"},
+            {
+                "rosbag": str(bag),
+                "image_topic": "/realsense/color/image_raw",
+                "trajectory_mode": "none",
+                "offline_object_detection": True,
+                "object_detection_model_root": str(model_root),
+                "object_detection_image_topic": "/realsense/color/image_raw",
+            },
         )
         self.assertFalse(blocked["ready"])
-        self.assertEqual(self.check(blocked, "analysis.image_topic")["status"], BLOCKED)
+        self.assertEqual(
+            self.check(blocked, "analysis.object_detection_camera_info_topic")["status"],
+            BLOCKED,
+        )
 
     def test_analysis_runtime_is_reported_before_start(self) -> None:
         bag = write_bag(
@@ -398,6 +448,43 @@ class AnalysisPreflightTests(unittest.TestCase):
 
 
 class AnalysisScriptTests(unittest.TestCase):
+    def test_offline_detection_sidecar_runs_before_extraction(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            config = SimpleNamespace(
+                ros2_ws=root / "ros2_ws",
+                python_bin="python3",
+                launch_package="jetpilot_system_launch",
+                analysis_ros_domain_id=92,
+            )
+            script = build_analysis_script(
+                config,
+                analysis_dir=root / "analysis",
+                rosbag=root / "record/run",
+                image_topic="/realsense/color/image_raw",
+                control_topic="",
+                mode_topic="",
+                pose_topic="",
+                speed_topic="",
+                map_dir=None,
+                trajectory_mode="none",
+                max_fps=15.0,
+                offline_detection_model_root=root / "ros2_ws/models/yolov8/test",
+                offline_detection_image_topic="/realsense/color/image_raw",
+                offline_detection_camera_info_topic="/realsense/color/camera_info",
+            )
+
+            self.assertIn("jetpilot_console.offline_detection_worker", script)
+            self.assertIn("--detection-bag", script)
+            self.assertLess(
+                script.index("jetpilot_console.offline_detection_worker"),
+                script.index("jetpilot_console.analysis_worker --rosbag"),
+            )
+            syntax = subprocess.run(
+                ["bash", "-n"], input=script, text=True, capture_output=True, check=False
+            )
+            self.assertEqual(syntax.returncode, 0, syntax.stderr)
+
     def test_worker_contract_and_offline_safety_flags(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)

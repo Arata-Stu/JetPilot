@@ -449,6 +449,17 @@ def build_analysis_script(
     e2e_applied_control_topic: str = "",
     e2e_manual_only: bool = True,
     e2e_deadline_ms: float = 33.3,
+    offline_detection_model_root: Path | None = None,
+    offline_detection_image_topic: str = "",
+    offline_detection_camera_info_topic: str = "",
+    offline_detection_source_width: int = 424,
+    offline_detection_source_height: int = 240,
+    offline_detection_network_width: int = 224,
+    offline_detection_network_height: int = 224,
+    offline_detection_max_fps: float = 15.0,
+    offline_detection_confidence: float = 0.35,
+    offline_detection_nms: float = 0.45,
+    offline_detection_replay_rate: float = 0.5,
 ) -> str:
     """Build the Linux/Docker task script used by ``POST /api/analyses``.
 
@@ -476,6 +487,24 @@ def build_analysis_script(
         raise ValueError("E2E provider must be auto, cpu, or cuda")
     if not math.isfinite(e2e_deadline_ms) or e2e_deadline_ms <= 0.0:
         raise ValueError("E2E deadline must be a positive finite value")
+    if offline_detection_model_root is not None:
+        if not offline_detection_image_topic or not offline_detection_camera_info_topic:
+            raise ValueError("offline detection requires image and camera_info topics")
+        if min(
+            offline_detection_source_width,
+            offline_detection_source_height,
+            offline_detection_network_width,
+            offline_detection_network_height,
+        ) <= 0:
+            raise ValueError("offline detection image dimensions must be positive")
+        if not math.isfinite(offline_detection_max_fps) or offline_detection_max_fps <= 0.0:
+            raise ValueError("offline detection max FPS must be positive")
+        if not math.isfinite(offline_detection_replay_rate) or offline_detection_replay_rate <= 0.0:
+            raise ValueError("offline detection replay rate must be positive")
+        if not 0.0 <= offline_detection_confidence <= 1.0:
+            raise ValueError("offline detection confidence must be in [0, 1]")
+        if not 0.0 <= offline_detection_nms <= 1.0:
+            raise ValueError("offline detection NMS must be in [0, 1]")
 
     status_file = analysis_dir / "status.json"
     snapshot = analysis_dir / "localization" / "vslam_snapshot.json"
@@ -763,6 +792,52 @@ def build_analysis_script(
                 ]
             )
 
+    detection_bag = analysis_dir / "detections" / "sidecar"
+    detection_manifest = analysis_dir / "detections" / "manifest.json"
+    if offline_detection_model_root is not None:
+        offline_detection_worker = [
+            _q(config.python_bin),
+            "-m",
+            "jetpilot_console.offline_detection_worker",
+            "--rosbag",
+            _q(rosbag),
+            "--output-bag",
+            _q(detection_bag),
+            "--manifest",
+            _q(detection_manifest),
+            "--status-file",
+            _q(status_file),
+            "--model-root",
+            _q(offline_detection_model_root),
+            "--image-topic",
+            _q(offline_detection_image_topic),
+            "--camera-info-topic",
+            _q(offline_detection_camera_info_topic),
+            "--source-width",
+            str(offline_detection_source_width),
+            "--source-height",
+            str(offline_detection_source_height),
+            "--network-width",
+            str(offline_detection_network_width),
+            "--network-height",
+            str(offline_detection_network_height),
+            "--max-inference-fps",
+            f"{offline_detection_max_fps:.9g}",
+            "--confidence-threshold",
+            f"{offline_detection_confidence:.9g}",
+            "--nms-threshold",
+            f"{offline_detection_nms:.9g}",
+            "--replay-rate",
+            f"{offline_detection_replay_rate:.9g}",
+        ]
+        lines.extend(
+            [
+                f"export ROS_DOMAIN_ID={int(config.analysis_ros_domain_id)}",
+                'echo "[stage] offline object detection"',
+                " ".join(offline_detection_worker),
+            ]
+        )
+
     worker = [
         _q(config.python_bin),
         "-m",
@@ -783,6 +858,15 @@ def build_analysis_script(
             worker.extend(["--image-topics", _q(t)])
     if primary_image_topic:
         worker.extend(["--primary-image-topic", _q(primary_image_topic)])
+    if offline_detection_model_root is not None:
+        worker.extend(
+            [
+                "--detection-bag",
+                _q(detection_bag),
+                "--detection-manifest",
+                _q(detection_manifest),
+            ]
+        )
     for option, value in (
         ("--control-topic", control_topic),
         ("--mode-topic", mode_topic),

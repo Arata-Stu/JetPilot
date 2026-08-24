@@ -1,0 +1,10 @@
+# Replace this path with the root of the Roboflow YOLOv8 export.
+path: /workspaces/datasets/jetpilot_objects_v1
+train: train/images
+val: valid/images
+test: test/images
+
+# This order is part of the TensorRT/decoder interface.
+names:
+  0: vehicle
+  1: barrier

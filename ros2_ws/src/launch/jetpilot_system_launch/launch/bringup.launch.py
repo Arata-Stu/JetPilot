@@ -67,6 +67,8 @@ _REPLAY_ISOLATED_TOPICS = (
     '/oakd_lite/diagnostics',
     '/planning/diagnostics',
     '/controller/diagnostics',
+    '/perception/detections',
+    '/perception/object_detection/diagnostics',
     '/jetson/diagnostics',
     '/localization/pose_hint_required',
     '/localization/pose_hint_state',
@@ -369,6 +371,22 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('e2e_input_image_height', '240', cli=True)
     args.add_arg('e2e_network_image_width', '212', cli=True)
     args.add_arg('e2e_network_image_height', '120', cli=True)
+
+    args.add_arg('enable_object_detection', False, cli=True)
+    args.add_arg('object_detection_image_topic', '/realsense/color/image_raw', cli=True)
+    args.add_arg(
+        'object_detection_camera_info_topic',
+        '/realsense/color/camera_info',
+        cli=True)
+    args.add_arg(
+        'object_detection_model_root',
+        '/workspaces/ros2_ws/models/yolov8/latest',
+        cli=True)
+    args.add_arg('object_detection_source_width', '424', cli=True)
+    args.add_arg('object_detection_source_height', '240', cli=True)
+    args.add_arg('object_detection_network_width', '224', cli=True)
+    args.add_arg('object_detection_network_height', '224', cli=True)
+    args.add_arg('object_detection_max_inference_fps', '15.0', cli=True)
 
     args.add_arg('enable_localization', False, cli=True)
     args.add_arg('localization_camera_name', 'realsense', cli=True)
@@ -716,6 +734,27 @@ def generate_launch_description() -> lut.LaunchDescription:
                 'use_sim_time': args.use_sim_time,
             },
             condition=IfCondition(args.enable_e2e_inference),
+        ))
+
+    actions.append(
+        lu.include(
+            'jetpilot_object_detection',
+            'launch/yolov8_tensor_rt.launch.py',
+            launch_arguments={
+                'container_name': args.sensor_kit_container_name,
+                'run_standalone': lut.NotSubstitution(
+                    _LaunchBoolean(args.enable_sensor_kit)),
+                'image_topic': args.object_detection_image_topic,
+                'camera_info_topic': args.object_detection_camera_info_topic,
+                'model_root': args.object_detection_model_root,
+                'source_width': args.object_detection_source_width,
+                'source_height': args.object_detection_source_height,
+                'network_width': args.object_detection_network_width,
+                'network_height': args.object_detection_network_height,
+                'max_inference_fps': args.object_detection_max_inference_fps,
+                'use_sim_time': args.use_sim_time,
+            },
+            condition=IfCondition(args.enable_object_detection),
         ))
 
     actions.append(

@@ -1,0 +1,15 @@
+yolov8_decoder:
+  ros__parameters:
+    output_tensor_name: output_tensor
+    class_names: [vehicle, barrier]
+    network_width: 224
+    network_height: 224
+    source_width: 424
+    source_height: 240
+    confidence_threshold: 0.35
+    nms_threshold: 0.45
+    max_detections: 50
+    # Ultralytics YOLOv8 ONNX raw output is normally [1, 4 + classes, candidates].
+    tensor_layout: channel_major
+    # Keep this consistent with DnnImageEncoderNode enable_padding.
+    resize_mode: letterbox

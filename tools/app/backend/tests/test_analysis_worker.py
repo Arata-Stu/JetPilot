@@ -12,6 +12,7 @@ from jetpilot_console.analysis_worker import (
     _decode_image,
     _explicit_speed,
     _jetson_metric_samples,
+    _object_detection_payload,
     Progress,
     _snapshot_samples,
     _THERMAL_SMOOTHING_STATE,
@@ -24,6 +25,42 @@ from jetpilot_console.map_detail import directory_fingerprint
 
 
 class SnapshotTrajectoryTests(unittest.TestCase):
+    def test_extracts_jazzy_detection2d_payload(self) -> None:
+        message = SimpleNamespace(
+            detections=[
+                SimpleNamespace(
+                    bbox=SimpleNamespace(
+                        center=SimpleNamespace(
+                            position=SimpleNamespace(x=110.0, y=70.0)
+                        ),
+                        size_x=40.0,
+                        size_y=20.0,
+                    ),
+                    results=[
+                        SimpleNamespace(
+                            hypothesis=SimpleNamespace(
+                                class_id="vehicle", score=0.91
+                            )
+                        )
+                    ],
+                )
+            ]
+        )
+
+        self.assertEqual(
+            _object_detection_payload(message),
+            [
+                {
+                    "class_id": "vehicle",
+                    "score": 0.91,
+                    "x_min": 90.0,
+                    "y_min": 60.0,
+                    "x_max": 130.0,
+                    "y_max": 80.0,
+                }
+            ],
+        )
+
     def test_extracts_plot_friendly_jetson_metrics(self) -> None:
         message = SimpleNamespace(
             status=[

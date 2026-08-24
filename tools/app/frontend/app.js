@@ -242,6 +242,18 @@ const state = {
     trajectoryMode: "auto",
     offlineLocalizationMode: "auto",
     maxFps: 15,
+    offlineObjectDetection: false,
+    objectDetectionModelRoot: "/workspaces/ros2_ws/models/yolov8/latest",
+    objectDetectionImageTopic: "",
+    objectDetectionCameraInfoTopic: "",
+    objectDetectionSourceWidth: 424,
+    objectDetectionSourceHeight: 240,
+    objectDetectionNetworkWidth: 224,
+    objectDetectionNetworkHeight: 224,
+    objectDetectionMaxFps: 15,
+    objectDetectionConfidence: 0.35,
+    objectDetectionNms: 0.45,
+    objectDetectionReplayRate: 0.5,
     analyses: [],
     selectedId: "",
     detail: null,
@@ -2556,6 +2568,18 @@ function analysisPreflightPayload() {
     trajectory_mode: trajectoryMode,
     offline_localization_mode: isTelemetryMode ? "" : state.analysis.offlineLocalizationMode,
     max_fps: state.analysis.maxFps,
+    offline_object_detection: Boolean(state.analysis.offlineObjectDetection),
+    object_detection_model_root: state.analysis.objectDetectionModelRoot,
+    object_detection_image_topic: state.analysis.objectDetectionImageTopic,
+    object_detection_camera_info_topic: state.analysis.objectDetectionCameraInfoTopic,
+    object_detection_source_width: Number(state.analysis.objectDetectionSourceWidth) || 424,
+    object_detection_source_height: Number(state.analysis.objectDetectionSourceHeight) || 240,
+    object_detection_network_width: Number(state.analysis.objectDetectionNetworkWidth) || 224,
+    object_detection_network_height: Number(state.analysis.objectDetectionNetworkHeight) || 224,
+    object_detection_max_fps: Number(state.analysis.objectDetectionMaxFps) || 15,
+    object_detection_confidence: Number(state.analysis.objectDetectionConfidence),
+    object_detection_nms: Number(state.analysis.objectDetectionNms),
+    object_detection_replay_rate: Number(state.analysis.objectDetectionReplayRate) || 0.5,
     preset: preset,
   };
 }
@@ -3158,6 +3182,39 @@ function renderAnalysisForm() {
         <input id="analysis-max-fps" type="number" min="1" max="60" step="1" value="${esc(analysis.maxFps)}" onchange="updateAnalysisOption('maxFps', this.value)" />
       </div>
 
+      <div class="field full" style="border-top:1px solid #2d3744; padding-top:0.75rem; margin-top:0.25rem;">
+        <label class="check-row">
+          <input type="checkbox" ${analysis.offlineObjectDetection ? "checked" : ""} onchange="updateAnalysisOption('offlineObjectDetection', this.checked)" />
+          <span><strong>Run YOLOv8 after recording</strong><small style="display:block; color:#8a99a8;">Replay RGB + CameraInfo and create a model-specific detection sidecar.</small></span>
+        </label>
+      </div>
+      ${analysis.offlineObjectDetection ? `
+        <div class="field full">
+          <label>YOLOv8 model directory</label>
+          <input value="${esc(analysis.objectDetectionModelRoot)}" onchange="updateAnalysisOption('objectDetectionModelRoot', this.value)" />
+          <div class="field-hint">Must contain model.onnx under ros2_ws/models/yolov8.</div>
+        </div>
+        <div class="field">
+          <label>Detector RGB Image</label>
+          <select onchange="updateAnalysisOption('objectDetectionImageTopic', this.value)">
+            <option value="">Select raw RGB image</option>
+            ${analysisTopicRecords().filter((topic) => /sensor_msgs\/(msg\/)?Image$/.test(topic.type)).map((topic) => `<option value="${esc(topic.name)}" ${topic.name === analysis.objectDetectionImageTopic ? "selected" : ""}>${esc(topic.name)}</option>`).join("")}
+          </select>
+        </div>
+        <div class="field">
+          <label>Detector CameraInfo</label>
+          <select onchange="updateAnalysisOption('objectDetectionCameraInfoTopic', this.value)">
+            <option value="">Select CameraInfo</option>
+            ${analysisTopicRecords().filter((topic) => /sensor_msgs\/(msg\/)?CameraInfo$/.test(topic.type)).map((topic) => `<option value="${esc(topic.name)}" ${topic.name === analysis.objectDetectionCameraInfoTopic ? "selected" : ""}>${esc(topic.name)}</option>`).join("")}
+          </select>
+        </div>
+        <div class="field"><label>Inference FPS</label><input type="number" min="0.1" max="240" step="0.5" value="${esc(analysis.objectDetectionMaxFps)}" onchange="updateAnalysisOption('objectDetectionMaxFps', this.value)" /></div>
+        <div class="field"><label>Replay rate</label><input type="number" min="0.05" max="4" step="0.05" value="${esc(analysis.objectDetectionReplayRate)}" onchange="updateAnalysisOption('objectDetectionReplayRate', this.value)" /><div class="field-hint">Use 0.5 when inference cannot keep up at real time.</div></div>
+        <div class="field"><label>Confidence</label><input type="number" min="0" max="1" step="0.01" value="${esc(analysis.objectDetectionConfidence)}" onchange="updateAnalysisOption('objectDetectionConfidence', this.value)" /></div>
+        <div class="field"><label>NMS IoU</label><input type="number" min="0" max="1" step="0.01" value="${esc(analysis.objectDetectionNms)}" onchange="updateAnalysisOption('objectDetectionNms', this.value)" /></div>
+        <details class="field full"><summary>Image dimensions</summary><div class="e2e-compact-fields"><label>Source W<input type="number" min="1" value="${esc(analysis.objectDetectionSourceWidth)}" onchange="updateAnalysisOption('objectDetectionSourceWidth', this.value)" /></label><label>Source H<input type="number" min="1" value="${esc(analysis.objectDetectionSourceHeight)}" onchange="updateAnalysisOption('objectDetectionSourceHeight', this.value)" /></label><label>Network W<input type="number" min="32" value="${esc(analysis.objectDetectionNetworkWidth)}" onchange="updateAnalysisOption('objectDetectionNetworkWidth', this.value)" /></label><label>Network H<input type="number" min="32" value="${esc(analysis.objectDetectionNetworkHeight)}" onchange="updateAnalysisOption('objectDetectionNetworkHeight', this.value)" /></label></div></details>
+      ` : ""}
+
       <!-- Map & VSLAM Configuration (Only when Map Mode is selected) -->
       ${preset === "map_vslam" ? `
         <div class="field full" style="border-top:1px solid #2d3744; padding-top:0.75rem; margin-top:0.25rem;">
@@ -3624,6 +3681,8 @@ function renderAnalysisSources() {
   const topics = state.analysis.detail?.topics || {};
   const trajectory = analysisTrajectory();
   const speed = analysisSpeedSeries()[0];
+  const detection = state.analysis.timeline?.object_detection || state.analysis.detail?.object_detection || {};
+  const detectionModel = detection?.metadata?.model?.onnx || detection?.metadata?.model_root || "";
   const rows = [
     ["Image", topics.image || state.analysis.detail?.image_topic],
     ["Control", topics.control || state.analysis.detail?.control_topic],
@@ -3634,6 +3693,7 @@ function renderAnalysisSources() {
       analysisLocalizationMethodLabel(trajectory.localizationMethod),
       trajectory.frameId ? `frame ${trajectory.frameId}` : "",
     ].filter(Boolean).join(" / ")],
+    ["Object detection", [detection.source, detectionModel ? shortName(detectionModel) : ""].filter(Boolean).join(" / ")],
   ].filter(([, value]) => value);
   if (!rows.length) return "";
   return `<div class="analysis-source-row">${rows.map(([label, value]) => `<span><strong>${esc(label)}</strong>${esc(value)}</span>`).join("")}</div>`;
@@ -3711,6 +3771,14 @@ async function selectAnalysisBag(path) {
         state.e2ePipeline.imuTopic = imuTopic.name;
         state.analysis.e2eImuTopic = imuTopic.name;
       }
+      const rawRgb = analysisTopicRecords().find((topic) => topic.name === "/realsense/color/image_raw" && /sensor_msgs\/(msg\/)?Image$/.test(topic.type))
+        || analysisTopicRecords().find((topic) => /sensor_msgs\/(msg\/)?Image$/.test(topic.type) && /(color|rgb)/i.test(topic.name))
+        || analysisTopicRecords().find((topic) => /sensor_msgs\/(msg\/)?Image$/.test(topic.type));
+      const cameraInfo = analysisTopicRecords().find((topic) => topic.name === "/realsense/color/camera_info" && /CameraInfo$/.test(topic.type))
+        || analysisTopicRecords().find((topic) => /CameraInfo$/.test(topic.type) && rawRgb && topic.name.startsWith(rawRgb.name.replace(/\/image[^/]*$/, "")))
+        || analysisTopicRecords().find((topic) => /CameraInfo$/.test(topic.type));
+      state.analysis.objectDetectionImageTopic = rawRgb?.name || "";
+      state.analysis.objectDetectionCameraInfoTopic = cameraInfo?.name || "";
     }
   } catch (error) {
     if (state.analysis.selectedBagPath === selectedPath) {
@@ -3732,6 +3800,15 @@ function updateAnalysisOption(key, value) {
   if (key === "maxFps") {
     const number = Number(value);
     state.analysis.maxFps = Number.isFinite(number) ? Math.max(1, Math.min(60, Math.round(number))) : 15;
+  } else if (key === "offlineObjectDetection") {
+    state.analysis.offlineObjectDetection = Boolean(value);
+  } else if ([
+    "objectDetectionSourceWidth", "objectDetectionSourceHeight",
+    "objectDetectionNetworkWidth", "objectDetectionNetworkHeight",
+    "objectDetectionMaxFps", "objectDetectionConfidence",
+    "objectDetectionNms", "objectDetectionReplayRate",
+  ].includes(key)) {
+    state.analysis[key] = Number(value);
   } else {
     state.analysis[key] = String(value ?? "");
   }
@@ -3742,6 +3819,7 @@ function updateAnalysisOption(key, value) {
     scheduleAnalysisPreflight();
   }
   if (key === "selectedMapPath" && state.analysis.timeline) updateAnalysisConsistencyDom();
+  if (key === "offlineObjectDetection" && isAnalysisTab()) render();
 }
 
 function bindAnalysisPreflight(payload) {

@@ -66,6 +66,21 @@ MCAPとRAWのduration分割は`config/tool/bag_manager.param.yaml`の`recording_
 
 Jetson 上の通常起動では `isaac_ros_jetson_stats` が既定で有効になり、診断情報を `/jetson/diagnostics` へ publish します。必要に応じて `enable_jetson_stats:=false` で無効化できます。x86 imageには同packageが配布されないため既定で無効になり、明示的な有効化も拒否します。`scripts/bringup.sh` のオフライン再生プリセットでは tool stack自体を停止するため、Jetson statsも起動しません。
 
+## 軽量物体検出（任意）
+
+`enable_object_detection:=true`で、224x224 YOLOv8 TensorRTとC++ decoderをsensor kitと
+同じcomponent containerへ読み込みます。既定OFFで、depthは使用しません。モデルは
+`/workspaces/ros2_ws/models/yolov8/latest/model.onnx`（engine生成後は`model.plan`）を参照します。
+学習・export・アノテーション規約は`jetpilot_object_detection` packageのREADMEを参照してください。
+走行時に検出器を有効化していなかったbagも、ConsoleのBag Analysisから後日TensorRT推論し、
+検出sidecarとoverlayを生成できます。元bagは書き換えません。
+
+```bash
+ros2 launch jetpilot_system_launch bringup.launch.py \
+  enable_sensor_kit:=true enable_localization:=true \
+  enable_object_detection:=true
+```
+
 ## VSLAM初期位置モード
 
 `bringup.sh`の`--localization-init`で、VSLAM起動時の初期位置推定経路を選択できます。

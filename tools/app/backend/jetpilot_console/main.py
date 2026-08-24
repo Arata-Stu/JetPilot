@@ -1435,6 +1435,12 @@ find {shlex.quote(record_root)} -name metadata.yaml -printf '%TY-%Tm-%Td %TH:%TM
             e2e_provider = str(resolved.get("inference_provider") or "auto")
             e2e_deadline_ms = float(resolved.get("deadline_ms") or 33.3)
             e2e_manual_only = bool(resolved.get("manual_only", True))
+            offline_detection_model_root = (
+                Path(str(resolved["object_detection_model_root"]))
+                if resolved.get("offline_object_detection")
+                and resolved.get("object_detection_model_root")
+                else None
+            )
         except (KeyError, TypeError, ValueError) as exc:
             self._json({"error": f"preflight result is incomplete: {exc}"}, HTTPStatus.CONFLICT)
             return
@@ -1467,6 +1473,18 @@ find {shlex.quote(record_root)} -name metadata.yaml -printf '%TY-%Tm-%Td %TH:%TM
             "inference_provider",
             "manual_only",
             "deadline_ms",
+            "offline_object_detection",
+            "object_detection_model_root",
+            "object_detection_image_topic",
+            "object_detection_camera_info_topic",
+            "object_detection_source_width",
+            "object_detection_source_height",
+            "object_detection_network_width",
+            "object_detection_network_height",
+            "object_detection_max_fps",
+            "object_detection_confidence",
+            "object_detection_nms",
+            "object_detection_replay_rate",
         )
         stored_request = {key: body.get(key) for key in accepted_fields if key in body}
         stored_request["label"] = label
@@ -1476,7 +1494,11 @@ find {shlex.quote(record_root)} -name metadata.yaml -printf '%TY-%Tm-%Td %TH:%TM
         initial_phase = (
             "offline-localization"
             if trajectory_mode == "offline"
-            else ("e2e-prepare" if e2e else "extracting")
+            else (
+                "offline-detection"
+                if offline_detection_model_root is not None
+                else ("e2e-prepare" if e2e else "extracting")
+            )
         )
 
         analysis_id = ""
@@ -1521,6 +1543,37 @@ find {shlex.quote(record_root)} -name metadata.yaml -printf '%TY-%Tm-%Td %TH:%TM
                 e2e_applied_control_topic=str(resolved.get("applied_control_topic") or ""),
                 e2e_manual_only=e2e_manual_only,
                 e2e_deadline_ms=e2e_deadline_ms,
+                offline_detection_model_root=offline_detection_model_root,
+                offline_detection_image_topic=str(
+                    resolved.get("object_detection_image_topic") or ""
+                ),
+                offline_detection_camera_info_topic=str(
+                    resolved.get("object_detection_camera_info_topic") or ""
+                ),
+                offline_detection_source_width=int(
+                    resolved.get("object_detection_source_width") or 424
+                ),
+                offline_detection_source_height=int(
+                    resolved.get("object_detection_source_height") or 240
+                ),
+                offline_detection_network_width=int(
+                    resolved.get("object_detection_network_width") or 224
+                ),
+                offline_detection_network_height=int(
+                    resolved.get("object_detection_network_height") or 224
+                ),
+                offline_detection_max_fps=float(
+                    resolved.get("object_detection_max_fps") or 15.0
+                ),
+                offline_detection_confidence=float(
+                    resolved.get("object_detection_confidence", 0.35)
+                ),
+                offline_detection_nms=float(
+                    resolved.get("object_detection_nms", 0.45)
+                ),
+                offline_detection_replay_rate=float(
+                    resolved.get("object_detection_replay_rate") or 0.5
+                ),
             )
         except (OSError, TypeError, ValueError) as exc:
             if analysis_id:
@@ -1550,9 +1603,22 @@ find {shlex.quote(record_root)} -name metadata.yaml -printf '%TY-%Tm-%Td %TH:%TM
                     {"name": "E2E predictions", "path": str(analysis_dir / "e2e" / "predictions.csv")},
                 ]
             )
+        if offline_detection_model_root is not None:
+            artifacts.extend(
+                [
+                    {
+                        "name": "Detection sidecar",
+                        "path": str(analysis_dir / "detections" / "sidecar"),
+                    },
+                    {
+                        "name": "Detection manifest",
+                        "path": str(analysis_dir / "detections" / "manifest.json"),
+                    },
+                ]
+            )
         resource_key = (
             f"analysis-ros-domain:{config.analysis_ros_domain_id}"
-            if trajectory_mode == "offline"
+            if trajectory_mode == "offline" or offline_detection_model_root is not None
             else f"analysis-bag:{rosbag}"
         )
         resource_keys = [resource_key]

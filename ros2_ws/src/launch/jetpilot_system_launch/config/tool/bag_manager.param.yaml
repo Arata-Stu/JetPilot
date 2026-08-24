@@ -51,6 +51,8 @@ bag_manager_node:
       - /planning/diagnostics
       - /controller/diagnostics
       - /e2e/diagnostics
+      - /perception/detections
+      - /perception/object_detection/diagnostics
       - /jetson/diagnostics
 
       ## SilkyEvCam event camera.

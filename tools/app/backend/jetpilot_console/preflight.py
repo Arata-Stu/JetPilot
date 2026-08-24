@@ -25,6 +25,7 @@ from .map_pipeline import (
 )
 from .security import resolve_under_root
 from .e2e_analysis import resolve_e2e_model
+from .object_detection_analysis import resolve_object_detection_model_root
 
 
 PASS = "pass"
@@ -759,6 +760,126 @@ def _analyze_rosbag_preflight(
             PASS,
             "Speed can be read or derived from the selected trajectory source.",
         )
+
+    raw_detection_enabled = payload.get("offline_object_detection", False)
+    detection_enabled = (
+        raw_detection_enabled
+        if isinstance(raw_detection_enabled, bool)
+        else str(raw_detection_enabled).strip().lower() in {"1", "true", "yes", "on"}
+    )
+    report.resolved["offline_object_detection"] = detection_enabled
+    if detection_enabled:
+        detector_launch = (
+            Path(config.ros2_ws)
+            / "install"
+            / "jetpilot_object_detection"
+            / "share"
+            / "jetpilot_object_detection"
+            / "launch"
+            / "yolov8_tensor_rt.launch.py"
+        )
+        report.add(
+            "analysis.object_detection_runtime",
+            "Offline detection runtime",
+            PASS if detector_launch.is_file() else BLOCKED,
+            (
+                "The installed YOLOv8 TensorRT launch is available."
+                if detector_launch.is_file()
+                else "jetpilot_object_detection has not been built in this ROS workspace."
+            ),
+            remediation=(
+                None
+                if detector_launch.is_file()
+                else "Build and source jetpilot_object_detection before starting offline inference."
+            ),
+            details={"launch": str(detector_launch)},
+        )
+        try:
+            detection_model_root = resolve_object_detection_model_root(
+                config, payload.get("object_detection_model_root")
+            )
+        except ValueError as exc:
+            detection_model_root = None
+            report.add(
+                "analysis.object_detection_model",
+                "Offline YOLOv8 model",
+                BLOCKED,
+                str(exc),
+                remediation=(
+                    "Place model.onnx under ros2_ws/models/yolov8/<model-name> and select that directory."
+                ),
+            )
+        if detection_model_root is not None:
+            report.resolved["object_detection_model_root"] = str(detection_model_root)
+            report.add(
+                "analysis.object_detection_model",
+                "Offline YOLOv8 model",
+                PASS,
+                "The YOLOv8 ONNX model is available for offline TensorRT inference.",
+                details={"model_root": str(detection_model_root)},
+            )
+
+        detection_image_topic = _analysis_topic(
+            topics,
+            report,
+            check_id="analysis.object_detection_image_topic",
+            label="Offline detection image topic",
+            raw_value=payload.get("object_detection_image_topic") or primary_image_topic,
+            required=True,
+            expected_types={"sensor_msgs/msg/Image"},
+        )
+        detection_camera_info_topic = _analysis_topic(
+            topics,
+            report,
+            check_id="analysis.object_detection_camera_info_topic",
+            label="Offline detection CameraInfo topic",
+            raw_value=payload.get("object_detection_camera_info_topic"),
+            required=True,
+            expected_types={"sensor_msgs/msg/CameraInfo"},
+        )
+        if detection_image_topic:
+            report.resolved["object_detection_image_topic"] = detection_image_topic
+        if detection_camera_info_topic:
+            report.resolved["object_detection_camera_info_topic"] = detection_camera_info_topic
+
+        numeric_contracts = (
+            ("object_detection_source_width", 424.0, 1.0, 8192.0, True),
+            ("object_detection_source_height", 240.0, 1.0, 8192.0, True),
+            ("object_detection_network_width", 224.0, 32.0, 2048.0, True),
+            ("object_detection_network_height", 224.0, 32.0, 2048.0, True),
+            ("object_detection_max_fps", 15.0, 0.1, 240.0, False),
+            ("object_detection_confidence", 0.35, 0.0, 1.0, False),
+            ("object_detection_nms", 0.45, 0.0, 1.0, False),
+            ("object_detection_replay_rate", 0.5, 0.05, 4.0, False),
+        )
+        numeric_values: dict[str, int | float] = {}
+        invalid_values: list[str] = []
+        for key, default, minimum, maximum, integer in numeric_contracts:
+            try:
+                value = float(payload.get(key, default))
+            except (TypeError, ValueError):
+                value = math.nan
+            if not math.isfinite(value) or value < minimum or value > maximum:
+                invalid_values.append(key)
+                continue
+            numeric_values[key] = int(value) if integer else value
+        if invalid_values:
+            report.add(
+                "analysis.object_detection_parameters",
+                "Offline detection parameters",
+                BLOCKED,
+                "One or more offline detection parameters are outside the supported range.",
+                details={"invalid": invalid_values},
+            )
+        else:
+            report.resolved.update(numeric_values)
+            report.add(
+                "analysis.object_detection_parameters",
+                "Offline detection parameters",
+                PASS,
+                "Offline replay and decoder thresholds are valid.",
+                details=numeric_values,
+            )
 
 
 def _analyze_e2e_preflight(

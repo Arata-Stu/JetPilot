@@ -18,6 +18,7 @@
   <exec_depend>jetpilot_controller</exec_depend>
   <exec_depend>jetpilot_hdmap_publisher</exec_depend>
   <exec_depend>jetpilot_e2e_inference</exec_depend>
+  <exec_depend>jetpilot_object_detection</exec_depend>
   <exec_depend>jetpilot_localization_manager</exec_depend>
   <exec_depend>jetpilot_operation</exec_depend>
   <exec_depend>jetpilot_planning</exec_depend>

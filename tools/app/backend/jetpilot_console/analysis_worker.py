@@ -27,6 +27,10 @@ JETSON_DIAGNOSTIC_TOPICS = (
     "/jetson/diagnostics",
     "/diagnostics",
 )
+OBJECT_DETECTION_TOPICS = (
+    "/perception/detections",
+)
+OBJECT_DETECTION_OVERLAY_TOPIC = "/perception/detections_overlay"
 JETSON_METRIC_ORDER = {
     "cpu": 10,
     "gpu": 20,
@@ -232,6 +236,43 @@ def _e2e_diagnostic_payload(message: Any) -> dict[str, object] | None:
                 payload[key] = str(getattr(value, "value", "") or "")
         return payload
     return None
+
+
+def _object_detection_payload(message: Any) -> list[dict[str, object]]:
+    payload: list[dict[str, object]] = []
+    for detection in getattr(message, "detections", []) or []:
+        results = list(getattr(detection, "results", []) or [])
+        if not results:
+            continue
+        best = max(
+            results,
+            key=lambda result: _finite(_nested(result, "hypothesis.score", default=0.0)),
+        )
+        center_x = _finite(
+            _nested(detection, "bbox.center.position.x", "bbox.center.x", default=0.0)
+        )
+        center_y = _finite(
+            _nested(detection, "bbox.center.position.y", "bbox.center.y", default=0.0)
+        )
+        size_x = max(0.0, _finite(_nested(detection, "bbox.size_x", default=0.0)))
+        size_y = max(0.0, _finite(_nested(detection, "bbox.size_y", default=0.0)))
+        if size_x <= 0.0 or size_y <= 0.0:
+            continue
+        payload.append(
+            {
+                "class_id": str(
+                    _nested(best, "hypothesis.class_id", default="unknown") or "unknown"
+                ),
+                "score": round(
+                    _finite(_nested(best, "hypothesis.score", default=0.0)), 6
+                ),
+                "x_min": round(center_x - size_x * 0.5, 3),
+                "y_min": round(center_y - size_y * 0.5, 3),
+                "x_max": round(center_x + size_x * 0.5, 3),
+                "y_max": round(center_y + size_y * 0.5, 3),
+            }
+        )
+    return payload
 
 
 def _jetson_numeric_value(raw_value: Any) -> tuple[float, str] | None:
@@ -772,6 +813,86 @@ def _write_jpeg(path: Path, image: Any, quality: int) -> tuple[int, int]:
     return int(width), int(height)
 
 
+def _render_detection_overlays(
+    analysis_dir: Path,
+    frames: list[dict[str, object]],
+    detection_samples: list[dict[str, object]],
+    jpeg_quality: int,
+    *,
+    max_delta_ms: float = 250.0,
+) -> int:
+    if not frames or not detection_samples:
+        return 0
+    try:
+        import cv2
+    except ImportError as error:
+        raise RuntimeError("OpenCV is required to render detection overlays.") from error
+
+    def sync_timestamp_ns(sample: Mapping[str, object]) -> int:
+        return int(sample.get("_header_timestamp_ns") or sample.get("_timestamp_ns") or 0)
+
+    ordered = sorted(detection_samples, key=sync_timestamp_ns)
+    timestamps = [sync_timestamp_ns(sample) for sample in ordered]
+    overlay_dir = analysis_dir / "frames" / _topic_slug(OBJECT_DETECTION_OVERLAY_TOPIC)
+    overlay_dir.mkdir(parents=True, exist_ok=True)
+    palette = ((64, 220, 255), (255, 170, 64), (96, 232, 120), (224, 96, 224))
+    rendered = 0
+
+    for frame_index, frame in enumerate(frames):
+        timestamp_ns = sync_timestamp_ns(frame)
+        insert_at = bisect.bisect_left(timestamps, timestamp_ns)
+        candidates = [index for index in (insert_at - 1, insert_at) if 0 <= index < len(ordered)]
+        if not candidates:
+            continue
+        nearest_index = min(candidates, key=lambda index: abs(timestamps[index] - timestamp_ns))
+        delta_ms = (timestamps[nearest_index] - timestamp_ns) / 1e6
+        if abs(delta_ms) > max_delta_ms:
+            continue
+
+        source_path = analysis_dir / str(frame.get("path") or "")
+        image = cv2.imread(str(source_path), cv2.IMREAD_COLOR)
+        if image is None:
+            continue
+        image_height, image_width = image.shape[:2]
+        for item_index, detection in enumerate(ordered[nearest_index].get("detections", [])):
+            if not isinstance(detection, dict):
+                continue
+            x_min = max(0, min(image_width - 1, round(_finite(detection.get("x_min")))))
+            y_min = max(0, min(image_height - 1, round(_finite(detection.get("y_min")))))
+            x_max = max(0, min(image_width - 1, round(_finite(detection.get("x_max")))))
+            y_max = max(0, min(image_height - 1, round(_finite(detection.get("y_max")))))
+            if x_max <= x_min or y_max <= y_min:
+                continue
+            color = palette[item_index % len(palette)]
+            cv2.rectangle(image, (x_min, y_min), (x_max, y_max), color, 2)
+            label = f"{detection.get('class_id', 'unknown')} {_finite(detection.get('score')):.2f}"
+            text_y = max(14, y_min - 5)
+            cv2.putText(
+                image,
+                label,
+                (x_min, text_y),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.45,
+                color,
+                1,
+                cv2.LINE_AA,
+            )
+
+        filename = f"frame_{frame_index:08d}.jpg"
+        relative_path = f"frames/{_topic_slug(OBJECT_DETECTION_OVERLAY_TOPIC)}/{filename}"
+        width, height = _write_jpeg(overlay_dir / filename, image, jpeg_quality)
+        channels = frame.setdefault("channels", {})
+        if isinstance(channels, dict):
+            channels[OBJECT_DETECTION_OVERLAY_TOPIC] = {
+                "path": relative_path,
+                "width": width,
+                "height": height,
+                "delta_ms": round(delta_ms, 3),
+            }
+        rendered += 1
+    return rendered
+
+
 def _snapshot_samples(path: Path) -> list[dict[str, object]]:
     if not path.is_file():
         raise RuntimeError(f"Offline localization snapshot was not created: {path}")
@@ -1070,6 +1191,8 @@ class AnalysisOptions:
     comparison_control_topic: str = ""
     section_topic: str = ""
     e2e_diagnostic_topic: str = ""
+    detection_bag: Path | None = None
+    detection_manifest: Path | None = None
     imu_topic: str = ""
     map_dir: Path | None = None
     trajectory_snapshot: Path | None = None
@@ -1115,6 +1238,46 @@ class Progress:
 def _topic_slug(topic: str) -> str:
     slug = re.sub(r"[^A-Za-z0-9_.-]+", "_", topic.strip().lstrip("/")).strip("_")
     return slug or "camera"
+
+
+def _read_detection_sidecar(path: Path) -> tuple[str, list[dict[str, object]]]:
+    sidecar = path.expanduser().resolve()
+    if not sidecar.is_dir():
+        raise FileNotFoundError(f"Detection sidecar bag was not found: {sidecar}")
+    reader, topic_types = _open_reader(sidecar)
+    topic = next(
+        (
+            candidate
+            for candidate in OBJECT_DETECTION_TOPICS
+            if candidate in topic_types
+            and topic_types[candidate].endswith("vision_msgs/msg/Detection2DArray")
+        ),
+        "",
+    )
+    if not topic:
+        raise RuntimeError("Detection sidecar contains no supported Detection2DArray topic")
+    deserialize_message, get_message = _deserializers()
+    message_class = get_message(topic_types[topic])
+    samples: list[dict[str, object]] = []
+    while reader.has_next():
+        current_topic, serialized, bag_timestamp_ns = reader.read_next()
+        if current_topic != topic:
+            continue
+        message = deserialize_message(serialized, message_class)
+        header_timestamp_ns = _stamp_ns(message)
+        # Sidecar receive timestamps may use wall time. The detector preserves the
+        # source image stamp, which is the stable clock for model-to-model comparison.
+        timestamp_ns = header_timestamp_ns or int(bag_timestamp_ns)
+        samples.append(
+            {
+                "_timestamp_ns": timestamp_ns,
+                "_header_timestamp_ns": header_timestamp_ns,
+                "detections": _object_detection_payload(message),
+            }
+        )
+    if not samples:
+        raise RuntimeError("Detection sidecar contains no decodable detection messages")
+    return topic, samples
 
 
 def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
@@ -1168,7 +1331,9 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
         if options.status_file
         else analysis_dir / "status.json"
     )
-    progress_floor = 0.42 if options.trajectory_snapshot else 0.0
+    progress_floor = (
+        0.66 if options.detection_bag else (0.42 if options.trajectory_snapshot else 0.0)
+    )
 
     def task_progress(extraction_progress: float) -> float:
         return progress_floor + (1.0 - progress_floor) * extraction_progress
@@ -1218,6 +1383,17 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
         if topic in topic_types and topic_types[topic].endswith("DiagnosticArray")
     ]
     requested.update(jetson_diagnostic_topics)
+    object_detection_topic = "" if options.detection_bag else next(
+        (
+            topic
+            for topic in OBJECT_DETECTION_TOPICS
+            if topic in topic_types
+            and topic_types[topic].endswith("vision_msgs/msg/Detection2DArray")
+        ),
+        "",
+    )
+    if object_detection_topic:
+        requested.add(object_detection_topic)
 
     recorded_tf_topic = "/tf" if options.pose_topic and "/tf" in topic_types else ""
     if recorded_tf_topic:
@@ -1234,6 +1410,7 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
     modes: list[dict[str, object]] = []
     sections: list[dict[str, object]] = []
     e2e_diagnostics: list[dict[str, object]] = []
+    object_detections: list[dict[str, object]] = []
     imu_samples: list[dict[str, object]] = []
     speeds: list[dict[str, object]] = []
     trajectory: list[dict[str, object]] = []
@@ -1366,6 +1543,10 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
             payload = _e2e_diagnostic_payload(message)
             if payload is not None:
                 e2e_diagnostics.append({**common, **payload})
+        if object_detection_topic and topic == object_detection_topic:
+            object_detections.append(
+                {**common, "detections": _object_detection_payload(message)}
+            )
         if options.imu_topic and topic == options.imu_topic:
             imu_samples.append({**common, **_imu_payload(message)})
         if options.speed_topic and topic == options.speed_topic:
@@ -1395,11 +1576,35 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
                 ),
             )
 
+    detection_source = "recorded" if object_detections else "none"
+    detection_metadata: dict[str, object] = {}
+    if options.detection_bag:
+        object_detection_topic, object_detections = _read_detection_sidecar(
+            options.detection_bag
+        )
+        detection_source = "offline_sidecar"
+        if options.detection_manifest and options.detection_manifest.is_file():
+            try:
+                loaded_detection_metadata = json.loads(
+                    options.detection_manifest.read_text(encoding="utf-8")
+                )
+            except (OSError, json.JSONDecodeError):
+                loaded_detection_metadata = {}
+            if isinstance(loaded_detection_metadata, dict):
+                detection_metadata = loaded_detection_metadata
+
     if not frames:
         detail = f" Last decoder error: {image_decode_error_examples[-1]}" if image_decode_error_examples else ""
         raise RuntimeError(
             f"No decodable image messages were found on {options.image_topic}.{detail}"
         )
+
+    detection_overlay_frames = _render_detection_overlays(
+        analysis_dir,
+        frames,
+        object_detections,
+        options.jpeg_quality,
+    )
 
     recorded_transformed_count = 0
     recorded_dropped_count = 0
@@ -1435,6 +1640,7 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
         modes,
         sections,
         e2e_diagnostics,
+        object_detections,
         imu_samples,
         speeds,
         trajectory,
@@ -1458,6 +1664,7 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
     modes = _downsample(modes)
     sections = _downsample(sections)
     e2e_diagnostics = _downsample(e2e_diagnostics)
+    object_detections = _downsample(object_detections)
     imu_samples = _downsample(imu_samples)
     speeds = _downsample(speeds)
     jetson_series_by_id: dict[str, dict[str, object]] = {}
@@ -1557,6 +1764,8 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
         warnings.append(str(consistency.get("message") or "Map整合性を確認してください。"))
     if jetson_diagnostic_topics and not jetson_series:
         warnings.append("Jetson diagnostics topicはありますが、plot可能なjtop数値は抽出されませんでした。")
+    if object_detection_topic and object_detections and not detection_overlay_frames:
+        warnings.append("物体検出結果はありますが、画像と時刻同期できずoverlayを生成できませんでした。")
     if offline_localization_method in {"vslam_identity", "vslam_identity_fallback"}:
         warnings.append(
             "VGLを使わず、保存cuVSLAM Mapの原点をidentity初期姿勢として自己位置を生成しました。"
@@ -1581,6 +1790,12 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
         "modes": modes,
         "sections": sections,
         "e2e_diagnostics": e2e_diagnostics,
+        "object_detections": object_detections,
+        "object_detection": {
+            "source": detection_source,
+            "topic": object_detection_topic,
+            "metadata": detection_metadata,
+        },
         "imu": imu_samples,
         "speeds": speeds,
         "trajectory": {
@@ -1623,12 +1838,22 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
                 "mode": options.mode_topic,
                 "section": options.section_topic,
                 "e2e_diagnostics": options.e2e_diagnostic_topic,
+                "object_detections": object_detection_topic,
+                "object_detection_overlay": (
+                    OBJECT_DETECTION_OVERLAY_TOPIC if detection_overlay_frames else ""
+                ),
                 "imu": options.imu_topic,
                 "pose": options.pose_topic,
                 "speed": options.speed_topic,
                 "jetson_stats": jetson_diagnostic_topics,
             },
             "map": map_payload,
+            "object_detection": {
+                "source": detection_source,
+                "topic": object_detection_topic,
+                "sidecar_bag": str(options.detection_bag) if options.detection_bag else "",
+                "metadata": detection_metadata,
+            },
             "offline_localization": (
                 {"method": offline_localization_method}
                 if offline_snapshot_samples is not None
@@ -1642,6 +1867,8 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
                 "modes": len(modes),
                 "sections": len(sections),
                 "e2e_diagnostics": len(e2e_diagnostics),
+                "object_detections": len(object_detections),
+                "object_detection_overlay_frames": detection_overlay_frames,
                 "imu": len(imu_samples),
                 "speeds": len(speeds),
                 "trajectory": len(trajectory),
@@ -1791,6 +2018,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--comparison-control-topic", default="")
     parser.add_argument("--section-topic", default="")
     parser.add_argument("--e2e-diagnostic-topic", default="")
+    parser.add_argument("--detection-bag", default="")
+    parser.add_argument("--detection-manifest", default="")
     parser.add_argument("--imu-topic", default="")
     parser.add_argument("--map-dir", default="")
     parser.add_argument("--trajectory-snapshot", default="")
@@ -1853,6 +2082,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                     comparison_control_topic=args.comparison_control_topic,
                     section_topic=args.section_topic,
                     e2e_diagnostic_topic=args.e2e_diagnostic_topic,
+                    detection_bag=(
+                        Path(args.detection_bag).expanduser().resolve()
+                        if args.detection_bag
+                        else None
+                    ),
+                    detection_manifest=(
+                        Path(args.detection_manifest).expanduser().resolve()
+                        if args.detection_manifest
+                        else None
+                    ),
                     imu_topic=args.imu_topic,
                     map_dir=Path(args.map_dir).expanduser().resolve() if args.map_dir else None,
                     trajectory_snapshot=(
