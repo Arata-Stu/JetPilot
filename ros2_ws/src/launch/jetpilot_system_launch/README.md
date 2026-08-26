@@ -71,7 +71,9 @@ Jetson 上の通常起動では `isaac_ros_jetson_stats` が既定で有効に�
 `enable_object_detection:=true`で、224x224 YOLOv8 TensorRTとC++ decoderをsensor kitと
 同じcomponent containerへ読み込みます。既定OFFで、depthは使用しません。モデルは
 `/workspaces/ros2_ws/models/yolov8/latest/model.onnx`（engine生成後は`model.plan`）を参照します。
-学習・export・アノテーション規約は`jetpilot_object_detection` packageのREADMEを参照してください。
+学習・再学習・export・アノテーション規約は
+`python_ws/jetpilot_object_detection_training`のREADMEを参照してください。ROS packageは
+TensorRT runtimeとC++ decoderだけを担当します。
 走行時に検出器を有効化していなかったbagも、ConsoleのBag Analysisから後日TensorRT推論し、
 検出sidecarとoverlayを生成できます。元bagは書き換えません。
 

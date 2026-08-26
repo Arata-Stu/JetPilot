@@ -71,6 +71,13 @@ from .map_pipeline import (
     prepare_hd_raster_script,
     scan_camera_topic_configs,
 )
+from .object_detection_pipeline import (
+    build_deploy_task as build_object_detection_deploy_task,
+    build_export_task as build_object_detection_export_task,
+    build_train_task as build_object_detection_train_task,
+    build_validate_dataset_task as build_object_detection_validate_dataset_task,
+    pipeline_snapshot as object_detection_pipeline_snapshot,
+)
 from .preflight import evaluate_preflight
 from .security import (
     RequestRejected,
@@ -323,6 +330,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/e2e/pipeline":
             self._json(pipeline_catalog(self.server.state.config))
             return
+        if path == "/api/object-detection/pipeline":
+            self._json(object_detection_pipeline_snapshot(self.server.state.config))
+            return
         if path.startswith("/api/analyses/"):
             self._analysis_get(path)
             return
@@ -516,6 +526,34 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/e2e/deploy":
             self._start_e2e_pipeline_task(build_deploy_task, body)
+            return
+        if path == "/api/object-detection/datasets/validate":
+            self._start_e2e_pipeline_task(
+                build_object_detection_validate_dataset_task,
+                body,
+                pipeline_label="object-detection",
+            )
+            return
+        if path == "/api/object-detection/training/start":
+            self._start_e2e_pipeline_task(
+                build_object_detection_train_task,
+                body,
+                pipeline_label="object-detection",
+            )
+            return
+        if path == "/api/object-detection/export-onnx":
+            self._start_e2e_pipeline_task(
+                build_object_detection_export_task,
+                body,
+                pipeline_label="object-detection",
+            )
+            return
+        if path == "/api/object-detection/deploy":
+            self._start_e2e_pipeline_task(
+                build_object_detection_deploy_task,
+                body,
+                pipeline_label="object-detection",
+            )
             return
         if path == "/api/maps/build-vgl-vslam":
             self._start_map_build(body)
@@ -1698,7 +1736,13 @@ find {shlex.quote(record_root)} -name metadata.yaml -printf '%TY-%Tm-%Td %TH:%TM
             HTTPStatus.CREATED,
         )
 
-    def _start_e2e_pipeline_task(self, builder: Any, body: dict[str, Any]) -> None:
+    def _start_e2e_pipeline_task(
+        self,
+        builder: Any,
+        body: dict[str, Any],
+        *,
+        pipeline_label: str = "E2E",
+    ) -> None:
         try:
             spec: PipelineTaskSpec = builder(self.server.state.config, body)
             task = self.server.state.tasks.start(
@@ -1715,7 +1759,7 @@ find {shlex.quote(record_root)} -name metadata.yaml -printf '%TY-%Tm-%Td %TH:%TM
             self._json(
                 {
                     "error": (
-                        "The selected E2E pipeline input or output is already in use: "
+                        f"The selected {pipeline_label} pipeline input or output is already in use: "
                         f"{active.get('title') or active.get('kind')} "
                         f"({active.get('task_id')}). Stop it or wait for it to finish."
                     ),

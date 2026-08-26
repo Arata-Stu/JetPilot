@@ -73,6 +73,38 @@ const state = {
     remoteRoot: "",
     buildEngine: true,
   },
+  objectDetectionPipeline: {
+    datasets: [],
+    runs: [],
+    models: [],
+    baseModels: ["yolov8n.pt"],
+    deployProfiles: [],
+    trainingRoot: "",
+    datasetRoot: "",
+    runRoot: "",
+    modelRoot: "",
+    datasetYaml: "",
+    runDir: "",
+    sourceRunDir: "",
+    runName: "yolov8n_224",
+    trainingMode: "train",
+    baseModel: "yolov8n.pt",
+    epochs: 100,
+    batch: 32,
+    device: "0",
+    workers: 8,
+    patience: 30,
+    seed: 42,
+    freeze: 0,
+    opset: 17,
+    simplify: true,
+    deployProfile: "",
+    deployHost: "",
+    deployUser: "",
+    remoteRoot: "",
+    deployName: "yolov8n_224",
+    buildEngine: true,
+  },
   listControls: {
     rosbags: { query: "", sort: "newest", groupByDate: true, collapsedDays: {} },
     rosbagTrash: { query: "", sort: "newest", groupByDate: true, collapsedDays: {} },
@@ -294,6 +326,7 @@ const tabs = [
   ["dashboard", "Dashboard"],
   ["rosbags", "Rosbags"],
   ["bag-analysis", "Bag Analysis"],
+  ["object-detection", "Object Detection"],
   ["e2e-analysis", "E2E Analysis"],
   ["map-builder", "Map Builder"],
   ["joy-profile", "Joy Profile"],
@@ -1145,7 +1178,7 @@ function sh(value) {
 
 async function refreshAll() {
   const previousFpvSession = state.fpv.browserStatus?.session_id || "";
-  const [config, tasks, rosbags, rosbagTrash, maps, cameraTopicConfigs, localIps, analyses, e2eModels, e2ePipeline, fpvStatus] = await Promise.all([
+  const [config, tasks, rosbags, rosbagTrash, maps, cameraTopicConfigs, localIps, analyses, e2eModels, e2ePipeline, objectDetectionPipeline, fpvStatus] = await Promise.all([
     api("/api/config"),
     api("/api/tasks"),
     api("/api/rosbags/local"),
@@ -1156,6 +1189,7 @@ async function refreshAll() {
     api("/api/analyses").catch(() => ({ analyses: [] })),
     api("/api/e2e/models").catch(() => ({ models: [] })),
     api("/api/e2e/pipeline").catch(() => ({ datasets: [], runs: [], experiments: [], deploy_profiles: [], deploy_presets: [] })),
+    api("/api/object-detection/pipeline").catch(() => ({ datasets: [], runs: [], models: [], base_models: [], deploy_profiles: [], defaults: {} })),
     api("/api/fpv/status").catch(() => ({ fpv: { available: false, running: false } })),
   ]);
   state.config = config;
@@ -1199,6 +1233,54 @@ async function refreshAll() {
   }
   if (!state.analysis.e2eModelPath && state.e2eModels[0]) {
     state.analysis.e2eModelPath = state.e2eModels[0].path || "";
+  }
+  const detection = state.objectDetectionPipeline;
+  detection.datasets = objectDetectionPipeline.datasets || [];
+  detection.runs = objectDetectionPipeline.runs || [];
+  detection.models = objectDetectionPipeline.models || [];
+  detection.baseModels = objectDetectionPipeline.base_models?.length
+    ? objectDetectionPipeline.base_models
+    : detection.baseModels;
+  detection.deployProfiles = objectDetectionPipeline.deploy_profiles || [];
+  detection.trainingRoot = objectDetectionPipeline.training_root || "";
+  detection.datasetRoot = objectDetectionPipeline.dataset_root || "";
+  detection.runRoot = objectDetectionPipeline.run_root || "";
+  detection.modelRoot = objectDetectionPipeline.model_root || "";
+  const detectionDefaults = objectDetectionPipeline.defaults || {};
+  if (!detection.datasetYaml || !detection.datasets.some((item) => objectDetectionDatasetPath(item) === detection.datasetYaml)) {
+    detection.datasetYaml = objectDetectionDatasetPath(detection.datasets[0]);
+  }
+  if (!detection.runDir || !detection.runs.some((item) => item.path === detection.runDir)) {
+    detection.runDir = detection.runs[0]?.path || "";
+  }
+  if (!detection.sourceRunDir || !detection.runs.some((item) => item.path === detection.sourceRunDir)) {
+    detection.sourceRunDir = detection.runs[0]?.path || "";
+  }
+  if (!detection.deployProfile) {
+    detection.deployProfile = objectDetectionPipeline.default_deploy_profile
+      || detection.deployProfiles[0]?.id
+      || "";
+  }
+  if (!detection.remoteRoot) detection.remoteRoot = detectionDefaults.remote_root || "";
+  if (!detection.deployUser) detection.deployUser = detectionDefaults.deploy_user || "";
+  if (!detection.deployHost) detection.deployHost = detectionDefaults.deploy_host || "";
+  const selectedDetectionRun = detection.runs.find((item) => item.path === detection.runDir);
+  if (selectedDetectionRun?.name && detection.deployName === "yolov8n_224") {
+    detection.deployName = selectedDetectionRun.name;
+  }
+  const availableDetectionModels = [
+    ...detection.models,
+    ...detection.runs.filter((item) => item.model_root).map((item) => ({
+      name: item.name,
+      path: item.model_root,
+      source: "training_run",
+    })),
+  ];
+  if (
+    availableDetectionModels.length
+    && !availableDetectionModels.some((item) => item.path === state.analysis.objectDetectionModelRoot)
+  ) {
+    state.analysis.objectDetectionModelRoot = availableDetectionModels[0].path || state.analysis.objectDetectionModelRoot;
   }
   state.fpv.browserStatus = fpvStatus.fpv || state.fpv.browserStatus;
   noteFpvWebRtcRtpObserved(state.fpv.browserStatus);
@@ -1329,6 +1411,7 @@ function updateLogOnly(chunk = "", append = false) {
 function renderPage() {
   if (state.tab === "rosbags") return renderRosbags();
   if (state.tab === "bag-analysis") return renderBagAnalysis();
+  if (state.tab === "object-detection") return renderObjectDetectionPipeline();
   if (state.tab === "e2e-analysis") return renderE2EAnalysis();
   if (state.tab === "map-builder") return renderMapBuilder();
   if (state.tab === "joy-profile") return renderJoyProfile();
@@ -3019,6 +3102,317 @@ function renderE2EPipeline() {
     </section>`;
 }
 
+const OBJECT_DETECTION_PIPELINE_TASK_KINDS = [
+  "object-detection-validate-dataset",
+  "object-detection-validate",
+  "object-detection-train",
+  "object-detection-export",
+  "object-detection-export-onnx",
+  "object-detection-deploy",
+];
+
+function isObjectDetectionPipelineTask(task) {
+  return OBJECT_DETECTION_PIPELINE_TASK_KINDS.includes(task?.kind);
+}
+
+function objectDetectionDatasetPath(dataset) {
+  return dataset?.data_yaml || dataset?.path || "";
+}
+
+function selectedObjectDetectionDataset() {
+  return state.objectDetectionPipeline.datasets.find(
+    (item) => objectDetectionDatasetPath(item) === state.objectDetectionPipeline.datasetYaml,
+  ) || null;
+}
+
+function selectedObjectDetectionRun() {
+  return state.objectDetectionPipeline.runs.find(
+    (item) => item.path === state.objectDetectionPipeline.runDir,
+  ) || null;
+}
+
+function selectedObjectDetectionSourceRun() {
+  return state.objectDetectionPipeline.runs.find(
+    (item) => item.path === state.objectDetectionPipeline.sourceRunDir,
+  ) || null;
+}
+
+function selectedObjectDetectionDeployProfile() {
+  return state.objectDetectionPipeline.deployProfiles.find(
+    (item) => item.id === state.objectDetectionPipeline.deployProfile,
+  ) || null;
+}
+
+function objectDetectionModelCatalog() {
+  const records = [
+    ...state.objectDetectionPipeline.models,
+    ...state.objectDetectionPipeline.runs
+      .filter((item) => item.model_root || item.onnx_path)
+      .map((item) => ({
+        name: item.name,
+        path: item.model_root || String(item.onnx_path || "").replace(/\/model\.onnx$/, ""),
+        source: "training_run",
+      })),
+  ];
+  const seen = new Set();
+  return records.filter((item) => {
+    const path = String(item.path || "");
+    if (!path || seen.has(path)) return false;
+    seen.add(path);
+    return true;
+  });
+}
+
+function updateObjectDetectionPipelineOption(key, value) {
+  const pipeline = state.objectDetectionPipeline;
+  if (!(key in pipeline)) return;
+  const booleanKeys = ["buildEngine", "simplify"];
+  const numberKeys = ["epochs", "batch", "workers", "patience", "seed", "freeze", "opset"];
+  if (booleanKeys.includes(key)) pipeline[key] = Boolean(value);
+  else if (numberKeys.includes(key)) pipeline[key] = Number(value);
+  else pipeline[key] = String(value ?? "");
+
+  if (key === "deployProfile") {
+    const profile = selectedObjectDetectionDeployProfile();
+    if (profile) {
+      pipeline.deployUser = profile.user || "";
+      pipeline.deployHost = profile.host === "__manual__" ? "" : (profile.host || "");
+      pipeline.remoteRoot = profile.remote_root || pipeline.remoteRoot;
+    }
+  }
+  if (key === "runDir") {
+    const run = selectedObjectDetectionRun();
+    if (run?.name) pipeline.deployName = run.name;
+  }
+  if (key === "sourceRunDir" && pipeline.trainingMode === "resume") {
+    const run = selectedObjectDetectionSourceRun();
+    if (run?.name) pipeline.runName = run.name;
+  }
+  if (key === "trainingMode" && pipeline.trainingMode === "resume") {
+    const run = selectedObjectDetectionSourceRun();
+    if (run?.name) pipeline.runName = run.name;
+  }
+  render();
+}
+
+async function startObjectDetectionPipelineTask(action, endpoint, title, target, payload) {
+  if (!confirmAction({
+    title,
+    target,
+    detail: "The command will run as a visible, cancellable Console task.",
+  })) return;
+  if (!beginAction(action, title)) return;
+  try {
+    const result = await api(endpoint, { method: "POST", body: JSON.stringify(payload) });
+    if (result.task) {
+      rememberStartedTask(result.task, action, payload);
+      state.selectedTaskId = result.task.task_id;
+      state.tasks = [result.task, ...state.tasks.filter((item) => item.task_id !== result.task.task_id)];
+    }
+    toast(`${title} started`);
+  } catch (error) {
+    toast(`${title} failed to start: ${error.message}`, "error");
+  } finally {
+    endAction(action, { renderAfter: state.tab === "object-detection" });
+  }
+}
+
+function validateObjectDetectionDataset() {
+  const pipeline = state.objectDetectionPipeline;
+  const dataset = selectedObjectDetectionDataset();
+  return startObjectDetectionPipelineTask(
+    "object-detection:validate",
+    "/api/object-detection/datasets/validate",
+    "Validate object-detection dataset",
+    dataset?.name || pipeline.datasetYaml,
+    { dataset_yaml: pipeline.datasetYaml },
+  );
+}
+
+function trainObjectDetectionModel() {
+  const pipeline = state.objectDetectionPipeline;
+  const sourceRun = selectedObjectDetectionSourceRun();
+  const checkpoint = pipeline.trainingMode === "resume"
+    ? sourceRun?.last_checkpoint
+    : pipeline.trainingMode === "fine_tune"
+      ? sourceRun?.best_checkpoint
+      : "";
+  const datasetYaml = pipeline.trainingMode === "resume"
+    ? (sourceRun?.dataset_yaml || "")
+    : pipeline.datasetYaml;
+  return startObjectDetectionPipelineTask(
+    "object-detection:train",
+    "/api/object-detection/training/start",
+    pipeline.trainingMode === "resume" ? "Resume YOLOv8 training" : "Train YOLOv8 detector",
+    pipeline.trainingMode === "resume" ? (sourceRun?.name || pipeline.sourceRunDir) : pipeline.runName,
+    {
+      mode: pipeline.trainingMode,
+      dataset_yaml: datasetYaml,
+      run_name: pipeline.runName,
+      base_model: pipeline.baseModel,
+      checkpoint,
+      epochs: pipeline.epochs,
+      batch: pipeline.batch,
+      device: pipeline.device,
+      workers: pipeline.workers,
+      patience: pipeline.patience,
+      seed: pipeline.seed,
+      freeze: pipeline.freeze,
+      opset: pipeline.opset,
+      export_after_training: true,
+    },
+  );
+}
+
+function exportObjectDetectionOnnx() {
+  const pipeline = state.objectDetectionPipeline;
+  const run = selectedObjectDetectionRun();
+  return startObjectDetectionPipelineTask(
+    "object-detection:export",
+    "/api/object-detection/export-onnx",
+    "Export YOLOv8 ONNX",
+    run?.name || pipeline.runDir,
+    {
+      run_dir: pipeline.runDir,
+      opset: pipeline.opset,
+      simplify: pipeline.simplify,
+    },
+  );
+}
+
+function deployObjectDetectionModel() {
+  const pipeline = state.objectDetectionPipeline;
+  const run = selectedObjectDetectionRun();
+  const profile = selectedObjectDetectionDeployProfile();
+  const user = pipeline.deployUser || profile?.user || "";
+  const host = pipeline.deployHost || (profile?.host === "__manual__" ? "" : profile?.host) || "";
+  return startObjectDetectionPipelineTask(
+    "object-detection:deploy",
+    "/api/object-detection/deploy",
+    "Deploy YOLOv8 to Jetson",
+    `${user}@${host}`,
+    {
+      run_dir: pipeline.runDir,
+      model_path: run?.onnx_path || "",
+      profile: pipeline.deployProfile,
+      user,
+      host,
+      remote_root: pipeline.remoteRoot,
+      model_name: pipeline.deployName,
+      build_engine: pipeline.buildEngine,
+    },
+  );
+}
+
+function useObjectDetectionRunForBagAnalysis() {
+  const run = selectedObjectDetectionRun();
+  const modelRoot = run?.model_root
+    || (run?.onnx_path ? String(run.onnx_path).replace(/\/model\.onnx$/, "") : "");
+  if (!modelRoot) {
+    toast("Export model.onnx before selecting it for Bag Analysis.", "error");
+    return;
+  }
+  state.analysis.offlineObjectDetection = true;
+  state.analysis.objectDetectionModelRoot = modelRoot;
+  state.tab = "bag-analysis";
+  render();
+  toast(`Bag Analysis model selected: ${run.name}`);
+}
+
+function objectDetectionSplitTotals(dataset) {
+  const splits = dataset?.splits && typeof dataset.splits === "object" ? Object.values(dataset.splits) : [];
+  return splits.reduce((totals, split) => ({
+    images: totals.images + Number(split?.images || 0),
+    labels: totals.labels + Number(split?.label_files || split?.labels || 0),
+    annotations: totals.annotations + Number(split?.annotations || 0),
+  }), { images: 0, labels: 0, annotations: 0 });
+}
+
+function objectDetectionPipelineStageState() {
+  const pipeline = state.objectDetectionPipeline;
+  const selectedRun = selectedObjectDetectionRun();
+  return [
+    ["Dataset", pipeline.datasets.length ? `${pipeline.datasets.length} found` : "not found", Boolean(pipeline.datasets.length)],
+    ["Training", pipeline.runs.some((item) => item.best_checkpoint) ? `${pipeline.runs.length} run(s)` : "not trained", pipeline.runs.some((item) => item.best_checkpoint)],
+    ["ONNX", pipeline.runs.some((item) => item.onnx_path) ? "exported" : "not exported", pipeline.runs.some((item) => item.onnx_path)],
+    ["Bag eval", state.analysis.analyses.some((item) => Boolean(item?.manifest?.resolved?.offline_object_detection)) ? "result available" : "ready after export", state.analysis.analyses.some((item) => Boolean(item?.manifest?.resolved?.offline_object_detection))],
+    ["Jetson", state.tasks.some((item) => item.kind === "object-detection-deploy" && item.status === "success") ? "deployed" : (selectedRun?.onnx_path ? "ready" : "waiting for ONNX"), state.tasks.some((item) => item.kind === "object-detection-deploy" && item.status === "success")],
+  ];
+}
+
+function renderObjectDetectionPipeline() {
+  const pipeline = state.objectDetectionPipeline;
+  const dataset = selectedObjectDetectionDataset();
+  const run = selectedObjectDetectionRun();
+  const sourceRun = selectedObjectDetectionSourceRun();
+  const profile = selectedObjectDetectionDeployProfile();
+  const totals = objectDetectionSplitTotals(dataset);
+  const metrics = run?.metrics || run?.last_metrics || {};
+  const pipelineTasks = state.tasks.filter(isObjectDetectionPipelineTask).slice(0, 10);
+  const sourceRequired = ["fine_tune", "resume"].includes(pipeline.trainingMode);
+  const sourceReady = pipeline.trainingMode === "fine_tune"
+    ? Boolean(sourceRun?.best_checkpoint)
+    : pipeline.trainingMode === "resume"
+      ? Boolean(sourceRun?.last_checkpoint)
+      : true;
+  const canTrain = sourceReady && (
+    pipeline.trainingMode === "resume"
+      ? Boolean(sourceRun?.dataset_yaml)
+      : Boolean(pipeline.datasetYaml && pipeline.runName)
+  );
+  const host = pipeline.deployHost || (profile?.host === "__manual__" ? "" : profile?.host) || "";
+  const user = pipeline.deployUser || profile?.user || "";
+  return `
+    <div class="page object-detection-page">
+      <section class="panel e2e-pipeline-panel">
+        <div class="panel-header"><h2>YOLOv8 Object Detection</h2><span class="spacer"></span><button onclick="refreshAll()">Refresh artifacts</button></div>
+        <div class="panel-body">
+          <div class="notice compact">Training and ONNX export run on this Notebook. TensorRT <code>model.plan</code> is generated on the selected Jetson.</div>
+          <div class="e2e-pipeline-progress">
+            ${objectDetectionPipelineStageState().map(([label, detail, done], index) => `<div class="${done ? "done" : ""}"><span>${index + 1}</span><strong>${esc(label)}</strong><small>${esc(detail)}</small></div>`).join("")}
+          </div>
+          <div class="e2e-pipeline-grid">
+            <article class="e2e-pipeline-stage">
+              <header><span>01</span><div><strong>Select & validate dataset</strong><small>Roboflow YOLOv8 data.yaml / vehicle + barrier</small></div></header>
+              <div class="field"><label>Dataset</label><select onchange="updateObjectDetectionPipelineOption('datasetYaml', this.value)"><option value="">No dataset found</option>${pipeline.datasets.map((item) => { const path = objectDetectionDatasetPath(item); return `<option value="${esc(path)}" ${path === pipeline.datasetYaml ? "selected" : ""}>${esc(item.name || shortName(path))}${item.valid === false ? " — invalid" : ""}</option>`; }).join("")}</select><div class="field-hint">Copy or unzip a Roboflow YOLOv8 export under ${esc(pipeline.datasetRoot)}.</div></div>
+              ${dataset ? `<div class="e2e-run-summary"><span>${esc(totals.images)} images</span><span>${esc(totals.annotations)} boxes</span><small>Classes: ${esc((dataset.classes || []).join(" → ") || "not inspected")}</small><small>${esc(objectDetectionDatasetPath(dataset))}</small></div>${dataset.error ? `<div class="notice error compact">${esc(dataset.error)}</div>` : ""}` : `<div class="empty compact">No data.yaml has been selected.</div>`}
+              <button class="primary ${actionBusy("object-detection:validate") ? "is-busy" : ""}" onclick="validateObjectDetectionDataset()" ${pipeline.datasetYaml ? "" : "disabled"} ${actionButtonAttrs("object-detection:validate", "Dataset validation is starting...")}>${esc(actionButtonLabel("object-detection:validate", "Validate all labels", "Starting..."))}</button>
+            </article>
+
+            <article class="e2e-pipeline-stage">
+              <header><span>02</span><div><strong>Train / fine-tune</strong><small>Fixed 224 × 224 input for the Isaac ROS decoder</small></div></header>
+              <div class="field"><label>Training mode</label><select onchange="updateObjectDetectionPipelineOption('trainingMode', this.value)">${[["train","New training"],["fine_tune","Fine-tune best.pt"],["resume","Resume interrupted run"]].map(([value,label]) => `<option value="${value}" ${pipeline.trainingMode === value ? "selected" : ""}>${label}</option>`).join("")}</select></div>
+              ${sourceRequired ? `<div class="field"><label>Source run</label><select onchange="updateObjectDetectionPipelineOption('sourceRunDir', this.value)"><option value="">Select source run</option>${pipeline.runs.map((item) => `<option value="${esc(item.path)}" ${item.path === pipeline.sourceRunDir ? "selected" : ""}>${esc(item.name)} — ${pipeline.trainingMode === "resume" ? (item.last_checkpoint ? "last.pt ready" : "no last.pt") : (item.best_checkpoint ? "best.pt ready" : "no best.pt")}</option>`).join("")}</select></div>` : `<div class="field"><label>Initial weights</label><select onchange="updateObjectDetectionPipelineOption('baseModel', this.value)">${pipeline.baseModels.map((item) => { const value = typeof item === "string" ? item : item.id; const label = typeof item === "string" ? item : (item.label || item.id); return `<option value="${esc(value)}" ${value === pipeline.baseModel ? "selected" : ""}>${esc(label)}</option>`; }).join("")}</select></div>`}
+              ${pipeline.trainingMode !== "resume" ? `<div class="field"><label>Run name</label><input value="${esc(pipeline.runName)}" onchange="updateObjectDetectionPipelineOption('runName', this.value)" /><div class="field-hint">${esc(pipeline.runRoot)}</div></div>` : `<div class="field"><label>Resume target</label><input value="${esc(sourceRun?.name || "")}" disabled /><div class="field-hint">The dataset and run directory are inherited from the interrupted run.</div></div>`}
+              <div class="e2e-compact-fields"><label>Epochs<input type="number" min="1" max="10000" value="${esc(pipeline.epochs)}" onchange="updateObjectDetectionPipelineOption('epochs', this.value)" /></label><label>Batch<input type="number" min="1" max="1024" value="${esc(pipeline.batch)}" onchange="updateObjectDetectionPipelineOption('batch', this.value)" /></label><label>Device<select onchange="updateObjectDetectionPipelineOption('device', this.value)">${[["0","CUDA 0"],["1","CUDA 1"],["mps","Apple MPS"],["cpu","CPU"]].map(([value,label]) => `<option value="${value}" ${pipeline.device === value ? "selected" : ""}>${label}</option>`).join("")}</select></label></div>
+              <details><summary>Advanced training parameters</summary><div class="e2e-compact-fields"><label>Workers<input type="number" min="0" max="64" value="${esc(pipeline.workers)}" onchange="updateObjectDetectionPipelineOption('workers', this.value)" /></label><label>Patience<input type="number" min="0" max="10000" value="${esc(pipeline.patience)}" onchange="updateObjectDetectionPipelineOption('patience', this.value)" /></label><label>Freeze layers<input type="number" min="0" max="1000" value="${esc(pipeline.freeze)}" onchange="updateObjectDetectionPipelineOption('freeze', this.value)" /></label><label>Seed<input type="number" min="0" value="${esc(pipeline.seed)}" onchange="updateObjectDetectionPipelineOption('seed', this.value)" /></label></div></details>
+              <button class="primary ${actionBusy("object-detection:train") ? "is-busy" : ""}" onclick="trainObjectDetectionModel()" ${canTrain ? "" : "disabled"} ${actionButtonAttrs("object-detection:train", "Training is starting...")}>${esc(actionButtonLabel("object-detection:train", pipeline.trainingMode === "resume" ? "Resume training" : "Start training", "Starting..."))}</button>
+            </article>
+
+            <article class="e2e-pipeline-stage">
+              <header><span>03</span><div><strong>Review & export</strong><small>best.pt → fixed-shape model.onnx + metadata</small></div></header>
+              <div class="field"><label>Training run</label><select onchange="updateObjectDetectionPipelineOption('runDir', this.value)"><option value="">Select run</option>${pipeline.runs.map((item) => `<option value="${esc(item.path)}" ${item.path === pipeline.runDir ? "selected" : ""}>${esc(item.name)} — ${item.best_checkpoint ? "best.pt" : "incomplete"}${item.onnx_path ? " + ONNX" : ""}</option>`).join("")}</select></div>
+              ${run ? `<div class="e2e-run-summary"><span>${run.best_checkpoint ? "Checkpoint ready" : "No best checkpoint"}</span><span>${run.onnx_path ? "ONNX ready" : "ONNX not exported"}</span><small>${metrics.epoch !== undefined ? `Epoch ${esc(metrics.epoch)} · ` : ""}mAP50 ${esc(metrics.map50 ?? metrics["metrics/mAP50(B)"] ?? "-")} · mAP50-95 ${esc(metrics.map50_95 ?? metrics["metrics/mAP50-95(B)"] ?? "-")}</small><small>${esc(run.path)}</small></div>` : `<div class="empty compact">Select a training run.</div>`}
+              <div class="e2e-compact-fields"><label>ONNX opset<input type="number" min="11" max="20" value="${esc(pipeline.opset)}" onchange="updateObjectDetectionPipelineOption('opset', this.value)" /></label><label class="check-row"><input type="checkbox" ${pipeline.simplify ? "checked" : ""} onchange="updateObjectDetectionPipelineOption('simplify', this.checked)" /><span>Simplify ONNX</span></label></div>
+              <div class="button-stack"><button class="primary ${actionBusy("object-detection:export") ? "is-busy" : ""}" onclick="exportObjectDetectionOnnx()" ${run?.best_checkpoint ? "" : "disabled"} ${actionButtonAttrs("object-detection:export", "ONNX export is starting...")}>${esc(actionButtonLabel("object-detection:export", "Export ONNX", "Starting..."))}</button><button onclick="useObjectDetectionRunForBagAnalysis()" ${run?.onnx_path ? "" : "disabled"}>Use in Bag Analysis</button></div>
+            </article>
+
+            <article class="e2e-pipeline-stage">
+              <header><span>04</span><div><strong>Deploy to Jetson</strong><small>SSH transfer + target-side TensorRT FP16 build</small></div></header>
+              <div class="field"><label>Connection profile</label><select onchange="updateObjectDetectionPipelineOption('deployProfile', this.value)"><option value="">Select profile</option>${pipeline.deployProfiles.map((item) => `<option value="${esc(item.id)}" ${item.id === pipeline.deployProfile ? "selected" : ""}>${esc(item.label || item.id)} — ${esc(item.host === "__manual__" ? "manual" : item.host)}</option>`).join("")}</select></div>
+              <div class="e2e-compact-fields"><label>SSH user<input value="${esc(user)}" onchange="updateObjectDetectionPipelineOption('deployUser', this.value)" /></label><label>Host<input value="${esc(host)}" onchange="updateObjectDetectionPipelineOption('deployHost', this.value)" /></label></div>
+              <div class="field"><label>Remote model root</label><input value="${esc(pipeline.remoteRoot || profile?.remote_root || "")}" onchange="updateObjectDetectionPipelineOption('remoteRoot', this.value)" /></div>
+              <div class="field"><label>Model name</label><input value="${esc(pipeline.deployName)}" onchange="updateObjectDetectionPipelineOption('deployName', this.value)" /><div class="field-hint">Installed as &lt;remote root&gt;/${esc(pipeline.deployName || "model")}/model.onnx.</div></div>
+              <label class="check-row"><input type="checkbox" ${pipeline.buildEngine ? "checked" : ""} onchange="updateObjectDetectionPipelineOption('buildEngine', this.checked)" /><span>Build TensorRT model.plan on the Jetson (FP16)</span></label>
+              <button class="primary ${actionBusy("object-detection:deploy") ? "is-busy" : ""}" onclick="deployObjectDetectionModel()" ${run?.onnx_path && host && user ? "" : "disabled"} ${actionButtonAttrs("object-detection:deploy", "Deployment is starting...")}>${esc(actionButtonLabel("object-detection:deploy", "Transfer & build", "Starting..."))}</button>
+            </article>
+          </div>
+          <details class="e2e-pipeline-tasks" ${pipelineTasks.some(isActiveTask) ? "open" : ""}><summary>Object-detection tasks (${pipelineTasks.length})</summary>${renderTaskTable(pipelineTasks)}</details>
+        </div>
+      </section>
+    </div>`;
+}
+
 function renderE2EAnalysis() {
   return `
     <div class="page analysis-page e2e-analysis-page">
@@ -3191,8 +3585,12 @@ function renderAnalysisForm() {
       ${analysis.offlineObjectDetection ? `
         <div class="field full">
           <label>YOLOv8 model directory</label>
-          <input value="${esc(analysis.objectDetectionModelRoot)}" onchange="updateAnalysisOption('objectDetectionModelRoot', this.value)" />
-          <div class="field-hint">Must contain model.onnx under ros2_ws/models/yolov8.</div>
+          <select onchange="updateAnalysisOption('objectDetectionModelRoot', this.value)">
+            <option value="">Select exported or deployed model</option>
+            ${objectDetectionModelCatalog().map((item) => `<option value="${esc(item.path)}" ${item.path === analysis.objectDetectionModelRoot ? "selected" : ""}>${esc(item.name || shortName(item.path))} — ${item.source === "training_run" ? "training export" : "model catalog"}</option>`).join("")}
+            ${analysis.objectDetectionModelRoot && !objectDetectionModelCatalog().some((item) => item.path === analysis.objectDetectionModelRoot) ? `<option value="${esc(analysis.objectDetectionModelRoot)}" selected>${esc(shortName(analysis.objectDetectionModelRoot))} — current path</option>` : ""}
+          </select>
+          <div class="field-hint">Select a local training export or a model under ros2_ws/models/yolov8. The directory must contain model.onnx.</div>
         </div>
         <div class="field">
           <label>Detector RGB Image</label>
@@ -10273,6 +10671,12 @@ window.trainE2EModel = trainE2EModel;
 window.exportE2EOnnx = exportE2EOnnx;
 window.deployE2EModel = deployE2EModel;
 window.useE2ERunForOfflineEval = useE2ERunForOfflineEval;
+window.updateObjectDetectionPipelineOption = updateObjectDetectionPipelineOption;
+window.validateObjectDetectionDataset = validateObjectDetectionDataset;
+window.trainObjectDetectionModel = trainObjectDetectionModel;
+window.exportObjectDetectionOnnx = exportObjectDetectionOnnx;
+window.deployObjectDetectionModel = deployObjectDetectionModel;
+window.useObjectDetectionRunForBagAnalysis = useObjectDetectionRunForBagAnalysis;
 window.refreshAnalysisData = refreshAnalysisData;
 window.startBagAnalysis = startBagAnalysis;
 window.startE2EAnalysis = startE2EAnalysis;
@@ -10365,12 +10769,12 @@ setInterval(() => {
   api("/api/tasks")
     .then(async (data) => {
       const nextTasks = data.tasks || [];
-      const e2ePipelineTaskFinished = nextTasks.some((task) => {
-        if (!isE2EPipelineTask(task) || !isFinishedTask(task)) return false;
+      const pipelineTaskFinished = nextTasks.some((task) => {
+        if (!(isE2EPipelineTask(task) || isObjectDetectionPipelineTask(task)) || !isFinishedTask(task)) return false;
         const previous = state.tasks.find((item) => item.task_id === task.task_id);
         return !previous || previous.status !== task.status || previous.ended_at !== task.ended_at;
       });
-      if (e2ePipelineTaskFinished) {
+      if (pipelineTaskFinished) {
         state.tasks = nextTasks;
         await refreshAll();
         return;

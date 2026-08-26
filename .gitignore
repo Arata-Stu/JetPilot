@@ -21,6 +21,9 @@ isaac_ros_assets/
 !/ros2_ws/models/e2e/
 /ros2_ws/models/e2e/*
 !/ros2_ws/models/e2e/.gitkeep
+!/ros2_ws/models/yolov8/
+/ros2_ws/models/yolov8/*
+!/ros2_ws/models/yolov8/.gitkeep
 tmp/
 
 # Keep writable E2E workspace roots present after clone, but never track their
@@ -33,6 +36,17 @@ python_ws/jetpilot_e2e_training/outputs/*
 !python_ws/jetpilot_e2e_training/outputs/e2e/
 python_ws/jetpilot_e2e_training/outputs/e2e/*
 !python_ws/jetpilot_e2e_training/outputs/e2e/.gitkeep
+
+# Keep the YOLOv8 training workspace roots, but not datasets, checkpoints,
+# exported ONNX files, or other generated training artifacts.
+!python_ws/jetpilot_object_detection_training/datasets/
+python_ws/jetpilot_object_detection_training/datasets/*
+!python_ws/jetpilot_object_detection_training/datasets/.gitkeep
+!python_ws/jetpilot_object_detection_training/outputs/
+python_ws/jetpilot_object_detection_training/outputs/*
+!python_ws/jetpilot_object_detection_training/outputs/yolov8/
+python_ws/jetpilot_object_detection_training/outputs/yolov8/*
+!python_ws/jetpilot_object_detection_training/outputs/yolov8/.gitkeep
 
 # CenturyArks SilkyEvCam plugin source is distributed separately.
 tools/isaac-ros-cli/docker/silky_evcam_plugin_source/*

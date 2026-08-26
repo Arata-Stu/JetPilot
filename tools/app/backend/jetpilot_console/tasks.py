@@ -225,6 +225,14 @@ class TaskManager:
 
     def _run_task(self, task: Task) -> None:
         with self.lock:
+            # A task can be cancelled after it is queued but before this worker
+            # acquires the lock.  Do not revive that task and spawn its process.
+            if task.status != "queued":
+                if task.status == "stopping":
+                    task.status = "stopped"
+                    task.ended_at = task.ended_at or _now()
+                    self._save()
+                return
             task.status = "running"
             task.started_at = _now()
             self._save()
@@ -248,7 +256,17 @@ class TaskManager:
                         task.pgid = os.getpgid(process.pid)
                     except OSError:
                         task.pgid = process.pid
+                    stop_after_spawn = task.status == "stopping"
                     self._save()
+
+                # stop() may run in the small window between Popen and process
+                # registration.  Honour that cancellation as soon as the
+                # process group becomes available.
+                if stop_after_spawn:
+                    try:
+                        os.killpg(task.pgid or process.pid, signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass
 
                 exit_code = process.wait()
                 with self.lock:
@@ -274,6 +292,11 @@ class TaskManager:
             task = self.tasks.get(task_id)
             if task is None or task.status not in ACTIVE_TASK_STATUSES:
                 return False
+            if task.status == "queued":
+                task.status = "stopped"
+                task.ended_at = _now()
+                self._save()
+                return True
             task.status = "stopping"
             self._save()
             process = self.processes.get(task_id)

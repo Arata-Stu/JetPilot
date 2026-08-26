@@ -38,8 +38,11 @@ WORKSPACE_DIRS=(
   "record"
   "map"
   "ros2_ws/models/e2e"
+  "ros2_ws/models/yolov8"
   "python_ws/jetpilot_e2e_training/datasets"
   "python_ws/jetpilot_e2e_training/outputs/e2e"
+  "python_ws/jetpilot_object_detection_training/datasets"
+  "python_ws/jetpilot_object_detection_training/outputs/yolov8"
 )
 
 errors=0

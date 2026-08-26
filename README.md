@@ -11,6 +11,8 @@
 - [Bringup profile追加ルール](docs/bringup_profile_rules.md)
 - [Planning / Control Architecture](docs/planning_control_architecture.md)
 - [rosbag Replay Safety](docs/rosbag_replay_safety.md)
+- [YOLOv8 Training / Retraining](python_ws/jetpilot_object_detection_training/README.md)
+- [YOLOv8 Isaac ROS Runtime / Decoder](ros2_ws/src/perception/jetpilot_object_detection/README.md)
 
 ## Isaac ROS Docker の世代整理
 

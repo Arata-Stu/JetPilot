@@ -4,7 +4,7 @@ train: train/images
 val: valid/images
 test: test/images
 
-# This order is part of the TensorRT/decoder interface.
+# This order is part of the TensorRT/C++ decoder interface.
 names:
   0: vehicle
   1: barrier

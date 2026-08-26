@@ -137,6 +137,24 @@ The UI deliberately targets the Isaac ROS TensorRT runtime pipeline; the
 non-Isaac ROS PyTorch inference node remains a dependency-failure fallback and
 is not exposed as a deployment choice.
 
+## Object-detection training and deployment
+
+Open **Object Detection** on the training Notebook to manage the 224x224 YOLOv8
+workflow. The Console discovers Roboflow YOLOv8 `data.yaml` files under
+`python_ws/jetpilot_object_detection_training/datasets`, checks the fixed
+`vehicle, barrier` class contract, and exposes full label validation as a
+cancellable task. New training, fine-tuning from a selected `best.pt`, and
+resume from `last.pt` share the same run catalog and guarded GPU resources.
+
+Completed runs expose the latest loss/mAP row, checkpoints, `model.onnx`, and
+`metadata.json`. An exported run can be selected directly in **Bag Analysis**
+for offline detector evaluation. Deployment transfers the selected export over
+SSH and builds the FP16 TensorRT engine on the Jetson in a staging directory;
+the previous model remains active if transfer or engine generation fails.
+Connection profiles contain only user/host/path information. Passwords and
+private-key contents are not stored in Console task state, so key-based SSH is
+required.
+
 ## Goals
 
 - Manage rosbag, map, HD map, raceline, preview, and Jetson transfer workflows
