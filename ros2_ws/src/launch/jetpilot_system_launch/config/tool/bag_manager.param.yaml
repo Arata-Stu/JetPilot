@@ -91,6 +91,7 @@ bag_manager_node:
       - /realsense/gyro/imu_info
       - /realsense/gyro/metadata
       - /realsense/gyro/sample
+      - /realsense/imu
       - /realsense/extrinsics/depth_to_accel
       - /realsense/extrinsics/depth_to_gyro
 
@@ -110,16 +111,6 @@ bag_manager_node:
       - /realsense/extrinsics/depth_to_infra1
       - /realsense/extrinsics/depth_to_infra2
 
-      ## OAK-D Lite RGB, synchronized rectified stereo, and IMU.
-      ## ROS depth and point cloud are not generated.
-      - /oakd_lite/rgb/camera_info
-      - /oakd_lite/rgb/image_raw
-      - /oakd_lite/left/camera_info
-      - /oakd_lite/left/image_rect
-      - /oakd_lite/right/camera_info
-      - /oakd_lite/right/image_rect
-      - /oakd_lite/imu/data
-      - /oakd_lite/diagnostics
     exclude_topics: []
 
     ## Storage backend. Use "mcap" for modern rosbag2 recording, or "sqlite3" if needed.

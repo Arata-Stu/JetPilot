@@ -64,7 +64,6 @@ _REPLAY_ISOLATED_TOPICS = (
     '/localization/vslam/diagnostics',
     '/localization/vgl/diagnostics',
     '/realsense/diagnostics',
-    '/oakd_lite/diagnostics',
     '/planning/diagnostics',
     '/controller/diagnostics',
     '/perception/detections',
@@ -396,8 +395,8 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('localization_base_frame', 'base_link', cli=True)
     args.add_arg('enable_vslam', True, cli=True)
     args.add_arg('vslam_enable_slam', True, cli=True)
-    args.add_arg('vslam_enable_imu', False, cli=True)
-    args.add_arg('vslam_imu_topic', '/front_stereo_imu/imu', cli=True)
+    args.add_arg('vslam_mode', 'vo', cli=True)
+    args.add_arg('vslam_imu_topic', '/realsense/imu', cli=True)
     args.add_arg('vslam_enable_ground_constraint_in_odometry', False, cli=True)
     args.add_arg('vslam_enable_ground_constraint_in_slam', False, cli=True)
     args.add_arg('vslam_enable_visualization', False, cli=True)
@@ -459,7 +458,8 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('vehicle_description_base_frame', 'base_link', cli=True)
     args.add_arg('vehicle_description_camera_frame', 'realsense_camera_link', cli=True)
     args.add_arg('vehicle_description_camera_x', '0.2075', cli=True)
-    args.add_arg('vehicle_description_camera_y', '0.019', cli=True)
+    # D455 mount offset: keep the RGB optical center on the vehicle centerline.
+    args.add_arg('vehicle_description_camera_y', '0.0115', cli=True)
     args.add_arg('vehicle_description_camera_z', '0.065', cli=True)
     args.add_arg('vehicle_description_camera_roll', '0.0', cli=True)
     args.add_arg('vehicle_description_camera_pitch', '0.0', cli=True)
@@ -769,7 +769,7 @@ def generate_launch_description() -> lut.LaunchDescription:
                 'localization_base_frame': args.localization_base_frame,
                 'enable_vslam': args.enable_vslam,
                 'vslam_enable_slam': args.vslam_enable_slam,
-                'vslam_enable_imu': args.vslam_enable_imu,
+                'vslam_mode': args.vslam_mode,
                 'vslam_imu_topic': args.vslam_imu_topic,
                 'vslam_enable_ground_constraint_in_odometry':
                     args.vslam_enable_ground_constraint_in_odometry,

@@ -33,7 +33,7 @@ TOP_LEVEL_FIELDS = {
 SENSOR_KIT_INTEGRATION_ARGUMENTS = {
     "localization_camera_name",
     "vgl_topic_config_file",
-    "vslam_enable_imu",
+    "vslam_mode",
     "vslam_imu_topic",
     "vehicle_description_camera_frame",
 }

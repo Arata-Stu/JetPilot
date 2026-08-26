@@ -56,7 +56,6 @@ mount設定の追加なしでcontainerから参照できます。
 ## JetPilot固有として維持した内容
 
 - `additional_setting` layerとJetPilotで使用するIsaac ROS／ROS package
-- DepthAI v3 layer
 - SilkyEvCam／OpenEB layerと外部配布plugin sourceの受け口
 - CycloneDDS profile、loopback multicast、ROS用network buffer設定
 - joystick、VESC、USB LiDAR向けdevice group設定
@@ -88,8 +87,6 @@ CUDA／TensorRTを再固定せず、このVPI/L4T runtimeだけを扱う小さ�
 RealSenseの独自 `--no_cuda` も公式設定へ戻しました。実機buildでのみ問題が再現する場合は、
 原因とbuild logを確認してから限定的に復活させます。
 
-DepthAI layerはOAK-D用として有効化しましたが、testing repositoryとDepthAI Python packageの
-version上書きを含むため、Jetson実機でcamera起動まで確認します。
 
 ## E2E NITROS／TensorRT移行
 
@@ -113,7 +110,7 @@ x86からJetsonへdeployするscriptの両方から削除しました。TensorRT
 3. container内でCUDA 13.2、TensorRT 10.16、Jetson r39.2由来packageを確認する。
 4. `/dev/i2c-1`、`/dev/gpiochip*`、`/dev/dri/render*` を非root userで開けることを確認する。
 5. PCA9685 steering／ESCを安全に浮かせた状態で確認する。
-6. RealSense、OAK-D、SilkyEvCamを個別に起動する。
+6. RealSense、SilkyEvCamを個別に起動する。
 7. `jtop` socket連携とIsaac ROS diagnosticsを確認する。
 8. VPI利用nodeで `libnvbufsurface_nvsci` 関連errorがないことを確認する。
 9. clean build後にE2E control／trajectory decoderを起動し、TensorRT engineを再生成する。

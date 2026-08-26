@@ -2566,8 +2566,6 @@ function preferredAnalysisTopic(kind, topics) {
     image: [
       "/realsense/color/image_raw/compressed",
       "/realsense/color/image_raw",
-      "/oakd_lite/rgb/image_raw/compressed",
-      "/oakd_lite/rgb/image_raw",
       "/event_camera/event_image",
       "/realsense/infra1/image_rect_raw",
     ],

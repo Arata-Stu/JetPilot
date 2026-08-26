@@ -62,7 +62,7 @@ def test_launcher_resolves_project_root_when_scripts_are_mounted_separately(
         env=env,
     )
 
-    assert "oakd-lite" in result.stdout
+    assert "realsense" in result.stdout
 
 
 def test_presets_are_listed() -> None:
@@ -95,8 +95,6 @@ def test_vehicle_and_sensor_profiles_are_listed_dynamically() -> None:
     assert "jpbb" in vehicles
     assert "JPBB-01 USB/RC safety bridge" in vehicles
     assert "realsense" in sensor_kits
-    assert "oakd-lite" in sensor_kits
-    assert "Luxonis OAK-D Lite" in sensor_kits
     assert "flir" in sensor_kits
     assert "realsense-silky" in sensor_kits
 
@@ -105,8 +103,8 @@ def test_bringup_profiles_pass_schema_validation() -> None:
     output = run_launcher("--validate-profiles").stdout
 
     assert "vehicle: 3 profile(s)" in output
-    assert "sensor_kit: 5 profile(s)" in output
-    assert "validated: 8 profile(s)" in output
+    assert "sensor_kit: 4 profile(s)" in output
+    assert "validated: 7 profile(s)" in output
 
 
 def test_new_manifest_is_available_without_editing_launcher(tmp_path: Path) -> None:
@@ -322,69 +320,64 @@ def test_sensor_kit_launch_can_be_selected_explicitly() -> None:
     assert "sensor_kit_camera_name:=realsense" in output
 
 
-def test_oakd_lite_profile_selects_depthai_composable_launch() -> None:
-    output = run_launcher(
-        "sensor",
-        "--sensor-kit",
-        "oakd-lite",
+def test_vslam_tracking_mode_can_switch_between_vo_and_vio() -> None:
+    vo = run_launcher(
+        "custom",
+        "--components",
+        "localization",
+        "--map",
+        "/workspaces/map/course_a",
+        "--vslam-mode",
+        "vo",
+        "--dry-run",
+    ).stdout
+    vio = run_launcher(
+        "custom",
+        "--components",
+        "localization",
+        "--map",
+        "/workspaces/map/course_a",
+        "--vslam-mode",
+        "vio",
         "--dry-run",
     ).stdout
 
-    assert "sensor kit   : oakd-lite" in output
-    assert (
-        "sensor_kit_interface_launch:=launch/sensors/oakd_lite.launch.py"
-        in output
+    assert "VSLAM mode   : vo" in vo
+    assert "vslam_mode:=vo" in vo
+    assert "VSLAM mode   : vio" in vio
+    assert "vslam_mode:=vio" in vio
+
+
+def test_invalid_vslam_tracking_mode_is_rejected() -> None:
+    result = run_launcher(
+        "custom",
+        "--components",
+        "localization",
+        "--map",
+        "/workspaces/map/course_a",
+        "--vslam-mode",
+        "invalid",
+        "--dry-run",
+        check=False,
     )
-    assert "sensor_kit_camera_name:=oakd_lite" in output
-    assert "sensor_kit_enable_color:=true" in output
-    assert "sensor_kit_enable_depth:=false" in output
-    assert "sensor_kit_rtp_fps:=35" in output
-    assert "localization_camera_name:=oakd_lite" in output
-    assert "vgl_topic_config_file:=vgl_camera_topics_oakd_lite.yaml" in output
-    assert "vslam_enable_imu:=false" in output
-    assert "vslam_imu_topic:=/oakd_lite/imu/data" in output
+
+    assert result.returncode != 0
+    assert "VSLAM mode must be vo or vio" in result.stderr
 
 
-def test_oakd_lite_uses_depthai_v3_component_and_is_recorded() -> None:
-    launch_source = (
+def test_realsense_vio_topic_and_d455_mount_offset_are_configured() -> None:
+    realsense_source = (
         PROJECT_ROOT
-        / "ros2_ws/src/launch/jetpilot_system_launch/launch/sensors"
-        / "oakd_lite.launch.py"
+        / "ros2_ws/src/launch/jetpilot_system_launch/launch/sensors/realsense.launch.py"
     ).read_text(encoding="utf-8")
-    sensor_config = (
+    bringup_source = (
         PROJECT_ROOT
-        / "ros2_ws/src/launch/jetpilot_system_launch/config/sensing"
-        / "oakd_lite.param.yaml"
-    ).read_text(encoding="utf-8")
-    localization_topics = (
-        PROJECT_ROOT
-        / "ros2_ws/src/launch/jetpilot_system_launch/config/localization"
-        / "vgl_camera_topics_oakd_lite.yaml"
-    ).read_text(encoding="utf-8")
-    bag_manager_config = (
-        PROJECT_ROOT
-        / "ros2_ws/src/launch/jetpilot_system_launch/config/tool"
-        / "bag_manager.param.yaml"
+        / "ros2_ws/src/launch/jetpilot_system_launch/launch/bringup.launch.py"
     ).read_text(encoding="utf-8")
 
-    assert "package='depthai_ros_driver_v3'" in launch_source
-    assert "plugin='depthai_ros_driver::Driver'" in launch_source
-    assert "executable='component_container_mt'" in launch_source
-    assert "use_intra_process_comms': True" in launch_source
-    assert "i_left_rect_publish_topic: true" in sensor_config
-    assert "i_right_rect_publish_topic: true" in sensor_config
-    assert "i_left_rect_synced: true" in sensor_config
-    assert "i_right_rect_synced: true" in sensor_config
-    assert "/oakd_lite/left/image_rect" in localization_topics
-    assert "/oakd_lite/right/image_rect" in localization_topics
-    assert "/oakd_lite/rgb/image_raw" in bag_manager_config
-    assert "/oakd_lite/left/image_rect" in bag_manager_config
-    assert "/oakd_lite/right/image_rect" in bag_manager_config
-    assert "/oakd_lite/stereo/image_raw" not in bag_manager_config
-    assert "/oakd_lite/imu/data" in bag_manager_config
-    assert "('/diagnostics', f'/{args.camera_name}/diagnostics')" in launch_source
-    assert "/oakd_lite/diagnostics" in bag_manager_config
-    assert "\n      - /diagnostics\n" not in bag_manager_config
+    assert "'unite_imu_method': 2" in realsense_source
+    assert "args.add_arg('vslam_imu_topic', '/realsense/imu'" in bringup_source
+    assert "args.add_arg('vehicle_description_camera_y', '0.0115'" in bringup_source
 
 
 def test_openeb_raw_recording_follows_bag_manager_session() -> None:

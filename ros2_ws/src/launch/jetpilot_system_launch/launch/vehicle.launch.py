@@ -153,7 +153,8 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('vehicle_description_base_frame', 'base_link', cli=True)
     args.add_arg('vehicle_description_camera_frame', 'realsense_camera_link', cli=True)
     args.add_arg('vehicle_description_camera_x', '0.2075', cli=True)
-    args.add_arg('vehicle_description_camera_y', '0.019', cli=True)
+    # D455 mount offset: keep the RGB optical center on the vehicle centerline.
+    args.add_arg('vehicle_description_camera_y', '0.0115', cli=True)
     args.add_arg('vehicle_description_camera_z', '0.065', cli=True)
     args.add_arg('vehicle_description_camera_roll', '0.0', cli=True)
     args.add_arg('vehicle_description_camera_pitch', '0.0', cli=True)

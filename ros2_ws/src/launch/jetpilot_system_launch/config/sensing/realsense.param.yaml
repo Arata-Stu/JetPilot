@@ -32,6 +32,8 @@
     enable_rgbd: false
     enable_accel: false
     enable_gyro: false
+    # 0: disabled, 1: copy latest accel, 2: interpolate accel at gyro stamps.
+    unite_imu_method: 2
     enable_sync: true
 
     # Keep RGB and stereo infrared at the same 60 fps for synchronized

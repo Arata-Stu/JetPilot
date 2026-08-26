@@ -143,10 +143,12 @@ def test_configurable_localization_endpoints_are_wired_to_producers() -> None:
     assert "('/diagnostics', args.vslam_diagnostics_topic)" in vslam_source
     assert "'vgl_diagnostics_topic': args.vgl_diagnostics_topic" in localization_source
     assert "('/diagnostics', args.vgl_diagnostics_topic)" in vgl_source
-    assert "'vslam_enable_imu': lu.is_true(args.vslam_enable_imu)" in localization_source
+    assert "'vslam_mode': args.vslam_mode" in localization_source
     assert "'vslam_imu_topic': args.vslam_imu_topic" in localization_source
     assert "('visual_slam/imu', args.vslam_imu_topic)" in vslam_source
-    assert "'tracking_mode': 1 if lu.is_true(args.vslam_enable_imu) else 0" in vslam_source
+    assert "'tracking_mode': tracking_mode_from_name(args.vslam_mode)" in vslam_source
+    assert "normalized == 'vo'" in vslam_source
+    assert "normalized == 'vio'" in vslam_source
 
 
 def test_jetson_stats_default_is_platform_aware() -> None:

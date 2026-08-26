@@ -47,6 +47,8 @@ def launch_realsense(args: lu.ArgumentContainer) -> list[lut.Action]:
         'enable_rgbd': False,
         'enable_accel': True,
         'enable_gyro': True,
+        # Publish the fused /realsense/imu stream required by VIO.
+        'unite_imu_method': 2,
         'enable_sync': True,
         'align_depth.enable': False,
         'colorizer.enable': False,

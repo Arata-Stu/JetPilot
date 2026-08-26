@@ -181,7 +181,7 @@ def add_nodes(args: lu.ArgumentContainer):
             'vslam_enable_ground_constraint_in_slam':
                 lu.is_true(args.vslam_enable_ground_constraint_in_slam),
             'vslam_camera_optical_frames': camera_optical_frames,
-            'vslam_enable_imu': lu.is_true(args.vslam_enable_imu),
+            'vslam_mode': args.vslam_mode,
             'vslam_imu_topic': args.vslam_imu_topic,
             'vslam_base_frame': base_frame,
             'vslam_use_rectified_images': True,
@@ -388,8 +388,8 @@ def generate_launch_description() -> lut.LaunchDescription:
     # vslam parameters
     args.add_arg('enable_vslam', True, cli=True)
     args.add_arg('vslam_enable_slam', True, cli=True)
-    args.add_arg('vslam_enable_imu', False, cli=True)
-    args.add_arg('vslam_imu_topic', '/front_stereo_imu/imu', cli=True)
+    args.add_arg('vslam_mode', 'vo', cli=True)
+    args.add_arg('vslam_imu_topic', '/realsense/imu', cli=True)
     args.add_arg('vslam_enable_ground_constraint_in_odometry', False, cli=True)
     args.add_arg('vslam_enable_ground_constraint_in_slam', False, cli=True)
     args.add_arg('vslam_enable_visualization', False, cli=True)

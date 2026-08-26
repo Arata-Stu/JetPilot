@@ -22,6 +22,15 @@ import isaac_ros_launch_utils as lu
 import yaml
 
 
+def tracking_mode_from_name(mode: str) -> int:
+    normalized = str(mode).strip().lower()
+    if normalized == 'vo':
+        return 0
+    if normalized == 'vio':
+        return 1
+    raise ValueError(f'vslam_mode must be "vo" or "vio", got: {mode}')
+
+
 def remap(i: int, name: str, identifier: str, rectified: bool) -> list[tuple[str, str]]:
     if rectified:
         return [
@@ -116,7 +125,7 @@ def add_vslam(args: lu.ArgumentContainer) -> list[lut.Action]:
         'enable_localization_n_mapping': lut.ParameterValue(args.vslam_enable_slam, value_type=bool),
         'enable_ground_constraint_in_odometry': lut.ParameterValue(args.vslam_enable_ground_constraint_in_odometry, value_type=bool),
         'enable_ground_constraint_in_slam': lut.ParameterValue(args.vslam_enable_ground_constraint_in_slam, value_type=bool),
-        'tracking_mode': 1 if lu.is_true(args.vslam_enable_imu) else 0,
+        'tracking_mode': tracking_mode_from_name(args.vslam_mode),
         'image_qos': args.vslam_image_qos,
         'save_map_folder_path': args.vslam_save_map_folder_path,
         'load_map_folder_path': args.vslam_load_map_folder_path,
@@ -161,8 +170,8 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('invert_odom_to_base_tf', False)
     args.add_arg('is_sim', False)
     args.add_arg('publish_odom_to_base_tf', True)
-    args.add_arg('vslam_enable_imu', False)
-    args.add_arg('vslam_imu_topic', '/front_stereo_imu/imu')
+    args.add_arg('vslam_mode', 'vo')
+    args.add_arg('vslam_imu_topic', '/realsense/imu')
     args.add_arg('vslam_publish_map_to_odom_tf', True)
     args.add_arg('vslam_enable_slam', False)
     args.add_arg('vslam_enabled_stereo_cameras', '')

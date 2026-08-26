@@ -20,43 +20,29 @@ JetPilot 全体の bringup をまとめる launch package です。tool、operat
 | Launch | Sensors |
 | --- | --- |
 | `launch/sensors/realsense.launch.py` | RealSense |
-| `launch/sensors/oakd_lite.launch.py` | OAK-D Lite RGB + rectified stereo + IMU |
 | `launch/sensors/flir_boson.launch.py` | FLIR Boson via `usb_cam` composable node |
 | `launch/sensors/realsense_silky_evcam.launch.py` | RealSense + SilkyEvCam/OpenEB |
 | `launch/sensors/realsense_silky_flir.launch.py` | RealSense + SilkyEvCam/OpenEB + FLIR Boson |
 
 FLIR の既定 topic は `/flir/camera_info` と `/flir/image_raw`、既定 frame は `boson_optical_frame` です。デバイスや format は `sensor_kit_flir_video_device:=/dev/video0`、`sensor_kit_flir_pixel_format:=mono16` のように bringup 引数で上書きできます。
 
-OAK-D Liteは`depthai_ros_driver_v3`のcomposable componentとして
-`multi_sensor_container`へ読み込まれます。ROS depth、point cloud、NN処理は無効で、既定の出力は
-次のとおりです。
+## VSLAM tracking mode
 
-| Data | Topic | Configuration |
-| --- | --- | --- |
-| Color image | `/oakd_lite/rgb/image_raw` | 640x400 @ 35 Hz |
-| Color camera info | `/oakd_lite/rgb/camera_info` | color imageに追従 |
-| Left mono image | `/oakd_lite/left/image_rect` | 640x400 @ 117 Hz、補正済み |
-| Left camera info | `/oakd_lite/left/camera_info` | left imageと同一stamp |
-| Right mono image | `/oakd_lite/right/image_rect` | 640x400 @ 117 Hz、補正済み |
-| Right camera info | `/oakd_lite/right/camera_info` | right imageと同一stamp |
-| IMU | `/oakd_lite/imu/data` | accel 480 Hz、gyro 400 Hzを要求 |
-| Diagnostics | `/oakd_lite/diagnostics` | DepthAI device状態 |
+VSLAMは`vo`（画像のみ、既定）と`vio`（画像＋IMU）を切り替えられます。
 
-OAK-D Liteを選択するには
-`scripts/bringup.sh sensor --sensor-kit oakd-lite`を使用します。BMI270は要求値を
-実機が公開できる最大rateへ丸めるため、IMUの実測publish rateは要求値より低くなる
-場合があります。また、Kickstarter版OAK-D Liteの一部にはIMUが搭載されていません。
-この構成ではIMU搭載モデルを前提とします。左右画像はDepthAI内で同期され、同一のROS
-timestampでpublishされます。`oakd-lite`プロファイルを選ぶと、VSLAM/VGLには
-`config/localization/vgl_camera_topics_oakd_lite.yaml`が自動選択され、VSLAMのIMU入力先も
-`/oakd_lite/imu/data`へ切り替わります。IMU融合はノイズ値とTFの実機確認前に誤差を
-増やさないよう既定OFFです。有効化する場合は`--set vslam_enable_imu:=true`を指定します。
+```bash
+scripts/bringup.sh localization --map /workspaces/map/course_a --vslam-mode vo
+scripts/bringup.sh localization --map /workspaces/map/course_a --vslam-mode vio
+```
 
-117 Hzの左右非圧縮画像は記録帯域が大きいため、Bag Manager使用時は保存先の書き込み速度と
-空き容量を確認してください。
+launchを直接起動する場合は`vslam_mode:=vo|vio`を指定します。RealSense D455はaccelとgyroを
+線形補間で統合して`/realsense/imu`へpublishし、VIOはこのtopicを購読します。
 
-診断topicは発行元ごとに分離されます。主な名前は`/oakd_lite/diagnostics`、
-`/realsense/diagnostics`、`/localization/vslam/diagnostics`、
+D455の車両取付TFは`base_link -> realsense_camera_link`で、RGB光学中心を車両中心軸へ
+合わせる公称横オフセットとして`y=+0.0115 m`を使用します。実機の取付方向が逆の場合は
+`vehicle_description_camera_y:=-0.0115`へ反転してください。
+
+診断topicは発行元ごとに分離されます。主な名前は`/realsense/diagnostics`、`/localization/vslam/diagnostics`、
 `/localization/vgl/diagnostics`です。Localization Managerは
 `/localization/vslam/diagnostics`を購読します。
 

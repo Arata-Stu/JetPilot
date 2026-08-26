@@ -198,7 +198,7 @@ offline_topic_subscribers() {{
   ros2 topic info "$1" 2>/dev/null | awk '/Subscription count:/ {{print $3; found=1}} END {{if (!found) print 0}}'
 }}
 offline_log_topic_counts() {{
-  echo "[debug] input topics: infra1 pubs=$(offline_topic_publishers /realsense/infra1/image_rect_raw), subs=$(offline_topic_subscribers /realsense/infra1/image_rect_raw); infra2 pubs=$(offline_topic_publishers /realsense/infra2/image_rect_raw), subs=$(offline_topic_subscribers /realsense/infra2/image_rect_raw); imu pubs=$(offline_topic_publishers /front_stereo_imu/imu), subs=$(offline_topic_subscribers /front_stereo_imu/imu)"
+  echo "[debug] input topics: infra1 pubs=$(offline_topic_publishers /realsense/infra1/image_rect_raw), subs=$(offline_topic_subscribers /realsense/infra1/image_rect_raw); infra2 pubs=$(offline_topic_publishers /realsense/infra2/image_rect_raw), subs=$(offline_topic_subscribers /realsense/infra2/image_rect_raw); imu pubs=$(offline_topic_publishers /realsense/imu), subs=$(offline_topic_subscribers /realsense/imu)"
   echo "[debug] output topics: path pubs=$(offline_topic_publishers /visual_slam/tracking/slam_path), subs=$(offline_topic_subscribers /visual_slam/tracking/slam_path); odom pubs=$(offline_topic_publishers /visual_slam/tracking/odometry), subs=$(offline_topic_subscribers /visual_slam/tracking/odometry); landmarks pubs=$(offline_topic_publishers /visual_slam/vis/landmarks_cloud), subs=$(offline_topic_subscribers /visual_slam/vis/landmarks_cloud)"
 }}
 trap 'offline_stop_launch TERM 5 || kill -KILL "-$offline_launch_pid" 2>/dev/null || kill -KILL "$offline_launch_pid" 2>/dev/null || true' EXIT

@@ -133,20 +133,6 @@ cd "${RC_AS_ROOT}"
 
 適用後、SilkyEvCam を抜き差しし、Docker コンテナを再起動してください。
 
-### 4.3 Luxonis OAK udev ルールの設定
-
-OAK-D LiteをDockerコンテナ内の通常ユーザーから扱えるようにするため、host側に
-udevルールを適用します。
-
-```bash
-cd "${RC_AS_ROOT}"
-./scripts/install_depthai_udev_rules.sh
-```
-
-適用後、OAK-D Liteを抜き差しし、Dockerコンテナを再起動してください。
-
----
-
 ## 5. ワークスペースと Isaac ROS CLI の構築
 
 作業用リポジトリをクローンし、環境変数の設定、および `isaac-ros-cli` のビルドとインストールを行います。
@@ -215,7 +201,6 @@ grep -n "get_workspace_mount_args" /usr/lib/isaac-ros-cli/run_dev.py
 grep -n 'project_root.*:/workspaces' /usr/lib/isaac-ros-cli/run_dev.py
 grep -n -- '-v /dev:/dev' /usr/lib/isaac-ros-cli/run_dev.py
 ls -l /etc/isaac-ros-cli/docker/Dockerfile.silky_evcam
-ls -l /etc/isaac-ros-cli/docker/Dockerfile.depthai
 ls -l /etc/isaac-ros-cli/docker/Dockerfile.additional_setting
 ```
 

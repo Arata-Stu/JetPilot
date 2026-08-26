@@ -31,6 +31,7 @@ INTERACTIVE=false
 CLI_BAG_MANAGER=''
 CLI_SENSOR_KIT=''
 CLI_LOCALIZATION_INIT=''
+CLI_VSLAM_MODE=''
 LOCALIZATION_INIT_MODE='pose-hint'
 REQUIRES_MAP=false
 REQUIRES_ROSBAG=false
@@ -131,6 +132,7 @@ Options:
                         Select RViz config: default, vslam-debug, or absolute path
       --localization-init MODE
                         VSLAM initialization: pose-hint (default), foxglove, or map-origin
+      --vslam-mode MODE VSLAM tracking: vo (default) or vio
       --pose-hint      Alias for --localization-init pose-hint
       --no-pose-hint  Alias for --localization-init map-origin
       --components LIST
@@ -149,6 +151,8 @@ Examples:
     --localization-init map-origin
   $(basename "$0") --preset localization --map /workspaces/map/course_a \
     --localization-init foxglove
+  $(basename "$0") --preset localization --map /workspaces/map/course_a \
+    --vslam-mode vio
   $(basename "$0") custom --components sensor,hd-map,foxglove \\
     --map /workspaces/map/course_a
   $(basename "$0") replay-localization --bag /workspaces/record/run_01 \\
@@ -258,6 +262,7 @@ set_base_args() {
   set_arg enable_localization false
   set_arg enable_vslam true
   set_arg vslam_enable_slam true
+  set_arg vslam_mode vo
   set_arg vslam_localize_on_startup false
   set_arg enable_localization_manager true
   set_arg enable_vgl true
@@ -497,6 +502,22 @@ normalize_localization_init_mode() {
       set_arg enable_foxglove true
       ;;
   esac
+}
+
+set_vslam_mode() {
+  case "$1" in
+    [Vv][Oo]) set_arg vslam_mode vo ;;
+    [Vv][Ii][Oo]) set_arg vslam_mode vio ;;
+    *) die "VSLAM mode must be vo or vio: $1" ;;
+  esac
+}
+
+normalize_vslam_mode() {
+  if [[ -n "$CLI_VSLAM_MODE" ]]; then
+    set_vslam_mode "$CLI_VSLAM_MODE"
+  else
+    set_vslam_mode "$(get_arg vslam_mode)"
+  fi
 }
 
 enable_offline_replay_stack() {
@@ -1382,6 +1403,7 @@ print_summary() {
   fi
   printf '  localization : %s\n' "$(get_arg enable_localization)"
   if is_true "$(get_arg enable_localization)"; then
+    printf '  VSLAM mode   : %s\n' "$(get_arg vslam_mode)"
     case "$LOCALIZATION_INIT_MODE" in
       map-origin)
         printf '  VSLAM init   : map-origin (VGL off; restart with pose-hint on failure)\n'
@@ -1485,6 +1507,12 @@ while (($# > 0)); do
       shift 2
       ;;
     --localization-init=*) CLI_LOCALIZATION_INIT="${1#*=}"; shift ;;
+    --vslam-mode)
+      (($# >= 2)) || die '--vslam-mode requires vo or vio'
+      CLI_VSLAM_MODE="$2"
+      shift 2
+      ;;
+    --vslam-mode=*) CLI_VSLAM_MODE="${1#*=}"; shift ;;
     --pose-hint) CLI_LOCALIZATION_INIT='pose-hint'; shift ;;
     --no-pose-hint|--map-origin) CLI_LOCALIZATION_INIT='map-origin'; shift ;;
     --components)
@@ -1599,6 +1627,7 @@ if ((${#EXTRA_LAUNCH_ARGS[@]} > 0)); then
   done
 fi
 normalize_localization_init_mode
+normalize_vslam_mode
 validate_configuration
 print_summary
 

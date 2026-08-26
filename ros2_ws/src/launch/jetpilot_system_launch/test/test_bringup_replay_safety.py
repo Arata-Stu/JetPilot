@@ -46,7 +46,6 @@ class ReplaySafetyTest(unittest.TestCase):
             "/localization/vslam/diagnostics",
             "/localization/vgl/diagnostics",
             "/realsense/diagnostics",
-            "/oakd_lite/diagnostics",
             "/localization/pose_hint_required",
             "/localization/pose_hint_state",
             "/tf",

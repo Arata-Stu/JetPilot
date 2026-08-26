@@ -25,7 +25,7 @@
     min_num_images: 2
     multicam_mode: 1
     # 0: stereo/multi-camera, 1: visual-inertial, 2: RGB-D
-    # Launch switches this to 1 only when vslam_enable_imu:=true.
+    # Launch selects 0 for vslam_mode:=vo and 1 for vslam_mode:=vio.
     tracking_mode: 0
     sync_matching_threshold_ms: 5.0
     enable_image_denoising: false
@@ -183,7 +183,7 @@
     base_frame: "base_link"
     # Match the camera_info frame_id used by both RealSense and ELP launch paths.
     camera_optical_frames: ['realsense_infra1_optical_frame', 'realsense_infra2_optical_frame']
-    imu_frame: "realsense_gyro_optical_frame"
+    imu_frame: "realsense_imu_optical_frame"
     
     # ============================================
     # Message Parameters

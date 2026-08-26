@@ -26,15 +26,15 @@ class ScanCameraTopicConfigsTest(unittest.TestCase):
                 / "localization"
             )
             config_dir.mkdir(parents=True)
-            config_path = config_dir / "vgl_camera_topics_oakd_lite.yaml"
+            config_path = config_dir / "vgl_camera_topics_secondary.yaml"
             config_path.write_text(
                 """
 stereo_cameras:
-  - name: oakd_lite_front
-    left: /oakd_lite/left/image_rect
-    left_camera_info: /oakd_lite/left/camera_info
-    right: /oakd_lite/right/image_rect
-    right_camera_info: /oakd_lite/right/camera_info
+  - name: secondary_stereo
+    left: /secondary/left/image_rect
+    left_camera_info: /secondary/left/camera_info
+    right: /secondary/right/image_rect
+    right_camera_info: /secondary/right/camera_info
 """.strip(),
                 encoding="utf-8",
             )
@@ -45,10 +45,10 @@ stereo_cameras:
             self.assertEqual(
                 configs[0]["required_topics"],
                 [
-                    "/oakd_lite/left/camera_info",
-                    "/oakd_lite/left/image_rect",
-                    "/oakd_lite/right/camera_info",
-                    "/oakd_lite/right/image_rect",
+                    "/secondary/left/camera_info",
+                    "/secondary/left/image_rect",
+                    "/secondary/right/camera_info",
+                    "/secondary/right/image_rect",
                 ],
             )
 

@@ -71,6 +71,7 @@ DEFAULT_TOPICS = [
     "/realsense/gyro/imu_info",
     "/realsense/gyro/metadata",
     "/realsense/gyro/sample",
+    "/realsense/imu",
     "/realsense/extrinsics/depth_to_accel",
     "/realsense/extrinsics/depth_to_gyro",
     # RealSense stereo infrared candidates. CameraInfo is required for offline VSLAM.
@@ -88,15 +89,6 @@ DEFAULT_TOPICS = [
     "/realsense/infra2/metadata",
     "/realsense/extrinsics/depth_to_infra1",
     "/realsense/extrinsics/depth_to_infra2",
-    # OAK-D Lite RGB, synchronized rectified stereo, IMU, and diagnostics.
-    "/oakd_lite/rgb/camera_info",
-    "/oakd_lite/rgb/image_raw",
-    "/oakd_lite/left/camera_info",
-    "/oakd_lite/left/image_rect",
-    "/oakd_lite/right/camera_info",
-    "/oakd_lite/right/image_rect",
-    "/oakd_lite/imu/data",
-    "/oakd_lite/diagnostics",
 ]
 
 
