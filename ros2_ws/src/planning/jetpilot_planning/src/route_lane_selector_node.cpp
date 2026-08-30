@@ -62,6 +62,82 @@ PathValidation validate_path(const nav_msgs::msg::Path & path, const std::size_t
   return {true, "ok"};
 }
 
+PathValidation validate_trajectory(
+  const jetpilot_msgs::msg::Trajectory & trajectory, const std::size_t min_path_poses,
+  const double min_path_length_m)
+{
+  if (trajectory.header.frame_id.empty())
+  {
+    return {false, "empty_frame_id"};
+  }
+  if (trajectory.line_id.empty())
+  {
+    return {false, "empty_line_id"};
+  }
+  if (trajectory.display_name.empty())
+  {
+    return {false, "empty_display_name"};
+  }
+  if (trajectory.source_hash.empty())
+  {
+    return {false, "empty_source_hash"};
+  }
+  if (trajectory.points.size() < min_path_poses)
+  {
+    return {false, "not_enough_points"};
+  }
+
+  double length = 0.0;
+  for (std::size_t index = 0U; index < trajectory.points.size(); ++index)
+  {
+    const auto & point = trajectory.points[index];
+    const auto & position = point.pose.position;
+    if (!std::isfinite(point.s_m) || !std::isfinite(point.curvature_radpm) ||
+        !std::isfinite(point.longitudinal_velocity_mps) ||
+        !std::isfinite(point.longitudinal_acceleration_mps2) ||
+        !std::isfinite(position.x) || !std::isfinite(position.y) || !std::isfinite(position.z))
+    {
+      return {false, "non_finite_trajectory_point"};
+    }
+    if (point.s_m < 0.0 || point.longitudinal_velocity_mps < 0.0)
+    {
+      return {false, "negative_station_or_speed"};
+    }
+    if (index > 0U)
+    {
+      const auto & previous = trajectory.points[index - 1U];
+      if (point.s_m <= previous.s_m)
+      {
+        return {false, "station_not_strictly_increasing"};
+      }
+      length += std::hypot(
+        position.x - previous.pose.position.x, position.y - previous.pose.position.y);
+    }
+  }
+  if (length < min_path_length_m)
+  {
+    return {false, "trajectory_too_short"};
+  }
+  return {true, "ok"};
+}
+
+nav_msgs::msg::Path trajectory_to_path(
+  const jetpilot_msgs::msg::Trajectory & trajectory, const rclcpp::Time & stamp)
+{
+  nav_msgs::msg::Path path;
+  path.header = trajectory.header;
+  path.header.stamp = stamp;
+  path.poses.reserve(trajectory.points.size());
+  for (const auto & point : trajectory.points)
+  {
+    geometry_msgs::msg::PoseStamped pose;
+    pose.header = path.header;
+    pose.pose = point.pose;
+    path.poses.push_back(std::move(pose));
+  }
+  return path;
+}
+
 diagnostic_msgs::msg::KeyValue diagnostic_value(const std::string & key, const std::string & value)
 {
   diagnostic_msgs::msg::KeyValue result;
@@ -94,6 +170,8 @@ RouteLaneSelectorNode::RouteLaneSelectorNode() : Node("route_lane_selector")
     declare_parameter<std::vector<std::string>>("lane_ids", std::vector<std::string>{"primary"});
   const auto lane_path_topics = declare_parameter<std::vector<std::string>>(
     "lane_path_topics", std::vector<std::string>{"/hd_map/primary_centerline_path"});
+  const auto lane_trajectory_topics = declare_parameter<std::vector<std::string>>(
+    "lane_trajectory_topics", std::vector<std::string>(lane_ids.size(), ""));
   const auto lane_target_speeds_mps =
     declare_parameter<std::vector<double>>("lane_target_speeds_mps", std::vector<double>{1.0});
   const auto default_lane_id = declare_parameter<std::string>("default_lane_id", "primary");
@@ -103,6 +181,8 @@ RouteLaneSelectorNode::RouteLaneSelectorNode() : Node("route_lane_selector")
 
   output_trajectory_topic_ =
     declare_parameter<std::string>("output_trajectory_topic", "/planning/trajectory");
+  output_profile_topic_ =
+    declare_parameter<std::string>("output_profile_topic", "/planning/trajectory_profile");
   const auto target_speed_topic =
     declare_parameter<std::string>("target_speed_topic", "/planning/target_speed");
   const auto requested_lane_topic =
@@ -136,7 +216,8 @@ RouteLaneSelectorNode::RouteLaneSelectorNode() : Node("route_lane_selector")
       "limits must be finite and valid");
   }
 
-  validate_configuration(lane_ids, lane_path_topics, lane_target_speeds_mps, default_lane_id);
+  validate_configuration(
+    lane_ids, lane_path_topics, lane_trajectory_topics, lane_target_speeds_mps, default_lane_id);
   const auto section_rules = parse_section_lane_rules(section_rule_entries);
   section_rules_configured_ = !section_rules.empty();
   validate_section_rules(section_rules, lane_ids);
@@ -149,6 +230,8 @@ RouteLaneSelectorNode::RouteLaneSelectorNode() : Node("route_lane_selector")
 
   const auto transient_qos = rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local();
   trajectory_pub_ = create_publisher<nav_msgs::msg::Path>(output_trajectory_topic_, transient_qos);
+  profile_pub_ = create_publisher<jetpilot_msgs::msg::Trajectory>(
+    output_profile_topic_, transient_qos);
   target_speed_pub_ = create_publisher<std_msgs::msg::Float32>(target_speed_topic, transient_qos);
   selected_lane_pub_ = create_publisher<std_msgs::msg::String>(selected_lane_topic, transient_qos);
   ready_pub_ = create_publisher<std_msgs::msg::Bool>(ready_topic, transient_qos);
@@ -177,11 +260,24 @@ RouteLaneSelectorNode::RouteLaneSelectorNode() : Node("route_lane_selector")
   for (std::size_t index = 0U; index < lane_ids.size(); ++index)
   {
     const auto lane_id = lane_ids[index];
-    path_caches_.emplace(lane_id, PathCache{});
-    path_subscriptions_.push_back(create_subscription<nav_msgs::msg::Path>(
-      lane_path_topics[index], path_qos,
-      [this, lane_id](const nav_msgs::msg::Path::ConstSharedPtr message)
-      { on_path(lane_id, message); }));
+    CandidateCache cache;
+    cache.expects_typed = !lane_trajectory_topics[index].empty();
+    candidate_caches_.emplace(lane_id, std::move(cache));
+    if (!lane_trajectory_topics[index].empty())
+    {
+      trajectory_subscriptions_.push_back(
+        create_subscription<jetpilot_msgs::msg::Trajectory>(
+          lane_trajectory_topics[index], path_qos,
+          [this, lane_id](const jetpilot_msgs::msg::Trajectory::ConstSharedPtr message)
+          { on_trajectory(lane_id, message); }));
+    }
+    else
+    {
+      path_subscriptions_.push_back(create_subscription<nav_msgs::msg::Path>(
+        lane_path_topics[index], path_qos,
+        [this, lane_id](const nav_msgs::msg::Path::ConstSharedPtr message)
+        { on_path(lane_id, message); }));
+    }
   }
 
   timer_ = create_wall_timer(std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -196,39 +292,53 @@ RouteLaneSelectorNode::RouteLaneSelectorNode() : Node("route_lane_selector")
 
 void RouteLaneSelectorNode::validate_configuration(
   const std::vector<std::string> & lane_ids, const std::vector<std::string> & lane_path_topics,
+  const std::vector<std::string> & lane_trajectory_topics,
   const std::vector<double> & lane_target_speeds_mps, const std::string & default_lane_id) const
 {
   if (lane_ids.empty() || lane_ids.size() != lane_path_topics.size() ||
+      lane_ids.size() != lane_trajectory_topics.size() ||
       lane_ids.size() != lane_target_speeds_mps.size())
   {
     throw std::invalid_argument(
-      "lane_ids, lane_path_topics, and lane_target_speeds_mps must be "
+      "lane_ids, lane_path_topics, lane_trajectory_topics, and lane_target_speeds_mps must be "
       "non-empty arrays of equal length");
   }
-  if (output_trajectory_topic_.empty())
+  if (output_trajectory_topic_.empty() || output_profile_topic_.empty())
   {
-    throw std::invalid_argument("output_trajectory_topic must not be empty");
+    throw std::invalid_argument("planning output topics must not be empty");
   }
 
   std::unordered_set<std::string> unique_lane_ids;
   std::unordered_set<std::string> unique_path_topics;
+  std::unordered_set<std::string> unique_trajectory_topics;
   for (std::size_t index = 0U; index < lane_ids.size(); ++index)
   {
-    if (lane_ids[index].empty() || lane_path_topics[index].empty())
+    if (lane_ids[index].empty() ||
+        (lane_path_topics[index].empty() && lane_trajectory_topics[index].empty()))
     {
-      throw std::invalid_argument("lane IDs and path topics must not be empty");
+      throw std::invalid_argument("lane IDs need a path or typed trajectory topic");
     }
     if (!unique_lane_ids.insert(lane_ids[index]).second)
     {
       throw std::invalid_argument("duplicate lane ID: " + lane_ids[index]);
     }
-    if (!unique_path_topics.insert(lane_path_topics[index]).second)
+    if (!lane_path_topics[index].empty() && !unique_path_topics.insert(lane_path_topics[index]).second)
     {
       throw std::invalid_argument("duplicate lane path topic: " + lane_path_topics[index]);
+    }
+    if (!lane_trajectory_topics[index].empty() &&
+        !unique_trajectory_topics.insert(lane_trajectory_topics[index]).second)
+    {
+      throw std::invalid_argument(
+        "duplicate lane trajectory topic: " + lane_trajectory_topics[index]);
     }
     if (lane_path_topics[index] == output_trajectory_topic_)
     {
       throw std::invalid_argument("a lane input topic must not equal output_trajectory_topic");
+    }
+    if (lane_trajectory_topics[index] == output_profile_topic_)
+    {
+      throw std::invalid_argument("a lane input topic must not equal output_profile_topic");
     }
     if (!std::isfinite(lane_target_speeds_mps[index]) || lane_target_speeds_mps[index] < 0.0)
     {
@@ -261,7 +371,7 @@ void RouteLaneSelectorNode::on_path(const std::string & lane_id,
   const auto validation = validate_path(*message, min_path_poses_, min_path_length_m_);
   {
     std::lock_guard<std::mutex> lock(state_mutex_);
-    auto & cache = path_caches_.at(lane_id);
+    auto & cache = candidate_caches_.at(lane_id);
     cache.path = message;
     cache.received_at = std::chrono::steady_clock::now();
     cache.valid = validation.valid;
@@ -274,6 +384,27 @@ void RouteLaneSelectorNode::on_path(const std::string & lane_id,
   }
 }
 
+void RouteLaneSelectorNode::on_trajectory(
+  const std::string & lane_id,
+  const jetpilot_msgs::msg::Trajectory::ConstSharedPtr & message)
+{
+  const auto validation = validate_trajectory(*message, min_path_poses_, min_path_length_m_);
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    auto & cache = candidate_caches_.at(lane_id);
+    cache.trajectory = message;
+    cache.received_at = std::chrono::steady_clock::now();
+    cache.valid = validation.valid;
+    cache.validation_reason = validation.reason;
+  }
+  if (!validation.valid)
+  {
+    RCLCPP_WARN(
+      get_logger(), "Rejected typed trajectory for lane '%s': %s", lane_id.c_str(),
+      validation.reason.c_str());
+  }
+}
+
 RouteLaneSelectorNode::SelectionSnapshot RouteLaneSelectorNode::snapshot_selection()
 {
   std::lock_guard<std::mutex> lock(state_mutex_);
@@ -281,9 +412,9 @@ RouteLaneSelectorNode::SelectionSnapshot RouteLaneSelectorNode::snapshot_selecti
   SelectionSnapshot snapshot;
   snapshot.requested_lane_id = requested_lane_id_;
   snapshot.current_section_id = current_section_id_;
-  for (const auto & [lane_id, cache] : path_caches_)
+  for (const auto & [lane_id, cache] : candidate_caches_)
   {
-    if (!cache.valid || !cache.path)
+    if (!cache.valid || (cache.expects_typed ? !cache.trajectory : !cache.path))
     {
       continue;
     }
@@ -326,7 +457,9 @@ RouteLaneSelectorNode::SelectionSnapshot RouteLaneSelectorNode::snapshot_selecti
                                       snapshot.available_lane_ids);
   if (snapshot.decision.ready())
   {
-    snapshot.path = path_caches_.at(snapshot.decision.lane_id).path;
+    const auto & cache = candidate_caches_.at(snapshot.decision.lane_id);
+    snapshot.path = cache.path;
+    snapshot.trajectory = cache.trajectory;
   }
   return snapshot;
 }
@@ -337,7 +470,11 @@ void RouteLaneSelectorNode::publish_outputs()
   const auto stamp = now();
 
   nav_msgs::msg::Path output_path;
-  if (snapshot.decision.ready() && snapshot.path)
+  if (snapshot.decision.ready() && snapshot.trajectory)
+  {
+    output_path = trajectory_to_path(*snapshot.trajectory, stamp);
+  }
+  else if (snapshot.decision.ready() && snapshot.path)
   {
     output_path = *snapshot.path;
     output_path.header.stamp = stamp;
@@ -354,6 +491,17 @@ void RouteLaneSelectorNode::publish_outputs()
     output_path.header.stamp = stamp;
   }
   trajectory_pub_->publish(output_path);
+
+  jetpilot_msgs::msg::Trajectory output_profile;
+  output_profile.header.stamp = stamp;
+  if (snapshot.decision.ready() && snapshot.trajectory)
+  {
+    output_profile = *snapshot.trajectory;
+    output_profile.header.stamp = stamp;
+  }
+  // An empty transient-local profile invalidates the previous selected profile
+  // when a legacy Path candidate is selected or planning is not ready.
+  profile_pub_->publish(output_profile);
 
   std_msgs::msg::Float32 target_speed;
   target_speed.data = snapshot.decision.ready()
@@ -379,6 +527,9 @@ void RouteLaneSelectorNode::publish_outputs()
   status.message = snapshot.decision.reason;
   status.values.push_back(diagnostic_value("ready", ready.data ? "true" : "false"));
   status.values.push_back(diagnostic_value("selected_lane", selected_lane.data));
+  status.values.push_back(diagnostic_value("line_id", output_profile.line_id));
+  status.values.push_back(diagnostic_value("line_name", output_profile.display_name));
+  status.values.push_back(diagnostic_value("source_hash", output_profile.source_hash));
   status.values.push_back(diagnostic_value("target_speed_mps", std::to_string(target_speed.data)));
   status.values.push_back(
     diagnostic_value("selection_source", selection_source_name(snapshot.decision.source)));

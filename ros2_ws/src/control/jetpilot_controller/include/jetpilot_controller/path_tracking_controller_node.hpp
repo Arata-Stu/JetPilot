@@ -16,7 +16,9 @@
 #include "jetpilot_controller/path_tracking_controller.hpp"
 #include "jetpilot_controller/pure_pursuit.hpp"
 #include "jetpilot_controller/trailing_controller.hpp"
+#include "jetpilot_controller/trajectory_speed_profile.hpp"
 #include "jetpilot_msgs/msg/control_command.hpp"
+#include "jetpilot_msgs/msg/trajectory.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "nav_msgs/msg/path.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -68,6 +70,7 @@ private:
   std::string algorithm_;
   std::string base_frame_;
   std::string trajectory_topic_;
+  std::string trajectory_profile_topic_;
   std::string target_speed_topic_;
   std::string planning_ready_topic_;
   std::string localization_state_topic_;
@@ -93,6 +96,8 @@ private:
   double safety_brake_command_{0.0};
   double max_steering_rate_per_s_{4.0};
   double max_lateral_accel_mps2_{2.0};
+  double trajectory_speed_lookahead_m_{0.5};
+  bool use_typed_trajectory_profiles_{true};
   double opponent_odometry_timeout_s_{0.3};
   PurePursuitParams pure_pursuit_params_;
   MapPursuitParams map_pursuit_params_;
@@ -105,9 +110,11 @@ private:
   tf2_ros::TransformListener tf_listener_;
 
   std::optional<nav_msgs::msg::Path> trajectory_;
+  std::optional<jetpilot_msgs::msg::Trajectory> trajectory_profile_;
   std::optional<nav_msgs::msg::Odometry> odometry_;
   std::optional<nav_msgs::msg::Odometry> opponent_odometry_;
   std::optional<SteadyTime> trajectory_received_at_;
+  std::optional<SteadyTime> trajectory_profile_received_at_;
   std::optional<SteadyTime> odometry_received_at_;
   std::optional<SteadyTime> opponent_odometry_received_at_;
   std::optional<SteadyTime> target_speed_received_at_;
@@ -124,6 +131,7 @@ private:
   bool last_ready_{false};
 
   rclcpp::Subscription<nav_msgs::msg::Path>::SharedPtr trajectory_sub_;
+  rclcpp::Subscription<jetpilot_msgs::msg::Trajectory>::SharedPtr trajectory_profile_sub_;
   rclcpp::Subscription<std_msgs::msg::Float32>::SharedPtr target_speed_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr planning_ready_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr localization_state_sub_;

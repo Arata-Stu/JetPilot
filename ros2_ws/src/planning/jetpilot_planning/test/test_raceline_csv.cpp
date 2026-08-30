@@ -55,9 +55,25 @@ TEST(RacelineCsv, LoadsGeneratedF1tenthLayout)
     temporary.path(), csv.filename());
   ASSERT_EQ(raceline.points.size(), 2U);
   EXPECT_EQ(raceline.source_path, std::filesystem::canonical(csv));
+  EXPECT_EQ(
+    raceline.source_hash,
+    "a2f52489a056bcbcf214962f32f162372d28f53f96af901fc4f0b2cdbd1d468a");
   EXPECT_DOUBLE_EQ(raceline.points[0].x, 1.0);
   EXPECT_DOUBLE_EQ(raceline.points[1].vx, 1.6);
   EXPECT_DOUBLE_EQ(raceline.points[1].ax, -0.1);
+}
+
+TEST(RacelineCsv, ContentHashChangesWithSpeedProfile)
+{
+  TemporaryDirectory temporary;
+  const auto csv = temporary.path() / "custom.csv";
+  write_file(csv, "0;0;0;0;0;1;0\n1;1;0;0;0;1;0\n");
+  const auto first = jetpilot_planning::load_raceline_csv(temporary.path(), csv.filename());
+
+  write_file(csv, "0;0;0;0;0;1;0\n1;1;0;0;0;0.5;-0.2\n");
+  const auto second = jetpilot_planning::load_raceline_csv(temporary.path(), csv.filename());
+
+  EXPECT_NE(first.source_hash, second.source_hash);
 }
 
 TEST(RacelineCsv, AcceptsUncommentedShortHeader)

@@ -23,6 +23,15 @@ SENSOR_KIT_PROFILE=''
 MAP_DIR="${BRINGUP_MAP_DIR:-}"
 ROSBAG="${BRINGUP_ROSBAG:-}"
 RACELINE_CSV="${BRINGUP_RACELINE_CSV:-}"
+CUSTOM_LINE_CSV="${BRINGUP_CUSTOM_LINE_CSV:-}"
+CUSTOM_LINE_ID="${BRINGUP_CUSTOM_LINE_ID:-}"
+CUSTOM_LINE_NAME="${BRINGUP_CUSTOM_LINE_NAME:-}"
+CUSTOM_LINE_CLOSED=true
+CUSTOM_LINE_ID_EXPLICIT=false
+CUSTOM_LINE_NAME_EXPLICIT=false
+CUSTOM_LINE_CLOSED_EXPLICIT=false
+[[ -n "$CUSTOM_LINE_ID" ]] && CUSTOM_LINE_ID_EXPLICIT=true
+[[ -n "$CUSTOM_LINE_NAME" ]] && CUSTOM_LINE_NAME_EXPLICIT=true
 RVIZ_CONFIG="${BRINGUP_RVIZ_CONFIG:-}"
 REPLAY_RATE='1.0'
 DRY_RUN=false
@@ -36,6 +45,7 @@ LOCALIZATION_INIT_MODE='pose-hint'
 REQUIRES_MAP=false
 REQUIRES_ROSBAG=false
 REQUIRES_RACELINE=false
+REQUIRES_CUSTOM_LINE=false
 REQUIRES_VEHICLE=false
 ARG_NAMES=()
 ARG_VALUES=()
@@ -98,6 +108,7 @@ offline-localization Rosbag replay + VGL/VSLAM localization + RViz (bag/map requ
 vehicle              Selected vehicle interface only
 teleop               Joy/teleop/operation + selected vehicle interface
 drive                Live sensor + joy/teleop/operation + selected vehicle interface
+e2e                  Live RealSense + E2E inference + joy/teleop/operation + vehicle
 runtime              Live sensor/localization/teleop + Foxglove pose fallback + vehicle (map required)
 custom               Interactive component selection; all components start OFF
 EOF
@@ -121,6 +132,16 @@ Options:
       --map PATH       Set map_dir (or BRINGUP_MAP_DIR)
       --bag PATH       Set rosbag directory/metadata.yaml (or BRINGUP_ROSBAG)
       --raceline PATH  Enable the C++ raceline loader with this generated CSV
+      --custom-line PATH
+                        Use a named/custom 7-column trajectory CSV
+      --custom-line-id NAME
+                        Override the custom line ID published at runtime
+      --custom-line-name NAME
+                        Override the custom line display name
+      --custom-line-open
+                        Treat the custom line as open (closed is the default)
+      --custom-line-closed
+                        Explicitly treat the custom line as closed
       --rate RATE      Rosbag replay rate (default: 1.0)
       --vehicle PROFILE
                         Select a discovered vehicle interface profile
@@ -146,6 +167,7 @@ Options:
 Examples:
   $(basename "$0") --preset vehicle --vehicle pca
   $(basename "$0") --preset drive --vehicle vesc
+  $(basename "$0") --preset e2e --vehicle vesc
   $(basename "$0") --preset localization --map /workspaces/map/course_a
   $(basename "$0") --preset localization --map /workspaces/map/course_a \
     --localization-init map-origin
@@ -166,6 +188,9 @@ Examples:
   $(basename "$0") custom --components sensor,localization,hd-map,control,vehicle \\
     --vehicle vesc --map /workspaces/map/course_a \\
     --raceline /workspaces/map/course_a/course_raceline.csv
+  $(basename "$0") custom --components sensor,localization,hd-map,control,vehicle \\
+    --vehicle vesc --map /workspaces/map/course_a \\
+    --custom-line /workspaces/map/course_a/course_a_custom_line.csv
   $(basename "$0") custom --components sensor,bag-manager,joy,teleop,operation,vehicle \\
     --vehicle vesc
 
@@ -180,7 +205,7 @@ known_preset() {
   case "$1" in
     sensor|localization-only|localization|localize-live|replay-localization|\
       offline-vslam|offline-vslam-map|offline-localization|\
-      vehicle|teleop|drive|runtime|\
+      vehicle|teleop|drive|e2e|runtime|\
       vehicle-pca|vehicle-vesc|teleop-pca|teleop-vesc|\
       drive-pca|drive-vesc|runtime-pca|runtime-vesc|custom) return 0 ;;
     *) return 1 ;;
@@ -257,7 +282,9 @@ set_base_args() {
   set_arg enable_operation false
   set_arg enable_planning false
   set_arg enable_raceline_publisher false
+  set_arg enable_custom_trajectory_publisher false
   set_arg enable_control false
+  set_arg enable_e2e_inference false
   set_arg enable_sensor_kit false
   set_arg enable_localization false
   set_arg enable_vslam true
@@ -335,6 +362,139 @@ raceline_selector_param() {
     "${ROS2_WS}/install/jetpilot_planning/share/jetpilot_planning/config/route_lane_selector.raceline.param.yaml"
 }
 
+custom_line_selector_param() {
+  first_existing_path \
+    "${ROS2_WS}/src/planning/jetpilot_planning/config/route_lane_selector.custom.param.yaml" \
+    "${PROJECT_ROOT}/ros2_ws/src/planning/jetpilot_planning/config/route_lane_selector.custom.param.yaml" \
+    "${ROS2_WS}/install/jetpilot_planning/share/jetpilot_planning/config/route_lane_selector.custom.param.yaml"
+}
+
+read_custom_line_metadata() {
+  local metadata_path="$1"
+  local trajectory_path="$2"
+  local hd_map_path="${3:-}"
+  "$PYTHON_BIN" -c '
+import hashlib
+import json
+import os
+import re
+import sys
+
+metadata_path, trajectory_path = sys.argv[1:3]
+hd_map_path = sys.argv[3] if len(sys.argv) > 3 else ""
+
+def reject(message):
+    raise SystemExit(f"custom line metadata rejected: {message}")
+
+try:
+    with open(metadata_path, "r", encoding="utf-8") as stream:
+        metadata = json.load(stream)
+except (OSError, UnicodeError, json.JSONDecodeError) as error:
+    reject(f"cannot read {metadata_path}: {error}")
+if not isinstance(metadata, dict):
+    reject("root must be an object")
+if metadata.get("format") != "jetpilot_custom_line_v1":
+    reject("unsupported format")
+
+line_id = metadata.get("id")
+if not isinstance(line_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", line_id):
+    reject("invalid id")
+line_name = metadata.get("name")
+if (not isinstance(line_name, str) or not line_name or len(line_name) > 120 or
+        any(ord(character) < 32 or ord(character) == 127 for character in line_name)):
+    reject("invalid name")
+closed_loop = metadata.get("closed_loop")
+if not isinstance(closed_loop, bool):
+    reject("closed_loop must be boolean")
+revision = metadata.get("revision")
+if not isinstance(revision, int) or isinstance(revision, bool) or revision < 1:
+    reject("revision must be a positive integer")
+
+source_hash = metadata.get("source_hash") or metadata.get("source_sha256")
+if not isinstance(source_hash, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", source_hash):
+    reject("source_hash must be SHA-256")
+expected_hash = metadata.get("trajectory_sha256")
+if not isinstance(expected_hash, str) or not re.fullmatch(r"[0-9a-fA-F]{64}", expected_hash):
+    reject("trajectory_sha256 must be SHA-256")
+
+trajectory_reference = metadata.get("trajectory_csv")
+if not isinstance(trajectory_reference, str) or not trajectory_reference:
+    reject("trajectory_csv is required")
+if os.path.isabs(trajectory_reference):
+    referenced_path = trajectory_reference
+else:
+    referenced_path = os.path.join(os.path.dirname(metadata_path), trajectory_reference)
+if os.path.realpath(referenced_path) != os.path.realpath(trajectory_path):
+    canonical_metadata_path = os.path.splitext(trajectory_path)[0] + ".meta.json"
+    relocated_canonical = (
+        os.path.isabs(trajectory_reference) and
+        os.path.realpath(metadata_path) == os.path.realpath(canonical_metadata_path) and
+        os.path.basename(trajectory_reference) == os.path.basename(trajectory_path)
+    )
+    if not relocated_canonical:
+        reject("trajectory_csv does not reference the selected CSV")
+if os.path.islink(metadata_path) or os.path.islink(trajectory_path):
+    reject("metadata and trajectory must not be symbolic links")
+if not os.path.isfile(trajectory_path):
+    reject("trajectory CSV is not a regular file")
+
+digest = hashlib.sha256()
+try:
+    with open(trajectory_path, "rb") as stream:
+        while True:
+            chunk = stream.read(1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+except OSError as error:
+    reject(f"cannot hash trajectory CSV: {error}")
+actual_hash = digest.hexdigest()
+if actual_hash.lower() != expected_hash.lower():
+    reject("trajectory_sha256 does not match the selected CSV")
+
+speed_profile_mode = metadata.get("speed_profile_mode")
+speed_authoring = metadata.get("speed_authoring")
+section_authored = speed_profile_mode == "sections" or speed_authoring == "sections"
+hd_map_hash_present = "hd_map_sha256" in metadata
+expected_hd_map_hash = metadata.get("hd_map_sha256")
+valid_hd_map_hash = (
+    isinstance(expected_hd_map_hash, str) and
+    re.fullmatch(r"[0-9a-fA-F]{64}", expected_hd_map_hash)
+)
+if section_authored and not valid_hd_map_hash:
+    reject("section-authored custom line requires hd_map_sha256")
+if hd_map_hash_present:
+    if not valid_hd_map_hash:
+        reject("hd_map_sha256 must be SHA-256")
+    if not hd_map_path:
+        if section_authored:
+            reject("section-authored custom line requires --map PATH")
+        reject("custom line metadata with hd_map_sha256 requires --map PATH")
+    if os.path.islink(hd_map_path) or not os.path.isfile(hd_map_path):
+        reject(f"HD map YAML is missing or not a regular file: {hd_map_path}")
+    hd_map_digest = hashlib.sha256()
+    try:
+        with open(hd_map_path, "rb") as stream:
+            while True:
+                chunk = stream.read(1024 * 1024)
+                if not chunk:
+                    break
+                hd_map_digest.update(chunk)
+    except OSError as error:
+        reject(f"cannot hash HD map YAML {hd_map_path}: {error}")
+    if hd_map_digest.hexdigest().lower() != expected_hd_map_hash.lower():
+        reject("hd_map_sha256 does not match the selected map")
+
+if os.path.basename(trajectory_path) == "trajectory.csv":
+    folder_id = os.path.basename(os.path.dirname(os.path.realpath(trajectory_path)))
+    if folder_id != line_id:
+        reject("manifest id does not match its custom_lines folder")
+
+runtime_hash = actual_hash
+print("\t".join((line_id, line_name, "true" if closed_loop else "false", runtime_hash)))
+' "$metadata_path" "$trajectory_path" "$hd_map_path"
+}
+
 configure_raceline() {
   [[ "$RACELINE_CSV" == /* ]] \
     || die '--raceline must be an absolute CSV path inside the Docker workspace'
@@ -348,6 +508,90 @@ configure_raceline() {
   set_arg planning_param "$(raceline_selector_param)"
   set_arg raceline_root "$(dirname -- "$RACELINE_CSV")"
   set_arg raceline_csv "$(basename -- "$RACELINE_CSV")"
+}
+
+configure_custom_line() {
+  [[ "$CUSTOM_LINE_CSV" == /* ]] \
+    || die '--custom-line must be an absolute CSV path inside the Docker workspace'
+  if [[ "$DRY_RUN" != 'true' ]]; then
+    [[ -f "$CUSTOM_LINE_CSV" ]] || die "custom line CSV does not exist: $CUSTOM_LINE_CSV"
+    [[ ! -L "$CUSTOM_LINE_CSV" ]] \
+      || die "custom line CSV must not be a symbolic link: $CUSTOM_LINE_CSV"
+  fi
+
+  local metadata_path=''
+  local metadata_required=false
+  local custom_basename
+  custom_basename="$(basename -- "$CUSTOM_LINE_CSV")"
+  if [[ "$custom_basename" == 'trajectory.csv' ]]; then
+    metadata_path="$(dirname -- "$CUSTOM_LINE_CSV")/custom_line.json"
+    metadata_required=true
+  elif [[ "$custom_basename" == *_custom_line.csv ]]; then
+    metadata_path="${CUSTOM_LINE_CSV%.csv}.meta.json"
+    metadata_required=true
+  elif [[ -f "${CUSTOM_LINE_CSV%.csv}.meta.json" ]]; then
+    metadata_path="${CUSTOM_LINE_CSV%.csv}.meta.json"
+  fi
+
+  local metadata_id=''
+  local metadata_name=''
+  local metadata_closed=''
+  local metadata_hash=''
+  local hd_map_path=''
+  if [[ -n "$MAP_DIR" ]]; then
+    local map_name
+    map_name="$(basename -- "${MAP_DIR%/}")"
+    hd_map_path="${MAP_DIR%/}/${map_name}_hd_map.yaml"
+  fi
+  if [[ -n "$metadata_path" && -f "$metadata_path" ]]; then
+    local metadata_output
+    metadata_output="$(read_custom_line_metadata "$metadata_path" "$CUSTOM_LINE_CSV" "$hd_map_path")" \
+      || die "invalid custom line metadata: $metadata_path"
+    IFS=$'\t' read -r metadata_id metadata_name metadata_closed metadata_hash \
+      <<< "$metadata_output"
+  elif [[ "$metadata_required" == 'true' && -e "$CUSTOM_LINE_CSV" ]]; then
+    die "custom line metadata is required for this bundle: $metadata_path"
+  fi
+
+  if [[ "$CUSTOM_LINE_ID_EXPLICIT" != 'true' && -n "$metadata_id" ]]; then
+    CUSTOM_LINE_ID="$metadata_id"
+  fi
+  if [[ "$CUSTOM_LINE_NAME_EXPLICIT" != 'true' && -n "$metadata_name" ]]; then
+    CUSTOM_LINE_NAME="$metadata_name"
+  fi
+  if [[ "$CUSTOM_LINE_CLOSED_EXPLICIT" != 'true' && -n "$metadata_closed" ]]; then
+    CUSTOM_LINE_CLOSED="$metadata_closed"
+  fi
+
+  if [[ -z "$CUSTOM_LINE_ID" ]]; then
+    if [[ "$(basename -- "$CUSTOM_LINE_CSV")" == 'trajectory.csv' ]]; then
+      CUSTOM_LINE_ID="$(basename -- "$(dirname -- "$CUSTOM_LINE_CSV")")"
+    else
+      CUSTOM_LINE_ID="$(basename -- "$CUSTOM_LINE_CSV" .csv)"
+      CUSTOM_LINE_ID="${CUSTOM_LINE_ID%_custom_line}"
+    fi
+  fi
+  [[ "$CUSTOM_LINE_ID" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$ ]] \
+    || die '--custom-line-id must be 1-64 characters: letters, digits, dot, underscore, hyphen'
+  if [[ -z "$CUSTOM_LINE_NAME" ]]; then
+    CUSTOM_LINE_NAME="$CUSTOM_LINE_ID"
+  fi
+  ((${#CUSTOM_LINE_NAME} <= 120)) \
+    || die '--custom-line-name must be 120 characters or fewer'
+  [[ ! "$CUSTOM_LINE_NAME" =~ [[:cntrl:]] ]] \
+    || die '--custom-line-name must not contain control characters'
+
+  set_arg enable_planning true
+  set_arg enable_custom_trajectory_publisher true
+  set_arg planning_param "$(custom_line_selector_param)"
+  set_arg custom_root "$(dirname -- "$CUSTOM_LINE_CSV")"
+  set_arg custom_csv "$(basename -- "$CUSTOM_LINE_CSV")"
+  set_arg custom_line_id "$CUSTOM_LINE_ID"
+  set_arg custom_line_name "$CUSTOM_LINE_NAME"
+  if [[ -n "$metadata_hash" ]]; then
+    set_arg custom_source_hash "$metadata_hash"
+  fi
+  set_arg custom_closed "$CUSTOM_LINE_CLOSED"
 }
 
 apply_vehicle() {
@@ -607,6 +851,12 @@ apply_preset() {
       enable_drive_stack
       REQUIRES_VEHICLE=true
       ;;
+    e2e)
+      set_arg enable_sensor_kit true
+      enable_drive_stack
+      set_arg enable_e2e_inference true
+      REQUIRES_VEHICLE=true
+      ;;
     runtime)
       enable_teleop_stack
       set_arg enable_sensor_kit true
@@ -858,9 +1108,19 @@ apply_custom_component_token() {
       set_arg enable_raceline_publisher true
       REQUIRES_RACELINE=true
       ;;
+    custom-line|custom-trajectory)
+      set_arg enable_planning true
+      set_arg enable_custom_trajectory_publisher true
+      REQUIRES_CUSTOM_LINE=true
+      REQUIRES_MAP=true
+      ;;
     control|autonomous-control)
       set_arg enable_planning true
       set_arg enable_control true
+      set_arg enable_operation true
+      ;;
+    e2e|e2e-inference)
+      set_arg enable_e2e_inference true
       set_arg enable_operation true
       ;;
     rviz)
@@ -998,6 +1258,45 @@ discover_raceline() {
   fi
 }
 
+discover_custom_line() {
+  local search_root="${MAP_DIR:-$MAP_ROOT}"
+  local path
+  local selected
+  local options=()
+
+  if [[ -d "$search_root" ]]; then
+    while IFS= read -r path; do
+      options+=("$path")
+    done < <(find "$search_root" -maxdepth 6 -type f \
+      \( -name '*_custom_line.csv' -o -path '*/custom_lines/*/trajectory.csv' \) \
+      | sort -r | head -50)
+  fi
+  options+=('パスを手入力...')
+  selected="$(choose_one 'Custom line CSV' "${options[@]}")" || exit $?
+  if [[ "$selected" == 'パスを手入力...' ]]; then
+    CUSTOM_LINE_CSV="$(prompt_path 'Custom line CSV' "$CUSTOM_LINE_CSV")"
+  else
+    CUSTOM_LINE_CSV="$selected"
+  fi
+}
+
+select_active_custom_line_from_map() {
+  local map_name
+  local candidate_csv
+  local candidate_meta
+
+  # No selected map simply means that the regular required-input check below
+  # should explain how to provide a custom line.  Keep this helper successful
+  # under `set -e` instead of aborting the launcher without a diagnostic.
+  [[ -n "$MAP_DIR" ]] || return 0
+  map_name="$(basename -- "${MAP_DIR%/}")"
+  candidate_csv="${MAP_DIR%/}/${map_name}_custom_line.csv"
+  candidate_meta="${candidate_csv%.csv}.meta.json"
+  if [[ -f "$candidate_csv" && -f "$candidate_meta" ]]; then
+    CUSTOM_LINE_CSV="$candidate_csv"
+  fi
+}
+
 interactive_custom() {
   local selection
   local options=(
@@ -1016,7 +1315,9 @@ interactive_custom() {
     'operation          Operation manager'
     'planning           Route/lane planning only'
     'raceline           Planning with generated raceline CSV'
+    'custom-line        Planning with named custom line + speed CSV'
     'control            Planning + Pure Pursuit control'
+    'e2e                TensorRT E2E direct control'
     'rviz               RViz'
     'vehicle            Vehicle interface (select next)'
   )
@@ -1234,6 +1535,10 @@ validate_configuration() {
   if is_true "$replay" && is_true "$vehicle"; then
     die 'rosbag replay and vehicle hardware cannot be enabled together'
   fi
+  if is_true "$(get_arg enable_control)" \
+    && is_true "$(get_arg enable_e2e_inference)"; then
+    die 'enable_control and enable_e2e_inference cannot be enabled together; both publish /auto/control_cmd'
+  fi
   if [[ "$REQUIRES_VEHICLE" == 'true' ]] && ! is_true "$vehicle"; then
     die "preset '$PRESET' requires --vehicle PROFILE (see --list-vehicles)"
   fi
@@ -1267,6 +1572,17 @@ validate_configuration() {
   if is_true "$(get_arg enable_raceline_publisher)" \
     && [[ -z "$(get_arg raceline_csv 2>/dev/null || true)" ]]; then
     die "preset '$PRESET' requires --raceline PATH"
+  fi
+  if is_true "$(get_arg enable_custom_trajectory_publisher)" \
+    && [[ -z "$(get_arg custom_csv 2>/dev/null || true)" ]]; then
+    die "preset '$PRESET' requires --custom-line PATH"
+  fi
+  if [[ "$REQUIRES_CUSTOM_LINE" == 'true' && -z "$MAP_DIR" ]]; then
+    die "custom-line component requires --map PATH"
+  fi
+  if is_true "$(get_arg enable_raceline_publisher)" \
+    && is_true "$(get_arg enable_custom_trajectory_publisher)"; then
+    die '--raceline and --custom-line are mutually exclusive'
   fi
   if is_true "$(get_arg enable_sensor_kit)" \
     && is_true "$(get_arg sensor_kit_enable_rtp_stream 2>/dev/null || true)"; then
@@ -1362,6 +1678,9 @@ ensure_ros_environment() {
   if is_true "$(get_arg enable_control)"; then
     packages+=(jetpilot_controller)
   fi
+  if is_true "$(get_arg enable_e2e_inference)"; then
+    packages+=(jetpilot_e2e_inference)
+  fi
   for package in "${packages[@]}"; do
     ros2 pkg prefix "$package" >/dev/null 2>&1 \
       || die "$package is unavailable; build the workspace first"
@@ -1425,7 +1744,9 @@ print_summary() {
   printf '  operation    : %s\n' "$(get_arg enable_operation)"
   printf '  planning     : %s\n' "$(get_arg enable_planning)"
   printf '  raceline     : %s\n' "${RACELINE_CSV:-none}"
+  printf '  custom line  : %s\n' "${CUSTOM_LINE_CSV:-none}"
   printf '  control      : %s\n' "$(get_arg enable_control)"
+  printf '  E2E inference: %s\n' "$(get_arg enable_e2e_inference)"
   printf '  map          : %s\n' "${MAP_DIR:-none}"
   printf '  rosbag       : %s\n' "${ROSBAG:-none}"
   if is_true "$(get_arg enable_rviz)"; then
@@ -1469,6 +1790,44 @@ while (($# > 0)); do
       shift 2
       ;;
     --raceline=*) RACELINE_CSV="${1#*=}"; shift ;;
+    --custom-line)
+      (($# >= 2)) || die '--custom-line requires a path'
+      CUSTOM_LINE_CSV="$2"
+      shift 2
+      ;;
+    --custom-line=*) CUSTOM_LINE_CSV="${1#*=}"; shift ;;
+    --custom-line-id)
+      (($# >= 2)) || die '--custom-line-id requires a name'
+      CUSTOM_LINE_ID="$2"
+      CUSTOM_LINE_ID_EXPLICIT=true
+      shift 2
+      ;;
+    --custom-line-id=*)
+      CUSTOM_LINE_ID="${1#*=}"
+      CUSTOM_LINE_ID_EXPLICIT=true
+      shift
+      ;;
+    --custom-line-name)
+      (($# >= 2)) || die '--custom-line-name requires a name'
+      CUSTOM_LINE_NAME="$2"
+      CUSTOM_LINE_NAME_EXPLICIT=true
+      shift 2
+      ;;
+    --custom-line-name=*)
+      CUSTOM_LINE_NAME="${1#*=}"
+      CUSTOM_LINE_NAME_EXPLICIT=true
+      shift
+      ;;
+    --custom-line-open)
+      CUSTOM_LINE_CLOSED=false
+      CUSTOM_LINE_CLOSED_EXPLICIT=true
+      shift
+      ;;
+    --custom-line-closed)
+      CUSTOM_LINE_CLOSED=true
+      CUSTOM_LINE_CLOSED_EXPLICIT=true
+      shift
+      ;;
     --rate)
       (($# >= 2)) || die '--rate requires a value'
       REPLAY_RATE="$2"
@@ -1616,9 +1975,24 @@ fi
 if [[ "$REQUIRES_RACELINE" == 'true' && -z "$RACELINE_CSV" && "$INTERACTIVE" == 'true' ]]; then
   discover_raceline
 fi
+if [[ "$REQUIRES_CUSTOM_LINE" == 'true' && -z "$CUSTOM_LINE_CSV" \
+  && -z "$RACELINE_CSV" ]]; then
+  select_active_custom_line_from_map
+fi
+if [[ "$REQUIRES_CUSTOM_LINE" == 'true' && -z "$CUSTOM_LINE_CSV" \
+  && "$INTERACTIVE" == 'true' ]]; then
+  discover_custom_line
+fi
+
+if [[ -n "$RACELINE_CSV" && -n "$CUSTOM_LINE_CSV" ]]; then
+  die '--raceline and --custom-line are mutually exclusive'
+fi
 
 if [[ -n "$RACELINE_CSV" ]]; then
   configure_raceline
+fi
+if [[ -n "$CUSTOM_LINE_CSV" ]]; then
+  configure_custom_line
 fi
 
 if ((${#EXTRA_LAUNCH_ARGS[@]} > 0)); then

@@ -10,7 +10,10 @@ JetPilotの経路選択を担当する、C++ / `ament_cmake_auto` の最小plann
 | input | `/planning/requested_lane` | `std_msgs/msg/String` | 条件判定moduleからのlane要求。空文字で解除 |
 | input | `/localization/current_section` | `std_msgs/msg/String` | sectionに基づくlaneルール |
 | candidate | `/planning/raceline_path` | `nav_msgs/msg/Path` | CSVから読み込んだraceline候補 |
+| candidate | `/planning/raceline_trajectory` | `jetpilot_msgs/msg/Trajectory` | racelineのgeometry + `vx/ax` |
+| candidate | `/planning/custom_trajectory` | `jetpilot_msgs/msg/Trajectory` | 名前付きcustom line + custom speed |
 | output | `/planning/trajectory` | `nav_msgs/msg/Path` | controllerが追従する選択済み経路 |
+| output | `/planning/trajectory_profile` | `jetpilot_msgs/msg/Trajectory` | 選択済みtyped trajectory。legacy Path選択時は空 |
 | output | `/planning/target_speed` | `std_msgs/msg/Float32` | 選択laneの目標速度（m/s） |
 | output | `/planning/selected_lane` | `std_msgs/msg/String` | 選択中lane ID。未ready時は空文字 |
 | output | `/planning/ready` | `std_msgs/msg/Bool` | controllerの実行可否 |
@@ -65,9 +68,34 @@ ros2 launch jetpilot_planning jetpilot_planning.launch.xml \
 負の`vx`、長さゼロのpathを起動時に検査します。
 
 `route_lane_selector.raceline.param.yaml`はprimaryとracelineの両方を購読する接続例です。
-標準topicは既存selectorの`lane_path_topics`へそのまま追加できます。現在の
-`nav_msgs/msg/Path`には点ごとの`vx/ax`を格納できないため、parserは値を保持しますが、
-controllerへ渡す速度は当面selectorの`lane_target_speeds_mps`を使用します。
+raceline/custom候補は`lane_trajectory_topics`でtyped messageを購読し、geometry、`vx/ax`、
+`line_id`、`source_hash`を一体として選択します。従来の`/planning/trajectory`も同じgeometryから
+生成してpublishするため、Pathだけを使うconsumerとの互換性を維持します。
+
+### 名前付きcustom lineを使う
+
+centerlineまたはracelineをUIで複製し、形状とSectionごとの目標速度を編集して生成した7列CSVも、
+同じ検証済みloaderで読みます。Waypointごとの速度入力は不要です。Section Gateの交点を境界に、
+曲率・加速・減速制約を適用した速度profileがofflineで各trajectory pointへ展開されます。
+
+```bash
+./scripts/bringup.sh custom \
+  --components sensor,localization,hd-map,control,vehicle \
+  --custom-line /workspaces/map/course_a/custom_lines/safe-main/trajectory.csv
+```
+
+標準では閉路です。開いたlineは`--custom-line-open`を付けます。`trajectory.csv`なら親directory名を
+line IDとして推定し、それ以外は`--custom-line-id NAME`で明示できます。racelineとcustom lineの
+同時指定は拒否します。
+
+UI生成bundleでは、個別lineの`custom_line.json`または有効lineの`<map>_custom_line.meta.json`から
+ID、表示名、開閉路、compiled CSVのSHA-256を自動取得します。manifestのpath・形式・hashとCSV実体が
+一致しない場合は起動を拒否します。Section速度profileではHD mapのSHA-256も照合し、Gate編集後の
+古いtrajectoryを別のSection layoutで起動しません。明示した`--custom-line-id`、`--custom-line-name`、
+`--custom-line-open/--custom-line-closed`はmanifest値より優先します。
+`custom` presetで`custom-line` componentと`--map`を指定した場合は、そのMapで有効化済みの
+canonical Custom Lineを自動選択します。line切替は次回launchに反映され、走行中のhot-swapは
+意図的に行いません。
 
 ## lane追加例
 
@@ -80,6 +108,7 @@ controllerへ渡す速度は当面selectorの`lane_target_speeds_mps`を使用�
       - /planning/raceline_path
       - /planning/shortcut_path
       - /planning/avoidance_path
+    lane_trajectory_topics: ["", /planning/raceline_trajectory, "", ""]
     lane_target_speeds_mps: [1.5, 2.0, 1.0, 0.8]
     default_lane_id: raceline
     section_lane_rules:
@@ -94,5 +123,5 @@ controllerへ渡す速度は当面selectorの`lane_target_speeds_mps`を使用�
 - centerlineのファイル読込は未実装です。生成済みraceline CSVの読込は実装済みです。
 - 車幅・境界clearanceを考慮する生成は`python_ws/map_tools/generate_raceline.py`で実装済みです。
   planning packageはその生成物を検証して読み込む責務に限定しています。
-- `nav_msgs/msg/Path`は目標速度を保持しないため、laneごとの速度を`lane_target_speeds_mps`で設定し、`/planning/target_speed`へ分けてpublishします。将来、点ごとの速度profileが必要になった時点で専用trajectory messageへ移行します。
+- centerline等のlegacy Pathは`lane_target_speeds_mps`を使います。raceline/custom lineは専用`Trajectory`の点ごとの`vx/ax`を使用し、lane target speedは追加の上限として残します。
 - obstacleやsignalの認識・経路生成は未実装です。このpackageは、それらを追加できる安全な選択境界を提供します。

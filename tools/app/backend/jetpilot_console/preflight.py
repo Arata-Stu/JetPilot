@@ -1021,7 +1021,7 @@ def _analyze_e2e_preflight(
             "e2e_imu_topic",
             "e2e.imu_topic",
             "E2E IMU topic",
-            "/sensors/imu",
+            "/realsense/imu",
             {"sensor_msgs/msg/Imu"},
         ),
     ):

@@ -401,6 +401,7 @@ editor.
   - right bound
   - generated centerline
   - generated raceline
+  - every named custom line, with the selected line colored by point speed
   - section gates
 - Right-side inspector:
   - closed/open loop
@@ -410,6 +411,9 @@ editor.
   - prepare landmark raster
   - edit and save HD map YAML/centerline CSV
   - generate raceline with adjustable vehicle width and per-side boundary margin
+  - clone Centerline or Raceline into multiple named Custom Lines
+  - edit Custom Line points, open/closed state, and per-section target speeds in the browser
+  - select one validated Custom Line as the default for the next drive/transfer
   - generate line preview
   - copy paths and commands
 
@@ -422,6 +426,7 @@ editor.
   - `<map_name>_hd_map.yaml`
   - `<map_name>_hd_map_centerline.csv`
   - `<map_name>_raceline.csv`
+  - `<map_name>_custom_line.csv` plus matching `.meta.json` when a Custom Line is selected
   - `<map_name>_line_preview.png`
 - Transfer action: notebook to Jetson.
 - Jetson map root browser with size, modified time, and `latest` symlink.
@@ -515,6 +520,10 @@ POST /api/maps/build-vgl-vslam
 POST /api/maps/prepare-hd-raster
 POST /api/maps/save-hd-map
 POST /api/maps/generate-raceline
+POST /api/maps/custom-lines/create
+POST /api/maps/custom-lines/update
+POST /api/maps/custom-lines/activate
+POST /api/maps/custom-lines/delete
 POST /api/maps/generate-preview
 POST /api/transfers/local-to-jetson
 ```
@@ -548,6 +557,28 @@ The API defaults preserve the existing `0.25 m` vehicle and `0.05 m` per-side
 margin behavior. Generation keeps the existing raceline CSV layout and writes
 the selected values to `<map_name>_raceline.meta.json` for reproducibility.
 
+Named Custom Lines live under `custom_lines/<line_id>/`. `custom_line.json` is
+the editable source and `trajectory.csv` is its compiled seven-column runtime
+artifact. A line can be cloned from the current Centerline or Raceline, renamed,
+and edited without changing either source. Speed is authored as one Whole-line
+target plus optional overrides keyed by the primary lane's Section IDs; it is
+not entered waypoint by waypoint. Section gates are intersected with the edited
+line so a changed line length does not move the speed boundaries. The compiler
+inserts boundary samples and recalculates station, heading, curvature, speed,
+and acceleration. Section targets are upper limits: curvature and forward/backward
+acceleration passes can lower the compiled speed. Geometry outside the primary
+lane, ambiguous gate intersections, unknown/duplicate Section IDs, non-positive
+targets, and unsafe profiles are rejected.
+
+Activation writes `<map_name>_custom_line.csv` and SHA-256-bound metadata for
+both the trajectory and the HD map/Section layout. Editing the HD map or gates
+recompiles the active line; if the new layout cannot be mapped unambiguously,
+the stale canonical pair is removed instead of remaining drive-ready. That
+canonical pair is the next-drive/transfer default; activating it in the notebook
+UI does not hot-switch a vehicle process already running. A
+Custom-Line-only runtime bundle is complete when both canonical files exist;
+a generated Raceline remains the alternative driving-line artifact.
+
 ## Pipeline Stages
 
 The GUI should not treat map creation as one giant script. Split it into
@@ -559,9 +590,9 @@ restartable stages:
 3. Prepare landmark raster for editing
 4. Edit HD map in browser
 5. Save HD map YAML and centerline CSV
-6. Generate raceline
-7. Generate preview image
-8. Transfer complete bundle to Jetson
+6. Generate raceline and/or create named Custom Lines
+7. Select the driving-line default and generate a preview image
+8. Transfer the complete bundle to Jetson
 ```
 
 `create_map.sh` can remain as a legacy wrapper, but the long-term direction

@@ -26,7 +26,7 @@ class ExtractConfig:
     max_control_dt_sec: float
     task: str = "control"
     odometry_topic: str = "/visual_slam/tracking/odometry"
-    imu_topic: str = "/sensors/imu"
+    imu_topic: str = "/realsense/imu"
     max_odometry_dt_sec: float = 0.15
     trajectory_horizon_sec: float = 1.5
     trajectory_points: int = 10

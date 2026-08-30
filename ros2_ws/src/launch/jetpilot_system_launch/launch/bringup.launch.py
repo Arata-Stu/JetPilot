@@ -35,7 +35,11 @@ _REPLAY_ISOLATED_TOPICS = (
     '/operation_mode/state',
     '/planning/requested_lane',
     '/planning/raceline_path',
+    '/planning/raceline_trajectory',
+    '/planning/custom_path',
+    '/planning/custom_trajectory',
     '/planning/trajectory',
+    '/planning/trajectory_profile',
     '/planning/target_speed',
     '/planning/selected_lane',
     '/planning/ready',
@@ -187,6 +191,20 @@ def _validate_replay_vehicle_safety(context):
     return []
 
 
+def _validate_autonomous_command_source(context):
+    controller_enabled = _launch_bool(context, 'enable_control')
+    e2e_enabled = _launch_bool(context, 'enable_e2e_inference')
+
+    if controller_enabled and e2e_enabled:
+        raise RuntimeError(
+            'Unsafe launch configuration rejected: enable_control and '
+            'enable_e2e_inference cannot both be true because both publish '
+            '/auto/control_cmd. Select exactly one autonomous command source.'
+        )
+
+    return []
+
+
 def _validate_foxglove_whitelist(value: str, name: str) -> None:
     try:
         patterns = yaml.safe_load(value)
@@ -317,6 +335,20 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('raceline_root', '', cli=True)
     args.add_arg('raceline_csv', '', cli=True)
     args.add_arg('raceline_path_topic', '/planning/raceline_path', cli=True)
+    args.add_arg('raceline_trajectory_topic', '/planning/raceline_trajectory', cli=True)
+    args.add_arg('raceline_line_id', 'raceline', cli=True)
+    args.add_arg('raceline_line_name', 'Raceline', cli=True)
+    args.add_arg('raceline_source_hash', '', cli=True)
+    args.add_arg('raceline_closed', True, cli=True)
+    args.add_arg('enable_custom_trajectory_publisher', False, cli=True)
+    args.add_arg('custom_root', '', cli=True)
+    args.add_arg('custom_csv', '', cli=True)
+    args.add_arg('custom_path_topic', '/planning/custom_path', cli=True)
+    args.add_arg('custom_trajectory_topic', '/planning/custom_trajectory', cli=True)
+    args.add_arg('custom_line_id', 'custom', cli=True)
+    args.add_arg('custom_line_name', 'Custom', cli=True)
+    args.add_arg('custom_source_hash', '', cli=True)
+    args.add_arg('custom_closed', True, cli=True)
     args.add_arg('planning_diagnostics_topic', '/planning/diagnostics', cli=True)
 
     args.add_arg('enable_sensor_kit', False, cli=True)
@@ -514,6 +546,7 @@ def generate_launch_description() -> lut.LaunchDescription:
         cli=True)
 
     actions = args.get_launch_actions()
+    actions.append(OpaqueFunction(function=_validate_autonomous_command_source))
     actions.append(OpaqueFunction(function=_validate_replay_vehicle_safety))
     actions.append(OpaqueFunction(function=_validate_foxglove_configuration))
 
@@ -585,6 +618,20 @@ def generate_launch_description() -> lut.LaunchDescription:
                 'raceline_root': args.raceline_root,
                 'raceline_csv': args.raceline_csv,
                 'raceline_path_topic': args.raceline_path_topic,
+                'raceline_trajectory_topic': args.raceline_trajectory_topic,
+                'raceline_line_id': args.raceline_line_id,
+                'raceline_line_name': args.raceline_line_name,
+                'raceline_source_hash': args.raceline_source_hash,
+                'raceline_closed': args.raceline_closed,
+                'enable_custom_trajectory_publisher': args.enable_custom_trajectory_publisher,
+                'custom_root': args.custom_root,
+                'custom_csv': args.custom_csv,
+                'custom_path_topic': args.custom_path_topic,
+                'custom_trajectory_topic': args.custom_trajectory_topic,
+                'custom_line_id': args.custom_line_id,
+                'custom_line_name': args.custom_line_name,
+                'custom_source_hash': args.custom_source_hash,
+                'custom_closed': args.custom_closed,
                 'diagnostics_topic': args.planning_diagnostics_topic,
                 'use_sim_time': args.use_sim_time,
             },

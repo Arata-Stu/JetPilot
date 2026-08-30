@@ -85,7 +85,9 @@ TrackingResult PurePursuit::compute(const TrackingInput & input) const
       return std::hypot(lhs.x, lhs.y) < std::hypot(rhs.x, rhs.y);
     });
   result.nearest_index = static_cast<std::size_t>(std::distance(input.path.begin(), closest));
-  if (params_.path_closure_mode == PathClosureMode::kClosed) {
+  if (input.path_closed_override) {
+    result.path_closed = *input.path_closed_override;
+  } else if (params_.path_closure_mode == PathClosureMode::kClosed) {
     result.path_closed = true;
   } else if (params_.path_closure_mode == PathClosureMode::kAuto) {
     result.path_closed = params_.closed_path_tolerance_m > 0.0 &&

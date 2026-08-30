@@ -43,13 +43,17 @@ from .indexes import (
     update_rosbag_metadata,
 )
 from .map_detail import (
+    activate_custom_line,
     activate_hd_map_version,
     build_map_detail,
+    create_custom_line,
+    delete_custom_line,
     directory_fingerprint,
     resolve_allowed_path,
     save_hd_map,
     save_hd_map_version,
     save_section_gates,
+    update_custom_line,
 )
 from .map_pipeline import (
     DEFAULT_RACELINE_ACCEL_LIMIT_MPS2,
@@ -575,6 +579,18 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/maps/activate-hd-map-version":
             self._activate_hd_map_version(body)
+            return
+        if path == "/api/maps/custom-lines/create":
+            self._custom_line_action(body, create_custom_line, "create")
+            return
+        if path == "/api/maps/custom-lines/update":
+            self._custom_line_action(body, update_custom_line, "update")
+            return
+        if path == "/api/maps/custom-lines/delete":
+            self._custom_line_action(body, delete_custom_line, "delete")
+            return
+        if path == "/api/maps/custom-lines/activate":
+            self._custom_line_action(body, activate_custom_line, "activate")
             return
         if path == "/api/maps/save-section-gates":
             self._save_section_gates(body)
@@ -1141,6 +1157,32 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
         except Exception as exc:
             self._json({"error": f"failed to activate HD map version: {exc}"}, HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    def _custom_line_action(self, body: dict[str, Any], action: Any, action_name: str) -> None:
+        try:
+            map_dir = resolve_allowed_path(
+                self.server.state.config, str(body.get("map_dir") or "")
+            )
+            with self.server.state.tasks.guard_resources([f"map-dir:{map_dir}"]):
+                result = action(self.server.state.config, body)
+            self._json(result)
+        except TaskResourceConflict as exc:
+            self._json(
+                {
+                    "error": "The Map is in use by an analysis or Map task. Stop it or wait for it to finish.",
+                    "active_task": exc.active_task,
+                },
+                HTTPStatus.CONFLICT,
+            )
+        except FileNotFoundError as exc:
+            self._json({"error": str(exc)}, HTTPStatus.NOT_FOUND)
+        except ValueError as exc:
+            self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+        except Exception as exc:
+            self._json(
+                {"error": f"failed to {action_name} custom line: {exc}"},
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+            )
 
     def _save_section_gates(self, body: dict[str, Any]) -> None:
         try:

@@ -2,6 +2,7 @@
 #define JETPILOT_CONTROLLER__PATH_TRACKING_CONTROLLER_HPP_
 
 #include <cstddef>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -26,6 +27,9 @@ struct TrackingInput
   // The path must already be expressed in the vehicle base frame.
   std::vector<Point2d> path;
   double speed_mps{0.0};
+  // Typed trajectories explicitly carry open/closed semantics. Legacy Path
+  // inputs leave this empty and continue to use controller configuration.
+  std::optional<bool> path_closed_override;
 };
 
 struct TrackingResult

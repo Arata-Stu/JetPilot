@@ -131,20 +131,19 @@ ros2 launch jetpilot_e2e_inference e2e_tensor_rt.launch.py \
   run_standalone:=false
 ```
 
-JetPilot bringupからは次のように有効化できます。RealSense colorは
-E2E推論やRTPの設定に関係なく常時有効です。
+実車では、sensor、E2E推論、joy/teleop、operation mux、vehicle interfaceをまとめる
+専用presetを使用します。
 
 ```bash
-ros2 launch jetpilot_system_launch bringup.launch.py \
-  enable_sensor_kit:=true \
-  enable_e2e_inference:=true
+/workspaces/scripts/bringup.sh e2e --vehicle vesc
 ```
 
 このbringup経路ではsensor launchが`multi_sensor_container`の
 `component_container_mt`を1つだけ作り、camera driver、image encoder、TensorRT、
 C++ decoderをすべてそこへロードします。E2E側は`run_standalone:=false`となるため、
 推論専用の別プロセスは作りません。これがintra-process/NITROS経路を維持する既定の
-実行方法です。
+実行方法です。従来controllerとE2Eはどちらも`/auto/control_cmd`へpublishするため、
+`enable_control`と`enable_e2e_inference`の同時有効化は拒否されます。
 
 ## PyTorch推論
 

@@ -8,6 +8,7 @@ operation command muxを通してPCA9685/VESCのどちらにも同じ正規化�
 | Direction | Topic | Type | Meaning |
 | --- | --- | --- | --- |
 | input | `/planning/trajectory` | `nav_msgs/msg/Path` | `map`等で表現された追従経路 |
+| input | `/planning/trajectory_profile` | `jetpilot_msgs/msg/Trajectory` | 任意。名前付きlineのgeometry、`vx/ax`、ID/hash |
 | input | `/planning/target_speed` | `std_msgs/msg/Float32` | plannerが選択した前進速度 [m/s] |
 | input | `/planning/ready` | `std_msgs/msg/Bool` | plannerの経路選択が有効か |
 | input | `/localization/pose_hint_state` | `std_msgs/msg/String` | managerのconfirmed `localized`状態 |
@@ -48,6 +49,8 @@ ros2 launch jetpilot_controller jetpilot_controller.launch.xml
 経路の先頭・末尾の距離が`closed_path_tolerance_m`以下なら自動判定し、終端で停止せずwrap
 します。HD mapの閉路が先頭点を末尾へ複製しておらず点間隔も広い場合は、track用設定を
 `path_closure_mode: closed`にしてください。分岐後の開いたlaneでは`open`を指定できます。
+typed trajectoryではmessageの`closed`がこの設定より優先されるため、custom lineごとに開閉路を
+安全に切り替えられます。
 
 ## Controller selection
 
@@ -70,7 +73,12 @@ trailing、横加速度上限、steering rate limitは既存node側で扱いま�
 
 Pure Pursuit は planner の `Path` を `base_link` 座標へ変換し、現在速度に応じた lookahead 距離で追従点を選びます。選ばれた点から曲率を計算し、wheelbase と最大舵角を使って正規化 steering command へ変換します。
 
-longitudinal 側は target speed と odometry speed の差を見て throttle/brake を出す単純な比例制御です。target speed が不正、未受信、timeout の場合は安全停止します。横加速度上限から速度も制限するため、小さい半径の path では target speed より低い速度指令になることがあります。
+longitudinal側はtarget speedとodometry speedの差を見てthrottle/brakeを出します。typed trajectoryが
+選択されている場合は、現在位置をlineへ射影して点ごとの速度・加速度を補間し、
+`trajectory_speed_lookahead_m`区間内の最小速度を先読みします。最終速度はprofile、
+`/planning/target_speed`、`max_target_speed_mps`、曲率由来上限、trailing上限の最小値です。
+`ax` feed-forward gainは既定0なので、実車確認後にだけ有効化してください。
+点間速度はcompiled CSVの区間一定加速度`ax=(v1²-v0²)/(2ds)`に合わせ、`v²`を距離で線形補間します。
 
 ## Opponent trailing
 

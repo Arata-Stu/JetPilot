@@ -18,6 +18,8 @@ const DEFAULT_MAP_EDITOR_ASSIST_SPACING_M = 0.08;
 const MAX_MAP_EDITOR_ASSIST_RANGE_POINTS = 30;
 const MAX_MAP_EDITOR_ASSIST_RESAMPLE_POINTS = 1200;
 const MAP_EDITOR_FIELDS = ["left_bound", "right_bound", "centerline"];
+const DEFAULT_CUSTOM_LINE_SPEED_MPS = 1.5;
+const MIN_CUSTOM_LINE_TARGET_SPEED_MPS = 0.1;
 
 const state = {
   tab: "dashboard",
@@ -44,7 +46,7 @@ const state = {
     imageTopic: "/realsense/color/image_raw",
     controlTopic: "/teleop/control_cmd",
     odometryTopic: "/visual_slam/tracking/odometry",
-    imuTopic: "/sensors/imu",
+    imuTopic: "/realsense/imu",
     inputWidth: 212,
     inputHeight: 120,
     maxControlDtSec: 0.1,
@@ -121,6 +123,7 @@ const state = {
     right_bound: true,
     centerline: true,
     raceline: true,
+    custom_line: true,
     odometry: false,
     section_gates: true,
     section_labels: true,
@@ -139,6 +142,20 @@ const state = {
     undoStack: [],
     redoStack: [],
     dragSnapshot: null,
+    assistRangePoints: DEFAULT_MAP_EDITOR_ASSIST_RANGE_POINTS,
+    assistSpacingM: DEFAULT_MAP_EDITOR_ASSIST_SPACING_M,
+  },
+  customLineEditor: {
+    enabled: false,
+    mapPath: "",
+    selectedId: "",
+    workingLine: null,
+    dirty: false,
+    selectedPointIndex: null,
+    draggingIndex: null,
+    dragSnapshot: null,
+    undoStack: [],
+    redoStack: [],
     assistRangePoints: DEFAULT_MAP_EDITOR_ASSIST_RANGE_POINTS,
     assistSpacingM: DEFAULT_MAP_EDITOR_ASSIST_SPACING_M,
   },
@@ -182,6 +199,7 @@ const state = {
     nearestIndex: 0,
     targetIndex: 0,
     targetPoint: null,
+    profileTargetSpeedMps: 0,
     steeringRad: 0,
     throttle: 0,
     brake: 0,
@@ -315,7 +333,7 @@ const state = {
     e2ePredictionTopic: "/auto/control_cmd",
     e2eAppliedTopic: "/vehicle/control_cmd",
     e2eDiagnosticTopic: "/e2e/diagnostics",
-    e2eImuTopic: "/sensors/imu",
+    e2eImuTopic: "/realsense/imu",
     e2eSectionTopic: "/localization/current_section",
     e2eManualOnly: true,
     e2eDeadlineMs: 33.3,
@@ -1908,6 +1926,7 @@ function mapProgressScore(map) {
     hd_map: 3,
     centerline_csv: 3,
     raceline_csv: 3,
+    custom_line_csv: 3,
     line_preview: 1,
   };
   return Object.entries(weights).reduce(
@@ -4161,7 +4180,7 @@ async function selectAnalysisBag(path) {
         || state.analysis.controlTopic
         || "";
       state.e2ePipeline.odometryTopic = state.analysis.poseTopic || state.e2ePipeline.odometryTopic;
-      const imuTopic = analysisTopicRecords().find((topic) => topic.type === "sensor_msgs/msg/Imu" && topic.name === "/sensors/imu")
+      const imuTopic = analysisTopicRecords().find((topic) => topic.type === "sensor_msgs/msg/Imu" && topic.name === "/realsense/imu")
         || analysisTopicRecords().find((topic) => topic.type === "sensor_msgs/msg/Imu");
       if (imuTopic?.name) {
         state.e2ePipeline.imuTopic = imuTopic.name;
@@ -6054,7 +6073,7 @@ function mapList(items = state.maps) {
       ${items
         .map((map) => {
           const selected = state.selectedMapPath === map.path;
-          const artifactKeys = ["cuvgl_map", "cuvslam_map", "hd_map", "centerline_csv", "raceline_csv", "line_preview"];
+          const artifactKeys = ["cuvgl_map", "cuvslam_map", "hd_map", "centerline_csv", "raceline_csv", "custom_line_csv", "custom_line_meta", "line_preview"];
           const title = mapDisplayName(map);
           return `
             <article class="map-list-item ${selected ? "selected" : ""}">
@@ -6103,6 +6122,8 @@ function artifactLabel(key) {
     hd_map: "HD map",
     centerline_csv: "centerline",
     raceline_csv: "raceline",
+    custom_line_csv: "drive custom",
+    custom_line_meta: "custom metadata",
     line_preview: "preview",
   }[key] || key;
 }
@@ -6153,6 +6174,7 @@ function renderMapWorkspace() {
         <aside class="map-side-panel">
           ${renderHdRasterOptions(detail)}
           ${renderHdMapEditor(detail)}
+          ${renderCustomLineEditor(detail)}
           ${renderHdMapVersions(detail)}
           ${renderRacelineClearance(detail)}
           ${renderSectionGateEditor(detail)}
@@ -6292,11 +6314,13 @@ function renderSimulationPanel(detail) {
   ensureSimulationState(detail);
   const sim = state.simulation;
   const path = simulationPathPoints(detail);
+  const customLine = selectedCustomLine(detail);
   const ready = path.length >= 2;
   const status = !ready ? "Need path" : sim.playing ? "Running" : sim.time > 0 ? "Paused" : "Ready";
   const sourceOptions = [
     ["raceline", "Raceline"],
     ["centerline", "Centerline"],
+    ["custom", customLine ? `Custom: ${customLine.name}` : "Custom line", !customLine],
   ];
   return `
     <section class="simulation-panel">
@@ -6320,10 +6344,12 @@ function renderSimulationPanel(detail) {
             <div class="field full">
               <label for="simulation-source">Path source</label>
               <select id="simulation-source" onchange="setSimulationSource(this.value)">
-                ${sourceOptions.map(([value, label]) => `<option value="${value}" ${sim.source === value ? "selected" : ""}>${esc(label)}</option>`).join("")}
+                ${sourceOptions.map(([value, label, disabled]) => `<option value="${value}" ${sim.source === value ? "selected" : ""} ${disabled ? "disabled" : ""}>${esc(label)}</option>`).join("")}
               </select>
             </div>
-            ${simulationNumberInput("targetSpeedMps", "Target speed (m/s)", 0, 0.1)}
+            ${sim.source === "custom"
+              ? `<div class="field"><label>Target speed</label><input value="Custom profile" disabled /><span class="field-hint">Uses speed_mps at the nearest custom point.</span></div>`
+              : simulationNumberInput("targetSpeedMps", "Target speed (m/s)", 0, 0.1)}
             ${simulationNumberInput("wheelbaseM", "Wheelbase (m)", 0.01, 0.01)}
             ${simulationNumberInput("minLookaheadM", "Min lookahead (m)", 0.01, 0.05)}
             ${simulationNumberInput("maxLookaheadM", "Max lookahead (m)", 0.01, 0.05)}
@@ -6363,6 +6389,7 @@ function renderSimulationMetrics() {
   return `
     ${statTile("time", `${sim.time.toFixed(2)} s`)}
     ${statTile("speed", `${sim.speed.toFixed(2)} m/s`)}
+    ${statTile("target", `${Number(sim.source === "custom" ? sim.profileTargetSpeedMps : sim.settings.targetSpeedMps).toFixed(2)} m/s`)}
     ${statTile("steer", `${sim.steeringRad.toFixed(3)} rad`)}
     ${statTile("error", `${sim.crossTrackErrorM.toFixed(3)} m`)}
     ${statTile("max error", `${sim.maxCrossTrackErrorM.toFixed(3)} m`)}
@@ -6624,6 +6651,7 @@ function renderLayerToggles() {
     ["right_bound", "Right bound"],
     ["centerline", "Centerline"],
     ["raceline", "Raceline"],
+    ["custom_line", "Custom lines"],
     ["odometry", "Odometry"],
     ["section_gates", "Section gates"],
     ["section_labels", "Labels"],
@@ -6729,6 +6757,156 @@ function renderHdMapEditor(detail) {
 function editorFieldButton(field, label) {
   const active = state.mapEditor.activeField === field;
   return `<button id="map-editor-field-${esc(field)}" class="${active ? "active" : ""}" onclick="setMapEditorField(${js(field)})" ${state.mapEditor.enabled ? "" : "disabled"}>${esc(label)}</button>`;
+}
+
+function renderCustomLineEditor(detail) {
+  const editor = ensureCustomLineEditor(detail);
+  const lines = customLinesFromDetail(detail);
+  const activeId = activeCustomLineId(detail);
+  const line = editor.workingLine;
+  const rasterReady = mapEditorRasterReady(detail);
+  const centerlineReady = customLineSourcePoints(detail, "centerline").length >= 2;
+  const racelineReady = customLineSourcePoints(detail, "raceline").length >= 2;
+  const sourceReady = centerlineReady || racelineReady;
+  const pointCount = line?.points?.length || 0;
+  const selectedIndex = Number.isInteger(editor.selectedPointIndex) ? editor.selectedPointIndex : null;
+  const selectedPoint = selectedIndex == null ? null : line?.points?.[selectedIndex];
+  const active = Boolean(line && line.id === activeId);
+  const speedStats = customLineSpeedStats(line);
+  const speedSections = customLineSpeedSections(detail, line);
+  const duplicateSectionIds = duplicateCustomLineSectionIds(speedSections);
+  const currentSectionIds = new Set(speedSections.map((section) => section.id));
+  const obsoleteSectionIds = Object.keys(line?.section_speeds_mps || {})
+    .filter((sectionId) => !currentSectionIds.has(sectionId));
+  const activeIssue = String(detail?.custom_line_catalog?.active_issue || "");
+  const issue = line ? customLineEditorIssue(detail, line) : "";
+  const repairWarning = line?.valid === false && line?.repairable
+    ? String(line.issue || "This line must be rebuilt for the current map sections")
+    : "";
+  const status = !line
+    ? (lines.length ? "Select a line" : "No custom lines")
+    : editor.dirty
+    ? "Unsaved"
+    : active
+    ? "Drive default"
+    : "Ready";
+  return `
+    <div class="inspector-block custom-line-block">
+      <div class="inspector-title-row">
+        <h4>Custom Lines</h4>
+        <span id="custom-line-status" class="${issue || repairWarning || activeIssue ? "warn" : editor.dirty ? "dirty" : active ? "ok" : ""}">${esc(issue || repairWarning || activeIssue || status)}</span>
+      </div>
+      <div class="custom-line-create-grid">
+        <input id="custom-line-create-name" class="full" placeholder="New line name" aria-label="New custom line name" />
+        <label class="custom-line-create-field">
+          <span>Copy shape from</span>
+          <select id="custom-line-create-source" aria-label="Clone source">
+            <option value="centerline" ${centerlineReady ? "" : "disabled"}>Centerline${centerlineReady ? "" : " (missing)"}</option>
+            <option value="raceline" ${racelineReady ? "" : "disabled"} ${!centerlineReady && racelineReady ? "selected" : ""}>Raceline${racelineReady ? "" : " (missing)"}</option>
+          </select>
+        </label>
+        <label class="custom-line-create-field">
+          <span>Whole line target (m/s)</span>
+          <input id="custom-line-create-speed" type="number" min="${MIN_CUSTOM_LINE_TARGET_SPEED_MPS}" step="0.05" value="${DEFAULT_CUSTOM_LINE_SPEED_MPS}" aria-label="Whole line target speed in meters per second" />
+        </label>
+        <button class="primary full ${actionBusy("custom-line:create") ? "is-busy" : ""}" onclick="createCustomLine()" ${sourceReady ? "" : "disabled"} ${actionButtonAttrs("custom-line:create", "Custom line is being created...")}>${esc(actionButtonLabel("custom-line:create", "Clone as Custom", "Creating..."))}</button>
+      </div>
+      <div class="field-hint">Clone a Centerline or Raceline, then keep each manual variation under its own name.</div>
+      <div class="custom-line-list">
+        ${lines.length
+          ? lines.map((item) => renderCustomLineRow(item, activeId, editor.selectedId)).join("")
+          : `<div class="field-hint">No named custom lines yet.</div>`}
+      </div>
+      ${activeIssue ? `<div class="field-hint warn-text">Drive default was cleared: ${esc(activeIssue)}</div>` : ""}
+      ${line
+        ? `
+          <div class="custom-line-selected-card">
+            <div class="custom-line-name-row">
+              <input id="custom-line-name" value="${esc(line.name)}" aria-label="Custom line name" oninput="markCustomLineNameDirty()" />
+              <button onclick="renameCustomLine()">Rename</button>
+            </div>
+            <div class="custom-line-meta">
+              <span>${esc(line.source_type || "custom")} · ${pointCount} pts</span>
+              <span>${line.source_stale ? "source changed" : active ? "selected for next drive" : "not selected"}</span>
+            </div>
+            <div class="custom-line-primary-actions">
+              <button class="${editor.enabled ? "primary" : ""}" onclick="toggleCustomLineEditor()">${editor.enabled ? "Editing" : "Edit shape"}</button>
+              <button id="custom-line-save" class="${actionBusy(`custom-line:update:${line.id}`) ? "is-busy" : ""}" onclick="saveCustomLineChanges()" ${issue ? "disabled" : ""} ${actionButtonAttrs(`custom-line:update:${line.id}`, "Custom line is saving...")}>${esc(actionButtonLabel(`custom-line:update:${line.id}`, "Save", "Saving..."))}</button>
+              <button class="${active ? "active" : ""}" onclick="activateCustomLine(${js(line.id)})" ${(active && !editor.dirty) || issue || repairWarning ? "disabled" : ""}>${repairWarning ? "Save repair first" : active ? "Drive default" : "Use for drive"}</button>
+            </div>
+            <div class="field-hint">Use for drive updates the launch/transfer default. It does not hot-switch a vehicle that is already running.</div>
+            ${repairWarning ? `<div class="field-hint warn-text">The editable shape was preserved. Review it, then Save to rebuild this line for the current Section layout.</div>` : ""}
+            <div class="custom-line-edit-actions">
+              <button id="custom-line-undo" onclick="undoCustomLineEdit()" ${editor.undoStack.length ? "" : "disabled"}>Undo</button>
+              <button id="custom-line-redo" onclick="redoCustomLineEdit()" ${editor.redoStack.length ? "" : "disabled"}>Redo</button>
+              <button id="custom-line-smooth" onclick="smoothCustomLineRange()" ${editor.enabled && canSmoothCustomLineRange() ? "" : "disabled"}>Smooth</button>
+              <button id="custom-line-delete-point" onclick="deleteSelectedCustomLinePoint()" ${editor.enabled && selectedPoint ? "" : "disabled"}>Delete Pt</button>
+              <button class="danger" onclick="deleteCustomLine(${js(line.id)})">Delete Line</button>
+            </div>
+            <div class="editor-assist-grid">
+              <div class="field">
+                <label for="custom-line-assist-range">Smooth range (±pts)</label>
+                <input id="custom-line-assist-range" type="number" min="1" max="${MAX_MAP_EDITOR_ASSIST_RANGE_POINTS}" step="1" value="${esc(editor.assistRangePoints)}" oninput="updateCustomLineAssist('rangePoints', this)" ${editor.enabled ? "" : "disabled"} />
+              </div>
+              <div class="field">
+                <label for="custom-line-assist-spacing">Spacing (m)</label>
+                <input id="custom-line-assist-spacing" type="number" min="0.02" max="1" step="0.01" value="${esc(editor.assistSpacingM)}" oninput="updateCustomLineAssist('spacingM', this)" ${editor.enabled ? "" : "disabled"} />
+              </div>
+            </div>
+            <label class="layer-toggle custom-line-closed-toggle">
+              <input id="custom-line-closed-loop" type="checkbox" ${line.closed_loop ? "checked" : ""} onchange="toggleCustomLineClosedLoop(this.checked)" />
+              <span>Closed loop${speedSections.length ? " · must match Map Sections" : ""}</span>
+            </label>
+            <div class="custom-line-speed-editor">
+              <div class="custom-line-speed-title">
+                <strong>Section speeds</strong>
+                <span>${speedSections.length ? `${speedSections.length} section${speedSections.length === 1 ? "" : "s"}` : "whole line"}</span>
+              </div>
+              <div class="custom-line-default-speed">
+                <div>
+                  <strong>Whole line</strong>
+                  <span>Fallback for Sections without an override and outside Sections</span>
+                </div>
+                <label>
+                  <span>Target / upper limit (m/s)</span>
+                  <input id="custom-line-default-speed" type="number" min="${MIN_CUSTOM_LINE_TARGET_SPEED_MPS}" step="0.05" value="${esc(customLineDefaultSpeed(line))}" aria-label="Whole line target speed in meters per second" onchange="setCustomLineDefaultSpeed(this)" />
+                </label>
+              </div>
+              ${speedSections.length
+                ? `<div class="custom-line-section-speed-list">${speedSections.map((section, index) => renderCustomLineSpeedSection(section, index, line, duplicateSectionIds.includes(section.id))).join("")}</div>`
+                : `<div class="field-hint">No sections are defined on this map, so the Whole line target is used everywhere.</div>`}
+              ${duplicateSectionIds.length
+                ? `<div class="field-hint warn-text">Some sections share the same ID (${esc(duplicateSectionIds.join(", "))}). Give each section a unique ID before setting separate speeds.</div>`
+                : ""}
+              ${obsoleteSectionIds.length
+                ? `<div class="field-hint warn-text">Old Section overrides (${esc(obsoleteSectionIds.join(", "))}) no longer exist and will be removed when you Save.</div>`
+                : ""}
+              <div class="field-hint">Each target is an upper limit. The compiled speed may be reduced automatically for curves and safe acceleration or braking.</div>
+              <div class="custom-speed-legend"><span>slow</span><i></i><span>fast</span><strong>${speedStats ? `${speedStats.min.toFixed(2)}–${speedStats.max.toFixed(2)} m/s point preview` : "—"}</strong></div>
+            </div>
+            <div id="custom-line-counts" class="editor-counts">${esc(customLineCountsLabel(line, selectedIndex))}</div>
+              <div class="field-hint">Select or drag a point to edit the shape. Click the line to add a point. Double-click or right-click a point to delete it.</div>
+            ${!rasterReady ? `<div class="field-hint warn-text">Generate an HD raster before editing point positions. Speed and name editing remain available.</div>` : ""}
+          </div>`
+        : ""}
+    </div>
+  `;
+}
+
+function renderCustomLineRow(line, activeId, selectedId) {
+  const active = line.id === activeId || Boolean(line.active);
+  const selected = line.id === selectedId;
+  const needsRepair = line.valid === false;
+  const revision = line.revision == null ? "" : ` · r${line.revision}`;
+  return `
+    <div class="custom-line-row ${active ? "active" : ""} ${selected ? "selected" : ""}">
+      <button class="custom-line-select" onclick="selectCustomLine(${js(line.id)})">
+        <strong>${esc(line.name || line.id)}</strong>
+        <span>${esc(line.source_type || "custom")} · ${esc(line.points.length)} pts${esc(revision)}</span>
+      </button>
+      <button onclick="activateCustomLine(${js(line.id)})" ${active || needsRepair ? "disabled" : ""}>${needsRepair ? "Repair" : active ? "Drive default" : "Use"}</button>
+    </div>
+  `;
 }
 
 function renderHdMapVersions(detail) {
@@ -6884,7 +7062,7 @@ function renderMapInspector(detail) {
     <div class="inspector-block">
       <h4>Readiness</h4>
       <div class="artifact-grid">
-        ${["cuvgl_map", "cuvslam_map", "landmark_image", "hd_map", "centerline_csv", "raceline_csv", "line_preview"]
+        ${["cuvgl_map", "cuvslam_map", "landmark_image", "hd_map", "centerline_csv", "raceline_csv", "custom_line_csv", "custom_line_meta", "line_preview"]
           .map((key) => `<div class="artifact-row"><span>${esc(artifactLabel(key))}</span><strong class="${artifacts[key]?.exists ? "ok" : "missing"}">${artifacts[key]?.exists ? "ok" : "missing"}</strong></div>`)
           .join("")}
       </div>
@@ -6898,6 +7076,7 @@ function renderMapInspector(detail) {
         ${statTile("sections", stats.section_count || 0)}
         ${statTile("gates", stats.section_gate_count || 0)}
         ${statTile("raceline pts", stats.raceline_points || 0)}
+        ${statTile("custom lines", stats.custom_line_count || 0)}
         ${statTile("odom pts", stats.odometry_points || 0)}
       </div>
     </div>
@@ -8470,6 +8649,723 @@ function redoMapEditor() {
   drawMapPreview();
 }
 
+function normalizeCustomLinePoint(point, fallbackSpeedMps = DEFAULT_CUSTOM_LINE_SPEED_MPS) {
+  const x = Number(Array.isArray(point) ? point[0] : point?.x_m ?? point?.x);
+  const y = Number(Array.isArray(point) ? point[1] : point?.y_m ?? point?.y);
+  const rawSpeed = Array.isArray(point) ? point[2] : point?.speed_mps ?? point?.vx_mps ?? point?.speed;
+  const speed = rawSpeed == null || rawSpeed === "" ? Number(fallbackSpeedMps) : Number(rawSpeed);
+  if (![x, y, speed].every(Number.isFinite)) return null;
+  return { x_m: x, y_m: y, speed_mps: Math.max(0, speed) };
+}
+
+function cloneCustomLinePoint(point) {
+  return normalizeCustomLinePoint(point) || { x_m: 0, y_m: 0, speed_mps: DEFAULT_CUSTOM_LINE_SPEED_MPS };
+}
+
+function normalizeCustomLineSpeed(value, fallback = DEFAULT_CUSTOM_LINE_SPEED_MPS) {
+  const parsed = Number(value);
+  if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  const fallbackValue = Number(fallback);
+  return Number.isFinite(fallbackValue) && fallbackValue > 0 ? fallbackValue : DEFAULT_CUSTOM_LINE_SPEED_MPS;
+}
+
+function normalizeCustomLineSectionSpeeds(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const speeds = {};
+  for (const [rawId, rawSpeed] of Object.entries(value)) {
+    const id = String(rawId || "").trim();
+    const speed = Number(rawSpeed);
+    if (id && Number.isFinite(speed) && speed > 0) speeds[id] = speed;
+  }
+  return speeds;
+}
+
+function cloneCustomLine(line = {}) {
+  const points = (line.points || line.path || [])
+    .map((point) => normalizeCustomLinePoint(point, line.default_speed_mps))
+    .filter(Boolean);
+  const pointFallback = points.find((point) => Number.isFinite(Number(point.speed_mps)))?.speed_mps;
+  return {
+    ...line,
+    id: String(line.id || ""),
+    name: String(line.name || line.label || line.id || "Custom line"),
+    source_type: String(line.source_type || line.source || line.base || "custom"),
+    closed_loop: line.closed_loop !== false,
+    default_speed_mps: normalizeCustomLineSpeed(line.default_speed_mps, pointFallback),
+    section_speeds_mps: normalizeCustomLineSectionSpeeds(line.section_speeds_mps),
+    speed_sections: Array.isArray(line.speed_sections)
+      ? line.speed_sections.filter((section) => section && typeof section === "object").map((section) => ({ ...section }))
+      : [],
+    points,
+  };
+}
+
+function customLineDefaultSpeed(line) {
+  return normalizeCustomLineSpeed(line?.default_speed_mps);
+}
+
+function customLineSpeedSections(detail, line) {
+  if (!line) return [];
+  const primaryLaneId = String(
+    detail?.hd_map?.primary_lane_id
+      || (detail?.hd_map?.lanes || []).find((lane) => lane?.primary)?.id
+      || "",
+  );
+  const compiledSections = Array.isArray(line.speed_sections) ? line.speed_sections : [];
+  const mapSections = Array.isArray(detail?.hd_map?.sections) ? detail.hd_map.sections : [];
+  const compiledById = new Map(compiledSections.map((section) => [String(section?.id || ""), section]));
+  const rawSections = mapSections.length
+    ? mapSections.map((section) => ({ ...(compiledById.get(String(section?.id || "")) || {}), ...section }))
+    : [];
+  const overrides = normalizeCustomLineSectionSpeeds(line.section_speeds_mps);
+  const fallback = customLineDefaultSpeed(line);
+  return rawSections
+    .filter((section) => {
+      const laneId = String(section?.lane_id || "");
+      return section && (!primaryLaneId || !laneId || laneId === primaryLaneId);
+    })
+    .map((section, index) => {
+      const id = String(section.id || `section_${String(index + 1).padStart(3, "0")}`);
+      const configured = Object.prototype.hasOwnProperty.call(overrides, id);
+      return {
+        ...section,
+        id,
+        configured,
+        speed_mps: configured ? overrides[id] : fallback,
+      };
+    });
+}
+
+function duplicateCustomLineSectionIds(sections) {
+  const seen = new Set();
+  const duplicates = new Set();
+  for (const section of sections || []) {
+    const id = String(section?.id || "");
+    if (seen.has(id)) duplicates.add(id);
+    seen.add(id);
+  }
+  return [...duplicates];
+}
+
+function customLineEditorIssue(detail, line) {
+  const lineIssue = customLineIssue(line);
+  if (lineIssue) return lineIssue;
+  return duplicateCustomLineSectionIds(customLineSpeedSections(detail, line)).length
+    ? "Section IDs must be unique"
+    : "";
+}
+
+function renderCustomLineSpeedSection(section, index, line, duplicateId = false) {
+  const gateRange = section.start_gate_id || section.end_gate_id
+    ? `${section.start_gate_id || "start"} → ${section.end_gate_id || "end"}`
+    : "Map section";
+  const configured = Object.prototype.hasOwnProperty.call(line.section_speeds_mps || {}, section.id);
+  return `
+    <div class="custom-line-section-speed-row ${configured ? "configured" : "inherited"}">
+      <div class="custom-line-section-speed-name">
+        <strong>Section ${index + 1}</strong>
+        <span>${esc(section.id)} · ${esc(gateRange)}</span>
+      </div>
+      <div class="custom-line-section-speed-control">
+        <label>
+          <span>Target / upper limit (m/s)</span>
+          <input type="number" min="${MIN_CUSTOM_LINE_TARGET_SPEED_MPS}" step="0.05" value="${esc(section.speed_mps)}" data-custom-line-section-speed="${esc(section.id)}" aria-label="${esc(section.id)} target speed in meters per second" onchange="setCustomLineSectionSpeed(${js(section.id)}, this)" ${duplicateId ? "disabled title=\"Section ID must be unique\"" : ""} />
+        </label>
+        <button type="button" data-custom-line-section-reset="${esc(section.id)}" onclick="resetCustomLineSectionSpeed(${js(section.id)})" ${configured && !duplicateId ? "" : "disabled"}>${configured ? "Use whole line" : "Whole line"}</button>
+      </div>
+    </div>
+  `;
+}
+
+function customLinesFromDetail(detail) {
+  const catalog = detail?.custom_lines;
+  const raw = Array.isArray(catalog)
+    ? catalog
+    : Array.isArray(catalog?.items)
+    ? catalog.items
+    : Array.isArray(catalog?.lines)
+    ? catalog.lines
+    : Array.isArray(detail?.custom_line_catalog?.items)
+    ? detail.custom_line_catalog.items
+    : [];
+  return raw.map(cloneCustomLine).filter((line) => line.id);
+}
+
+function activeCustomLineId(detail) {
+  const catalog = detail?.custom_lines;
+  return String(
+    detail?.active_custom_line_id
+      || (!Array.isArray(catalog) ? catalog?.active_id : "")
+      || detail?.custom_line_catalog?.active_id
+      || customLinesFromDetail(detail).find((line) => line.active)?.id
+      || "",
+  );
+}
+
+function customLineSourcePoints(detail, sourceType) {
+  const raw = sourceType === "raceline"
+    ? detail?.raceline_csv?.points || []
+    : detail?.centerline_csv?.points || [];
+  return raw
+    .map((point) => normalizeCustomLinePoint(point))
+    .filter(Boolean);
+}
+
+function customLineIssue(line) {
+  if (!line) return "Select a custom line";
+  if (line.valid === false && line.issue && !line.repairable) return String(line.issue);
+  if (!String(line.name || "").trim()) return "Name is required";
+  if (!Number.isFinite(Number(line.default_speed_mps)) || Number(line.default_speed_mps) < MIN_CUSTOM_LINE_TARGET_SPEED_MPS) {
+    return `Whole line speed must be at least ${MIN_CUSTOM_LINE_TARGET_SPEED_MPS} m/s`;
+  }
+  if (Object.values(line.section_speeds_mps || {}).some(
+    (speed) => !Number.isFinite(Number(speed)) || Number(speed) < MIN_CUSTOM_LINE_TARGET_SPEED_MPS,
+  )) {
+    return `Each Section speed must be at least ${MIN_CUSTOM_LINE_TARGET_SPEED_MPS} m/s`;
+  }
+  const minimum = line.closed_loop ? 3 : 2;
+  if ((line.points || []).length < minimum) return `Need ${minimum} points`;
+  if ((line.points || []).some((point) => !normalizeCustomLinePoint(point))) return "Invalid point or speed";
+  const segmentCount = line.closed_loop ? line.points.length : line.points.length - 1;
+  for (let index = 0; index < segmentCount; index += 1) {
+    const current = line.points[index];
+    const next = line.points[(index + 1) % line.points.length];
+    if (Math.hypot(current.x_m - next.x_m, current.y_m - next.y_m) <= 1.0e-6) return "Adjacent points overlap";
+  }
+  return "";
+}
+
+function customLineSpeedStats(line) {
+  const speeds = (line?.points || []).map((point) => Number(point.speed_mps)).filter(Number.isFinite);
+  if (!speeds.length) return null;
+  return { min: Math.min(...speeds), max: Math.max(...speeds) };
+}
+
+function customLineCountsLabel(line, selectedIndex = state.customLineEditor.selectedPointIndex) {
+  if (!line) return "No line selected";
+  const length = polylineWorldLength(customLineCoordinates(line), line.closed_loop);
+  const selected = Number.isInteger(selectedIndex) && line.points[selectedIndex] ? ` / selected ${selectedIndex + 1}` : "";
+  return `${line.points.length} pts / ${length.toFixed(2)} m${selected}`;
+}
+
+function customLineCoordinates(line) {
+  return (line?.points || []).map((point) => [Number(point.x_m), Number(point.y_m)]);
+}
+
+function ensureCustomLineEditor(detail, options = {}) {
+  const editor = state.customLineEditor;
+  const mapPath = detail?.map?.path || "";
+  if (!mapPath) return editor;
+  const lines = customLinesFromDetail(detail);
+  const sameMap = editor.mapPath === mapPath;
+  const selectedStillExists = lines.some((line) => line.id === editor.selectedId);
+  if (!sameMap || options.force || (!editor.dirty && !selectedStillExists)) {
+    const preferredId = String(options.selectedId || (sameMap ? editor.selectedId : "") || activeCustomLineId(detail) || lines[0]?.id || "");
+    const selected = lines.find((line) => line.id === preferredId) || lines[0] || null;
+    state.customLineEditor = {
+      ...editor,
+      enabled: sameMap && options.keepEnabled ? editor.enabled : false,
+      mapPath,
+      selectedId: selected?.id || "",
+      workingLine: selected ? cloneCustomLine(selected) : null,
+      dirty: false,
+      selectedPointIndex: null,
+      draggingIndex: null,
+      dragSnapshot: null,
+      undoStack: [],
+      redoStack: [],
+    };
+  }
+  return state.customLineEditor;
+}
+
+function customLinesForDrawing(detail) {
+  const lines = customLinesFromDetail(detail);
+  const editor = state.customLineEditor;
+  if (editor.mapPath !== detail?.map?.path || !editor.workingLine) return lines;
+  const index = lines.findIndex((line) => line.id === editor.workingLine.id);
+  if (index >= 0) lines[index] = cloneCustomLine(editor.workingLine);
+  else lines.push(cloneCustomLine(editor.workingLine));
+  return lines;
+}
+
+function selectedCustomLine(detail = state.selectedMapDetail) {
+  const editor = state.customLineEditor;
+  if (editor.mapPath === detail?.map?.path && editor.workingLine) return editor.workingLine;
+  const lines = customLinesFromDetail(detail);
+  return lines.find((line) => line.id === activeCustomLineId(detail)) || lines[0] || null;
+}
+
+function captureCustomLineSnapshot() {
+  const editor = state.customLineEditor;
+  return {
+    workingLine: editor.workingLine ? cloneCustomLine(editor.workingLine) : null,
+    selectedPointIndex: editor.selectedPointIndex,
+    dirty: editor.dirty,
+  };
+}
+
+function restoreCustomLineSnapshot(snapshot) {
+  if (!snapshot) return;
+  const editor = state.customLineEditor;
+  editor.workingLine = snapshot.workingLine ? cloneCustomLine(snapshot.workingLine) : null;
+  editor.selectedId = editor.workingLine?.id || "";
+  editor.selectedPointIndex = Number.isInteger(snapshot.selectedPointIndex) ? snapshot.selectedPointIndex : null;
+  editor.dirty = Boolean(snapshot.dirty);
+  editor.draggingIndex = null;
+  editor.dragSnapshot = null;
+}
+
+function rememberCustomLineState() {
+  const editor = state.customLineEditor;
+  editor.undoStack.push(captureCustomLineSnapshot());
+  if (editor.undoStack.length > 200) editor.undoStack.shift();
+  editor.redoStack = [];
+}
+
+function undoCustomLineEdit() {
+  const editor = state.customLineEditor;
+  if (!editor.undoStack.length) return;
+  editor.redoStack.push(captureCustomLineSnapshot());
+  restoreCustomLineSnapshot(editor.undoStack.pop());
+  updateCustomLineChrome();
+  drawMapPreview();
+}
+
+function redoCustomLineEdit() {
+  const editor = state.customLineEditor;
+  if (!editor.redoStack.length) return;
+  editor.undoStack.push(captureCustomLineSnapshot());
+  restoreCustomLineSnapshot(editor.redoStack.pop());
+  updateCustomLineChrome();
+  drawMapPreview();
+}
+
+function markCustomLineDirty() {
+  if (state.customLineEditor.workingLine) {
+    delete state.customLineEditor.workingLine.valid;
+    state.customLineEditor.workingLine.issue = "";
+  }
+  state.customLineEditor.dirty = true;
+  updateCustomLineChrome();
+}
+
+function markCustomLineNameDirty() {
+  const line = state.customLineEditor.workingLine;
+  if (!line) return;
+  line.name = String($("custom-line-name")?.value || "");
+  markCustomLineDirty();
+}
+
+function selectCustomLine(id) {
+  const detail = state.selectedMapDetail;
+  const editor = ensureCustomLineEditor(detail);
+  if (editor.selectedId === id) return;
+  if (editor.dirty && !window.confirm("Discard unsaved custom line changes and select another line?")) return;
+  const line = customLinesFromDetail(detail).find((item) => item.id === id);
+  if (!line) return;
+  editor.selectedId = line.id;
+  editor.workingLine = cloneCustomLine(line);
+  editor.dirty = false;
+  editor.selectedPointIndex = null;
+  editor.draggingIndex = null;
+  editor.dragSnapshot = null;
+  editor.undoStack = [];
+  editor.redoStack = [];
+  state.mapLayers.custom_line = true;
+  if (state.simulation.source === "custom") resetSimulationStateFromPath(detail);
+  render();
+}
+
+function toggleCustomLineEditor() {
+  const detail = state.selectedMapDetail;
+  const editor = ensureCustomLineEditor(detail);
+  if (!editor.workingLine) return;
+  editor.enabled = !editor.enabled;
+  editor.draggingIndex = null;
+  editor.dragSnapshot = null;
+  if (editor.enabled) {
+    state.mapEditor.enabled = false;
+    state.mapEditor.selected = null;
+    state.sectionEditor.enabled = false;
+    state.sectionEditor.selectedGateId = "";
+    state.mapLayers.custom_line = true;
+  }
+  render();
+}
+
+function toggleCustomLineClosedLoop(checked) {
+  const line = state.customLineEditor.workingLine;
+  if (!line) return;
+  const detail = state.selectedMapDetail;
+  if (customLineSpeedSections(detail, line).length) {
+    const primaryLaneId = String(
+      detail?.hd_map?.primary_lane_id
+        || (detail?.hd_map?.lanes || []).find((lane) => lane?.primary)?.id
+        || "",
+    );
+    const primaryLane = (detail?.hd_map?.lanes || []).find(
+      (lane) => lane && (!primaryLaneId || String(lane.id || "") === primaryLaneId),
+    );
+    const requiredClosedLoop = primaryLane?.closed_loop !== false;
+    if (Boolean(checked) !== requiredClosedLoop) {
+      toast(`A Section-based Custom Line must use the Map's ${requiredClosedLoop ? "closed" : "open"} topology.`, "error");
+      render();
+      return;
+    }
+  }
+  rememberCustomLineState();
+  line.closed_loop = Boolean(checked);
+  markCustomLineDirty();
+  drawMapPreview();
+}
+
+function updateCustomLineAssist(field, input) {
+  const raw = String(input?.value ?? "").trim();
+  const value = Number(raw);
+  const isRange = field === "rangePoints";
+  const min = isRange ? 1 : 0.02;
+  const max = isRange ? MAX_MAP_EDITOR_ASSIST_RANGE_POINTS : 1;
+  const valid = raw !== "" && Number.isFinite(value) && value >= min && value <= max;
+  input?.setCustomValidity(valid ? "" : `Enter a value from ${min} to ${max}`);
+  if (!valid) return;
+  if (isRange) state.customLineEditor.assistRangePoints = Math.round(value);
+  else if (field === "spacingM") state.customLineEditor.assistSpacingM = value;
+  updateCustomLineChrome();
+}
+
+function canSmoothCustomLineRange() {
+  const editor = state.customLineEditor;
+  const line = editor.workingLine;
+  const index = editor.selectedPointIndex;
+  if (!editor.enabled || !line || !Number.isInteger(index) || !line.points[index]) return false;
+  const range = selectedEditorRange(customLineCoordinates(line), index, editor.assistRangePoints, line.closed_loop);
+  return range.segment.length >= (range.closedWhole && line.closed_loop ? 4 : 3);
+}
+
+function interpolateCustomSpeed(points, fraction, closedLoop) {
+  if (!points.length) return DEFAULT_CUSTOM_LINE_SPEED_MPS;
+  if (points.length === 1) return Number(points[0].speed_mps);
+  const count = closedLoop ? points.length : points.length - 1;
+  const normalized = closedLoop ? ((fraction % 1) + 1) % 1 : Math.max(0, Math.min(1, fraction));
+  const scaled = normalized * count;
+  const index = Math.min(count - 1, Math.floor(scaled));
+  const ratio = Math.max(0, Math.min(1, scaled - index));
+  const start = points[index];
+  const end = points[(index + 1) % points.length];
+  return Number(start.speed_mps) + (Number(end.speed_mps) - Number(start.speed_mps)) * ratio;
+}
+
+function replaceCustomLineRange(points, range, replacement, closedLoop) {
+  if (range.closedWhole) return replacement;
+  if (!closedLoop) return [...points.slice(0, range.startIndex), ...replacement, ...points.slice(range.endIndex + 1)];
+  const rest = [];
+  for (let offset = range.count; offset < points.length; offset += 1) {
+    rest.push(cloneCustomLinePoint(points[(range.startIndex + offset) % points.length]));
+  }
+  return [...replacement, ...rest];
+}
+
+function smoothCustomLineRange() {
+  const editor = state.customLineEditor;
+  const line = editor.workingLine;
+  if (!canSmoothCustomLineRange() || !line) {
+    toast("Select a custom line point with enough neighbors first.", "error");
+    return;
+  }
+  const selectedPoint = cloneCustomLinePoint(line.points[editor.selectedPointIndex]);
+  const range = selectedEditorRange(customLineCoordinates(line), editor.selectedPointIndex, editor.assistRangePoints, line.closed_loop);
+  const sourcePoints = range.closedWhole
+    ? line.points.map(cloneCustomLinePoint)
+    : Array.from({ length: range.count }, (_, offset) => cloneCustomLinePoint(line.points[(range.startIndex + offset) % line.points.length]));
+  const smoothed = smoothEditorPolylineForAssist(range.segment, editor.assistSpacingM, Boolean(range.closedWhole && line.closed_loop));
+  const replacement = smoothed.map((point, index) => ({
+    x_m: point[0],
+    y_m: point[1],
+    speed_mps: interpolateCustomSpeed(sourcePoints, index / Math.max(1, smoothed.length - (range.closedWhole && line.closed_loop ? 0 : 1)), Boolean(range.closedWhole && line.closed_loop)),
+  }));
+  rememberCustomLineState();
+  line.points = replaceCustomLineRange(line.points, range, replacement, line.closed_loop);
+  editor.selectedPointIndex = nearestCustomLinePointIndex(line.points, [selectedPoint.x_m, selectedPoint.y_m]);
+  markCustomLineDirty();
+  toast(`Smoothed ${range.segment.length} points to ${replacement.length} points`);
+  render();
+}
+
+function customLineSpeedInputValue(input, label) {
+  const raw = String(input?.value ?? "").trim();
+  const speed = Number(raw);
+  const valid = raw !== "" && Number.isFinite(speed) && speed >= MIN_CUSTOM_LINE_TARGET_SPEED_MPS;
+  input?.setCustomValidity(valid ? "" : `${label} must be at least ${MIN_CUSTOM_LINE_TARGET_SPEED_MPS} m/s`);
+  if (!valid) input?.reportValidity();
+  return valid ? speed : null;
+}
+
+function setCustomLineDefaultSpeed(input) {
+  const editor = state.customLineEditor;
+  const line = editor.workingLine;
+  if (!line) return;
+  const speed = customLineSpeedInputValue(input, "Whole line target");
+  if (speed == null || speed === Number(line.default_speed_mps)) return;
+  rememberCustomLineState();
+  line.default_speed_mps = speed;
+  markCustomLineDirty();
+  render();
+}
+
+function setCustomLineSectionSpeed(sectionId, input) {
+  const line = state.customLineEditor.workingLine;
+  if (!line || !sectionId) return;
+  const speed = customLineSpeedInputValue(input, "Section target");
+  if (speed == null) return;
+  const current = line.section_speeds_mps || {};
+  if (Object.prototype.hasOwnProperty.call(current, sectionId) && Number(current[sectionId]) === speed) return;
+  rememberCustomLineState();
+  line.section_speeds_mps = { ...current, [sectionId]: speed };
+  markCustomLineDirty();
+  render();
+}
+
+function resetCustomLineSectionSpeed(sectionId) {
+  const line = state.customLineEditor.workingLine;
+  if (!line || !sectionId || !Object.prototype.hasOwnProperty.call(line.section_speeds_mps || {}, sectionId)) return;
+  rememberCustomLineState();
+  const next = { ...(line.section_speeds_mps || {}) };
+  delete next[sectionId];
+  line.section_speeds_mps = next;
+  markCustomLineDirty();
+  render();
+}
+
+function customLineRequestPoints(line) {
+  return (line?.points || []).map((point) => ({
+    x_m: Number(point.x_m),
+    y_m: Number(point.y_m),
+  }));
+}
+
+function customLineRequestSectionSpeeds(detail, line) {
+  const knownSectionIds = new Set(customLineSpeedSections(detail, line).map((section) => section.id));
+  return Object.fromEntries(
+    Object.entries(normalizeCustomLineSectionSpeeds(line?.section_speeds_mps))
+      .filter(([sectionId]) => knownSectionIds.has(sectionId)),
+  );
+}
+
+async function applyCustomLineResponse(payload, selectedId, options = {}) {
+  let detail = payload?.detail?.map ? payload.detail : payload?.map ? payload : null;
+  if (!detail && state.selectedMapPath) detail = await api(apiPath("/api/maps/detail", { path: state.selectedMapPath }));
+  if (!detail) return null;
+  state.selectedMapDetail = detail;
+  state.selectedMapPath = detail.map.path;
+  const mapIndex = state.maps.findIndex((item) => item.path === detail.map.path);
+  if (mapIndex >= 0) state.maps[mapIndex] = detail.map;
+  ensureCustomLineEditor(detail, { force: true, selectedId, keepEnabled: Boolean(options.keepEnabled) });
+  return detail;
+}
+
+async function createCustomLine() {
+  const detail = state.selectedMapDetail;
+  if (!detail?.map?.path) return;
+  const name = String($("custom-line-create-name")?.value || "").trim();
+  const sourceType = String($("custom-line-create-source")?.value || "centerline");
+  const speed = Number($("custom-line-create-speed")?.value ?? DEFAULT_CUSTOM_LINE_SPEED_MPS);
+  if (!name) {
+    toast("Enter a name for the custom line.", "error");
+    $("custom-line-create-name")?.focus();
+    return;
+  }
+  if (!["centerline", "raceline"].includes(sourceType) || customLineSourcePoints(detail, sourceType).length < 2) {
+    toast(`${sourceType === "raceline" ? "Raceline" : "Centerline"} is not available.`, "error");
+    return;
+  }
+  if (!Number.isFinite(speed) || speed < MIN_CUSTOM_LINE_TARGET_SPEED_MPS) {
+    toast(`Whole line target speed must be at least ${MIN_CUSTOM_LINE_TARGET_SPEED_MPS} m/s.`, "error");
+    return;
+  }
+  if (!beginAction("custom-line:create", "Creating custom line")) return;
+  try {
+    const existingIds = new Set(customLinesFromDetail(detail).map((line) => line.id));
+    const result = await api("/api/maps/custom-lines/create", {
+      method: "POST",
+      body: JSON.stringify({
+        map_dir: detail.map.path,
+        name,
+        source_type: sourceType,
+        base: sourceType,
+        default_speed_mps: speed,
+      }),
+    });
+    const returnedLines = result?.map ? customLinesFromDetail(result) : [];
+    const createdId = String(
+      result?.custom_line?.id
+        || result?.created?.id
+        || result?.id
+        || returnedLines.find((line) => !existingIds.has(line.id))?.id
+        || "",
+    );
+    const saved = await applyCustomLineResponse(result, createdId);
+    if (saved && !createdId) {
+      const match = customLinesFromDetail(saved).find((line) => line.name === name);
+      if (match) ensureCustomLineEditor(saved, { force: true, selectedId: match.id });
+    }
+    state.mapLayers.custom_line = true;
+    toast(`Created custom line “${name}”`);
+  } catch (error) {
+    toast(`Custom line create failed: ${error.message}`, "error");
+  } finally {
+    endAction("custom-line:create");
+  }
+}
+
+async function saveCustomLineChanges(options = {}) {
+  const detail = state.selectedMapDetail;
+  const editor = state.customLineEditor;
+  const line = editor.workingLine;
+  if (!detail?.map?.path || !line) return false;
+  const nameInput = $("custom-line-name");
+  if (nameInput) line.name = String(nameInput.value || "").trim();
+  const issue = customLineEditorIssue(detail, line);
+  if (issue) {
+    toast(issue, "error");
+    return false;
+  }
+  const actionKey = `custom-line:update:${line.id}`;
+  if (!beginAction(actionKey, "Saving custom line")) return false;
+  try {
+    const result = await api("/api/maps/custom-lines/update", {
+      method: "POST",
+      body: JSON.stringify({
+        map_dir: detail.map.path,
+        id: line.id,
+        name: line.name,
+        closed_loop: Boolean(line.closed_loop),
+        points: customLineRequestPoints(line),
+        default_speed_mps: customLineDefaultSpeed(line),
+        section_speeds_mps: customLineRequestSectionSpeeds(detail, line),
+      }),
+    });
+    await applyCustomLineResponse(result, line.id, { keepEnabled: Boolean(options.keepEnabled) });
+    toast(options.successMessage || "Custom line saved");
+    return true;
+  } catch (error) {
+    toast(`Custom line save failed: ${error.message}`, "error");
+    return false;
+  } finally {
+    endAction(actionKey, { renderAfter: options.renderAfter !== false });
+  }
+}
+
+function renameCustomLine() {
+  return saveCustomLineChanges({ successMessage: "Custom line renamed" });
+}
+
+async function activateCustomLine(id) {
+  const detail = state.selectedMapDetail;
+  const editor = state.customLineEditor;
+  if (!detail?.map?.path || !id) return;
+  if (editor.dirty) {
+    if (!window.confirm("Save the current custom line changes before activating another line?")) return;
+    const saved = await saveCustomLineChanges({ keepEnabled: false, renderAfter: false });
+    if (!saved) {
+      render();
+      return;
+    }
+  }
+  const actionKey = `custom-line:activate:${id}`;
+  if (!beginAction(actionKey, "Activating custom line")) return;
+  try {
+    const result = await api("/api/maps/custom-lines/activate", {
+      method: "POST",
+      body: JSON.stringify({ map_dir: detail.map.path, id }),
+    });
+    await applyCustomLineResponse(result, id);
+    state.simulation.source = "custom";
+    resetSimulationStateFromPath(state.selectedMapDetail);
+    toast("Custom line selected for the next drive");
+  } catch (error) {
+    toast(`Custom line activation failed: ${error.message}`, "error");
+  } finally {
+    endAction(actionKey);
+  }
+}
+
+async function deleteCustomLine(id) {
+  const detail = state.selectedMapDetail;
+  const line = customLinesFromDetail(detail).find((item) => item.id === id);
+  if (!detail?.map?.path || !line) return;
+  if (!confirmAction({
+    title: "Delete this custom line?",
+    target: line.name,
+    detail: `${line.points.length} points will be removed. Other named custom lines are kept.`,
+    destructive: true,
+  })) return;
+  const actionKey = `custom-line:delete:${id}`;
+  if (!beginAction(actionKey, "Deleting custom line")) return;
+  try {
+    const result = await api("/api/maps/custom-lines/delete", {
+      method: "POST",
+      body: JSON.stringify({ map_dir: detail.map.path, id }),
+    });
+    await applyCustomLineResponse(result, "");
+    toast(`Deleted custom line “${line.name}”`);
+  } catch (error) {
+    toast(`Custom line delete failed: ${error.message}`, "error");
+  } finally {
+    endAction(actionKey);
+  }
+}
+
+function updateCustomLineChrome() {
+  const editor = state.customLineEditor;
+  const line = editor.workingLine;
+  const detail = state.selectedMapDetail;
+  if (!detail || editor.mapPath !== detail.map?.path || !line) return;
+  const issue = customLineEditorIssue(detail, line);
+  const repairWarning = line.valid === false && line.repairable
+    ? String(line.issue || "This line must be rebuilt for the current map sections")
+    : "";
+  const activeIssue = String(detail?.custom_line_catalog?.active_issue || "");
+  const active = line.id === activeCustomLineId(detail);
+  const status = $("custom-line-status");
+  if (status) {
+    status.textContent = issue || repairWarning || activeIssue || (editor.dirty ? "Unsaved" : active ? "Drive default" : "Ready");
+    status.className = issue || repairWarning || activeIssue ? "warn" : editor.dirty ? "dirty" : active ? "ok" : "";
+  }
+  const save = $("custom-line-save");
+  if (save) save.disabled = Boolean(issue);
+  const undo = $("custom-line-undo");
+  if (undo) undo.disabled = !editor.undoStack.length;
+  const redo = $("custom-line-redo");
+  if (redo) redo.disabled = !editor.redoStack.length;
+  const smooth = $("custom-line-smooth");
+  if (smooth) smooth.disabled = !canSmoothCustomLineRange();
+  const del = $("custom-line-delete-point");
+  if (del) del.disabled = !(editor.enabled && Number.isInteger(editor.selectedPointIndex));
+  const counts = $("custom-line-counts");
+  if (counts) counts.textContent = customLineCountsLabel(line);
+  const defaultSpeed = $("custom-line-default-speed");
+  if (defaultSpeed && document.activeElement !== defaultSpeed) defaultSpeed.value = String(customLineDefaultSpeed(line));
+  const speedSections = customLineSpeedSections(detail, line);
+  const duplicateSectionIds = new Set(duplicateCustomLineSectionIds(speedSections));
+  const sectionSpeeds = new Map(speedSections.map((section) => [section.id, section]));
+  for (const input of document.querySelectorAll("[data-custom-line-section-speed]")) {
+    const sectionId = String(input.dataset.customLineSectionSpeed || "");
+    const section = sectionSpeeds.get(sectionId);
+    if (!section) continue;
+    const configured = Object.prototype.hasOwnProperty.call(line.section_speeds_mps || {}, sectionId);
+    if (document.activeElement !== input) input.value = String(section.speed_mps);
+    const row = input.closest(".custom-line-section-speed-row");
+    row?.classList.toggle("configured", configured);
+    row?.classList.toggle("inherited", !configured);
+    const reset = row?.querySelector("[data-custom-line-section-reset]");
+    if (reset) {
+      reset.disabled = !configured || duplicateSectionIds.has(sectionId);
+      reset.textContent = configured ? "Use whole line" : "Whole line";
+    }
+  }
+}
+
 function cloneSectionGate(gate) {
   return {
     id: gate.id || "gate_001",
@@ -8530,6 +9426,8 @@ function toggleSectionEditor() {
     state.mapEditor.enabled = false;
     state.mapEditor.dragging = null;
     state.mapEditor.selected = null;
+    state.customLineEditor.enabled = false;
+    state.customLineEditor.draggingIndex = null;
     state.mapLayers.centerline = true;
     state.mapLayers.section_gates = true;
     state.mapLayers.section_labels = true;
@@ -8772,6 +9670,8 @@ function toggleHdMapEditor() {
   if (state.mapEditor.enabled) {
     state.sectionEditor.enabled = false;
     state.sectionEditor.selectedGateId = "";
+    state.customLineEditor.enabled = false;
+    state.customLineEditor.draggingIndex = null;
   }
   state.mapEditor.selected = null;
   state.mapEditor.dragging = null;
@@ -9364,7 +10264,178 @@ function insertEditorPoint(lane, field, world, detail, pixel) {
   return insertIndex;
 }
 
+function nearestCustomLinePointIndex(points, target) {
+  let bestIndex = 0;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (let index = 0; index < (points || []).length; index += 1) {
+    const point = points[index];
+    const distance = pointDistance([point.x_m, point.y_m], target);
+    if (distance < bestDistance) {
+      bestIndex = index;
+      bestDistance = distance;
+    }
+  }
+  return bestIndex;
+}
+
+function nearestCustomLineCanvasPoint(detail, pixel, hitRadius) {
+  const line = state.customLineEditor.workingLine;
+  const canvas = $("map-preview-canvas");
+  if (!line || !canvas) return null;
+  const toPixel = mapPointProjector(detail, canvas.width, canvas.height);
+  let best = null;
+  for (let index = 0; index < line.points.length; index += 1) {
+    const point = line.points[index];
+    const candidate = toPixel([point.x_m, point.y_m]);
+    const distance = pointDistance(candidate, pixel);
+    if (distance <= hitRadius && (!best || distance < best.distance)) best = { index, distance };
+  }
+  return best;
+}
+
+function segmentProjectionRatio(point, start, end) {
+  const dx = Number(end[0]) - Number(start[0]);
+  const dy = Number(end[1]) - Number(start[1]);
+  const lengthSq = dx * dx + dy * dy;
+  if (lengthSq <= 1.0e-9) return 0;
+  return Math.max(0, Math.min(1, ((point[0] - start[0]) * dx + (point[1] - start[1]) * dy) / lengthSq));
+}
+
+function nearestCustomLineSegment(detail, pixel) {
+  const line = state.customLineEditor.workingLine;
+  const canvas = $("map-preview-canvas");
+  if (!line || !canvas || line.points.length < 2) return null;
+  const toPixel = mapPointProjector(detail, canvas.width, canvas.height);
+  const segmentCount = line.closed_loop && line.points.length >= 3 ? line.points.length : line.points.length - 1;
+  let best = null;
+  for (let index = 0; index < segmentCount; index += 1) {
+    const start = toPixel([line.points[index].x_m, line.points[index].y_m]);
+    const nextIndex = (index + 1) % line.points.length;
+    const end = toPixel([line.points[nextIndex].x_m, line.points[nextIndex].y_m]);
+    const distance = pointSegmentDistance(pixel, start, end);
+    if (!best || distance < best.distance) {
+      best = { index, nextIndex, distance, ratio: segmentProjectionRatio(pixel, start, end) };
+    }
+  }
+  return best;
+}
+
+function insertCustomLinePoint(world, detail, pixel) {
+  const line = state.customLineEditor.workingLine;
+  if (!line) return null;
+  if (line.points.length < 2) {
+    line.points.push({ x_m: world[0], y_m: world[1], speed_mps: DEFAULT_CUSTOM_LINE_SPEED_MPS });
+    return line.points.length - 1;
+  }
+  const segment = nearestCustomLineSegment(detail, pixel);
+  const start = segment ? line.points[segment.index] : line.points[line.points.length - 1];
+  const end = segment ? line.points[segment.nextIndex] : start;
+  const ratio = segment?.ratio ?? 1;
+  const speed = Number(start.speed_mps) + (Number(end.speed_mps) - Number(start.speed_mps)) * ratio;
+  const insertIndex = segment
+    ? (line.closed_loop && segment.index === line.points.length - 1 ? line.points.length : segment.index + 1)
+    : line.points.length;
+  line.points.splice(insertIndex, 0, { x_m: world[0], y_m: world[1], speed_mps: speed });
+  return insertIndex;
+}
+
+function handleCustomLinePointerDown(event) {
+  const detail = state.selectedMapDetail;
+  const editor = state.customLineEditor;
+  const line = editor.workingLine;
+  if (!detail || !editor.enabled || editor.mapPath !== detail.map?.path || !line) return;
+  if (!mapEditorRasterReady(detail) || (event.button != null && event.button !== 0)) return;
+  event.preventDefault();
+  const { canvas, point, hitRadius } = canvasEventInfo(event);
+  const nearest = nearestCustomLineCanvasPoint(detail, point, hitRadius);
+  if (nearest) {
+    editor.dragSnapshot = captureCustomLineSnapshot();
+    editor.selectedPointIndex = nearest.index;
+    editor.draggingIndex = nearest.index;
+  } else {
+    const world = mapPixelToWorld(detail, canvas.width, canvas.height, point);
+    if (!world) return;
+    rememberCustomLineState();
+    const index = insertCustomLinePoint(world, detail, point);
+    editor.selectedPointIndex = index;
+    editor.draggingIndex = index;
+    editor.dragSnapshot = null;
+    markCustomLineDirty();
+  }
+  if (canvas.setPointerCapture && event.pointerId != null) canvas.setPointerCapture(event.pointerId);
+  updateCustomLineChrome();
+  drawMapPreview();
+}
+
+function handleCustomLinePointerMove(event) {
+  const detail = state.selectedMapDetail;
+  const editor = state.customLineEditor;
+  const line = editor.workingLine;
+  if (!detail || !editor.enabled || !Number.isInteger(editor.draggingIndex) || !line) return;
+  event.preventDefault();
+  const { canvas, point } = canvasEventInfo(event);
+  const world = mapPixelToWorld(detail, canvas.width, canvas.height, point);
+  if (!world || !line.points[editor.draggingIndex]) return;
+  if (editor.dragSnapshot) {
+    editor.undoStack.push(editor.dragSnapshot);
+    if (editor.undoStack.length > 200) editor.undoStack.shift();
+    editor.redoStack = [];
+    editor.dragSnapshot = null;
+  }
+  line.points[editor.draggingIndex].x_m = world[0];
+  line.points[editor.draggingIndex].y_m = world[1];
+  markCustomLineDirty();
+  drawMapPreview();
+}
+
+function handleCustomLinePointerUp(event) {
+  const editor = state.customLineEditor;
+  if (!Number.isInteger(editor.draggingIndex)) return;
+  editor.draggingIndex = null;
+  editor.dragSnapshot = null;
+  const canvas = event.currentTarget || $("map-preview-canvas");
+  if (canvas?.releasePointerCapture && event.pointerId != null) {
+    try {
+      canvas.releasePointerCapture(event.pointerId);
+    } catch {
+      // Pointer capture may already be released by the browser.
+    }
+  }
+  updateCustomLineChrome();
+  drawMapPreview();
+}
+
+function deleteCustomLinePoint(index) {
+  const editor = state.customLineEditor;
+  const line = editor.workingLine;
+  if (!line || !Number.isInteger(index) || !line.points[index]) return false;
+  rememberCustomLineState();
+  line.points.splice(index, 1);
+  editor.selectedPointIndex = null;
+  editor.draggingIndex = null;
+  editor.dragSnapshot = null;
+  markCustomLineDirty();
+  return true;
+}
+
+function deleteSelectedCustomLinePoint() {
+  if (!state.customLineEditor.enabled) return;
+  if (deleteCustomLinePoint(state.customLineEditor.selectedPointIndex)) render();
+}
+
+function deleteNearestCustomLinePoint(event) {
+  const detail = state.selectedMapDetail;
+  if (!detail || !state.customLineEditor.enabled) return;
+  const { point, hitRadius } = canvasEventInfo(event);
+  const nearest = nearestCustomLineCanvasPoint(detail, point, hitRadius * 1.3);
+  if (nearest && deleteCustomLinePoint(nearest.index)) render();
+}
+
 function handleMapEditorPointerDown(event) {
+  if (state.customLineEditor.enabled) {
+    handleCustomLinePointerDown(event);
+    return;
+  }
   if (state.sectionEditor.enabled && handleSectionEditorPointerDown(event)) return;
   const detail = state.selectedMapDetail;
   if (!detail || !state.mapEditor.enabled || state.mapEditor.mapPath !== detail.map?.path) return;
@@ -9398,6 +10469,10 @@ function handleMapEditorPointerDown(event) {
 }
 
 function handleMapEditorPointerMove(event) {
+  if (state.customLineEditor.enabled) {
+    handleCustomLinePointerMove(event);
+    return;
+  }
   const detail = state.selectedMapDetail;
   const drag = state.mapEditor.dragging;
   if (!detail || !drag || !state.mapEditor.enabled || state.mapEditor.mapPath !== detail.map?.path) return;
@@ -9420,6 +10495,10 @@ function handleMapEditorPointerMove(event) {
 }
 
 function handleMapEditorPointerUp(event) {
+  if (state.customLineEditor.enabled) {
+    handleCustomLinePointerUp(event);
+    return;
+  }
   if (!state.mapEditor.dragging) return;
   state.mapEditor.dragging = null;
   state.mapEditor.dragSnapshot = null;
@@ -9529,6 +10608,11 @@ function deleteNearestEditorPoint(event) {
 }
 
 function handleMapEditorDoubleClick(event) {
+  if (state.customLineEditor.enabled) {
+    event.preventDefault();
+    deleteNearestCustomLinePoint(event);
+    return;
+  }
   if (state.sectionEditor.enabled) {
     event.preventDefault();
     deleteSelectedSectionGate();
@@ -9540,6 +10624,11 @@ function handleMapEditorDoubleClick(event) {
 }
 
 function handleMapEditorContextMenu(event) {
+  if (state.customLineEditor.enabled) {
+    event.preventDefault();
+    deleteNearestCustomLinePoint(event);
+    return;
+  }
   if (state.sectionEditor.enabled) {
     event.preventDefault();
     deleteSelectedSectionGate();
@@ -9692,6 +10781,7 @@ async function refreshSelectedMapData(options = {}) {
     if (options.render === false) {
       updateTaskChrome();
       updateMapEditorChrome();
+      updateCustomLineChrome();
       drawMapPreview();
       scheduleVisiblePreflights({ force: true });
     } else {
@@ -9812,6 +10902,18 @@ function drawMapLayers(ctx, detail, width, height) {
   if (state.mapLayers.raceline) {
     drawPolyline(ctx, (detail.raceline_csv?.points || []).map(toPixel), "#ff6d6d", 3, false);
   }
+  if (state.mapLayers.custom_line) {
+    const customLines = customLinesForDrawing(detail);
+    const selectedId = state.customLineEditor.mapPath === detail.map?.path ? state.customLineEditor.selectedId : "";
+    const activeId = activeCustomLineId(detail);
+    for (const line of customLines) {
+      const selected = line.id === selectedId;
+      const active = line.id === activeId || Boolean(line.active);
+      if (selected || active) drawCustomSpeedPolyline(ctx, line, toPixel, selected ? 4.5 : 3);
+      else drawPolyline(ctx, customLineCoordinates(line).map(toPixel), "rgba(87, 199, 194, 0.34)", 1.5, line.closed_loop);
+    }
+    drawCustomLinePointHandles(ctx, detail, toPixel);
+  }
   if (state.mapLayers.section_gates) {
     const gates = sectionGatesForDetail(detail) || detail.hd_map?.section_gates || [];
     for (const gate of gates) {
@@ -9825,6 +10927,64 @@ function drawMapLayers(ctx, detail, width, height) {
       }
     }
   }
+}
+
+function customLineSpeedColor(speed, maxSpeed) {
+  const ratio = Math.max(0, Math.min(1, Number(speed) / Math.max(0.01, Number(maxSpeed) || 1)));
+  const hue = 212 - ratio * 207;
+  return `hsl(${hue.toFixed(0)} 88% 62%)`;
+}
+
+function drawCustomSpeedPolyline(ctx, line, toPixel, width = 4) {
+  const points = line?.points || [];
+  if (points.length < 2) return;
+  const maxSpeed = Math.max(DEFAULT_RACELINE_MAX_SPEED_MPS, ...points.map((point) => Number(point.speed_mps) || 0));
+  const segmentCount = line.closed_loop && points.length >= 3 ? points.length : points.length - 1;
+  ctx.save();
+  ctx.lineWidth = width;
+  ctx.lineJoin = "round";
+  ctx.lineCap = "round";
+  for (let index = 0; index < segmentCount; index += 1) {
+    const nextIndex = (index + 1) % points.length;
+    const start = toPixel([points[index].x_m, points[index].y_m]);
+    const end = toPixel([points[nextIndex].x_m, points[nextIndex].y_m]);
+    if (![...start, ...end].every(Number.isFinite)) continue;
+    ctx.strokeStyle = customLineSpeedColor((Number(points[index].speed_mps) + Number(points[nextIndex].speed_mps)) * 0.5, maxSpeed);
+    ctx.beginPath();
+    ctx.moveTo(start[0], start[1]);
+    ctx.lineTo(end[0], end[1]);
+    ctx.stroke();
+  }
+  const first = toPixel([points[0].x_m, points[0].y_m]);
+  if (first.every(Number.isFinite)) {
+    ctx.fillStyle = customLineSpeedColor(points[0].speed_mps, maxSpeed);
+    ctx.beginPath();
+    ctx.arc(first[0], first[1], Math.max(4, width + 1), 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+function drawCustomLinePointHandles(ctx, detail, toPixel) {
+  const editor = state.customLineEditor;
+  const line = editor.workingLine;
+  if (!editor.enabled || editor.mapPath !== detail?.map?.path || !line) return;
+  const maxSpeed = Math.max(DEFAULT_RACELINE_MAX_SPEED_MPS, ...line.points.map((point) => Number(point.speed_mps) || 0));
+  ctx.save();
+  for (let index = 0; index < line.points.length; index += 1) {
+    const point = line.points[index];
+    const [x, y] = toPixel([point.x_m, point.y_m]);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    const selected = editor.selectedPointIndex === index;
+    ctx.fillStyle = customLineSpeedColor(point.speed_mps, maxSpeed);
+    ctx.strokeStyle = selected ? "#ffffff" : "rgba(8, 10, 12, 0.9)";
+    ctx.lineWidth = selected ? 3 : 2;
+    ctx.beginPath();
+    ctx.arc(x, y, selected ? 6.5 : 4.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+  }
+  ctx.restore();
 }
 
 function drawEditorPointHandles(ctx, detail, toPixel) {
@@ -9926,6 +11086,7 @@ function collectMapPoints(detail) {
   }
   for (const gate of detail.hd_map?.section_gates || []) points.push(...(gate.line || []));
   points.push(...(detail.centerline_csv?.points || []), ...(detail.raceline_csv?.points || []));
+  for (const line of customLinesForDrawing(detail)) points.push(...customLineCoordinates(line));
   points.push(...(detail.odometry?.points || []));
   return points.filter((point) => Array.isArray(point) && point.length >= 2);
 }
@@ -9955,6 +11116,15 @@ function primaryLane(detail) {
 
 function simulationPathPoints(detail = state.selectedMapDetail) {
   if (!detail) return [];
+  if (state.simulation.source === "custom") {
+    const line = selectedCustomLine(detail);
+    if (!line || line.valid === false) return [];
+    const points = line.points
+      .map((point) => ({ x: Number(point.x_m), y: Number(point.y_m), speed_mps: Number(point.speed_mps) }))
+      .filter((point) => [point.x, point.y, point.speed_mps].every(Number.isFinite));
+    points.closedLoop = Boolean(line.closed_loop);
+    return points;
+  }
   if (state.simulation.source === "raceline") {
     const raceline = normalizePoints(detail.raceline_csv?.points || []);
     if (raceline.length >= 2) return raceline;
@@ -9966,6 +11136,7 @@ function simulationPathPoints(detail = state.selectedMapDetail) {
 
 function simulationPathClosed(points) {
   if (!points || points.length < 3) return false;
+  if (typeof points.closedLoop === "boolean") return points.closedLoop;
   const first = points[0];
   const last = points[points.length - 1];
   return Math.hypot(first.x - last.x, first.y - last.y) <= 0.35;
@@ -9995,6 +11166,9 @@ function resetSimulationStateFromPath(detail = state.selectedMapDetail) {
   sim.nearestIndex = 0;
   sim.targetIndex = 0;
   sim.targetPoint = null;
+  sim.profileTargetSpeedMps = state.simulation.source === "custom" && Number.isFinite(Number(path[0]?.speed_mps))
+    ? Math.max(0, Number(path[0].speed_mps))
+    : sim.settings.targetSpeedMps;
   sim.steeringRad = 0;
   sim.throttle = 0;
   sim.brake = 0;
@@ -10083,7 +11257,7 @@ function updateSimulationSetting(key, input) {
 }
 
 function setSimulationSource(source) {
-  state.simulation.source = source === "centerline" ? "centerline" : "raceline";
+  state.simulation.source = ["centerline", "raceline", "custom"].includes(source) ? source : "raceline";
   resetSimulation();
 }
 
@@ -10103,7 +11277,12 @@ function stepSimulation(dt) {
   });
   if (!tracking) return;
 
-  const speedError = settings.targetSpeedMps - sim.speed;
+  const profileSpeed = Number(path[tracking.nearestIndex]?.speed_mps);
+  const targetSpeedMps = state.simulation.source === "custom" && Number.isFinite(profileSpeed)
+    ? Math.max(0, profileSpeed)
+    : settings.targetSpeedMps;
+  sim.profileTargetSpeedMps = targetSpeedMps;
+  const speedError = targetSpeedMps - sim.speed;
   const accelCommand = speedError >= 0
     ? Math.min(settings.maxAccelMps2, speedError * 1.8)
     : Math.max(-settings.maxDecelMps2, speedError * 2.4);
@@ -10241,6 +11420,8 @@ function drawSimulationPreview() {
   }
   drawPolyline(ctx, normalizePoints(detail.centerline_csv?.points || []).map((point) => toPixel([point.x, point.y])), "rgba(90,168,255,0.72)", 2, false);
   drawPolyline(ctx, normalizePoints(detail.raceline_csv?.points || []).map((point) => toPixel([point.x, point.y])), "rgba(255,109,109,0.9)", 3, false);
+  const customLine = selectedCustomLine(detail);
+  if (customLine) drawCustomSpeedPolyline(ctx, customLine, toPixel, state.simulation.source === "custom" ? 4.5 : 2.5);
 
   const sim = state.simulation;
   drawPolyline(ctx, sim.trajectory.map((point) => toPixel([point.x, point.y])), "#ffffff", 2.5, false);
@@ -10261,7 +11442,7 @@ function drawSimulationPreview() {
     ctx.save();
     ctx.fillStyle = "#f2c94c";
     ctx.font = "14px ui-sans-serif, system-ui";
-    ctx.fillText("Generate or edit a centerline/raceline before simulation.", 18, 28);
+    ctx.fillText("Generate or select a Centerline, Raceline, or Custom line before simulation.", 18, 28);
     ctx.restore();
   }
 }
@@ -10719,6 +11900,23 @@ window.setSimulationSource = setSimulationSource;
 window.openMapWorkspace = openMapWorkspace;
 window.refreshSelectedMap = refreshSelectedMap;
 window.toggleMapLayer = toggleMapLayer;
+window.createCustomLine = createCustomLine;
+window.selectCustomLine = selectCustomLine;
+window.toggleCustomLineEditor = toggleCustomLineEditor;
+window.saveCustomLineChanges = saveCustomLineChanges;
+window.renameCustomLine = renameCustomLine;
+window.activateCustomLine = activateCustomLine;
+window.deleteCustomLine = deleteCustomLine;
+window.undoCustomLineEdit = undoCustomLineEdit;
+window.redoCustomLineEdit = redoCustomLineEdit;
+window.smoothCustomLineRange = smoothCustomLineRange;
+window.deleteSelectedCustomLinePoint = deleteSelectedCustomLinePoint;
+window.toggleCustomLineClosedLoop = toggleCustomLineClosedLoop;
+window.updateCustomLineAssist = updateCustomLineAssist;
+window.setCustomLineDefaultSpeed = setCustomLineDefaultSpeed;
+window.setCustomLineSectionSpeed = setCustomLineSectionSpeed;
+window.resetCustomLineSectionSpeed = resetCustomLineSectionSpeed;
+window.markCustomLineNameDirty = markCustomLineNameDirty;
 window.toggleHdMapEditor = toggleHdMapEditor;
 window.setMapEditorField = setMapEditorField;
 window.undoMapEditor = undoMapEditor;
@@ -10831,8 +12029,23 @@ setInterval(() => {
 }, 2000);
 
 window.addEventListener("keydown", (event) => {
-  if (!state.mapEditor.enabled || state.tab !== "maps" || isEditingField()) return;
+  if (state.tab !== "maps" || isEditingField()) return;
   const key = String(event.key || "").toLowerCase();
+  if (state.customLineEditor.enabled) {
+    if ((event.metaKey || event.ctrlKey) && key === "z") {
+      event.preventDefault();
+      if (event.shiftKey) redoCustomLineEdit();
+      else undoCustomLineEdit();
+    } else if ((event.metaKey || event.ctrlKey) && key === "y") {
+      event.preventDefault();
+      redoCustomLineEdit();
+    } else if (["backspace", "delete"].includes(key) && Number.isInteger(state.customLineEditor.selectedPointIndex)) {
+      event.preventDefault();
+      deleteSelectedCustomLinePoint();
+    }
+    return;
+  }
+  if (!state.mapEditor.enabled) return;
   if ((event.metaKey || event.ctrlKey) && key === "z") {
     event.preventDefault();
     if (event.shiftKey) redoMapEditor();

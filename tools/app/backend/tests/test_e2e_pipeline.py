@@ -109,6 +109,7 @@ class E2EPipelineTests(unittest.TestCase):
         self.assertEqual(spec.kind, "e2e-preprocess")
         self.assertIn(f"data.bag_path={self.bag.resolve()}", spec.command)
         self.assertIn("data.image_topic=/camera/image", spec.command)
+        self.assertIn("data.imu_topic=/realsense/imu", spec.command)
         self.assertTrue(spec.artifacts[0]["path"].endswith("datasets/dataset-a"))
 
         with self.assertRaises(ValueError):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 import os
 import re
@@ -72,6 +73,7 @@ def test_presets_are_listed() -> None:
         "vehicle",
         "teleop",
         "drive",
+        "e2e",
         "runtime",
         "localization",
         "localize-live",
@@ -209,11 +211,12 @@ def test_jpbb_vehicle_profile_resolves_without_changing_existing_backends() -> N
     assert "jetpilot_bridge_interface_node.param.yaml" in output
 
 
-def test_generic_vehicle_preset_requires_an_interface_noninteractively() -> None:
-    result = run_launcher("drive", "--dry-run", check=False)
+def test_generic_vehicle_presets_require_an_interface_noninteractively() -> None:
+    for preset in ("drive", "e2e"):
+        result = run_launcher(preset, "--dry-run", check=False)
 
-    assert result.returncode != 0
-    assert "requires --vehicle PROFILE" in result.stderr
+        assert result.returncode != 0
+        assert "requires --vehicle PROFILE" in result.stderr
 
 
 def test_vehicle_presets_select_matching_driver_configuration() -> None:
@@ -246,6 +249,25 @@ def test_drive_presets_enable_live_sensor_teleop_and_vehicle_on_jetson() -> None
     assert "enable_vehicle:=true" in output
     assert "vehicle_interface_pkg:=jetpilot_vesc_interface" in output
     assert "enable_localization:=false" in output
+
+
+def test_e2e_preset_enables_direct_control_stack_without_rule_based_control() -> None:
+    output = run_launcher("e2e", "--vehicle", "vesc", "--dry-run").stdout
+
+    for argument in (
+        "enable_sensor_kit:=true",
+        "enable_tool:=true",
+        "enable_joy:=true",
+        "enable_teleop:=true",
+        "enable_operation:=true",
+        "enable_e2e_inference:=true",
+        "enable_vehicle:=true",
+    ):
+        assert argument in output
+    assert "enable_planning:=false" in output
+    assert "enable_control:=false" in output
+    assert "enable_localization:=false" in output
+    assert "E2E inference: true" in output
 
 
 def test_x86_disables_jetson_stats_by_default() -> None:
@@ -1025,6 +1047,36 @@ def test_custom_control_enables_planning_and_pure_pursuit() -> None:
     assert "enable_operation:=true" in output
 
 
+def test_custom_e2e_enables_inference_and_operation_without_sensor_or_vehicle() -> None:
+    output = run_launcher(
+        "custom",
+        "--components",
+        "e2e",
+        "--dry-run",
+    ).stdout
+
+    assert "enable_e2e_inference:=true" in output
+    assert "enable_operation:=true" in output
+    assert "enable_sensor_kit:=false" in output
+    assert "enable_vehicle:=false" in output
+    assert "enable_planning:=false" in output
+    assert "enable_control:=false" in output
+
+
+def test_rule_based_control_and_e2e_are_mutually_exclusive() -> None:
+    result = run_launcher(
+        "custom",
+        "--components",
+        "control,e2e",
+        "--dry-run",
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "cannot be enabled together" in result.stderr
+    assert "/auto/control_cmd" in result.stderr
+
+
 def test_custom_planning_can_run_without_controller() -> None:
     output = run_launcher(
         "custom",
@@ -1062,6 +1114,536 @@ def test_raceline_component_requires_csv() -> None:
 
     assert result.returncode != 0
     assert "requires --raceline" in result.stderr
+
+
+def test_custom_line_option_enables_typed_loader_and_selector(tmp_path: Path) -> None:
+    custom_line = tmp_path / "custom_lines" / "safe-main" / "trajectory.csv"
+    custom_line.parent.mkdir(parents=True)
+    custom_line.write_text("0;0;0;0;0;1;0\n1;1;0;0;0;0.5;-0.2\n")
+    trajectory_hash = hashlib.sha256(custom_line.read_bytes()).hexdigest()
+    (custom_line.parent / "custom_line.json").write_text(
+        json.dumps(
+            {
+                "format": "jetpilot_custom_line_v1",
+                "id": "safe-main",
+                "name": "Safe Main",
+                "closed_loop": True,
+                "revision": 2,
+                "source_hash": "1" * 64,
+                "trajectory_csv": "trajectory.csv",
+                "trajectory_sha256": trajectory_hash,
+            }
+        )
+    )
+
+    output = run_launcher(
+        "custom",
+        "--components",
+        "control",
+        "--custom-line",
+        str(custom_line),
+        "--custom-line-open",
+        "--dry-run",
+    ).stdout
+
+    assert "enable_custom_trajectory_publisher:=true" in output
+    assert "route_lane_selector.custom.param.yaml" in output
+    assert f"custom_root:={custom_line.parent}" in output
+    assert "custom_csv:=trajectory.csv" in output
+    assert "custom_line_id:=safe-main" in output
+    assert "custom_line_name:=Safe\\ Main" in output
+    assert f"custom_source_hash:={trajectory_hash}" in output
+    assert "custom_closed:=false" in output
+
+
+def test_canonical_custom_line_uses_validated_metadata(tmp_path: Path) -> None:
+    custom_line = tmp_path / "course_a_custom_line.csv"
+    custom_line.write_text("0;0;0;0;0;1;0\n1;1;0;0;0;0.5;-0.2\n")
+    trajectory_hash = hashlib.sha256(custom_line.read_bytes()).hexdigest()
+    custom_line.with_suffix(".meta.json").write_text(
+        json.dumps(
+            {
+                "format": "jetpilot_custom_line_v1",
+                "id": "manual-attack",
+                "name": "Manual Attack",
+                "closed_loop": False,
+                "revision": 4,
+                "source_hash": "2" * 64,
+                # Canonical bundles are relocatable from the Console host to Jetson.
+                "trajectory_csv": "/Users/operator/maps/course_a/course_a_custom_line.csv",
+                "trajectory_sha256": trajectory_hash,
+            }
+        )
+    )
+
+    output = run_launcher(
+        "custom", "--components", "control", "--custom-line", str(custom_line), "--dry-run"
+    ).stdout
+
+    assert "custom_line_id:=manual-attack" in output
+    assert "custom_line_name:=Manual\\ Attack" in output
+    assert "custom_closed:=false" in output
+
+    overridden = run_launcher(
+        "custom",
+        "--components",
+        "control",
+        "--custom-line",
+        str(custom_line),
+        "--custom-line-id",
+        "alias",
+        "--custom-line-name",
+        "Alias Line",
+        "--custom-line-closed",
+        "--dry-run",
+    ).stdout
+    assert "custom_line_id:=alias" in overridden
+    assert "custom_line_name:=Alias\\ Line" in overridden
+    assert "custom_closed:=true" in overridden
+
+
+def test_custom_line_rejects_metadata_hash_mismatch(tmp_path: Path) -> None:
+    custom_line = tmp_path / "course_a_custom_line.csv"
+    custom_line.write_text("0;0;0;0;0;1;0\n1;1;0;0;0;1;0\n")
+    custom_line.with_suffix(".meta.json").write_text(
+        json.dumps(
+            {
+                "format": "jetpilot_custom_line_v1",
+                "id": "manual",
+                "name": "Manual",
+                "closed_loop": True,
+                "revision": 1,
+                "source_hash": "3" * 64,
+                "trajectory_csv": str(custom_line),
+                "trajectory_sha256": "0" * 64,
+            }
+        )
+    )
+
+    result = run_launcher(
+        "custom",
+        "--components",
+        "control",
+        "--custom-line",
+        str(custom_line),
+        "--dry-run",
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "metadata rejected" in result.stderr
+
+
+def test_custom_line_bundle_requires_manifest(tmp_path: Path) -> None:
+    custom_line = tmp_path / "custom_lines" / "manual" / "trajectory.csv"
+    custom_line.parent.mkdir(parents=True)
+    custom_line.write_text("0;0;0;0;0;1;0\n1;1;0;0;0;1;0\n")
+
+    result = run_launcher(
+        "custom",
+        "--components",
+        "control",
+        "--custom-line",
+        str(custom_line),
+        "--dry-run",
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "metadata is required" in result.stderr
+
+
+def test_custom_line_and_raceline_are_mutually_exclusive(tmp_path: Path) -> None:
+    trajectory = tmp_path / "trajectory.csv"
+    trajectory.write_text("0;0;0;0;0;1;0\n1;1;0;0;0;1;0\n")
+    result = run_launcher(
+        "custom",
+        "--components",
+        "control",
+        "--raceline",
+        str(trajectory),
+        "--custom-line",
+        str(trajectory),
+        "--dry-run",
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "mutually exclusive" in result.stderr
+
+
+def test_custom_line_component_requires_csv() -> None:
+    result = run_launcher(
+        "custom", "--components", "custom-line", "--dry-run", check=False
+    )
+
+    assert result.returncode != 0
+    assert "requires --custom-line" in result.stderr
+
+
+def test_custom_line_component_uses_active_line_from_selected_map(tmp_path: Path) -> None:
+    map_dir = tmp_path / "course_a"
+    map_dir.mkdir()
+    custom_line = map_dir / "course_a_custom_line.csv"
+    custom_line.write_text("0;0;0;0;0;1;0\n1;1;0;0;0;1;0\n")
+    trajectory_hash = hashlib.sha256(custom_line.read_bytes()).hexdigest()
+    custom_line.with_suffix(".meta.json").write_text(
+        json.dumps(
+            {
+                "format": "jetpilot_custom_line_v1",
+                "id": "safe-main",
+                "name": "Safe Main",
+                "closed_loop": False,
+                "revision": 2,
+                "source_hash": "a" * 64,
+                "trajectory_csv": str(custom_line),
+                "trajectory_sha256": trajectory_hash,
+            }
+        )
+    )
+
+    output = run_launcher(
+        "custom",
+        "--components",
+        "custom-line",
+        "--map",
+        str(map_dir),
+        "--dry-run",
+    ).stdout
+
+    assert f"custom_root:={map_dir}" in output
+    assert "custom_csv:=course_a_custom_line.csv" in output
+    assert "custom_line_id:=safe-main" in output
+    assert "custom_line_name:=Safe\\ Main" in output
+
+
+def test_section_authored_canonical_custom_line_requires_matching_hd_map(
+    tmp_path: Path,
+) -> None:
+    map_dir = tmp_path / "course_a"
+    map_dir.mkdir()
+    hd_map = map_dir / "course_a_hd_map.yaml"
+    hd_map.write_text("format: tamiya_local_hd_map_v1\nsections: []\n", encoding="utf-8")
+    hd_map_hash = hashlib.sha256(hd_map.read_bytes()).hexdigest()
+    custom_line = map_dir / "course_a_custom_line.csv"
+    custom_line.write_text("0;0;0;0;0;1;0\n1;1;0;0;0;1;0\n")
+    trajectory_hash = hashlib.sha256(custom_line.read_bytes()).hexdigest()
+
+    for mode_field in ("speed_profile_mode", "speed_authoring"):
+        custom_line.with_suffix(".meta.json").write_text(
+            json.dumps(
+                {
+                    "format": "jetpilot_custom_line_v1",
+                    "id": "safe-main",
+                    "name": "Safe Main",
+                    "closed_loop": False,
+                    "revision": 2,
+                    "source_hash": "a" * 64,
+                    "trajectory_csv": custom_line.name,
+                    "trajectory_sha256": trajectory_hash,
+                    mode_field: "sections",
+                    "hd_map_sha256": hd_map_hash,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        output = run_launcher(
+            "custom",
+            "--components",
+            "custom-line",
+            "--map",
+            str(map_dir),
+            "--custom-line",
+            str(custom_line),
+            "--dry-run",
+        ).stdout
+
+        assert "enable_custom_trajectory_publisher:=true" in output
+        assert "custom_line_id:=safe-main" in output
+
+
+def test_section_authored_named_custom_line_accepts_matching_hd_map(
+    tmp_path: Path,
+) -> None:
+    map_dir = tmp_path / "course_a"
+    line_dir = map_dir / "custom_lines" / "safe-main"
+    line_dir.mkdir(parents=True)
+    hd_map = map_dir / "course_a_hd_map.yaml"
+    hd_map.write_text("format: tamiya_local_hd_map_v1\nsections: []\n", encoding="utf-8")
+    custom_line = line_dir / "trajectory.csv"
+    custom_line.write_text("0;0;0;0;0;1;0\n1;1;0;0;0;1;0\n")
+    (line_dir / "custom_line.json").write_text(
+        json.dumps(
+            {
+                "format": "jetpilot_custom_line_v1",
+                "id": "safe-main",
+                "name": "Safe Main",
+                "closed_loop": False,
+                "revision": 2,
+                "source_hash": "b" * 64,
+                "trajectory_csv": custom_line.name,
+                "trajectory_sha256": hashlib.sha256(custom_line.read_bytes()).hexdigest(),
+                "speed_authoring": "sections",
+                "hd_map_sha256": hashlib.sha256(hd_map.read_bytes()).hexdigest(),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    output = run_launcher(
+        "custom",
+        "--components",
+        "control",
+        "--map",
+        str(map_dir),
+        "--custom-line",
+        str(custom_line),
+        "--dry-run",
+    ).stdout
+
+    assert f"custom_root:={line_dir}" in output
+    assert "custom_line_id:=safe-main" in output
+
+
+def test_section_authored_custom_line_rejects_stale_hd_map(tmp_path: Path) -> None:
+    map_dir = tmp_path / "course_a"
+    map_dir.mkdir()
+    hd_map = map_dir / "course_a_hd_map.yaml"
+    hd_map.write_text("format: tamiya_local_hd_map_v1\nsections: []\n", encoding="utf-8")
+    custom_line = map_dir / "course_a_custom_line.csv"
+    custom_line.write_text("0;0;0;0;0;1;0\n1;1;0;0;0;1;0\n")
+    custom_line.with_suffix(".meta.json").write_text(
+        json.dumps(
+            {
+                "format": "jetpilot_custom_line_v1",
+                "id": "safe-main",
+                "name": "Safe Main",
+                "closed_loop": False,
+                "revision": 2,
+                "source_hash": "c" * 64,
+                "trajectory_csv": custom_line.name,
+                "trajectory_sha256": hashlib.sha256(custom_line.read_bytes()).hexdigest(),
+                "speed_profile_mode": "sections",
+                "hd_map_sha256": "0" * 64,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = run_launcher(
+        "custom",
+        "--components",
+        "custom-line",
+        "--map",
+        str(map_dir),
+        "--custom-line",
+        str(custom_line),
+        "--dry-run",
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "hd_map_sha256 does not match the selected map" in result.stderr
+
+
+def test_section_authored_custom_line_requires_hd_map_hash(tmp_path: Path) -> None:
+    map_dir = tmp_path / "course_a"
+    map_dir.mkdir()
+    hd_map = map_dir / "course_a_hd_map.yaml"
+    hd_map.write_text("format: tamiya_local_hd_map_v1\nsections: []\n", encoding="utf-8")
+    custom_line = map_dir / "course_a_custom_line.csv"
+    custom_line.write_text("0;0;0;0;0;1;0\n1;1;0;0;0;1;0\n")
+    custom_line.with_suffix(".meta.json").write_text(
+        json.dumps(
+            {
+                "format": "jetpilot_custom_line_v1",
+                "id": "safe-main",
+                "name": "Safe Main",
+                "closed_loop": False,
+                "revision": 2,
+                "source_hash": "d" * 64,
+                "trajectory_csv": custom_line.name,
+                "trajectory_sha256": hashlib.sha256(custom_line.read_bytes()).hexdigest(),
+                "speed_authoring": "sections",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = run_launcher(
+        "custom",
+        "--components",
+        "custom-line",
+        "--map",
+        str(map_dir),
+        "--custom-line",
+        str(custom_line),
+        "--dry-run",
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "section-authored custom line requires hd_map_sha256" in result.stderr
+
+
+def test_section_authored_custom_line_requires_selected_map(tmp_path: Path) -> None:
+    custom_line = tmp_path / "course_a_custom_line.csv"
+    custom_line.write_text("0;0;0;0;0;1;0\n1;1;0;0;0;1;0\n")
+    custom_line.with_suffix(".meta.json").write_text(
+        json.dumps(
+            {
+                "format": "jetpilot_custom_line_v1",
+                "id": "safe-main",
+                "name": "Safe Main",
+                "closed_loop": False,
+                "revision": 2,
+                "source_hash": "e" * 64,
+                "trajectory_csv": custom_line.name,
+                "trajectory_sha256": hashlib.sha256(custom_line.read_bytes()).hexdigest(),
+                "speed_profile_mode": "sections",
+                "hd_map_sha256": "f" * 64,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = run_launcher(
+        "custom",
+        "--components",
+        "control",
+        "--custom-line",
+        str(custom_line),
+        "--dry-run",
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "section-authored custom line requires --map PATH" in result.stderr
+
+
+def test_hashed_legacy_custom_line_requires_matching_selected_map(
+    tmp_path: Path,
+) -> None:
+    map_dir = tmp_path / "course_a"
+    map_dir.mkdir()
+    hd_map = map_dir / "course_a_hd_map.yaml"
+    hd_map.write_text("format: tamiya_local_hd_map_v1\nsections: []\n", encoding="utf-8")
+    custom_line = map_dir / "course_a_custom_line.csv"
+    custom_line.write_text("0;0;0;0;0;1;0\n1;1;0;0;0;1;0\n")
+    metadata = {
+        "format": "jetpilot_custom_line_v1",
+        "id": "legacy-main",
+        "name": "Legacy Main",
+        "closed_loop": False,
+        "revision": 2,
+        "source_hash": "e" * 64,
+        "trajectory_csv": custom_line.name,
+        "trajectory_sha256": hashlib.sha256(custom_line.read_bytes()).hexdigest(),
+        "speed_profile_mode": "legacy_points",
+        "hd_map_sha256": hashlib.sha256(hd_map.read_bytes()).hexdigest(),
+    }
+    custom_line.with_suffix(".meta.json").write_text(
+        json.dumps(metadata),
+        encoding="utf-8",
+    )
+
+    output = run_launcher(
+        "custom",
+        "--components",
+        "control",
+        "--map",
+        str(map_dir),
+        "--custom-line",
+        str(custom_line),
+        "--dry-run",
+    ).stdout
+    assert "custom_line_id:=legacy-main" in output
+
+    hd_map.write_text("format: tamiya_local_hd_map_v1\nsections: [changed]\n", encoding="utf-8")
+    stale = run_launcher(
+        "custom",
+        "--components",
+        "control",
+        "--map",
+        str(map_dir),
+        "--custom-line",
+        str(custom_line),
+        "--dry-run",
+        check=False,
+    )
+    assert stale.returncode != 0
+    assert "hd_map_sha256 does not match the selected map" in stale.stderr
+
+
+def test_hashed_legacy_custom_line_requires_selected_map(tmp_path: Path) -> None:
+    custom_line = tmp_path / "course_a_custom_line.csv"
+    custom_line.write_text("0;0;0;0;0;1;0\n1;1;0;0;0;1;0\n")
+    custom_line.with_suffix(".meta.json").write_text(
+        json.dumps(
+            {
+                "format": "jetpilot_custom_line_v1",
+                "id": "legacy-main",
+                "name": "Legacy Main",
+                "closed_loop": False,
+                "revision": 2,
+                "source_hash": "e" * 64,
+                "trajectory_csv": custom_line.name,
+                "trajectory_sha256": hashlib.sha256(custom_line.read_bytes()).hexdigest(),
+                "speed_authoring": "legacy_points",
+                "hd_map_sha256": "f" * 64,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = run_launcher(
+        "custom",
+        "--components",
+        "control",
+        "--custom-line",
+        str(custom_line),
+        "--dry-run",
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "custom line metadata with hd_map_sha256 requires --map PATH" in result.stderr
+
+
+def test_custom_line_component_requires_selected_map_for_legacy_bundle(
+    tmp_path: Path,
+) -> None:
+    custom_line = tmp_path / "course_a_custom_line.csv"
+    custom_line.write_text("0;0;0;0;0;1;0\n1;1;0;0;0;1;0\n")
+    custom_line.with_suffix(".meta.json").write_text(
+        json.dumps(
+            {
+                "format": "jetpilot_custom_line_v1",
+                "id": "safe-main",
+                "name": "Safe Main",
+                "closed_loop": False,
+                "revision": 2,
+                "source_hash": "f" * 64,
+                "trajectory_csv": custom_line.name,
+                "trajectory_sha256": hashlib.sha256(custom_line.read_bytes()).hexdigest(),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = run_launcher(
+        "custom",
+        "--components",
+        "custom-line",
+        "--custom-line",
+        str(custom_line),
+        "--dry-run",
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "custom-line component requires --map PATH" in result.stderr
 
 
 def test_custom_components_reject_conflicting_input_sources() -> None:
@@ -1321,6 +1903,7 @@ def test_every_noninteractive_preset_emits_unique_launch_arguments(tmp_path: Pat
         "vehicle",
         "teleop",
         "drive",
+        "e2e",
         "runtime",
         "vehicle-pca",
         "vehicle-vesc",
@@ -1333,7 +1916,7 @@ def test_every_noninteractive_preset_emits_unique_launch_arguments(tmp_path: Pat
     )
     for preset in presets:
         arguments = [preset, "--dry-run"]
-        if preset in {"vehicle", "teleop", "drive", "runtime"}:
+        if preset in {"vehicle", "teleop", "drive", "e2e", "runtime"}:
             arguments += ["--vehicle", "vesc"]
         if preset in {
             "localization-only",

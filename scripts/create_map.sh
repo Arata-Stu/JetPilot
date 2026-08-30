@@ -168,7 +168,12 @@ transfer_map_to_jetson() {
   local remote_parent
   local hd_map_yaml
   local raceline_csv
+  local custom_line_csv
+  local custom_line_meta
+  local custom_line_dir
+  local custom_line_ready=false
   local required_path
+  local optional_path
   local sources=()
 
   command -v ssh >/dev/null 2>&1 || die "ssh command was not found"
@@ -177,14 +182,31 @@ transfer_map_to_jetson() {
   map_name="$(basename "$map_dir")"
   hd_map_yaml="${map_dir}/${map_name}_hd_map.yaml"
   raceline_csv="${map_dir}/${map_name}_raceline.csv"
+  custom_line_csv="${map_dir}/${map_name}_custom_line.csv"
+  custom_line_meta="${map_dir}/${map_name}_custom_line.meta.json"
+  custom_line_dir="${map_dir}/custom_lines"
 
   for required_path in \
     "${map_dir}/cuvgl_map" \
     "${map_dir}/cuvslam_map" \
-    "$hd_map_yaml" \
-    "$raceline_csv"; do
+    "$hd_map_yaml"; do
     [[ -e "$required_path" ]] || die "Jetson runtime map artifact was not found: $required_path"
     sources+=("$required_path")
+  done
+  if [[ -e "$raceline_csv" ]]; then
+    sources+=("$raceline_csv")
+  fi
+  if [[ -e "$custom_line_csv" || -e "$custom_line_meta" ]]; then
+    [[ -f "$custom_line_csv" && -f "$custom_line_meta" ]] \
+      || die "Active custom line transfer requires both CSV and metadata: $custom_line_csv, $custom_line_meta"
+    sources+=("$custom_line_csv" "$custom_line_meta")
+    custom_line_ready=true
+  fi
+  if [[ ! -e "$raceline_csv" && "$custom_line_ready" != 'true' ]]; then
+    die "Jetson runtime map needs a raceline or an active custom line CSV + metadata"
+  fi
+  for optional_path in "$custom_line_dir"; do
+    [[ -e "$optional_path" ]] && sources+=("$optional_path")
   done
 
   if [[ "$map_dir" == "${MAP_ROOT%/}/"* ]]; then
@@ -209,7 +231,13 @@ transfer_map_to_jetson() {
   echo "================ Jetson map transfer ================"
   echo "Source          : $map_dir"
   echo "Destination     : ${remote_host}:${remote_map_dir}"
-  echo "Artifacts       : cuvgl_map, cuvslam_map, HD map, raceline"
+  echo "Artifacts       : cuvgl_map, cuvslam_map, HD map"
+  if [[ -e "$raceline_csv" ]]; then
+    echo "Driving line    : raceline"
+  fi
+  if [[ "$custom_line_ready" == 'true' ]]; then
+    echo "Custom line     : active CSV, metadata, and named source sets"
+  fi
   echo "Excluded        : logs and notebook-side intermediate files"
   echo "Remote latest   : ${remote_parent}/latest -> ${map_name}"
   echo "====================================================="
@@ -237,16 +265,29 @@ offer_jetson_transfer() {
   local map_dir="$1"
   local map_name
   local required_path
+  local raceline_csv
+  local custom_line_csv
+  local custom_line_meta
   local missing=()
 
   map_name="$(basename "$map_dir")"
+  raceline_csv="${map_dir}/${map_name}_raceline.csv"
+  custom_line_csv="${map_dir}/${map_name}_custom_line.csv"
+  custom_line_meta="${map_dir}/${map_name}_custom_line.meta.json"
   for required_path in \
     "${map_dir}/cuvgl_map" \
     "${map_dir}/cuvslam_map" \
-    "${map_dir}/${map_name}_hd_map.yaml" \
-    "${map_dir}/${map_name}_raceline.csv"; do
+    "${map_dir}/${map_name}_hd_map.yaml"; do
     [[ -e "$required_path" ]] || missing+=("$required_path")
   done
+  if [[ -e "$custom_line_csv" || -e "$custom_line_meta" ]] \
+    && [[ ! -f "$custom_line_csv" || ! -f "$custom_line_meta" ]]; then
+    missing+=("active custom line requires both $custom_line_csv and $custom_line_meta")
+  fi
+  if [[ ! -e "$raceline_csv" ]] \
+    && [[ ! -f "$custom_line_csv" || ! -f "$custom_line_meta" ]]; then
+    missing+=("raceline or active custom line CSV + metadata")
+  fi
 
   if [[ ${#missing[@]} -gt 0 ]]; then
     echo

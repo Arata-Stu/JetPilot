@@ -113,8 +113,8 @@ TrackingResult MapPursuit::compute(const TrackingInput & input) const
       return std::hypot(lhs.x, lhs.y) < std::hypot(rhs.x, rhs.y);
     });
   result.nearest_index = static_cast<std::size_t>(std::distance(input.path.begin(), closest));
-  result.path_closed = is_closed_path(
-    input.path, params_.path_closure_mode, params_.closed_path_tolerance_m);
+  result.path_closed = input.path_closed_override.value_or(is_closed_path(
+    input.path, params_.path_closure_mode, params_.closed_path_tolerance_m));
   result.lookahead_distance_m = std::clamp(
     params_.min_lookahead_m + params_.lookahead_speed_gain_s * std::abs(input.speed_mps),
     params_.min_lookahead_m, params_.max_lookahead_m);

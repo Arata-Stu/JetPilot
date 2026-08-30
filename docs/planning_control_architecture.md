@@ -20,8 +20,12 @@ Pure Pursuit controllerが入り、従来の固定値`autonomous_control_node`�
 
 ファイル形式の解釈を複数 node にコピーしません。HD map の正規化処理は共有 library
 または一つの loader に集約し、planning node は型付き message を受け取ります。
-初期実装は`nav_msgs/Path`と別topicのlane目標速度を使います。点ごとの目標速度、lane ID、
-曲率、停止条件が必要になった段階で専用trajectory messageへ移行します。
+centerline等のlegacy候補は`nav_msgs/Path`とlane目標速度を使います。racelineとcustom lineは
+`jetpilot_msgs/Trajectory`でgeometry、点ごとの速度・加速度、line ID、CSV hash、開閉路を
+一体として渡します。互換用`Path`も同じtyped trajectoryから生成します。
+Custom Lineの速度はUIでWaypointごとに入力せず、HD mapのSectionごとの目標上限として指定します。
+offline compilerがSection GateをCustom Line上のstationへ写像し、曲率と加減速制約を適用してから、
+runtime用の点ごとの速度・加速度へ展開します。
 
 ## Data flow
 
@@ -29,6 +33,7 @@ Pure Pursuit controllerが入り、従来の固定値`autonomous_control_node`�
 flowchart LR
   MAP["HD map / centerline / sections"] --> LOADER["jetpilot_hdmap_publisher"]
   RACE["Generated raceline CSV"] --> RACELOADER["jetpilot_planning raceline loader"]
+  CUSTOM["Named custom line + speed CSV"] --> RACELOADER
   LOADER --> GRAPH["Lane candidates"]
   RACELOADER --> GRAPH
   GRAPH --> ROUTE["Route selector"]
@@ -38,7 +43,7 @@ flowchart LR
   ROUTE --> LOCAL["Local trajectory planner"]
   OBJECTS["Obstacles"] --> LOCAL
   POSE["Pose / velocity"] --> LOCAL
-  LOCAL --> TRAJ["Timed trajectory"]
+  LOCAL --> TRAJ["Typed trajectory / compatibility Path"]
   TRAJ --> CTRL["Pure Pursuit / future MPC"]
   POSE --> CTRL
   CTRL --> CMD["/auto/control_cmd"]
@@ -75,10 +80,10 @@ connection ごとに持たせます。
 
 ## Message contract
 
-将来 `jetpilot_msgs` へ次の型を追加します。詳細fieldはID、時刻、frameの契約を確定します。
+`Trajectory`と`TrajectoryPoint`は実装済みです。lane graphとstatus型は分岐実装時に追加します。
 
 - `LaneGraph`, `LaneSegment`, `LaneConnection`
-- `Trajectory`, `TrajectoryPoint`（pose、速度、曲率、加速度、lane/section ID）
+- **実装済み:** `Trajectory`, `TrajectoryPoint`（pose、速度、曲率、加速度、line ID/hash、開閉路）
 - `PlanningStatus`（active route、blocked reason、trajectory age）
 - `ControllerStatus`（algorithm、tracking error、command age、ready/fault）
 
@@ -89,9 +94,10 @@ controller は古い trajectory、frame 不一致、localization 不良、NaN/In
 ## Controller sequence
 
 最初の controller は Pure Pursuit とします。設定対象は wheelbase、最小/最大 lookahead、
-速度に対する lookahead gain、最大 steering、trajectory timeout です。初期版の速度指令は
-`/planning/target_speed`を使い、曲率と横加速度上限から安全側へ制限します。点ごとの速度profile
-や横偏差に応じた減速は専用trajectory messageへ移行する段階で追加します。
+速度に対する lookahead gain、最大 steering、trajectory timeout です。legacy Pathは
+`/planning/target_speed`を使います。typed trajectoryでは現在stationと先読み区間から点ごとの
+速度profileを読み、scalar目標速度、global上限、曲率・横加速度上限、trailing上限との最小値を
+使います。CSVの区間一定加速度と合わせ、点間速度は`v²`を距離で線形補間します。
 
 同じ入力・出力契約で `map_pursuit` と軽量な `kinematic_mpc` を選択できます。現行の
 `kinematic_mpc` は動的タイヤモデルを使わず、kinematic bicycle model の操舵候補を
@@ -118,9 +124,10 @@ raceline を誤用しないようにします。実走行時の localization 誤
 
 1. **実装済み:** `nav_msgs/Path`による初期契約、lane selector、raceline CSV loaderを用意する。
 2. **実装済み:** `jetpilot_controller`のPure Pursuit、localization/TF/input timeout時の停止を実装する。
-3. successor graph と shortcut / signal 条件を追加し、分岐 unit test を作る。
-4. obstacle input と local avoidance、走行不能時の停止を追加する。
-5. **実装済み:** 同一trajectory fixtureでPure Pursuit、MAP-like pursuit、軽量Kinematic MPCを比較できるcontroller factoryを追加する。
+3. **実装済み:** raceline/custom lineをtyped trajectoryへ移行し、Section指定からcompileした点ごとの速度profileをcontrollerへ接続する。
+4. successor graph と shortcut / signal 条件を追加し、分岐 unit test を作る。
+5. obstacle input と local avoidance、走行不能時の停止を追加する。
+6. **実装済み:** 同一trajectory fixtureでPure Pursuit、MAP-like pursuit、軽量Kinematic MPCを比較できるcontroller factoryを追加する。
 
 各段階で、狭い lane、分岐条件欠落、全候補閉鎖、古い localization、古い trajectory、
 逆向き経路、loop course を自動テストします。Linux Docker 上では `colcon test` に加え、

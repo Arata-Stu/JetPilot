@@ -10,6 +10,7 @@
 #include "jetpilot_controller/map_pursuit.hpp"
 #include "jetpilot_controller/pure_pursuit.hpp"
 #include "jetpilot_controller/trailing_controller.hpp"
+#include "jetpilot_controller/trajectory_speed_profile.hpp"
 
 namespace jetpilot_controller
 {
@@ -93,6 +94,19 @@ TEST(PurePursuit, SupportsExplicitPathClosureMode)
   PurePursuit open_controller(open_params);
   const auto open = open_controller.compute({{{0.0, 0.0}, {0.5, 0.0}, {0.0, 0.0}}, 0.0});
   EXPECT_FALSE(open.path_closed);
+}
+
+TEST(PurePursuit, TypedTrajectoryClosureOverridesConfiguredMode)
+{
+  PurePursuitParams params;
+  params.path_closure_mode = PathClosureMode::kClosed;
+  PurePursuit controller(params);
+  TrackingInput input{{{0.0, 0.0}, {1.0, 0.0}, {2.0, 0.0}}, 0.0};
+  input.path_closed_override = false;
+
+  const auto result = controller.compute(input);
+  ASSERT_TRUE(result.valid) << result.reason;
+  EXPECT_FALSE(result.path_closed);
 }
 
 TEST(PurePursuit, RejectsUnsafeInputs)
@@ -203,6 +217,68 @@ TEST(LongitudinalController, HoldsNeutralInsideDeadband)
   const auto command = controller.compute(1.0, 1.01);
   EXPECT_DOUBLE_EQ(command.throttle, 0.0);
   EXPECT_DOUBLE_EQ(command.brake, 0.0);
+}
+
+TEST(LongitudinalController, AppliesOptionalAccelerationFeedforward)
+{
+  LongitudinalParams params;
+  params.throttle_acceleration_feedforward = 0.1;
+  params.brake_deceleration_feedforward = 0.2;
+  LongitudinalController controller(params);
+
+  const auto accelerating = controller.compute(1.0, 1.0, 0.5);
+  EXPECT_NEAR(accelerating.throttle, 0.05, 1.0e-9);
+  EXPECT_DOUBLE_EQ(accelerating.brake, 0.0);
+
+  const auto braking = controller.compute(1.0, 1.0, -0.5);
+  EXPECT_DOUBLE_EQ(braking.throttle, 0.0);
+  EXPECT_NEAR(braking.brake, 0.1, 1.0e-9);
+}
+
+TEST(TrajectorySpeedProfile, InterpolatesAndLooksAheadConservatively)
+{
+  const std::vector<TrajectoryProfilePoint> profile{
+    {0.0, 2.0, -1.5}, {1.0, 1.0, 1.5}, {2.0, 2.0, 0.0}};
+
+  const auto interpolated = sample_trajectory_profile(profile, 0.5, 0.0, false, 2.0);
+  ASSERT_TRUE(interpolated.valid) << interpolated.reason;
+  EXPECT_NEAR(interpolated.speed_mps, std::sqrt(2.5), 1.0e-9);
+  EXPECT_DOUBLE_EQ(interpolated.acceleration_mps2, -1.5);
+
+  const auto lookahead = sample_trajectory_profile(profile, 0.25, 1.0, false, 2.0);
+  ASSERT_TRUE(lookahead.valid) << lookahead.reason;
+  EXPECT_DOUBLE_EQ(lookahead.speed_mps, 1.0);
+  EXPECT_DOUBLE_EQ(lookahead.acceleration_mps2, -1.5);
+}
+
+TEST(TrajectorySpeedProfile, WrapsClosedProfileLookahead)
+{
+  const std::vector<TrajectoryProfilePoint> profile{
+    {0.0, 0.5, 1.875}, {1.0, 2.0, 0.0}, {2.0, 2.0, -1.875}};
+
+  const auto sample = sample_trajectory_profile(profile, 2.4, 0.8, true, 3.0);
+  ASSERT_TRUE(sample.valid) << sample.reason;
+  EXPECT_DOUBLE_EQ(sample.speed_mps, 0.5);
+  EXPECT_DOUBLE_EQ(sample.acceleration_mps2, -1.875);
+}
+
+TEST(TrajectorySpeedProfile, InterpolatesClosedSeamWithConstantAcceleration)
+{
+  const std::vector<TrajectoryProfilePoint> profile{
+    {0.0, 1.0, 1.5}, {1.0, 2.0, 2.5}, {2.0, 3.0, -4.0}};
+
+  const auto sample = sample_trajectory_profile(profile, 2.5, 0.0, true, 3.0);
+  ASSERT_TRUE(sample.valid) << sample.reason;
+  EXPECT_NEAR(sample.speed_mps, std::sqrt(5.0), 1.0e-9);
+  EXPECT_DOUBLE_EQ(sample.acceleration_mps2, -4.0);
+}
+
+TEST(TrajectorySpeedProfile, RejectsInvalidOrUnorderedPoints)
+{
+  EXPECT_FALSE(sample_trajectory_profile(
+    {{0.0, 1.0, 0.0}, {1.0, -1.0, 0.0}}, 0.0, 0.5, false, 1.0).valid);
+  EXPECT_FALSE(sample_trajectory_profile(
+    {{0.0, 1.0, 0.0}, {0.0, 1.0, 0.0}}, 0.0, 0.5, false, 1.0).valid);
 }
 
 TEST(LongitudinalController, RejectsNonFiniteParameters)

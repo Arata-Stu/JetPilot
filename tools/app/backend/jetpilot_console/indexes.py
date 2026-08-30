@@ -134,7 +134,11 @@ def _looks_like_map_dir(path: Path) -> bool:
         return True
     if (path / "vslam_landmarks.yaml").exists() or (path / "vslam_landmarks.png").exists():
         return True
-    return any(path.glob("*_hd_map.yaml")) or any(path.glob("*_raceline.csv"))
+    return (
+        any(path.glob("*_hd_map.yaml"))
+        or any(path.glob("*_raceline.csv"))
+        or any(path.glob("*_custom_line.csv"))
+    )
 
 
 def _map_dir_score(path: Path) -> int:
@@ -154,6 +158,8 @@ def _map_dir_score(path: Path) -> int:
     if any(path.glob("*_hd_map_centerline.csv")):
         score += 10
     if any(path.glob("*_raceline.csv")):
+        score += 10
+    if any(path.glob("*_custom_line.csv")):
         score += 10
     if any(path.glob("*_line_preview.png")):
         score += 5
@@ -225,12 +231,18 @@ def scan_maps(map_root: Path) -> list[dict[str, object]]:
             "hd_map": _artifact(map_dir / f"{name}_hd_map.yaml"),
             "centerline_csv": _artifact(map_dir / f"{name}_hd_map_centerline.csv"),
             "raceline_csv": _artifact(map_dir / f"{name}_raceline.csv"),
+            "custom_line_csv": _artifact(map_dir / f"{name}_custom_line.csv"),
+            "custom_line_meta": _artifact(map_dir / f"{name}_custom_line.meta.json"),
             "line_preview": _artifact(map_dir / f"{name}_line_preview.png"),
         }
-        complete_runtime = all(
-            artifacts[key]["exists"]
-            for key in ("cuvgl_map", "cuvslam_map", "hd_map", "raceline_csv")
+        localization_ready = all(
+            artifacts[key]["exists"] for key in ("cuvgl_map", "cuvslam_map", "hd_map")
         )
+        custom_line_ready = bool(
+            artifacts["custom_line_csv"]["exists"] and artifacts["custom_line_meta"]["exists"]
+        )
+        driving_line_ready = bool(artifacts["raceline_csv"]["exists"] or custom_line_ready)
+        complete_runtime = localization_ready and driving_line_ready
         maps.append(
             {
                 "name": name,

@@ -1,10 +1,12 @@
 /**:
   ros__parameters:
-    lane_ids: [primary, raceline]
-    lane_path_topics: [/hd_map/primary_centerline_path, /planning/raceline_path]
-    lane_trajectory_topics: ["", /planning/raceline_trajectory]
-    lane_target_speeds_mps: [1.0, 1.5]
-    default_lane_id: raceline
+    lane_ids: [primary, custom]
+    lane_path_topics: [/hd_map/primary_centerline_path, /planning/custom_path]
+    # The custom candidate is received as one typed message so its geometry,
+    # per-point speed, line ID and source hash cannot be mixed across revisions.
+    lane_trajectory_topics: ["", /planning/custom_trajectory]
+    lane_target_speeds_mps: [1.0, 3.0]
+    default_lane_id: custom
     section_lane_rules: []
     fallback_to_default_lane: false
 

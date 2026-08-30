@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <string>
 #include <vector>
 
 namespace jetpilot_planning
@@ -36,6 +37,7 @@ struct RacelineData
 {
   std::filesystem::path source_path;
   std::vector<RacelinePoint> points;
+  std::string source_hash;
 };
 
 // Resolve a requested CSV below raceline_root. If root is empty, requested must

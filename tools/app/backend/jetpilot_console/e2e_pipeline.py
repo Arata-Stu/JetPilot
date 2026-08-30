@@ -274,7 +274,7 @@ def build_preprocess_task(config: Any, body: dict[str, Any]) -> PipelineTaskSpec
             f"data.image_topic={_topic(body.get('image_topic'), label='image topic')}",
             f"data.control_topic={_topic(body.get('control_topic') or '/teleop/control_cmd', label='control topic')}",
             f"data.odometry_topic={_topic(body.get('odometry_topic') or '/visual_slam/tracking/odometry', label='odometry topic')}",
-            f"data.imu_topic={_topic(body.get('imu_topic') or '/sensors/imu', label='IMU topic')}",
+            f"data.imu_topic={_topic(body.get('imu_topic') or '/realsense/imu', label='IMU topic')}",
             f"data.task={task}",
             f"data.input_width={width}",
             f"data.input_height={height}",

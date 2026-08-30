@@ -79,6 +79,8 @@ void PathTrackingControllerNode::declare_and_read_parameters()
   algorithm_ = declare_parameter<std::string>("algorithm", "pure_pursuit");
   base_frame_ = declare_parameter<std::string>("base_frame", "base_link");
   trajectory_topic_ = declare_parameter<std::string>("trajectory_topic", "/planning/trajectory");
+  trajectory_profile_topic_ = declare_parameter<std::string>(
+    "trajectory_profile_topic", "/planning/trajectory_profile");
   target_speed_topic_ =
     declare_parameter<std::string>("target_speed_topic", "/planning/target_speed");
   planning_ready_topic_ = declare_parameter<std::string>("planning_ready_topic", "/planning/ready");
@@ -109,6 +111,10 @@ void PathTrackingControllerNode::declare_and_read_parameters()
   safety_brake_command_ = declare_parameter<double>("safety_brake_command", 0.0);
   max_steering_rate_per_s_ = declare_parameter<double>("max_steering_rate_per_s", 4.0);
   max_lateral_accel_mps2_ = declare_parameter<double>("max_lateral_accel_mps2", 2.0);
+  trajectory_speed_lookahead_m_ =
+    declare_parameter<double>("trajectory_speed_lookahead_m", 0.5);
+  use_typed_trajectory_profiles_ =
+    declare_parameter<bool>("use_typed_trajectory_profiles", true);
   opponent_odometry_timeout_s_ = declare_parameter<double>("opponent_odometry_timeout_s", 0.3);
 
   pure_pursuit_params_.wheelbase_m = declare_parameter<double>("wheelbase_m", 0.26);
@@ -166,7 +172,11 @@ void PathTrackingControllerNode::declare_and_read_parameters()
   longitudinal_params.throttle_kp = declare_parameter<double>("throttle_kp", 0.5);
   longitudinal_params.throttle_feedforward =
     declare_parameter<double>("throttle_feedforward", 0.05);
+  longitudinal_params.throttle_acceleration_feedforward =
+    declare_parameter<double>("throttle_acceleration_feedforward", 0.0);
   longitudinal_params.brake_kp = declare_parameter<double>("brake_kp", 0.5);
+  longitudinal_params.brake_deceleration_feedforward =
+    declare_parameter<double>("brake_deceleration_feedforward", 0.0);
   longitudinal_params.speed_deadband_mps = declare_parameter<double>("speed_deadband_mps", 0.05);
   longitudinal_params.max_throttle_command =
     declare_parameter<double>("max_throttle_command", 0.35);
@@ -188,7 +198,8 @@ void PathTrackingControllerNode::declare_and_read_parameters()
        {control_rate_hz_, trajectory_timeout_s_, odometry_timeout_s_, target_speed_timeout_s_,
         transform_timeout_s_, transform_max_age_s_, localization_state_timeout_s_,
         fallback_target_speed_mps_, max_target_speed_mps_, goal_tolerance_m_, safety_brake_command_,
-        max_steering_rate_per_s_, max_lateral_accel_mps2_, opponent_odometry_timeout_s_})
+        max_steering_rate_per_s_, max_lateral_accel_mps2_, trajectory_speed_lookahead_m_,
+        opponent_odometry_timeout_s_})
   {
     if (!std::isfinite(value))
     {
@@ -227,6 +238,15 @@ void PathTrackingControllerNode::declare_and_read_parameters()
   {
     throw std::invalid_argument("max_lateral_accel_mps2 must be >= 0");
   }
+  if (trajectory_speed_lookahead_m_ < 0.0)
+  {
+    throw std::invalid_argument("trajectory_speed_lookahead_m must be >= 0");
+  }
+  if (use_typed_trajectory_profiles_ && trajectory_profile_topic_.empty())
+  {
+    throw std::invalid_argument(
+      "trajectory_profile_topic must not be empty when typed profiles are enabled");
+  }
   if (opponent_odometry_timeout_s_ <= 0.0)
   {
     throw std::invalid_argument("opponent_odometry_timeout_s must be > 0");
@@ -264,6 +284,21 @@ void PathTrackingControllerNode::create_interfaces()
       trajectory_ = *message;
       trajectory_received_at_ = std::chrono::steady_clock::now();
     });
+  if (use_typed_trajectory_profiles_)
+  {
+    trajectory_profile_sub_ = create_subscription<jetpilot_msgs::msg::Trajectory>(
+      trajectory_profile_topic_, latched_qos,
+      [this](const jetpilot_msgs::msg::Trajectory::SharedPtr message)
+      {
+        trajectory_profile_received_at_ = std::chrono::steady_clock::now();
+        if (message->points.empty())
+        {
+          trajectory_profile_.reset();
+          return;
+        }
+        trajectory_profile_ = *message;
+      });
+  }
   target_speed_sub_ = create_subscription<std_msgs::msg::Float32>(
     target_speed_topic_, latched_qos,
     [this](const std_msgs::msg::Float32::SharedPtr message)
@@ -587,17 +622,32 @@ void PathTrackingControllerNode::control_cycle()
     publish_safety_stop("planning is not ready");
     return;
   }
-  if (!trajectory_ || !trajectory_received_at_)
+  const bool typed_profile_active =
+    use_typed_trajectory_profiles_ && trajectory_profile_ && trajectory_profile_received_at_;
+  if (!typed_profile_active && (!trajectory_ || !trajectory_received_at_))
   {
     publish_safety_stop("waiting for trajectory");
     return;
   }
-  if (seconds_since(*trajectory_received_at_) > trajectory_timeout_s_)
+  if (typed_profile_active &&
+      seconds_since(*trajectory_profile_received_at_) > trajectory_timeout_s_)
+  {
+    publish_safety_stop("typed trajectory profile is stale");
+    return;
+  }
+  if (!typed_profile_active && seconds_since(*trajectory_received_at_) > trajectory_timeout_s_)
   {
     publish_safety_stop("trajectory is stale");
     return;
   }
-  if (trajectory_->poses.size() < 2U)
+  if (typed_profile_active &&
+      (trajectory_profile_->points.size() < 2U || trajectory_profile_->line_id.empty() ||
+       trajectory_profile_->source_hash.empty()))
+  {
+    publish_safety_stop("typed trajectory profile is invalid");
+    return;
+  }
+  if (!typed_profile_active && trajectory_->poses.size() < 2U)
   {
     publish_safety_stop("trajectory is empty or too short");
     return;
@@ -618,7 +668,28 @@ void PathTrackingControllerNode::control_cycle()
 
   TrackingInput input;
   input.speed_mps = *speed;
-  if (!transform_trajectory(*trajectory_, input.path, reason))
+  if (typed_profile_active)
+  {
+    input.path_closed_override = trajectory_profile_->closed;
+  }
+  nav_msgs::msg::Path active_path;
+  if (typed_profile_active)
+  {
+    active_path.header = trajectory_profile_->header;
+    active_path.poses.reserve(trajectory_profile_->points.size());
+    for (const auto & point : trajectory_profile_->points)
+    {
+      geometry_msgs::msg::PoseStamped pose;
+      pose.header = active_path.header;
+      pose.pose = point.pose;
+      active_path.poses.push_back(std::move(pose));
+    }
+  }
+  else
+  {
+    active_path = *trajectory_;
+  }
+  if (!transform_trajectory(active_path, input.path, reason))
   {
     publish_safety_stop(reason);
     return;
@@ -630,14 +701,51 @@ void PathTrackingControllerNode::control_cycle()
     return;
   }
 
+  const bool path_closed = tracking.path_closed;
   const double goal_distance = std::hypot(input.path.back().x, input.path.back().y);
-  if (stop_at_path_end_ && !tracking.path_closed && goal_distance <= goal_tolerance_m_)
+  if (stop_at_path_end_ && !path_closed && goal_distance <= goal_tolerance_m_)
   {
     publish_safety_stop("goal reached");
     return;
   }
 
   double limited_target_speed = *target_speed;
+  double profile_acceleration_mps2 = 0.0;
+  double profile_speed_mps = std::numeric_limits<double>::infinity();
+  if (typed_profile_active)
+  {
+    std::vector<TrajectoryProfilePoint> profile;
+    profile.reserve(input.path.size());
+    double station_m = 0.0;
+    for (std::size_t index = 0U; index < input.path.size(); ++index)
+    {
+      if (index > 0U)
+      {
+        station_m += std::hypot(
+          input.path[index].x - input.path[index - 1U].x,
+          input.path[index].y - input.path[index - 1U].y);
+      }
+      const auto & source = trajectory_profile_->points[index];
+      profile.push_back(
+        {station_m, source.longitudinal_velocity_mps,
+         source.longitudinal_acceleration_mps2});
+    }
+    const auto projection = project_station(input.path, Point2d{0.0, 0.0}, path_closed);
+    const double loop_length_m = path_length(input.path, path_closed);
+    const auto profile_sample = projection.valid
+      ? sample_trajectory_profile(
+          profile, projection.station_m, trajectory_speed_lookahead_m_, path_closed,
+          loop_length_m)
+      : TrajectoryProfileSample{false, 0.0, 0.0, "profile_projection_failed"};
+    if (!profile_sample.valid)
+    {
+      publish_safety_stop("typed trajectory speed profile invalid: " + profile_sample.reason);
+      return;
+    }
+    limited_target_speed = std::min(limited_target_speed, profile_sample.speed_mps);
+    profile_speed_mps = profile_sample.speed_mps;
+    profile_acceleration_mps2 = profile_sample.acceleration_mps2;
+  }
   if (max_lateral_accel_mps2_ > 0.0 && std::abs(tracking.curvature) > 1.0e-6)
   {
     const double curve_speed = std::sqrt(max_lateral_accel_mps2_ / std::abs(tracking.curvature));
@@ -648,10 +756,17 @@ void PathTrackingControllerNode::control_cycle()
   trailing.target_speed_mps = limited_target_speed;
   if (trailing_controller_->params().enabled)
   {
-    trailing = apply_trailing_limit(limited_target_speed, *speed, input.path, tracking.path_closed);
+    trailing = apply_trailing_limit(limited_target_speed, *speed, input.path, path_closed);
     limited_target_speed = trailing.target_speed_mps;
   }
-  const auto longitudinal = longitudinal_controller_->compute(limited_target_speed, *speed);
+  if (limited_target_speed + 1.0e-6 < profile_speed_mps && profile_acceleration_mps2 > 0.0)
+  {
+    // A stricter scalar, curvature, or trailing cap overrides positive
+    // acceleration feed-forward from the custom profile.
+    profile_acceleration_mps2 = 0.0;
+  }
+  const auto longitudinal = longitudinal_controller_->compute(
+    limited_target_speed, *speed, profile_acceleration_mps2);
 
   jetpilot_msgs::msg::ControlCommand command;
   command.header.stamp = now();

@@ -12,6 +12,8 @@ struct LongitudinalParams
   double speed_deadband_mps{0.05};
   double max_throttle_command{0.35};
   double max_brake_command{0.3};
+  double throttle_acceleration_feedforward{0.0};
+  double brake_deceleration_feedforward{0.0};
 };
 
 struct LongitudinalCommand
@@ -25,7 +27,9 @@ class LongitudinalController
 public:
   explicit LongitudinalController(LongitudinalParams params);
 
-  LongitudinalCommand compute(double target_speed_mps, double current_speed_mps) const;
+  LongitudinalCommand compute(
+    double target_speed_mps, double current_speed_mps,
+    double target_acceleration_mps2 = 0.0) const;
   const LongitudinalParams & params() const noexcept;
 
 private:

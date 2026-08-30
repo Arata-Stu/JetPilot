@@ -159,8 +159,8 @@ TrackingResult KinematicMpc::compute(const TrackingInput & input) const
     return result;
   }
 
-  result.path_closed = is_closed_path(
-    input.path, params_.path_closure_mode, params_.closed_path_tolerance_m);
+  result.path_closed = input.path_closed_override.value_or(is_closed_path(
+    input.path, params_.path_closure_mode, params_.closed_path_tolerance_m));
   const auto ego_projection = project_to_path(input.path, Point2d{0.0, 0.0}, result.path_closed);
   if (!ego_projection.valid) {
     result.reason = "could not project ego onto path";

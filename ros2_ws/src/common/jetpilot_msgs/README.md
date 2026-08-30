@@ -11,6 +11,11 @@ JetPilot 内で共有する message 定義です。operation、teleop、controll
 | `OperationModeState` | `/operation_mode/state` | 現在の operation mode と変更元を latched state として配信する |
 | `BagRequest` | `/bag/request` | rosbag record の START/STOP/SPLIT/MARK を要求する |
 | `BagStatus` | `/bag/status` | record 中か、出力先 URI、最後の event を通知する |
+| `TrajectoryPoint` | `Trajectory.points[]` | pose、曲率、点ごとの速度・加速度を同じstationで保持する |
+| `Trajectory` | `/planning/*_trajectory`, `/planning/trajectory_profile` | 名前付きlineのgeometryとspeed profileをID/hash付きで原子的に運ぶ |
+
+`Trajectory.line_id`は名前付きlineの安定ID、`display_name`はUI表示名、`source_hash`はcompiled
+CSVのcontent hashです。selectorはgeometryと速度を別topicから組み合わせず、このmessage単位で選択します。
 
 ## ControlCommand の扱い
 

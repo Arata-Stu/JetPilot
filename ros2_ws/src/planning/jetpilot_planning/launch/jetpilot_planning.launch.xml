@@ -6,6 +6,20 @@
   <arg name="raceline_root" default=""/>
   <arg name="raceline_csv" default=""/>
   <arg name="raceline_path_topic" default="/planning/raceline_path"/>
+  <arg name="raceline_trajectory_topic" default="/planning/raceline_trajectory"/>
+  <arg name="raceline_line_id" default="raceline"/>
+  <arg name="raceline_line_name" default="Raceline"/>
+  <arg name="raceline_source_hash" default=""/>
+  <arg name="raceline_closed" default="true"/>
+  <arg name="enable_custom_trajectory_publisher" default="false"/>
+  <arg name="custom_root" default=""/>
+  <arg name="custom_csv" default=""/>
+  <arg name="custom_path_topic" default="/planning/custom_path"/>
+  <arg name="custom_trajectory_topic" default="/planning/custom_trajectory"/>
+  <arg name="custom_line_id" default="custom"/>
+  <arg name="custom_line_name" default="Custom"/>
+  <arg name="custom_source_hash" default=""/>
+  <arg name="custom_closed" default="true"/>
   <arg name="diagnostics_topic" default="/planning/diagnostics"/>
 
   <node pkg="jetpilot_planning" exec="raceline_path_publisher_node"
@@ -15,6 +29,26 @@
     <param name="raceline_root" value="$(var raceline_root)"/>
     <param name="raceline_csv" value="$(var raceline_csv)"/>
     <param name="output_topic" value="$(var raceline_path_topic)"/>
+    <param name="trajectory_output_topic" value="$(var raceline_trajectory_topic)"/>
+    <param name="line_id" value="$(var raceline_line_id)"/>
+    <param name="line_name" value="$(var raceline_line_name)"/>
+    <param name="source_hash" value="$(var raceline_source_hash)"/>
+    <param name="closed" value="$(var raceline_closed)"/>
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+  </node>
+
+  <node pkg="jetpilot_planning" exec="raceline_path_publisher_node"
+        name="custom_trajectory_publisher" output="screen"
+        if="$(var enable_custom_trajectory_publisher)">
+    <param from="$(var raceline_config_file)"/>
+    <param name="raceline_root" value="$(var custom_root)"/>
+    <param name="raceline_csv" value="$(var custom_csv)"/>
+    <param name="output_topic" value="$(var custom_path_topic)"/>
+    <param name="trajectory_output_topic" value="$(var custom_trajectory_topic)"/>
+    <param name="line_id" value="$(var custom_line_id)"/>
+    <param name="line_name" value="$(var custom_line_name)"/>
+    <param name="source_hash" value="$(var custom_source_hash)"/>
+    <param name="closed" value="$(var custom_closed)"/>
     <param name="use_sim_time" value="$(var use_sim_time)"/>
   </node>
 

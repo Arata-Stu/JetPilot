@@ -1648,6 +1648,244 @@ tr:last-child td {
   background: #13171d;
 }
 
+.custom-line-block {
+  background: #10191a;
+}
+
+.custom-line-create-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.custom-line-create-grid .full {
+  grid-column: 1 / -1;
+}
+
+.custom-line-create-field {
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.custom-line-create-field select,
+.custom-line-create-field input {
+  width: 100%;
+}
+
+.custom-line-list {
+  display: grid;
+  max-height: 230px;
+  gap: 7px;
+  overflow-y: auto;
+}
+
+.custom-line-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
+  gap: 7px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #101416;
+  padding: 6px;
+}
+
+.custom-line-row.active {
+  border-color: #2a6d48;
+}
+
+.custom-line-row.selected {
+  outline: 1px solid #38658a;
+  background: #132028;
+}
+
+.custom-line-select {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+  border-color: transparent;
+  background: transparent;
+  padding: 3px 5px;
+  text-align: left;
+}
+
+.custom-line-select:hover {
+  border-color: #38658a;
+  background: #17232b;
+}
+
+.custom-line-select strong,
+.custom-line-select span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.custom-line-select span,
+.custom-line-meta {
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10px;
+}
+
+.custom-line-selected-card {
+  display: grid;
+  gap: 9px;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+.custom-line-name-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.custom-line-meta,
+.custom-line-speed-title,
+.custom-speed-legend {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.custom-line-primary-actions,
+.custom-line-edit-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.custom-line-primary-actions button,
+.custom-line-edit-actions button {
+  min-height: 38px;
+  white-space: normal;
+}
+
+.custom-line-primary-actions button.active {
+  border-color: #2a6d48;
+  color: #9ee3bd;
+}
+
+.custom-line-closed-toggle {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px;
+}
+
+.custom-line-speed-editor {
+  display: grid;
+  gap: 8px;
+  border: 1px solid rgba(87, 199, 194, 0.25);
+  border-radius: 7px;
+  background: rgba(7, 16, 18, 0.6);
+  padding: 9px;
+}
+
+.custom-line-speed-title strong {
+  color: var(--soft);
+  font-size: 12px;
+}
+
+.custom-line-speed-title span,
+.custom-speed-legend {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.custom-line-default-speed,
+.custom-line-section-speed-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(185px, 1fr);
+  align-items: end;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: rgba(16, 24, 27, 0.78);
+  padding: 8px;
+}
+
+.custom-line-default-speed {
+  border-color: rgba(87, 199, 194, 0.42);
+}
+
+.custom-line-default-speed > div,
+.custom-line-default-speed label,
+.custom-line-section-speed-name,
+.custom-line-section-speed-control label {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.custom-line-default-speed strong,
+.custom-line-section-speed-name strong {
+  color: var(--soft);
+  font-size: 11px;
+}
+
+.custom-line-default-speed span,
+.custom-line-section-speed-row span {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.custom-line-section-speed-list {
+  display: grid;
+  max-height: 320px;
+  gap: 7px;
+  overflow-y: auto;
+}
+
+.custom-line-section-speed-row.inherited {
+  border-style: dashed;
+}
+
+.custom-line-section-speed-control {
+  display: grid;
+  grid-template-columns: minmax(82px, 1fr) auto;
+  align-items: end;
+  gap: 6px;
+}
+
+.custom-line-section-speed-control input,
+.custom-line-default-speed input {
+  width: 100%;
+}
+
+.custom-line-section-speed-control button {
+  min-height: 34px;
+  padding-inline: 8px;
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.custom-speed-legend i {
+  flex: 1;
+  min-width: 48px;
+  height: 7px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, hsl(212 88% 62%), hsl(108 88% 62%), hsl(5 88% 62%));
+}
+
+.custom-speed-legend strong {
+  color: var(--soft);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.warn-text {
+  color: #f0cc75;
+}
+
 .version-save-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

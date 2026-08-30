@@ -6,6 +6,10 @@ path_tracking_controller_node:
     # ROS interfaces. planning publishes latched trajectory, speed and readiness.
     base_frame: base_link
     trajectory_topic: /planning/trajectory
+    # Typed profile is optional and authoritative when non-empty. Legacy
+    # centerline Path + scalar target speed remains supported.
+    trajectory_profile_topic: /planning/trajectory_profile
+    use_typed_trajectory_profiles: true
     target_speed_topic: /planning/target_speed
     planning_ready_topic: /planning/ready
     localization_state_topic: /localization/pose_hint_state
@@ -73,6 +77,12 @@ path_tracking_controller_node:
     max_throttle_command: 0.35
     max_brake_command: 0.3
     max_lateral_accel_mps2: 2.0
+    # Use the minimum custom/raceline speed inside this forward window so the
+    # controller starts slowing before a manually marked slow section.
+    trajectory_speed_lookahead_m: 0.5
+    # Optional use of the CSV ax column; zero preserves legacy behavior.
+    throttle_acceleration_feedforward: 0.0
+    brake_deceleration_feedforward: 0.0
 
     # Optional opponent trailing. When enabled, opponent odometry is projected onto
     # the active trajectory and target speed is reduced to keep this gap.

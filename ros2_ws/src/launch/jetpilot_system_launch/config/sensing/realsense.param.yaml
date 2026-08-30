@@ -41,6 +41,9 @@
     depth_module.infra_profile: "424x240x60"
     depth_module.infra1_format: "Y8"
     depth_module.infra2_format: "Y8"
+    # Disable projected IR dots to avoid introducing camera-relative features into VSLAM.
+    # Verify support on the target device with `ros2 param list`.
+    depth_module.emitter_enabled: 0
     # Enable depth only for diagnostics if infra frames are advertised but do not flow.
     # enable_depth: true
     # depth_module.depth_profile: "640x480x15"

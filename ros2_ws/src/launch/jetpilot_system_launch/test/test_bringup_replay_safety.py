@@ -59,7 +59,11 @@ class ReplaySafetyTest(unittest.TestCase):
         expected_autonomy_topics = {
             "/planning/requested_lane",
             "/planning/raceline_path",
+            "/planning/raceline_trajectory",
+            "/planning/custom_path",
+            "/planning/custom_trajectory",
             "/planning/trajectory",
+            "/planning/trajectory_profile",
             "/planning/target_speed",
             "/planning/selected_lane",
             "/planning/ready",
@@ -131,6 +135,37 @@ class ReplaySafetyTest(unittest.TestCase):
         context.launch_configurations["enable_vehicle"] = "true"
         context.launch_configurations["allow_unsafe_replay_with_vehicle"] = "1"
         self.assertEqual(BRINGUP._validate_replay_vehicle_safety(context), [])
+
+    def test_autonomous_command_sources_are_mutually_exclusive(self) -> None:
+        for controller_enabled, e2e_enabled in (
+            ("false", "false"),
+            ("true", "false"),
+            ("false", "true"),
+        ):
+            with self.subTest(
+                controller=controller_enabled,
+                e2e=e2e_enabled,
+            ):
+                context = LaunchContext()
+                context.launch_configurations.update(
+                    {
+                        "enable_control": controller_enabled,
+                        "enable_e2e_inference": e2e_enabled,
+                    }
+                )
+                self.assertEqual(
+                    BRINGUP._validate_autonomous_command_source(context), []
+                )
+
+        context = LaunchContext()
+        context.launch_configurations.update(
+            {
+                "enable_control": "true",
+                "enable_e2e_inference": "true",
+            }
+        )
+        with self.assertRaisesRegex(RuntimeError, "/auto/control_cmd"):
+            BRINGUP._validate_autonomous_command_source(context)
 
 
 if __name__ == "__main__":

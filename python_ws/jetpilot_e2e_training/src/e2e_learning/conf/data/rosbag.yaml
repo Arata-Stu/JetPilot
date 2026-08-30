@@ -5,7 +5,7 @@ dataset_dir: datasets/e2e/default
 image_topic: /realsense/color/image_raw
 control_topic: /teleop/control_cmd
 odometry_topic: /visual_slam/tracking/odometry
-imu_topic: /sensors/imu
+imu_topic: /realsense/imu
 task: control
 
 # Sensor presets:

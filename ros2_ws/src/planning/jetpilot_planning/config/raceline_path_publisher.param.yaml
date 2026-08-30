@@ -6,6 +6,12 @@
     raceline_root: ""
     raceline_csv: ""
     output_topic: /planning/raceline_path
+    trajectory_output_topic: /planning/raceline_trajectory
+    publish_typed_trajectory: true
+    line_id: raceline
+    line_name: Raceline
+    source_hash: ""
+    closed: true
     frame_id: map
     max_file_bytes: 16777216
     max_points: 200000

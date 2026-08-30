@@ -4,8 +4,10 @@ import csv
 import hashlib
 import json
 import math
+import os
 import shutil
 import struct
+import tempfile
 from ast import literal_eval
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,6 +20,23 @@ from .indexes import _artifact, _dir_size, _iso_mtime
 
 HD_MAP_VERSION_DIR = "hd_map_versions"
 HD_MAP_VERSION_ACTIVE_FILE = "active.json"
+CUSTOM_LINE_DIR = "custom_lines"
+CUSTOM_LINE_ACTIVE_FILE = "active.json"
+CUSTOM_LINE_MANIFEST_FILE = "custom_line.json"
+CUSTOM_LINE_TRAJECTORY_FILE = "trajectory.csv"
+CUSTOM_LINE_FORMAT = "jetpilot_custom_line_v1"
+CUSTOM_LINE_DEFAULT_SPEED_MPS = 1.0
+CUSTOM_LINE_MIN_SECTION_SPEED_MPS = 0.1
+CUSTOM_LINE_POINT_EPSILON_M = 1.0e-9
+CUSTOM_LINE_MAX_POINTS = 20_000
+CUSTOM_LINE_SPEED_SAMPLE_STEP_M = 0.10
+CUSTOM_LINE_MAX_COMPILED_POINTS = 100_000
+CUSTOM_LINE_CONTAINMENT_SAMPLE_STEP_M = 0.05
+CUSTOM_LINE_MAX_CONTAINMENT_SAMPLES = 100_000
+CUSTOM_LINE_DEFAULT_MAX_SPEED_MPS = 3.0
+CUSTOM_LINE_DEFAULT_LATERAL_ACCEL_LIMIT_MPS2 = 2.5
+CUSTOM_LINE_DEFAULT_ACCEL_LIMIT_MPS2 = 1.5
+CUSTOM_LINE_DEFAULT_DECEL_LIMIT_MPS2 = 2.5
 
 
 def _is_relative_to(path: Path, root: Path) -> bool:
@@ -500,7 +519,12 @@ def _payload_section_gates(value: Any, lane_ids: set[str]) -> list[dict[str, Any
             continue
         gate_id = _sanitize_id(str(raw_gate.get("id") or ""), f"gate_{index:03d}")
         if gate_id in used_ids:
-            gate_id = f"gate_{index:03d}"
+            base_id = f"gate_{index:03d}"
+            gate_id = base_id
+            suffix = 2
+            while gate_id in used_ids:
+                gate_id = f"{base_id[:55]}_{suffix}"
+                suffix += 1
         used_ids.add(gate_id)
         lane_id = _sanitize_id(str(raw_gate.get("lane_id") or ""), fallback_lane_id)
         if lane_ids and lane_id not in lane_ids:
@@ -544,6 +568,7 @@ def _build_sections_for_gates(
         gates_by_lane.setdefault(str(gate["lane_id"]), []).append(gate)
 
     sections: list[dict[str, Any]] = []
+    used_section_ids: set[str] = set()
     section_index = 1
     for lane_id, lane_gates in sorted(gates_by_lane.items()):
         lane = lane_by_id.get(lane_id)
@@ -560,8 +585,15 @@ def _build_sections_for_gates(
                 continue
             key = (lane_id, str(start_gate["id"]), str(end_gate["id"]))
             previous = preserved.get(key, {})
+            requested_id = _sanitize_id(str(previous.get("id") or ""), f"section_{section_index:03d}")
+            section_id = requested_id
+            suffix = 2
+            while section_id in used_section_ids:
+                section_id = f"{requested_id[:55]}_{suffix}"
+                suffix += 1
+            used_section_ids.add(section_id)
             section: dict[str, Any] = {
-                "id": str(previous.get("id") or f"section_{section_index:03d}"),
+                "id": section_id,
                 "lane_id": lane_id,
                 "start_gate_id": str(start_gate["id"]),
                 "end_gate_id": str(end_gate["id"]),
@@ -704,6 +736,8 @@ def _read_hd_map(path: Path) -> tuple[dict[str, Any], dict[str, Any] | None]:
                 "end_gate_id": str(raw_section.get("end_gate_id") or ""),
                 "start_s_m": _as_float(raw_section.get("start_s_m")),
                 "end_s_m": _as_float(raw_section.get("end_s_m")),
+                "wrap": bool(raw_section.get("wrap", False)),
+                "lane_length_m": raw_section.get("lane_length_m"),
                 "speed_override_mps": raw_section.get("speed_override_mps"),
                 "speed_scale": raw_section.get("speed_scale"),
                 "class": raw_section.get("class"),
@@ -856,9 +890,27 @@ def _read_json_file(path: Path) -> dict[str, Any]:
 
 def _write_json_file(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path = path.with_suffix(f"{path.suffix}.tmp")
-    temporary_path.write_text(json.dumps(data, ensure_ascii=True, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    temporary_path.replace(path)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary_path = Path(handle.name)
+            handle.write(json.dumps(data, ensure_ascii=True, indent=2, sort_keys=True) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, path)
+    finally:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink()
+            except FileNotFoundError:
+                pass
 
 
 def _version_artifact_paths(version_dir: Path) -> dict[str, Path]:
@@ -935,6 +987,1883 @@ def _read_hd_map_versions(map_dir: Path) -> dict[str, Any]:
     }
 
 
+def _custom_line_root(map_dir: Path) -> Path:
+    return map_dir / CUSTOM_LINE_DIR
+
+
+def _checked_custom_line_root(map_dir: Path, *, create: bool = False) -> Path:
+    root = _custom_line_root(map_dir)
+    if root.is_symlink():
+        raise ValueError("custom_lines must be a real folder, not a symbolic link")
+    if create:
+        root.mkdir(parents=True, exist_ok=True)
+    if root.is_symlink():
+        raise ValueError("custom_lines must be a real folder, not a symbolic link")
+    if root.exists() and not root.is_dir():
+        raise ValueError("custom_lines exists but is not a directory")
+    resolved_map_dir = map_dir.resolve()
+    resolved_root = root.resolve()
+    if not _is_relative_to(resolved_root, resolved_map_dir):
+        raise ValueError("custom_lines resolves outside the map folder")
+    return root
+
+
+def _custom_line_active_path(map_dir: Path) -> Path:
+    return _checked_custom_line_root(map_dir) / CUSTOM_LINE_ACTIVE_FILE
+
+
+def _canonical_custom_line_paths(map_dir: Path) -> dict[str, Path]:
+    return {
+        "trajectory": map_dir / f"{map_dir.name}_custom_line.csv",
+        "meta": map_dir / f"{map_dir.name}_custom_line.meta.json",
+    }
+
+
+def _canonical_custom_line_active(map_dir: Path) -> tuple[str, str]:
+    canonical = _canonical_custom_line_paths(map_dir)
+    meta = _read_json_file(canonical["meta"])
+    if not meta:
+        cached = _read_json_file(_custom_line_active_path(map_dir))
+        cached_issue = str(cached.get("issue") or "")
+        return "", cached_issue
+    if str(meta.get("format") or "") != CUSTOM_LINE_FORMAT:
+        return "", "active custom line metadata has an unsupported format"
+    custom_line_id = str(meta.get("id") or "")
+    if not _is_safe_custom_line_id(custom_line_id):
+        return "", "active custom line metadata has an invalid id"
+    expected_hash = str(meta.get("trajectory_sha256") or "").lower()
+    if len(expected_hash) != 64 or any(char not in "0123456789abcdef" for char in expected_hash):
+        return "", "active custom line metadata has an invalid trajectory hash"
+    if canonical["trajectory"].is_symlink() or not canonical["trajectory"].is_file():
+        return "", "active custom line trajectory is missing or not a regular file"
+    if _sha256_file(canonical["trajectory"]).lower() != expected_hash:
+        return "", "active custom line trajectory does not match its metadata"
+    profile_mode = str(meta.get("speed_profile_mode") or "")
+    speed_authoring = str(meta.get("speed_authoring") or "")
+    section_authored = profile_mode == "sections" or speed_authoring == "sections"
+    expected_layout = str(
+        meta.get("section_layout_fingerprint") or meta.get("section_layout_hash") or ""
+    ).lower()
+    expected_hd_map_hash = str(meta.get("hd_map_sha256") or "").lower()
+    if section_authored or expected_layout or expected_hd_map_hash:
+        try:
+            layout = _custom_line_hd_layout(map_dir)
+        except (OSError, TypeError, ValueError, OverflowError) as exc:
+            return "", f"active custom line HD section layout is invalid: {exc}"
+        if not expected_layout or expected_layout != str(layout["fingerprint"]).lower():
+            return "", "active custom line section layout is stale"
+        if not expected_hd_map_hash or expected_hd_map_hash != str(layout["hd_map_sha256"]).lower():
+            return "", "active custom line HD map hash is stale"
+    return custom_line_id, ""
+
+
+def _is_safe_custom_line_id(value: str) -> bool:
+    if not value or len(value) > 64 or not value[0].isascii() or not value[0].isalnum():
+        return False
+    return all(char.isascii() and (char.isalnum() or char in ("_", "-")) for char in value)
+
+
+def _require_custom_line_id(payload: dict[str, Any]) -> str:
+    value = str(payload.get("id") or payload.get("custom_line_id") or "").strip()
+    if not _is_safe_custom_line_id(value):
+        raise ValueError("custom line id must use 1-64 ASCII letters, digits, '_' or '-', starting with a letter or digit")
+    return value
+
+
+def _custom_line_path(map_dir: Path, custom_line_id: str) -> Path:
+    if not _is_safe_custom_line_id(custom_line_id):
+        raise ValueError("invalid custom line id")
+    raw_root = _checked_custom_line_root(map_dir)
+    root = raw_root.resolve()
+    candidate = raw_root / custom_line_id
+    if candidate.is_symlink():
+        raise ValueError("custom line folder must not be a symbolic link")
+    path = candidate.resolve()
+    if not _is_relative_to(path, root):
+        raise ValueError("custom line path is outside the map folder")
+    return path
+
+
+def _custom_line_id_from_name(root: Path, name: str) -> str:
+    slug_chars: list[str] = []
+    previous_separator = False
+    for char in name.strip().lower():
+        if char.isascii() and char.isalnum():
+            slug_chars.append(char)
+            previous_separator = False
+        elif not previous_separator and slug_chars:
+            slug_chars.append("-")
+            previous_separator = True
+    base = "".join(slug_chars).strip("-")[:48] or "custom-line"
+    if base == "active":
+        base = "custom-line"
+    candidate = base
+    suffix = 2
+    while (root / candidate).exists():
+        candidate = f"{base[:55]}-{suffix}"
+        suffix += 1
+    return candidate
+
+
+def _custom_line_name(value: Any) -> str:
+    name = str(value or "").strip()
+    if not name:
+        raise ValueError("custom line name is required")
+    if len(name) > 120:
+        raise ValueError("custom line name must be 120 characters or fewer")
+    if any(ord(char) < 32 or ord(char) == 127 for char in name):
+        raise ValueError("custom line name must not contain control characters")
+    return name
+
+
+def _custom_line_source_type(payload: dict[str, Any]) -> str:
+    value = str(payload.get("source_type") or payload.get("base") or "").strip().lower()
+    aliases = {
+        "centerline": "centerline",
+        "center-line": "centerline",
+        "center_line": "centerline",
+        "raceline": "raceline",
+        "race-line": "raceline",
+        "race_line": "raceline",
+    }
+    normalized = aliases.get(value)
+    if normalized is None:
+        raise ValueError("source_type/base must be 'centerline' or 'raceline'")
+    return normalized
+
+
+def _nonnegative_finite_float(value: Any, field_name: str) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be a finite number") from exc
+    if not math.isfinite(number):
+        raise ValueError(f"{field_name} must be a finite number")
+    if number < 0.0:
+        raise ValueError(f"{field_name} must be greater than or equal to 0")
+    return number
+
+
+def _positive_finite_float(value: Any, field_name: str) -> float:
+    number = _nonnegative_finite_float(value, field_name)
+    if number <= 0.0:
+        raise ValueError(f"{field_name} must be greater than 0")
+    return number
+
+
+def _custom_line_constraints(
+    payload: dict[str, Any],
+    defaults: dict[str, Any] | None = None,
+) -> dict[str, float]:
+    fallback = {
+        "max_speed_mps": CUSTOM_LINE_DEFAULT_MAX_SPEED_MPS,
+        "lateral_accel_limit_mps2": CUSTOM_LINE_DEFAULT_LATERAL_ACCEL_LIMIT_MPS2,
+        "accel_limit_mps2": CUSTOM_LINE_DEFAULT_ACCEL_LIMIT_MPS2,
+        "decel_limit_mps2": CUSTOM_LINE_DEFAULT_DECEL_LIMIT_MPS2,
+    }
+    if isinstance(defaults, dict):
+        fallback.update({key: defaults[key] for key in fallback if key in defaults})
+    nested = payload.get("constraints") if isinstance(payload.get("constraints"), dict) else {}
+    result: dict[str, float] = {}
+    for field_name, default in fallback.items():
+        value = payload[field_name] if field_name in payload else nested.get(field_name, default)
+        result[field_name] = _positive_finite_float(value, field_name)
+    return result
+
+
+def _custom_line_points(value: Any, closed_loop: bool) -> list[dict[str, float]]:
+    if not isinstance(value, list):
+        raise ValueError("points must be an array")
+    if len(value) > CUSTOM_LINE_MAX_POINTS:
+        raise ValueError(f"custom line supports at most {CUSTOM_LINE_MAX_POINTS} points")
+    minimum = 3 if closed_loop else 2
+    if len(value) < minimum:
+        raise ValueError(f"custom line needs at least {minimum} points")
+
+    points: list[dict[str, float]] = []
+    for index, row in enumerate(value):
+        if not isinstance(row, dict):
+            raise ValueError(f"points[{index}] must be an object")
+        try:
+            x_m = float(row.get("x_m"))
+            y_m = float(row.get("y_m"))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"points[{index}] x_m and y_m must be finite numbers") from exc
+        if not math.isfinite(x_m) or not math.isfinite(y_m):
+            raise ValueError(f"points[{index}] x_m and y_m must be finite numbers")
+        point = {"x_m": x_m, "y_m": y_m}
+        # speed_mps was the authoring format before section profiles were
+        # introduced.  Keep accepting it so old manifests remain readable,
+        # but new manifests only persist x/y here.
+        if row.get("speed_mps") is not None:
+            point["speed_mps"] = _nonnegative_finite_float(
+                row.get("speed_mps"),
+                f"points[{index}].speed_mps",
+            )
+        points.append(point)
+
+    buckets: dict[tuple[int, int], list[tuple[int, dict[str, float]]]] = {}
+    for index, point in enumerate(points):
+        try:
+            bucket_x = math.floor(point["x_m"] / CUSTOM_LINE_POINT_EPSILON_M)
+            bucket_y = math.floor(point["y_m"] / CUSTOM_LINE_POINT_EPSILON_M)
+        except OverflowError as exc:
+            raise ValueError(f"points[{index}] coordinates are outside the supported range") from exc
+        for offset_x in (-1, 0, 1):
+            for offset_y in (-1, 0, 1):
+                for previous_index, previous in buckets.get((bucket_x + offset_x, bucket_y + offset_y), []):
+                    distance = math.hypot(
+                        point["x_m"] - previous["x_m"],
+                        point["y_m"] - previous["y_m"],
+                    )
+                    if not math.isfinite(distance):
+                        raise ValueError("custom line coordinates produce a non-finite segment length")
+                    if distance <= CUSTOM_LINE_POINT_EPSILON_M:
+                        raise ValueError(f"points[{index}] duplicates points[{previous_index}]")
+        buckets.setdefault((bucket_x, bucket_y), []).append((index, point))
+    if closed_loop:
+        closing_distance = math.hypot(
+            points[0]["x_m"] - points[-1]["x_m"],
+            points[0]["y_m"] - points[-1]["y_m"],
+        )
+        if not math.isfinite(closing_distance) or closing_distance <= CUSTOM_LINE_POINT_EPSILON_M:
+            raise ValueError("closed custom line has a zero-length closing segment")
+    return points
+
+
+def _primary_lane_geometry(map_dir: Path) -> dict[str, Any] | None:
+    hd_map_path = map_dir / f"{map_dir.name}_hd_map.yaml"
+    hd_map, _ = _read_hd_map(hd_map_path)
+    primary_lane_id = str(hd_map.get("primary_lane_id") or "")
+    lanes = hd_map.get("lanes") if isinstance(hd_map.get("lanes"), list) else []
+    primary = next(
+        (
+            lane
+            for lane in lanes
+            if isinstance(lane, dict) and (str(lane.get("id") or "") == primary_lane_id or lane.get("primary"))
+        ),
+        None,
+    )
+    return primary if isinstance(primary, dict) else None
+
+
+def _point_inside_polygon(point: list[float], polygon: list[list[float]]) -> bool:
+    if len(polygon) < 3:
+        return False
+    for index, start in enumerate(polygon):
+        end = polygon[(index + 1) % len(polygon)]
+        if _segment_distance(point, start, end) <= CUSTOM_LINE_POINT_EPSILON_M:
+            return True
+
+    inside = False
+    x, y = point
+    previous = polygon[-1]
+    for current in polygon:
+        x1, y1 = previous
+        x2, y2 = current
+        if (y1 > y) != (y2 > y):
+            intersection_x = (x2 - x1) * (y - y1) / (y2 - y1) + x1
+            if x < intersection_x:
+                inside = not inside
+        previous = current
+    return inside
+
+
+def _custom_line_geometry_validation(
+    map_dir: Path,
+    points: list[dict[str, float]],
+    closed_loop: bool,
+) -> dict[str, Any]:
+    lane = _primary_lane_geometry(map_dir)
+    if lane is None:
+        return {
+            "valid": False,
+            "issue": "primary lane geometry is required to validate a custom line",
+            "min_clearance_m": None,
+            "containment_checked": False,
+        }
+    left_bound = _as_points(lane.get("left_bound", []))
+    right_bound = _as_points(lane.get("right_bound", []))
+    polygon = left_bound + list(reversed(right_bound))
+    if len(left_bound) < 2 or len(right_bound) < 2 or len(polygon) < 3:
+        return {
+            "valid": False,
+            "issue": "primary lane needs usable left and right bounds",
+            "min_clearance_m": None,
+            "containment_checked": False,
+        }
+
+    area_twice = sum(
+        polygon[index][0] * polygon[(index + 1) % len(polygon)][1]
+        - polygon[(index + 1) % len(polygon)][0] * polygon[index][1]
+        for index in range(len(polygon))
+    )
+    if not math.isfinite(area_twice) or abs(area_twice) <= CUSTOM_LINE_POINT_EPSILON_M:
+        return {
+            "valid": False,
+            "issue": "primary lane bounds do not form a usable corridor",
+            "min_clearance_m": None,
+            "containment_checked": False,
+        }
+
+    closed_lane = bool(lane.get("closed_loop", True))
+    min_clearance = math.inf
+    def validate_sample(xy: list[float], label: str) -> dict[str, Any] | None:
+        nonlocal min_clearance
+        if not _point_inside_polygon(xy, polygon):
+            return {
+                "valid": False,
+                "issue": f"{label} is outside the primary lane bounds",
+                "min_clearance_m": None if min_clearance == math.inf else min_clearance,
+                "containment_checked": True,
+            }
+        clearance = min(
+            _nearest_distance(xy, left_bound, closed_lane),
+            _nearest_distance(xy, right_bound, closed_lane),
+        )
+        min_clearance = min(min_clearance, clearance)
+        return None
+
+    for index, point in enumerate(points):
+        issue = validate_sample([point["x_m"], point["y_m"]], f"points[{index}]")
+        if issue is not None:
+            return issue
+
+    segment_count = len(points) if closed_loop else len(points) - 1
+    sample_count = 0
+    for index in range(segment_count):
+        start = points[index]
+        end = points[(index + 1) % len(points)]
+        distance = math.hypot(end["x_m"] - start["x_m"], end["y_m"] - start["y_m"])
+        steps = max(1, math.ceil(distance / CUSTOM_LINE_CONTAINMENT_SAMPLE_STEP_M))
+        sample_count += max(0, steps - 1)
+        if sample_count > CUSTOM_LINE_MAX_CONTAINMENT_SAMPLES:
+            return {
+                "valid": False,
+                "issue": "custom line requires too many lane-containment samples",
+                "min_clearance_m": None if min_clearance == math.inf else min_clearance,
+                "containment_checked": True,
+            }
+        for sample_index in range(1, steps):
+            ratio = sample_index / steps
+            xy = [
+                start["x_m"] + (end["x_m"] - start["x_m"]) * ratio,
+                start["y_m"] + (end["y_m"] - start["y_m"]) * ratio,
+            ]
+            issue = validate_sample(xy, f"segment[{index}] sample[{sample_index}]")
+            if issue is not None:
+                return issue
+    return {
+        "valid": True,
+        "issue": "",
+        "min_clearance_m": min_clearance if math.isfinite(min_clearance) else None,
+        "containment_checked": True,
+    }
+
+
+def _custom_line_content_hash(
+    points: list[dict[str, float]],
+    closed_loop: bool,
+    default_speed_mps: float | None = None,
+    section_speeds_mps: dict[str, float] | None = None,
+    constraints: dict[str, float] | None = None,
+) -> str:
+    geometry = [{"x_m": point["x_m"], "y_m": point["y_m"]} for point in points]
+    content: dict[str, Any] = {"closed_loop": closed_loop, "points": geometry}
+    if default_speed_mps is not None:
+        content["default_speed_mps"] = default_speed_mps
+        content["section_speeds_mps"] = dict(sorted((section_speeds_mps or {}).items()))
+    if constraints is not None:
+        content["constraints"] = constraints
+    serialized = json.dumps(
+        content,
+        ensure_ascii=True,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _custom_line_hd_layout(map_dir: Path) -> dict[str, Any]:
+    hd_map_path = map_dir / f"{map_dir.name}_hd_map.yaml"
+    hd_map, _ = _read_hd_map(hd_map_path)
+    primary_lane_id = str(hd_map.get("primary_lane_id") or "")
+    lanes = hd_map.get("lanes") if isinstance(hd_map.get("lanes"), list) else []
+    lane = next(
+        (
+            item
+            for item in lanes
+            if isinstance(item, dict)
+            and (str(item.get("id") or "") == primary_lane_id or item.get("primary"))
+        ),
+        None,
+    )
+    if not isinstance(lane, dict):
+        raise ValueError("primary lane geometry is required for custom line section speeds")
+    primary_lane_id = str(lane.get("id") or primary_lane_id)
+    centerline = _as_points(lane.get("centerline", []))
+    closed_loop = bool(lane.get("closed_loop", True))
+    minimum = 3 if closed_loop else 2
+    if len(centerline) < minimum:
+        raise ValueError("primary lane centerline is incomplete")
+
+    gate_by_id: dict[str, dict[str, Any]] = {}
+    for raw_gate in hd_map.get("section_gates", []) or []:
+        if not isinstance(raw_gate, dict) or str(raw_gate.get("lane_id") or "") != primary_lane_id:
+            continue
+        gate_id = str(raw_gate.get("id") or "")
+        if not gate_id:
+            raise ValueError("primary lane section gate has no id")
+        if gate_id in gate_by_id:
+            raise ValueError(f"duplicate primary lane section gate id: {gate_id}")
+        line = _as_points(raw_gate.get("line", []))[:2]
+        if len(line) != 2 or math.hypot(line[1][0] - line[0][0], line[1][1] - line[0][1]) <= CUSTOM_LINE_POINT_EPSILON_M:
+            raise ValueError(f"section gate {gate_id} needs a usable two-point line")
+        gate_by_id[gate_id] = {
+            "id": gate_id,
+            "lane_id": primary_lane_id,
+            "s_m": _as_float(raw_gate.get("s_m"), 0.0),
+            "line": line,
+        }
+
+    sections: list[dict[str, Any]] = []
+    section_ids: set[str] = set()
+    section_pairs: set[tuple[str, str]] = set()
+    for raw_section in hd_map.get("sections", []) or []:
+        if not isinstance(raw_section, dict) or str(raw_section.get("lane_id") or "") != primary_lane_id:
+            continue
+        section_id = str(raw_section.get("id") or "")
+        if not section_id:
+            raise ValueError("primary lane section has no id")
+        if section_id in section_ids:
+            raise ValueError(f"duplicate primary lane section id: {section_id}")
+        section_ids.add(section_id)
+        start_gate_id = str(raw_section.get("start_gate_id") or "")
+        end_gate_id = str(raw_section.get("end_gate_id") or "")
+        if start_gate_id == end_gate_id or start_gate_id not in gate_by_id or end_gate_id not in gate_by_id:
+            raise ValueError(f"section {section_id} references missing or identical gates")
+        section_pair = (start_gate_id, end_gate_id)
+        if section_pair in section_pairs:
+            raise ValueError(
+                f"duplicate primary lane section gate pair: {start_gate_id} -> {end_gate_id}"
+            )
+        section_pairs.add(section_pair)
+        sections.append(
+            {
+                "id": section_id,
+                "lane_id": primary_lane_id,
+                "start_gate_id": start_gate_id,
+                "end_gate_id": end_gate_id,
+                "start_s_m": _as_float(raw_section.get("start_s_m"), gate_by_id[start_gate_id]["s_m"]),
+                "end_s_m": _as_float(raw_section.get("end_s_m"), gate_by_id[end_gate_id]["s_m"]),
+                "wrap": bool(raw_section.get("wrap", False)),
+                "speed_override_mps": raw_section.get("speed_override_mps"),
+            }
+        )
+
+    layout_source = {
+        "primary_lane_id": primary_lane_id,
+        "closed_loop": closed_loop,
+        "centerline": centerline,
+        "gates": [gate_by_id[key] for key in sorted(gate_by_id)],
+        "sections": [
+            {
+                key: section[key]
+                for key in ("id", "lane_id", "start_gate_id", "end_gate_id", "start_s_m", "end_s_m", "wrap")
+            }
+            for section in sorted(sections, key=lambda item: str(item["id"]))
+        ],
+    }
+    fingerprint = hashlib.sha256(
+        json.dumps(layout_source, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return {
+        "primary_lane_id": primary_lane_id,
+        "closed_loop": closed_loop,
+        "centerline": centerline,
+        "gates": gate_by_id,
+        "sections": sections,
+        "section_ids": section_ids,
+        "fingerprint": fingerprint,
+        "hd_map_sha256": _sha256_file(hd_map_path),
+    }
+
+
+def _custom_line_section_speeds(
+    value: Any,
+    layout: dict[str, Any],
+    *,
+    allow_legacy_zero: bool = False,
+) -> dict[str, float]:
+    if value is None:
+        value = {}
+    if not isinstance(value, dict):
+        raise ValueError("section_speeds_mps must be an object keyed by section id")
+    known_ids = set(layout.get("section_ids") or set())
+    result: dict[str, float] = {}
+    for raw_id, raw_speed in value.items():
+        section_id = str(raw_id)
+        if section_id not in known_ids:
+            raise ValueError(f"section_speeds_mps contains unknown primary lane section id: {section_id}")
+        speed = _nonnegative_finite_float(raw_speed, f"section_speeds_mps.{section_id}")
+        if not allow_legacy_zero and speed < CUSTOM_LINE_MIN_SECTION_SPEED_MPS:
+            raise ValueError(
+                f"section_speeds_mps.{section_id} must be at least "
+                f"{CUSTOM_LINE_MIN_SECTION_SPEED_MPS:g} m/s"
+            )
+        result[section_id] = speed
+    return dict(sorted(result.items()))
+
+
+def _custom_line_default_speed(value: Any, *, allow_legacy_zero: bool = False) -> float:
+    speed = _nonnegative_finite_float(value, "default_speed_mps")
+    if not allow_legacy_zero and speed < CUSTOM_LINE_MIN_SECTION_SPEED_MPS:
+        raise ValueError(f"default_speed_mps must be at least {CUSTOM_LINE_MIN_SECTION_SPEED_MPS:g} m/s")
+    return speed
+
+
+def _custom_polyline_stations(
+    points: list[dict[str, float]],
+    closed_loop: bool,
+) -> tuple[list[float], list[float], float]:
+    stations = [0.0]
+    segment_count = len(points) if closed_loop else len(points) - 1
+    segment_lengths: list[float] = []
+    for index in range(segment_count):
+        following = (index + 1) % len(points)
+        distance = math.hypot(
+            points[following]["x_m"] - points[index]["x_m"],
+            points[following]["y_m"] - points[index]["y_m"],
+        )
+        if not math.isfinite(distance) or distance <= CUSTOM_LINE_POINT_EPSILON_M:
+            raise ValueError(f"custom line segment {index} has a zero or non-finite length")
+        segment_lengths.append(distance)
+        if following != 0:
+            stations.append(stations[-1] + distance)
+    total_length = sum(segment_lengths)
+    if not math.isfinite(total_length) or total_length <= CUSTOM_LINE_POINT_EPSILON_M:
+        raise ValueError("custom line length is invalid")
+    return stations, segment_lengths, total_length
+
+
+def _segment_intersection_parameter(
+    start: dict[str, float],
+    end: dict[str, float],
+    gate_start: list[float],
+    gate_end: list[float],
+) -> float | None:
+    rx = end["x_m"] - start["x_m"]
+    ry = end["y_m"] - start["y_m"]
+    sx = gate_end[0] - gate_start[0]
+    sy = gate_end[1] - gate_start[1]
+    qpx = gate_start[0] - start["x_m"]
+    qpy = gate_start[1] - start["y_m"]
+    denominator = rx * sy - ry * sx
+    scale = max(1.0, math.hypot(rx, ry) * math.hypot(sx, sy))
+    tolerance = 1.0e-10 * scale
+    if abs(denominator) <= tolerance:
+        # A path running along a gate has no unique section transition.
+        if abs(qpx * ry - qpy * rx) <= tolerance:
+            raise ValueError("custom line overlaps a section gate")
+        return None
+    t = (qpx * sy - qpy * sx) / denominator
+    u = (qpx * ry - qpy * rx) / denominator
+    bound_tolerance = 1.0e-9
+    if -bound_tolerance <= t <= 1.0 + bound_tolerance and -bound_tolerance <= u <= 1.0 + bound_tolerance:
+        return max(0.0, min(1.0, t))
+    return None
+
+
+def _custom_line_gate_stations(
+    points: list[dict[str, float]],
+    closed_loop: bool,
+    layout: dict[str, Any],
+) -> tuple[dict[str, float], list[float], list[float], float]:
+    author_stations, segment_lengths, total_length = _custom_polyline_stations(points, closed_loop)
+    gate_stations: dict[str, float] = {}
+    segment_count = len(segment_lengths)
+    for gate_id, gate in layout["gates"].items():
+        raw_stations: list[float] = []
+        for index in range(segment_count):
+            following = (index + 1) % len(points)
+            parameter = _segment_intersection_parameter(
+                points[index],
+                points[following],
+                gate["line"][0],
+                gate["line"][1],
+            )
+            if parameter is None:
+                continue
+            station = author_stations[index] + segment_lengths[index] * parameter
+            if closed_loop and (station >= total_length - 1.0e-8 or station <= 1.0e-8):
+                station = 0.0
+            if not any(abs(station - previous) <= 1.0e-7 for previous in raw_stations):
+                raw_stations.append(station)
+        if len(raw_stations) != 1:
+            raise ValueError(
+                f"section gate {gate_id} must intersect the custom line exactly once; found {len(raw_stations)}"
+            )
+        gate_stations[gate_id] = raw_stations[0]
+
+    if layout["sections"]:
+        ordered_gates = sorted(gate_stations, key=lambda gate_id: gate_stations[gate_id])
+        actual_pairs = {
+            (str(section["start_gate_id"]), str(section["end_gate_id"]))
+            for section in layout["sections"]
+        }
+        if closed_loop:
+            expected_pairs = {
+                (ordered_gates[index], ordered_gates[(index + 1) % len(ordered_gates)])
+                for index in range(len(ordered_gates))
+            }
+        else:
+            expected_pairs = {
+                (ordered_gates[index], ordered_gates[index + 1])
+                for index in range(max(0, len(ordered_gates) - 1))
+            }
+        if actual_pairs != expected_pairs:
+            raise ValueError("section gate order is inconsistent with the custom line direction")
+    return gate_stations, author_stations, segment_lengths, total_length
+
+
+def _signed_area_twice_xy(points: list[list[float]]) -> float:
+    return sum(
+        points[index][0] * points[(index + 1) % len(points)][1]
+        - points[(index + 1) % len(points)][0] * points[index][1]
+        for index in range(len(points))
+    )
+
+
+def _validate_two_gate_closed_direction(
+    points: list[dict[str, float]],
+    layout: dict[str, Any],
+) -> None:
+    custom_xy = [[point["x_m"], point["y_m"]] for point in points]
+    custom_area = _signed_area_twice_xy(custom_xy)
+    center_area = _signed_area_twice_xy(layout["centerline"])
+    coordinate_scale = max(
+        1.0,
+        *(abs(value) for point in [*custom_xy, *layout["centerline"]] for value in point[:2]),
+    )
+    area_tolerance = 1.0e-12 * coordinate_scale * coordinate_scale * max(
+        len(custom_xy),
+        len(layout["centerline"]),
+    )
+    if (
+        not math.isfinite(custom_area)
+        or not math.isfinite(center_area)
+        or abs(custom_area) <= area_tolerance
+        or abs(center_area) <= area_tolerance
+    ):
+        raise ValueError("custom line direction is ambiguous relative to the primary lane")
+    if (custom_area < 0.0) != (center_area < 0.0):
+        raise ValueError("custom line direction is opposite relative to the primary lane")
+
+
+def _custom_line_speed_context(
+    points: list[dict[str, float]],
+    closed_loop: bool,
+    layout: dict[str, Any],
+) -> dict[str, Any]:
+    if layout["sections"] and bool(layout["closed_loop"]) != closed_loop:
+        raise ValueError("custom line closed_loop must match the primary lane topology")
+    if layout["sections"] and closed_loop and len(layout["gates"]) == 2:
+        _validate_two_gate_closed_direction(points, layout)
+    if not layout["sections"]:
+        stations, segment_lengths, total_length = _custom_polyline_stations(points, closed_loop)
+        return {
+            "gate_stations": {},
+            "author_stations": stations,
+            "segment_lengths": segment_lengths,
+            "total_length": total_length,
+            "sections": [],
+        }
+    gate_stations, author_stations, segment_lengths, total_length = _custom_line_gate_stations(
+        points,
+        closed_loop,
+        layout,
+    )
+    sections: list[dict[str, Any]] = []
+    for section in layout["sections"]:
+        start_station = gate_stations[str(section["start_gate_id"])]
+        end_station = gate_stations[str(section["end_gate_id"])]
+        if not closed_loop and end_station <= start_station + CUSTOM_LINE_POINT_EPSILON_M:
+            raise ValueError(f"section {section['id']} has reversed or empty custom-line bounds")
+        if closed_loop and abs(end_station - start_station) <= CUSTOM_LINE_POINT_EPSILON_M:
+            raise ValueError(f"section {section['id']} has empty custom-line bounds")
+        sections.append({**section, "custom_start_s_m": start_station, "custom_end_s_m": end_station})
+    return {
+        "gate_stations": gate_stations,
+        "author_stations": author_stations,
+        "segment_lengths": segment_lengths,
+        "total_length": total_length,
+        "sections": sections,
+    }
+
+
+def _section_for_custom_station(station: float, context: dict[str, Any], closed_loop: bool) -> str | None:
+    total_length = float(context["total_length"])
+    if closed_loop:
+        station %= total_length
+    for section in context["sections"]:
+        start = float(section["custom_start_s_m"])
+        end = float(section["custom_end_s_m"])
+        if closed_loop and end < start:
+            inside = station >= start or station < end
+        else:
+            inside = start <= station < end
+            if not closed_loop and abs(station - end) <= CUSTOM_LINE_POINT_EPSILON_M and abs(end - total_length) <= 1.0e-8:
+                inside = True
+        if inside:
+            return str(section["id"])
+    return None
+
+
+def _legacy_custom_line_speed_profile(
+    points: list[dict[str, float]],
+    context: dict[str, Any],
+    closed_loop: bool,
+) -> tuple[float, dict[str, float]]:
+    legacy_speeds: list[float] = []
+    for index, point in enumerate(points):
+        if "speed_mps" not in point:
+            raise ValueError("legacy custom line points must include speed_mps")
+        legacy_speeds.append(_nonnegative_finite_float(point["speed_mps"], f"points[{index}].speed_mps"))
+    default_speed = min(legacy_speeds)
+    grouped: dict[str, list[float]] = {}
+    for station, speed in zip(context["author_stations"], legacy_speeds):
+        section_id = _section_for_custom_station(station, context, closed_loop)
+        if section_id is not None:
+            grouped.setdefault(section_id, []).append(speed)
+    section_speeds = {
+        str(section["id"]): min(grouped.get(str(section["id"]), legacy_speeds))
+        for section in context["sections"]
+    }
+    return default_speed, dict(sorted(section_speeds.items()))
+
+
+def _augment_custom_line_at_gates(
+    points: list[dict[str, float]],
+    closed_loop: bool,
+    context: dict[str, Any],
+) -> list[dict[str, Any]]:
+    augmented: list[dict[str, Any]] = [
+        {
+            "x_m": point["x_m"],
+            "y_m": point["y_m"],
+            "custom_s_m": context["author_stations"][index],
+            "author_index": index,
+            "gate_ids": [],
+        }
+        for index, point in enumerate(points)
+    ]
+    total_length = float(context["total_length"])
+    for gate_id, station in context["gate_stations"].items():
+        existing = next((item for item in augmented if abs(float(item["custom_s_m"]) - station) <= 1.0e-7), None)
+        if existing is not None:
+            existing["gate_ids"].append(gate_id)
+            continue
+        segment_index = 0
+        for index, start_station in enumerate(context["author_stations"]):
+            end_station = (
+                context["author_stations"][index + 1]
+                if index + 1 < len(points)
+                else total_length
+            )
+            if start_station < station < end_station:
+                segment_index = index
+                break
+        following = (segment_index + 1) % len(points)
+        start_station = context["author_stations"][segment_index]
+        ratio = (station - start_station) / context["segment_lengths"][segment_index]
+        augmented.append(
+            {
+                "x_m": points[segment_index]["x_m"] + (points[following]["x_m"] - points[segment_index]["x_m"]) * ratio,
+                "y_m": points[segment_index]["y_m"] + (points[following]["y_m"] - points[segment_index]["y_m"]) * ratio,
+                "custom_s_m": station,
+                "author_index": None,
+                "gate_ids": [gate_id],
+            }
+        )
+    augmented.sort(key=lambda item: float(item["custom_s_m"]))
+    densified: list[dict[str, Any]] = []
+    interval_count = len(augmented) if closed_loop else len(augmented) - 1
+    for index in range(interval_count):
+        start = augmented[index]
+        end = augmented[(index + 1) % len(augmented)]
+        densified.append(start)
+        distance = math.hypot(end["x_m"] - start["x_m"], end["y_m"] - start["y_m"])
+        steps = max(1, math.ceil(distance / CUSTOM_LINE_SPEED_SAMPLE_STEP_M))
+        if len(densified) + steps - 1 > CUSTOM_LINE_MAX_COMPILED_POINTS:
+            raise ValueError(
+                f"compiled custom line supports at most {CUSTOM_LINE_MAX_COMPILED_POINTS} points"
+            )
+        start_station = float(start["custom_s_m"])
+        end_station = float(end["custom_s_m"])
+        if closed_loop and index == len(augmented) - 1:
+            end_station = float(context["total_length"])
+        for step in range(1, steps):
+            ratio = step / steps
+            densified.append(
+                {
+                    "x_m": start["x_m"] + (end["x_m"] - start["x_m"]) * ratio,
+                    "y_m": start["y_m"] + (end["y_m"] - start["y_m"]) * ratio,
+                    "custom_s_m": start_station + (end_station - start_station) * ratio,
+                    "author_index": None,
+                    "gate_ids": [],
+                }
+            )
+    if not closed_loop:
+        densified.append(augmented[-1])
+    if len(densified) > CUSTOM_LINE_MAX_COMPILED_POINTS:
+        raise ValueError(f"compiled custom line supports at most {CUSTOM_LINE_MAX_COMPILED_POINTS} points")
+    return densified
+
+
+def _requested_section_speed(
+    station: float,
+    context: dict[str, Any],
+    closed_loop: bool,
+    default_speed_mps: float,
+    section_speeds_mps: dict[str, float],
+) -> float:
+    section_id = _section_for_custom_station(station, context, closed_loop)
+    return section_speeds_mps.get(section_id, default_speed_mps) if section_id is not None else default_speed_mps
+
+
+def _apply_custom_speed_envelope(
+    trajectory: list[dict[str, float]],
+    closed_loop: bool,
+    constraints: dict[str, float],
+) -> list[float]:
+    speeds: list[float] = []
+    for row in trajectory:
+        curvature = abs(row["kappa_radpm"])
+        curvature_cap = math.inf
+        if curvature > 1.0e-12:
+            curvature_cap = math.sqrt(constraints["lateral_accel_limit_mps2"] / curvature)
+        speeds.append(min(row["vx_mps"], constraints["max_speed_mps"], curvature_cap))
+
+    edges = [(index, index + 1) for index in range(len(speeds) - 1)]
+    distances = [trajectory[index + 1]["s_m"] - trajectory[index]["s_m"] for index in range(len(speeds) - 1)]
+    if closed_loop:
+        closing_distance = math.hypot(
+            trajectory[0]["x_m"] - trajectory[-1]["x_m"],
+            trajectory[0]["y_m"] - trajectory[-1]["y_m"],
+        )
+        edges.append((len(speeds) - 1, 0))
+        distances.append(closing_distance)
+
+    tolerance = 1.0e-12
+    for _ in range(max(2, len(speeds) * 2 + 2)):
+        changed = False
+        for (start, end), distance in zip(edges, distances):
+            cap = math.sqrt(max(0.0, speeds[start] * speeds[start] + 2.0 * constraints["accel_limit_mps2"] * distance))
+            if speeds[end] > cap + tolerance:
+                speeds[end] = cap
+                changed = True
+        for (start, end), distance in reversed(list(zip(edges, distances))):
+            cap = math.sqrt(max(0.0, speeds[end] * speeds[end] + 2.0 * constraints["decel_limit_mps2"] * distance))
+            if speeds[start] > cap + tolerance:
+                speeds[start] = cap
+                changed = True
+        if not changed:
+            break
+    return speeds
+
+
+def _compile_custom_line(
+    map_dir: Path,
+    points: list[dict[str, float]],
+    closed_loop: bool,
+    default_speed_mps: float,
+    section_speeds_mps: dict[str, float],
+    constraints: dict[str, float],
+) -> tuple[list[dict[str, float]], list[dict[str, float]], dict[str, Any], dict[str, Any]]:
+    layout = _custom_line_hd_layout(map_dir)
+    default_speed_mps = _custom_line_default_speed(default_speed_mps, allow_legacy_zero=True)
+    section_speeds_mps = _custom_line_section_speeds(
+        section_speeds_mps,
+        layout,
+        allow_legacy_zero=True,
+    )
+    context = _custom_line_speed_context(points, closed_loop, layout)
+    augmented = _augment_custom_line_at_gates(points, closed_loop, context)
+    target_by_section = {
+        str(section["id"]): section_speeds_mps.get(str(section["id"]), default_speed_mps)
+        for section in context["sections"]
+    }
+    requested: list[dict[str, float]] = []
+    for item in augmented:
+        target = _requested_section_speed(
+            float(item["custom_s_m"]),
+            context,
+            closed_loop,
+            default_speed_mps,
+            section_speeds_mps,
+        )
+        if item["gate_ids"]:
+            adjacent: list[float] = []
+            for section in context["sections"]:
+                if section["start_gate_id"] in item["gate_ids"] or section["end_gate_id"] in item["gate_ids"]:
+                    adjacent.append(target_by_section[str(section["id"])])
+            if not closed_loop and len(adjacent) < 2:
+                adjacent.append(default_speed_mps)
+            target = min([target, *adjacent])
+        requested.append({"x_m": item["x_m"], "y_m": item["y_m"], "speed_mps": target})
+
+    geometry_seed = [
+        {"x_m": point["x_m"], "y_m": point["y_m"], "speed_mps": 0.0}
+        for point in requested
+    ]
+    initial_trajectory = _derive_custom_trajectory(geometry_seed, closed_loop)
+    for row, point in zip(initial_trajectory, requested):
+        row["vx_mps"] = point["speed_mps"]
+    safe_speeds = _apply_custom_speed_envelope(initial_trajectory, closed_loop, constraints)
+    if any(not math.isfinite(speed * speed) for speed in safe_speeds):
+        raise ValueError("compiled custom line speed is outside the supported numeric range")
+    compiled_points = [
+        {"x_m": point["x_m"], "y_m": point["y_m"], "speed_mps": safe_speeds[index]}
+        for index, point in enumerate(requested)
+    ]
+    trajectory = _derive_custom_trajectory(compiled_points, closed_loop)
+    geometry = _custom_line_geometry_validation(map_dir, points, closed_loop)
+    if not geometry["valid"]:
+        return trajectory, [], {**geometry, "speed_adjusted": False}, {**layout, "context": context}
+    feasibility = _custom_line_feasibility_validation(trajectory, constraints)
+    validation = {
+        **geometry,
+        **feasibility,
+        "speed_adjusted": any(safe + 1.0e-9 < requested[index]["speed_mps"] for index, safe in enumerate(safe_speeds)),
+        "requested_max_speed_mps": max(point["speed_mps"] for point in requested),
+    }
+    author_points: list[dict[str, float] | None] = [None] * len(points)
+    for index, item in enumerate(augmented):
+        author_index = item["author_index"]
+        if author_index is not None:
+            author_points[author_index] = {
+                "x_m": points[author_index]["x_m"],
+                "y_m": points[author_index]["y_m"],
+                "speed_mps": safe_speeds[index],
+            }
+    if any(point is None for point in author_points):
+        raise ValueError("failed to map compiled speeds back to editable points")
+    return trajectory, [point for point in author_points if point is not None], validation, {**layout, "context": context}
+
+
+def _derive_custom_trajectory(
+    points: list[dict[str, float]],
+    closed_loop: bool,
+) -> list[dict[str, float]]:
+    count = len(points)
+    s_values = [0.0]
+    for index in range(1, count):
+        distance = math.hypot(
+            points[index]["x_m"] - points[index - 1]["x_m"],
+            points[index]["y_m"] - points[index - 1]["y_m"],
+        )
+        if not math.isfinite(distance) or distance <= CUSTOM_LINE_POINT_EPSILON_M:
+            raise ValueError(f"points[{index - 1}] to points[{index}] has a zero or non-finite length")
+        next_s = s_values[-1] + distance
+        if not math.isfinite(next_s) or next_s <= s_values[-1]:
+            raise ValueError("derived s values are not finite and strictly increasing")
+        s_values.append(next_s)
+
+    if closed_loop:
+        closing_distance = math.hypot(
+            points[0]["x_m"] - points[-1]["x_m"],
+            points[0]["y_m"] - points[-1]["y_m"],
+        )
+        if not math.isfinite(closing_distance) or closing_distance <= CUSTOM_LINE_POINT_EPSILON_M:
+            raise ValueError("closed custom line has a zero or non-finite closing segment")
+
+    psi_values: list[float] = []
+    kappa_values: list[float] = []
+    for index in range(count):
+        if closed_loop:
+            previous = points[(index - 1) % count]
+            following = points[(index + 1) % count]
+        elif index == 0:
+            previous = points[0]
+            following = points[1]
+        elif index == count - 1:
+            previous = points[count - 2]
+            following = points[count - 1]
+        else:
+            previous = points[index - 1]
+            following = points[index + 1]
+
+        tangent_x = following["x_m"] - previous["x_m"]
+        tangent_y = following["y_m"] - previous["y_m"]
+        tangent_length = math.hypot(tangent_x, tangent_y)
+        if not math.isfinite(tangent_length) or tangent_length <= CUSTOM_LINE_POINT_EPSILON_M:
+            raise ValueError(f"points[{index}] does not have a valid tangent")
+        psi_values.append(math.atan2(tangent_y, tangent_x))
+
+        if not closed_loop and index in (0, count - 1):
+            kappa_values.append(0.0)
+            continue
+        current = points[index]
+        a = math.hypot(current["x_m"] - previous["x_m"], current["y_m"] - previous["y_m"])
+        b = math.hypot(following["x_m"] - current["x_m"], following["y_m"] - current["y_m"])
+        c = math.hypot(following["x_m"] - previous["x_m"], following["y_m"] - previous["y_m"])
+        denominator = a * b * c
+        if not math.isfinite(denominator) or denominator <= CUSTOM_LINE_POINT_EPSILON_M:
+            raise ValueError(f"points[{index}] does not have a valid curvature neighborhood")
+        cross = (
+            (current["x_m"] - previous["x_m"]) * (following["y_m"] - current["y_m"])
+            - (current["y_m"] - previous["y_m"]) * (following["x_m"] - current["x_m"])
+        )
+        kappa_values.append(2.0 * cross / denominator)
+
+    acceleration_values: list[float] = []
+    for index in range(count):
+        if index + 1 < count:
+            following_index = index + 1
+            distance = s_values[following_index] - s_values[index]
+        elif closed_loop:
+            following_index = 0
+            distance = math.hypot(
+                points[0]["x_m"] - points[-1]["x_m"],
+                points[0]["y_m"] - points[-1]["y_m"],
+            )
+        else:
+            acceleration_values.append(0.0)
+            continue
+        acceleration = (
+            points[following_index]["speed_mps"] ** 2 - points[index]["speed_mps"] ** 2
+        ) / (2.0 * distance)
+        if not math.isfinite(acceleration):
+            raise ValueError("custom speeds produce a non-finite longitudinal acceleration")
+        acceleration_values.append(acceleration)
+
+    trajectory: list[dict[str, float]] = []
+    for index, point in enumerate(points):
+        row = {
+            "s_m": s_values[index],
+            "x_m": point["x_m"],
+            "y_m": point["y_m"],
+            "psi_rad": psi_values[index],
+            "kappa_radpm": kappa_values[index],
+            "vx_mps": point["speed_mps"],
+            "ax_mps2": acceleration_values[index],
+        }
+        if not all(math.isfinite(value) for value in row.values()):
+            raise ValueError("derived trajectory contains a non-finite value")
+        trajectory.append(row)
+    return trajectory
+
+
+def _custom_line_feasibility_validation(
+    trajectory: list[dict[str, float]],
+    constraints: dict[str, float],
+) -> dict[str, Any]:
+    max_speed = max(row["vx_mps"] for row in trajectory)
+    max_lateral_accel = max(abs(row["vx_mps"] ** 2 * row["kappa_radpm"]) for row in trajectory)
+    max_accel = max(max(0.0, row["ax_mps2"]) for row in trajectory)
+    max_decel = max(max(0.0, -row["ax_mps2"]) for row in trajectory)
+    metrics = {
+        "max_speed_mps": max_speed,
+        "max_lateral_accel_mps2": max_lateral_accel,
+        "max_accel_mps2": max_accel,
+        "max_decel_mps2": max_decel,
+    }
+    checks = (
+        (max_speed, constraints["max_speed_mps"], "custom speed exceeds max_speed_mps"),
+        (
+            max_lateral_accel,
+            constraints["lateral_accel_limit_mps2"],
+            "custom speed and curvature exceed lateral_accel_limit_mps2",
+        ),
+        (max_accel, constraints["accel_limit_mps2"], "custom speed profile exceeds accel_limit_mps2"),
+        (max_decel, constraints["decel_limit_mps2"], "custom speed profile exceeds decel_limit_mps2"),
+    )
+    for actual, limit, issue in checks:
+        if not math.isfinite(actual):
+            return {"valid": False, "issue": "custom speed feasibility is non-finite", **metrics}
+        if actual > limit + 1.0e-9:
+            return {"valid": False, "issue": f"{issue}: {actual:.6g} > {limit:.6g}", **metrics}
+    return {"valid": True, "issue": "", **metrics}
+
+
+def _validate_custom_line(
+    map_dir: Path,
+    points: list[dict[str, float]],
+    closed_loop: bool,
+    constraints: dict[str, float],
+) -> tuple[list[dict[str, float]], dict[str, Any]]:
+    trajectory = _derive_custom_trajectory(points, closed_loop)
+    geometry = _custom_line_geometry_validation(map_dir, points, closed_loop)
+    if not geometry["valid"]:
+        return trajectory, geometry
+    feasibility = _custom_line_feasibility_validation(trajectory, constraints)
+    return trajectory, {**geometry, **feasibility}
+
+
+def _write_custom_trajectory(path: Path, trajectory: list[dict[str, float]]) -> str:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary_path = Path(handle.name)
+            handle.write("# s_m;x_m;y_m;psi_rad;kappa_radpm;vx_mps;ax_mps2\n")
+            writer = csv.writer(handle, delimiter=";", lineterminator="\n")
+            for row in trajectory:
+                writer.writerow(
+                    [
+                        _fmt_float(row["s_m"]),
+                        _fmt_float(row["x_m"]),
+                        _fmt_float(row["y_m"]),
+                        _fmt_float(row["psi_rad"]),
+                        _fmt_float(row["kappa_radpm"]),
+                        _fmt_float(row["vx_mps"]),
+                        _fmt_float(row["ax_mps2"]),
+                    ]
+                )
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, path)
+    finally:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink()
+            except FileNotFoundError:
+                pass
+    trajectory_hash = _sha256_file(path)
+    if not trajectory_hash:
+        raise OSError(f"failed to hash trajectory: {path}")
+    return trajectory_hash
+
+
+def _source_closed_loop(map_dir: Path) -> bool:
+    lane = _primary_lane_geometry(map_dir)
+    return bool(lane.get("closed_loop", True)) if lane is not None else True
+
+
+def _read_custom_line_source(
+    map_dir: Path,
+    source_type: str,
+    default_speed_mps: float,
+) -> tuple[Path, list[dict[str, float]]]:
+    if source_type == "centerline":
+        source_path = map_dir / f"{map_dir.name}_hd_map_centerline.csv"
+        delimiter = ","
+        x_index, y_index = 0, 1
+    else:
+        source_path = map_dir / f"{map_dir.name}_raceline.csv"
+        delimiter = ";"
+        x_index, y_index = 1, 2
+    if not source_path.exists() or not source_path.is_file():
+        raise FileNotFoundError(f"{source_type} source not found: {source_path}")
+
+    points: list[dict[str, float]] = []
+    with source_path.open("r", encoding="utf-8", errors="strict", newline="") as handle:
+        reader = csv.reader(handle, delimiter=delimiter)
+        for line_number, row in enumerate(reader, start=1):
+            if not row or not any(value.strip() for value in row) or row[0].strip().startswith("#"):
+                continue
+            try:
+                x_m = float(row[x_index])
+                y_m = float(row[y_index])
+            except (IndexError, ValueError) as exc:
+                raise ValueError(f"invalid {source_type} row {line_number}") from exc
+            if not math.isfinite(x_m) or not math.isfinite(y_m):
+                raise ValueError(f"invalid non-finite coordinate in {source_type} row {line_number}")
+            points.append({"x_m": x_m, "y_m": y_m, "speed_mps": default_speed_mps})
+    if not points:
+        raise ValueError(f"{source_type} source contains no valid points")
+    return source_path, points
+
+
+def _resolve_custom_line_map(config: ConsoleConfig, payload: dict[str, Any]) -> Path:
+    map_dir_value = str(payload.get("map_dir") or "")
+    if not map_dir_value:
+        raise ValueError("map_dir is required")
+    map_dir = resolve_allowed_path(config, map_dir_value)
+    if not map_dir.exists() or not map_dir.is_dir():
+        raise FileNotFoundError(f"map folder not found: {map_dir}")
+    return map_dir
+
+
+def _manifest_closed_loop(manifest: dict[str, Any]) -> bool:
+    value = manifest.get("closed_loop", True)
+    if not isinstance(value, bool):
+        raise ValueError("custom line closed_loop must be a boolean")
+    return value
+
+
+def _read_custom_line_manifest(line_dir: Path) -> dict[str, Any]:
+    manifest_path = line_dir / CUSTOM_LINE_MANIFEST_FILE
+    manifest = _read_json_file(manifest_path)
+    if not manifest:
+        raise ValueError(f"custom line manifest is missing or invalid: {manifest_path}")
+    if str(manifest.get("format") or "") != CUSTOM_LINE_FORMAT:
+        raise ValueError(f"unsupported custom line format: {manifest.get('format')}")
+    return manifest
+
+
+def _write_custom_line_bundle(
+    map_dir: Path,
+    line_dir: Path,
+    manifest: dict[str, Any],
+    points: list[dict[str, float]],
+    closed_loop: bool,
+    default_speed_mps: float,
+    section_speeds_mps: dict[str, float],
+    constraints: dict[str, float],
+) -> dict[str, Any]:
+    trajectory, _, validation, layout = _compile_custom_line(
+        map_dir,
+        points,
+        closed_loop,
+        default_speed_mps,
+        section_speeds_mps,
+        constraints,
+    )
+    if not validation["valid"]:
+        raise ValueError(str(validation["issue"]))
+    trajectory_path = line_dir / CUSTOM_LINE_TRAJECTORY_FILE
+    trajectory_hash = _write_custom_trajectory(trajectory_path, trajectory)
+    geometry = [{"x_m": point["x_m"], "y_m": point["y_m"]} for point in points]
+    updated = dict(manifest)
+    updated["format"] = CUSTOM_LINE_FORMAT
+    updated["closed_loop"] = closed_loop
+    updated["points"] = geometry
+    updated["point_count"] = len(points)
+    updated["trajectory_point_count"] = len(trajectory)
+    updated["default_speed_mps"] = default_speed_mps
+    updated["section_speeds_mps"] = dict(sorted(section_speeds_mps.items()))
+    updated["speed_profile_mode"] = "sections"
+    updated["speed_authoring"] = "sections"
+    updated["section_layout_fingerprint"] = layout["fingerprint"]
+    updated["section_layout_hash"] = layout["fingerprint"]
+    updated["hd_map_sha256"] = layout["hd_map_sha256"]
+    updated["validation"] = validation
+    updated["content_hash"] = _custom_line_content_hash(
+        geometry,
+        closed_loop,
+        default_speed_mps,
+        section_speeds_mps,
+        constraints,
+    )
+    updated["trajectory_csv"] = CUSTOM_LINE_TRAJECTORY_FILE
+    updated["trajectory_sha256"] = trajectory_hash
+    _write_json_file(line_dir / CUSTOM_LINE_MANIFEST_FILE, updated)
+    return updated
+
+
+def _custom_line_manifest_speed_profile(
+    map_dir: Path,
+    manifest: dict[str, Any],
+    points: list[dict[str, float]],
+    closed_loop: bool,
+) -> tuple[float, dict[str, float], str, dict[str, Any]]:
+    layout = _custom_line_hd_layout(map_dir)
+    context = _custom_line_speed_context(points, closed_loop, layout)
+    has_section_authoring = "default_speed_mps" in manifest or "section_speeds_mps" in manifest
+    if has_section_authoring:
+        if "default_speed_mps" not in manifest:
+            raise ValueError("section speed profile is missing default_speed_mps")
+        default_speed = _custom_line_default_speed(manifest.get("default_speed_mps"))
+        section_speeds = _custom_line_section_speeds(manifest.get("section_speeds_mps"), layout)
+        return default_speed, section_speeds, "sections", {**layout, "context": context}
+    default_speed, section_speeds = _legacy_custom_line_speed_profile(points, context, closed_loop)
+    return default_speed, section_speeds, "legacy_points", {**layout, "context": context}
+
+
+def _activate_custom_line_bundle(map_dir: Path, manifest: dict[str, Any]) -> None:
+    custom_line_id = str(manifest.get("id") or "")
+    if not _is_safe_custom_line_id(custom_line_id):
+        raise ValueError("custom line manifest has an invalid id")
+    closed_loop = _manifest_closed_loop(manifest)
+    points = _custom_line_points(manifest.get("points"), closed_loop)
+    constraints = _custom_line_constraints(
+        {},
+        manifest.get("constraints") if isinstance(manifest.get("constraints"), dict) else None,
+    )
+    default_speed, section_speeds, speed_mode, _ = _custom_line_manifest_speed_profile(
+        map_dir,
+        manifest,
+        points,
+        closed_loop,
+    )
+    if speed_mode == "legacy_points" and (
+        default_speed < CUSTOM_LINE_MIN_SECTION_SPEED_MPS
+        or any(speed < CUSTOM_LINE_MIN_SECTION_SPEED_MPS for speed in section_speeds.values())
+    ):
+        raise ValueError(
+            "legacy custom line speed is below 0.1 m/s; save it as a section speed profile before activation"
+        )
+    trajectory, _, validation, compiled_layout = _compile_custom_line(
+        map_dir,
+        points,
+        closed_loop,
+        default_speed,
+        section_speeds,
+        constraints,
+    )
+    if not validation["valid"]:
+        raise ValueError(str(validation["issue"]))
+    canonical = _canonical_custom_line_paths(map_dir)
+    trajectory_hash = _write_custom_trajectory(canonical["trajectory"], trajectory)
+    source_hash = str(manifest.get("source_hash") or manifest.get("source_sha256") or "")
+    meta = {
+        "format": CUSTOM_LINE_FORMAT,
+        "id": custom_line_id,
+        "name": str(manifest.get("name") or custom_line_id),
+        "closed_loop": closed_loop,
+        "source_hash": source_hash,
+        "revision": int(manifest.get("revision") or 1),
+        "trajectory_csv": canonical["trajectory"].name,
+        "trajectory_sha256": trajectory_hash,
+        "constraints": constraints,
+        "default_speed_mps": default_speed,
+        "section_speeds_mps": section_speeds,
+        "speed_profile_mode": speed_mode,
+        "speed_authoring": speed_mode,
+        "section_layout_fingerprint": compiled_layout["fingerprint"],
+        "section_layout_hash": compiled_layout["fingerprint"],
+        "hd_map_sha256": compiled_layout["hd_map_sha256"],
+        "activated_at": _now_iso(),
+    }
+    _write_json_file(canonical["meta"], meta)
+    try:
+        _write_json_file(
+            _custom_line_active_path(map_dir),
+            {
+                "id": custom_line_id,
+                "activated_at": meta["activated_at"],
+                "revision": meta["revision"],
+                "trajectory_sha256": trajectory_hash,
+            },
+        )
+    except OSError:
+        # The canonical CSV + metadata pair is the atomic source of truth.
+        # active.json is only a human-readable cache and must not turn a
+        # completed activation into a reported failure.
+        pass
+
+
+def _custom_line_source_stale(map_dir: Path, manifest: dict[str, Any]) -> bool | None:
+    source_type = str(manifest.get("source_type") or "")
+    source_hash = str(manifest.get("source_hash") or manifest.get("source_sha256") or "")
+    if not source_type or not source_hash:
+        return None
+    if source_type == "centerline":
+        source_path = map_dir / f"{map_dir.name}_hd_map_centerline.csv"
+    elif source_type == "raceline":
+        source_path = map_dir / f"{map_dir.name}_raceline.csv"
+    else:
+        return None
+    return _sha256_file(source_path) != source_hash
+
+
+def _custom_line_item(
+    map_dir: Path,
+    line_dir: Path,
+    active_id: str,
+) -> dict[str, Any]:
+    manifest_path = line_dir / CUSTOM_LINE_MANIFEST_FILE
+    trajectory_path = line_dir / CUSTOM_LINE_TRAJECTORY_FILE
+    manifest = _read_json_file(manifest_path)
+    item: dict[str, Any] = {
+        "id": line_dir.name,
+        "name": str(manifest.get("name") or line_dir.name),
+        "closed_loop": bool(manifest.get("closed_loop", True)),
+        "source_type": str(manifest.get("source_type") or ""),
+        "source_hash": str(manifest.get("source_hash") or manifest.get("source_sha256") or ""),
+        "base_hash": str(manifest.get("base_hash") or ""),
+        "content_hash": str(manifest.get("content_hash") or ""),
+        "revision": int(manifest.get("revision") or 0) if str(manifest.get("revision") or "").lstrip("-").isdigit() else 0,
+        "created_at": str(manifest.get("created_at") or ""),
+        "updated_at": str(manifest.get("updated_at") or ""),
+        "active": line_dir.name == active_id,
+        "points": [],
+        "point_count": 0,
+        "length_m": 0.0,
+        "source_stale": _custom_line_source_stale(map_dir, manifest),
+        "section_layout_stale": False,
+        "default_speed_mps": CUSTOM_LINE_DEFAULT_SPEED_MPS,
+        "section_speeds_mps": {},
+        "speed_profile_mode": str(manifest.get("speed_profile_mode") or "legacy_points"),
+        "speed_sections": [],
+        "repairable": False,
+        "constraints": {
+            "max_speed_mps": CUSTOM_LINE_DEFAULT_MAX_SPEED_MPS,
+            "lateral_accel_limit_mps2": CUSTOM_LINE_DEFAULT_LATERAL_ACCEL_LIMIT_MPS2,
+            "accel_limit_mps2": CUSTOM_LINE_DEFAULT_ACCEL_LIMIT_MPS2,
+            "decel_limit_mps2": CUSTOM_LINE_DEFAULT_DECEL_LIMIT_MPS2,
+        },
+        "valid": False,
+        "issue": "custom line manifest is invalid",
+        "min_clearance_m": None,
+        "validation": {
+            "valid": False,
+            "issue": "custom line manifest is invalid",
+            "min_clearance_m": None,
+            "containment_checked": False,
+        },
+        "manifest": _artifact(manifest_path),
+        "trajectory": _artifact(trajectory_path),
+        "trajectory_sha256": str(manifest.get("trajectory_sha256") or ""),
+    }
+    try:
+        if str(manifest.get("format") or "") != CUSTOM_LINE_FORMAT:
+            raise ValueError("custom line manifest has an unsupported format")
+        if str(manifest.get("id") or "") != line_dir.name:
+            raise ValueError("custom line manifest id does not match its folder")
+        closed_loop = _manifest_closed_loop(manifest)
+        points = _custom_line_points(manifest.get("points"), closed_loop)
+        fallback_speed = manifest.get("default_speed_mps", CUSTOM_LINE_DEFAULT_SPEED_MPS)
+        try:
+            fallback_speed = _nonnegative_finite_float(fallback_speed, "default_speed_mps")
+        except ValueError:
+            fallback_speed = CUSTOM_LINE_DEFAULT_SPEED_MPS
+        item["points"] = [
+            {
+                "x_m": point["x_m"],
+                "y_m": point["y_m"],
+                "speed_mps": point.get("speed_mps", fallback_speed),
+            }
+            for point in points
+        ]
+        item["point_count"] = len(points)
+        item["repairable"] = True
+        item["default_speed_mps"] = fallback_speed
+        if isinstance(manifest.get("section_speeds_mps"), dict):
+            item["section_speeds_mps"] = dict(manifest["section_speeds_mps"])
+        try:
+            current_layout = _custom_line_hd_layout(map_dir)
+            raw_section_speeds = (
+                manifest.get("section_speeds_mps")
+                if isinstance(manifest.get("section_speeds_mps"), dict)
+                else {}
+            )
+            item["speed_sections"] = [
+                {
+                    "id": str(section["id"]),
+                    "lane_id": str(section["lane_id"]),
+                    "start_gate_id": str(section["start_gate_id"]),
+                    "end_gate_id": str(section["end_gate_id"]),
+                    "start_s_m": float(section["start_s_m"]),
+                    "end_s_m": float(section["end_s_m"]),
+                    "wrap": bool(section.get("wrap", False)),
+                    "speed_mps": raw_section_speeds.get(str(section["id"]), fallback_speed),
+                    "configured": str(section["id"]) in raw_section_speeds,
+                }
+                for section in current_layout["sections"]
+            ]
+        except (OSError, TypeError, ValueError, OverflowError):
+            pass
+        constraints = _custom_line_constraints(
+            {},
+            manifest.get("constraints") if isinstance(manifest.get("constraints"), dict) else None,
+        )
+        default_speed, section_speeds, speed_mode, layout = _custom_line_manifest_speed_profile(
+            map_dir,
+            manifest,
+            points,
+            closed_loop,
+        )
+        trajectory, author_points, validation, compiled_layout = _compile_custom_line(
+            map_dir,
+            points,
+            closed_loop,
+            default_speed,
+            section_speeds,
+            constraints,
+        )
+        if not validation["valid"]:
+            raise ValueError(str(validation["issue"]))
+        expected_hash = str(manifest.get("trajectory_sha256") or "")
+        actual_hash = _sha256_file(trajectory_path)
+        if not trajectory_path.exists() or not expected_hash or actual_hash != expected_hash:
+            raise ValueError("trajectory.csv is missing or does not match its manifest")
+        stored_layout = str(
+            manifest.get("section_layout_fingerprint") or manifest.get("section_layout_hash") or ""
+        )
+        section_layout_stale = bool(speed_mode == "sections" and stored_layout != layout["fingerprint"])
+        if speed_mode == "sections":
+            expected_content_hash = _custom_line_content_hash(
+                points,
+                closed_loop,
+                default_speed,
+                section_speeds,
+                constraints,
+            )
+            if str(manifest.get("content_hash") or "") != expected_content_hash:
+                raise ValueError("custom line authoring content does not match its manifest hash")
+        length_m = trajectory[-1]["s_m"]
+        if closed_loop:
+            length_m += math.hypot(
+                trajectory[0]["x_m"] - trajectory[-1]["x_m"],
+                trajectory[0]["y_m"] - trajectory[-1]["y_m"],
+            )
+        item.update(
+            {
+                "closed_loop": closed_loop,
+                "points": author_points,
+                "point_count": len(points),
+                "trajectory_point_count": len(trajectory),
+                "length_m": length_m,
+                "constraints": constraints,
+                "default_speed_mps": default_speed,
+                "section_speeds_mps": section_speeds,
+                "speed_profile_mode": speed_mode,
+                "section_layout_stale": section_layout_stale,
+                "speed_sections": [
+                    {
+                        "id": str(section["id"]),
+                        "lane_id": str(section["lane_id"]),
+                        "start_gate_id": str(section["start_gate_id"]),
+                        "end_gate_id": str(section["end_gate_id"]),
+                        "start_s_m": float(section["start_s_m"]),
+                        "end_s_m": float(section["end_s_m"]),
+                        "custom_start_s_m": float(section["custom_start_s_m"]),
+                        "custom_end_s_m": float(section["custom_end_s_m"]),
+                        "wrap": bool(section.get("wrap", False)),
+                        "speed_mps": section_speeds.get(str(section["id"]), default_speed),
+                        "configured": str(section["id"]) in section_speeds,
+                    }
+                    for section in compiled_layout["context"]["sections"]
+                ],
+                "valid": True,
+                "issue": "",
+                "min_clearance_m": validation["min_clearance_m"],
+                "validation": validation,
+            }
+        )
+    except (OSError, TypeError, ValueError, OverflowError) as exc:
+        item["issue"] = str(exc)
+        item["validation"] = {
+            "valid": False,
+            "issue": str(exc),
+            "min_clearance_m": item.get("min_clearance_m"),
+            "containment_checked": False,
+        }
+    return item
+
+
+def _read_custom_lines(map_dir: Path) -> dict[str, Any]:
+    root = _checked_custom_line_root(map_dir)
+    active_id, active_issue = _canonical_custom_line_active(map_dir)
+    items: list[dict[str, Any]] = []
+    if root.exists():
+        resolved_root = root.resolve()
+        for line_dir in sorted(root.iterdir()):
+            if line_dir.name == CUSTOM_LINE_ACTIVE_FILE or not line_dir.is_dir() or line_dir.is_symlink():
+                continue
+            if not _is_safe_custom_line_id(line_dir.name):
+                continue
+            if not _is_relative_to(line_dir.resolve(), resolved_root):
+                continue
+            items.append(_custom_line_item(map_dir, line_dir, active_id))
+    items.sort(key=lambda item: (str(item.get("name") or "").casefold(), str(item.get("id") or "")))
+    canonical = _canonical_custom_line_paths(map_dir)
+    return {
+        "active_id": active_id,
+        "active_issue": active_issue,
+        "active_missing": bool(active_id and not any(item["id"] == active_id for item in items)),
+        "items": items,
+        "active_trajectory": _artifact(canonical["trajectory"]),
+        "active_meta": _artifact(canonical["meta"]),
+    }
+
+
+def create_custom_line(config: ConsoleConfig, payload: dict[str, Any]) -> dict[str, Any]:
+    map_dir = _resolve_custom_line_map(config, payload)
+    name = _custom_line_name(payload.get("name"))
+    source_type = _custom_line_source_type(payload)
+    default_speed_mps = _custom_line_default_speed(
+        payload.get("default_speed_mps", CUSTOM_LINE_DEFAULT_SPEED_MPS),
+    )
+    closed_loop_value = payload.get("closed_loop", _source_closed_loop(map_dir))
+    if not isinstance(closed_loop_value, bool):
+        raise ValueError("closed_loop must be a boolean")
+    constraints = _custom_line_constraints(payload)
+    source_path, raw_points = _read_custom_line_source(map_dir, source_type, default_speed_mps)
+    points = _custom_line_points(raw_points, closed_loop_value)
+    points = [{"x_m": point["x_m"], "y_m": point["y_m"]} for point in points]
+    layout = _custom_line_hd_layout(map_dir)
+    supplied_section_speeds = _custom_line_section_speeds(payload.get("section_speeds_mps"), layout)
+    section_speeds: dict[str, float] = dict(supplied_section_speeds)
+    for section in layout["sections"]:
+        section_id = str(section["id"])
+        if section_id in section_speeds:
+            continue
+        raw_override = section.get("speed_override_mps")
+        if raw_override is not None:
+            try:
+                override = _custom_line_default_speed(raw_override)
+            except ValueError:
+                continue
+            section_speeds[section_id] = override
+
+    root = _checked_custom_line_root(map_dir, create=True)
+    custom_line_id = _custom_line_id_from_name(root, name)
+    line_dir = _custom_line_path(map_dir, custom_line_id)
+    line_dir.mkdir(parents=False, exist_ok=False)
+    timestamp = _now_iso()
+    source_hash = _sha256_file(source_path)
+    manifest = {
+        "format": CUSTOM_LINE_FORMAT,
+        "id": custom_line_id,
+        "name": name,
+        "closed_loop": closed_loop_value,
+        "source_type": source_type,
+        "source_path": source_path.name,
+        "source_hash": source_hash,
+        "source_sha256": source_hash,
+        "base_hash": _custom_line_content_hash(points, closed_loop_value),
+        "revision": 1,
+        "created_at": timestamp,
+        "updated_at": timestamp,
+        "constraints": constraints,
+    }
+    try:
+        _write_custom_line_bundle(
+            map_dir,
+            line_dir,
+            manifest,
+            points,
+            closed_loop_value,
+            default_speed_mps,
+            section_speeds,
+            constraints,
+        )
+    except Exception:
+        shutil.rmtree(line_dir, ignore_errors=True)
+        raise
+    return build_map_detail(config, str(map_dir))
+
+
+def update_custom_line(config: ConsoleConfig, payload: dict[str, Any]) -> dict[str, Any]:
+    map_dir = _resolve_custom_line_map(config, payload)
+    custom_line_id = _require_custom_line_id(payload)
+    line_dir = _custom_line_path(map_dir, custom_line_id)
+    if not line_dir.exists() or not line_dir.is_dir():
+        raise FileNotFoundError(f"custom line not found: {custom_line_id}")
+    manifest = _read_custom_line_manifest(line_dir)
+    if str(manifest.get("id") or "") != custom_line_id:
+        raise ValueError("custom line manifest id does not match its folder")
+
+    name = _custom_line_name(payload.get("name", manifest.get("name")))
+    closed_loop = payload.get("closed_loop", manifest.get("closed_loop", True))
+    if not isinstance(closed_loop, bool):
+        raise ValueError("closed_loop must be a boolean")
+    constraints = _custom_line_constraints(
+        payload,
+        manifest.get("constraints") if isinstance(manifest.get("constraints"), dict) else None,
+    )
+    layout = _custom_line_hd_layout(map_dir)
+    explicit_complete_profile = "default_speed_mps" in payload and "section_speeds_mps" in payload
+    if explicit_complete_profile:
+        default_speed_mps = _custom_line_default_speed(payload["default_speed_mps"])
+        section_speeds = _custom_line_section_speeds(payload["section_speeds_mps"], layout)
+    elif "default_speed_mps" in manifest:
+        default_speed_mps = _custom_line_default_speed(
+            payload.get("default_speed_mps", manifest.get("default_speed_mps")),
+        )
+        section_speeds = _custom_line_section_speeds(
+            payload.get("section_speeds_mps", manifest.get("section_speeds_mps")),
+            layout,
+        )
+    else:
+        existing_closed_loop = _manifest_closed_loop(manifest)
+        existing_points = _custom_line_points(manifest.get("points"), existing_closed_loop)
+        existing_default, existing_section_speeds, _, _ = _custom_line_manifest_speed_profile(
+            map_dir,
+            manifest,
+            existing_points,
+            existing_closed_loop,
+        )
+        default_speed_mps = _custom_line_default_speed(
+            payload.get("default_speed_mps", existing_default),
+        )
+        section_speeds = _custom_line_section_speeds(
+            payload.get("section_speeds_mps", existing_section_speeds),
+            layout,
+        )
+    point_payload = payload.get("points", manifest.get("points"))
+    points = _custom_line_points(point_payload, closed_loop)
+    points = [{"x_m": point["x_m"], "y_m": point["y_m"]} for point in points]
+
+    try:
+        previous_revision = int(manifest.get("revision") or 0)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("custom line revision is invalid") from exc
+    updated = dict(manifest)
+    updated.update(
+        {
+            "id": custom_line_id,
+            "name": name,
+            "closed_loop": closed_loop,
+            "revision": previous_revision + 1,
+            "updated_at": _now_iso(),
+            "constraints": constraints,
+        }
+    )
+    updated = _write_custom_line_bundle(
+        map_dir,
+        line_dir,
+        updated,
+        points,
+        closed_loop,
+        default_speed_mps,
+        section_speeds,
+        constraints,
+    )
+    canonical_meta = _read_json_file(_canonical_custom_line_paths(map_dir)["meta"])
+    if str(canonical_meta.get("id") or "") == custom_line_id:
+        _activate_custom_line_bundle(map_dir, updated)
+    return build_map_detail(config, str(map_dir))
+
+
+def activate_custom_line(config: ConsoleConfig, payload: dict[str, Any]) -> dict[str, Any]:
+    map_dir = _resolve_custom_line_map(config, payload)
+    custom_line_id = _require_custom_line_id(payload)
+    line_dir = _custom_line_path(map_dir, custom_line_id)
+    if not line_dir.exists() or not line_dir.is_dir():
+        raise FileNotFoundError(f"custom line not found: {custom_line_id}")
+    manifest = _read_custom_line_manifest(line_dir)
+    if str(manifest.get("id") or "") != custom_line_id:
+        raise ValueError("custom line manifest id does not match its folder")
+    closed_loop = _manifest_closed_loop(manifest)
+    points = _custom_line_points(manifest.get("points"), closed_loop)
+    constraints = _custom_line_constraints(
+        {},
+        manifest.get("constraints") if isinstance(manifest.get("constraints"), dict) else None,
+    )
+    default_speed, section_speeds, speed_mode, _ = _custom_line_manifest_speed_profile(
+        map_dir,
+        manifest,
+        points,
+        closed_loop,
+    )
+    _, _, validation, _ = _compile_custom_line(
+        map_dir,
+        points,
+        closed_loop,
+        default_speed,
+        section_speeds,
+        constraints,
+    )
+    if not validation["valid"]:
+        raise ValueError(str(validation["issue"]))
+    if speed_mode == "sections":
+        manifest = _write_custom_line_bundle(
+            map_dir,
+            line_dir,
+            manifest,
+            points,
+            closed_loop,
+            default_speed,
+            section_speeds,
+            constraints,
+        )
+    _activate_custom_line_bundle(map_dir, manifest)
+    return build_map_detail(config, str(map_dir))
+
+
+def delete_custom_line(config: ConsoleConfig, payload: dict[str, Any]) -> dict[str, Any]:
+    map_dir = _resolve_custom_line_map(config, payload)
+    custom_line_id = _require_custom_line_id(payload)
+    line_dir = _custom_line_path(map_dir, custom_line_id)
+    if not line_dir.exists() or not line_dir.is_dir():
+        raise FileNotFoundError(f"custom line not found: {custom_line_id}")
+    active_id, _ = _canonical_custom_line_active(map_dir)
+    canonical = _canonical_custom_line_paths(map_dir)
+    canonical_meta = _read_json_file(canonical["meta"])
+    canonical_claimed_id = str(canonical_meta.get("id") or "")
+    active_cache = _read_json_file(_custom_line_active_path(map_dir))
+    cached_failed_id = str(active_cache.get("failed_id") or "")
+    if active_id == custom_line_id or canonical_claimed_id == custom_line_id or cached_failed_id == custom_line_id:
+        timestamp = _now_iso()
+        for path in (canonical["meta"], canonical["trajectory"]):
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+        _write_json_file(_custom_line_active_path(map_dir), {"id": "", "deactivated_at": timestamp})
+    shutil.rmtree(line_dir)
+    return build_map_detail(config, str(map_dir))
+
+
+def _clear_active_custom_line_after_hd_change(
+    map_dir: Path,
+    issue: str,
+    custom_line_id: str = "",
+) -> None:
+    canonical = _canonical_custom_line_paths(map_dir)
+    for path in (canonical["meta"], canonical["trajectory"]):
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+    try:
+        _write_json_file(
+            _custom_line_active_path(map_dir),
+            {
+                "id": "",
+                "failed_id": custom_line_id,
+                "deactivated_at": _now_iso(),
+                "issue": issue,
+            },
+        )
+    except OSError:
+        pass
+
+
+def _refresh_active_custom_line_after_hd_change(map_dir: Path) -> None:
+    canonical_meta = _read_json_file(_canonical_custom_line_paths(map_dir)["meta"])
+    custom_line_id = str(canonical_meta.get("id") or "")
+    if not custom_line_id:
+        return
+    try:
+        line_dir = _custom_line_path(map_dir, custom_line_id)
+        manifest = _read_custom_line_manifest(line_dir)
+        if str(manifest.get("id") or "") != custom_line_id:
+            raise ValueError("custom line manifest id does not match its folder")
+        closed_loop = _manifest_closed_loop(manifest)
+        points = _custom_line_points(manifest.get("points"), closed_loop)
+        constraints = _custom_line_constraints(
+            {},
+            manifest.get("constraints") if isinstance(manifest.get("constraints"), dict) else None,
+        )
+        default_speed, section_speeds, speed_mode, _ = _custom_line_manifest_speed_profile(
+            map_dir,
+            manifest,
+            points,
+            closed_loop,
+        )
+        if speed_mode == "sections":
+            manifest = _write_custom_line_bundle(
+                map_dir,
+                line_dir,
+                manifest,
+                points,
+                closed_loop,
+                default_speed,
+                section_speeds,
+                constraints,
+            )
+        _activate_custom_line_bundle(map_dir, manifest)
+    except (OSError, TypeError, ValueError, OverflowError) as exc:
+        _clear_active_custom_line_after_hd_change(
+            map_dir,
+            f"HD map changed: {exc}",
+            custom_line_id,
+        )
+
+
 def _map_record(map_dir: Path, map_root: Path | None = None) -> dict[str, Any]:
     name = map_dir.name
     artifacts = {
@@ -946,12 +2875,17 @@ def _map_record(map_dir: Path, map_root: Path | None = None) -> dict[str, Any]:
         "hd_map": _artifact(map_dir / f"{name}_hd_map.yaml"),
         "centerline_csv": _artifact(map_dir / f"{name}_hd_map_centerline.csv"),
         "raceline_csv": _artifact(map_dir / f"{name}_raceline.csv"),
+        "custom_line_csv": _artifact(map_dir / f"{name}_custom_line.csv"),
+        "custom_line_meta": _artifact(map_dir / f"{name}_custom_line.meta.json"),
         "line_preview": _artifact(map_dir / f"{name}_line_preview.png"),
     }
-    complete_runtime = all(
-        artifacts[key]["exists"]
-        for key in ("cuvgl_map", "cuvslam_map", "hd_map", "raceline_csv")
+    localization_ready = all(
+        artifacts[key]["exists"] for key in ("cuvgl_map", "cuvslam_map", "hd_map")
     )
+    active_custom_line_id, _ = _canonical_custom_line_active(map_dir)
+    custom_line_ready = bool(active_custom_line_id)
+    driving_line_ready = bool(artifacts["raceline_csv"]["exists"] or custom_line_ready)
+    complete_runtime = localization_ready and driving_line_ready
     return {
         "name": name,
         "display_name": _display_name(map_root, map_dir) if map_root is not None else name,
@@ -994,6 +2928,7 @@ def build_map_detail(config: ConsoleConfig, map_dir_value: str) -> dict[str, Any
         1 for section in hd_map.get("sections", []) if section.get("speed_override_mps") is not None
     )
     primary_lane = next((lane for lane in hd_map.get("lanes", []) if lane.get("primary")), None)
+    custom_line_catalog = _read_custom_lines(map_dir)
 
     return {
         "map": _map_record(map_dir, config.map_root),
@@ -1001,6 +2936,9 @@ def build_map_detail(config: ConsoleConfig, map_dir_value: str) -> dict[str, Any
         "preview_image_url": preview_image,
         "hd_map": hd_map,
         "hd_map_versions": _read_hd_map_versions(map_dir),
+        "custom_lines": custom_line_catalog["items"],
+        "custom_line_catalog": custom_line_catalog,
+        "active_custom_line_id": custom_line_catalog["active_id"],
         "centerline_csv": centerline,
         "raceline_csv": raceline,
         "odometry": odometry,
@@ -1013,6 +2951,7 @@ def build_map_detail(config: ConsoleConfig, map_dir_value: str) -> dict[str, Any
             "section_count": len(hd_map.get("sections", [])),
             "speed_override_count": speed_override_count,
             "raceline_points": raceline["count"],
+            "custom_line_count": len(custom_line_catalog["items"]),
             "odometry_points": odometry["count"],
         },
     }
@@ -1080,6 +3019,7 @@ def save_hd_map(config: ConsoleConfig, payload: dict[str, Any]) -> dict[str, Any
     hd_map_path.parent.mkdir(parents=True, exist_ok=True)
     _write_hd_map_yaml(hd_map_path, raster, lanes, primary_lane_id, centerline_path, previous_data)
     _write_centerline_csv(centerline_path, primary_lane)
+    _refresh_active_custom_line_after_hd_change(map_dir)
     return build_map_detail(config, str(map_dir))
 
 
@@ -1166,6 +3106,7 @@ def activate_hd_map_version(config: ConsoleConfig, payload: dict[str, Any]) -> d
             _archive_active_artifact(map_dir, active_artifacts[key], archive_id)
 
     _write_json_file(_version_active_path(map_dir), {"id": version_id, "activated_at": _now_iso()})
+    _refresh_active_custom_line_after_hd_change(map_dir)
     return build_map_detail(config, str(map_dir))
 
 
@@ -1208,4 +3149,5 @@ def save_section_gates(config: ConsoleConfig, payload: dict[str, Any]) -> dict[s
         centerline_path = map_dir / f"{name}_hd_map_centerline.csv"
 
     _write_hd_map_yaml(hd_map_path, raster, lanes, primary_lane_id, centerline_path, updated_data)
+    _refresh_active_custom_line_after_hd_change(map_dir)
     return build_map_detail(config, str(map_dir))

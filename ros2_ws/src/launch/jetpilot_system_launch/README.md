@@ -1,6 +1,6 @@
 # jetpilot_system_launch
 
-JetPilot 全体の bringup をまとめる launch package です。tool、operation、planning、control、sensor、localization、vehicle interface を個別に有効化し、topic 名と安全条件を1箇所で揃えます。
+JetPilot 全体の bringup をまとめる launch package です。tool、operation、planning、control、E2E inference、sensor、localization、vehicle interface を個別に有効化し、topic 名と安全条件を1箇所で揃えます。
 
 ## 主な launch
 
@@ -51,6 +51,22 @@ SilkyEvCam/OpenEBを含むsensor kitでは、RAW記録機能が既定で待機�
 MCAPとRAWのduration分割は`config/tool/bag_manager.param.yaml`の`recording_split_duration_s`で一括指定します。統合launchにはRAW専用の分割引数を公開していないため、異なるdurationは指定できません。`0`は分割無効、例えば`600`は両方を約10分周期で分割します。
 
 Jetson 上の通常起動では `isaac_ros_jetson_stats` が既定で有効になり、診断情報を `/jetson/diagnostics` へ publish します。必要に応じて `enable_jetson_stats:=false` で無効化できます。x86 imageには同packageが配布されないため既定で無効になり、明示的な有効化も拒否します。`scripts/bringup.sh` のオフライン再生プリセットでは tool stack自体を停止するため、Jetson statsも起動しません。
+
+## E2E direct control
+
+RealSense RGBをTensorRT E2Eへ入力して直接制御する場合は、専用presetを使用します。
+
+```bash
+/workspaces/scripts/bringup.sh e2e --vehicle vesc
+```
+
+このpresetはsensor kit、E2E inference、joy/teleop、operation mux、指定したvehicle interfaceを
+有効にします。localization、planning、従来controllerはOFFのままです。モデルを変更する場合は
+`--set e2e_model_root:=/workspaces/ros2_ws/models/e2e/<model>`を追加します。
+
+`custom`では`e2e` componentを選択できます。`control`と`e2e`はどちらも
+`/auto/control_cmd`へpublishするため併用できません。`scripts/bringup.sh`と統合
+`bringup.launch.py`の両方が同時有効化を起動前に拒否します。
 
 ## 軽量物体検出（任意）
 
@@ -217,8 +233,19 @@ TFのrate、HD map markerの更新サイズ、接続client数に依存します�
 標準的な自律走行の制御 topic は次の流れです。
 
 ```text
-/hd_map/primary_centerline_path or /planning/raceline_path
-  -> /planning/trajectory + /planning/target_speed + /planning/ready
+/hd_map/primary_centerline_path or /planning/{raceline,custom}_trajectory
+  -> /planning/trajectory + /planning/trajectory_profile
+  -> /planning/target_speed + /planning/ready
+  -> /auto/control_cmd
+  -> /vehicle/control_cmd
+  -> /control_cmd or vehicle-driver-specific commands
+```
+
+E2E direct controlでは、RealSense RGBから同じoperation muxへ接続します。
+
+```text
+/realsense/color/image_raw
+  -> E2E TensorRT inference
   -> /auto/control_cmd
   -> /vehicle/control_cmd
   -> /control_cmd or vehicle-driver-specific commands
@@ -264,4 +291,4 @@ ros2 launch jetpilot_system_launch bringup.launch.py \
 
 ## Map directory convention
 
-`map_dir` を指定すると、HD map は既定で `<map_dir>/<map_dir_name>_hd_map.yaml`、raceline は `raceline_root` と `raceline_csv` の組み合わせで読みます。明示的に `hd_map_yaml_path` や `raceline_csv` を渡すとこの規約を上書きできます。
+`map_dir` を指定すると、HD map は既定で `<map_dir>/<map_dir_name>_hd_map.yaml`、raceline は `raceline_root` と `raceline_csv` の組み合わせで読みます。名前付きcustom lineは`--custom-line`、開路は`--custom-line-open`で指定します。`custom` presetで`custom-line` componentを選び、Map内にConsoleで有効化した`<map_name>_custom_line.csv`とmetadataがあれば、そのlineを自動選択します。明示pathは常に優先されます。racelineとcustom lineは同時には選択できません。選択はlaunch時に読み込まれ、走行中のhot-swapは行いません。

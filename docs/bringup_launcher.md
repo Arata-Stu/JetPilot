@@ -25,6 +25,9 @@ Common presets:
 /workspaces/scripts/bringup.sh drive --vehicle pca
 /workspaces/scripts/bringup.sh drive --vehicle vesc
 
+# Live RealSense RGB + TensorRT E2E direct control + manual/STOP fallback
+/workspaces/scripts/bringup.sh e2e --vehicle vesc
+
 # Live camera + localization, without an actuator driver
 /workspaces/scripts/bringup.sh localization \
   --map /workspaces/map/course_a
@@ -61,6 +64,13 @@ Common presets:
   --components sensor,hd-map,foxglove \
   --map /workspaces/map/course_a
 ```
+
+The `e2e` preset enables the sensor kit, E2E inference, joy/teleop, the operation command mux, and
+the selected vehicle interface. Localization, planning, and the rule-based controller remain OFF.
+Override the deployed model when needed with `--set e2e_model_root:=/absolute/path/in/docker`.
+The `control` and `e2e` command sources are mutually exclusive because both publish
+`/auto/control_cmd`; the wrapper and the underlying integrated launch both reject enabling them
+together.
 
 Use `--list-presets` for the full list and `--dry-run` to inspect the exact ROS command. A final
 launch argument can be overridden without creating duplicates:
@@ -123,8 +133,8 @@ mode explicitly. The older combination `pose-hint --set enable_vgl:=false` remai
 `--localization-init foxglove` is the explicit and self-contained form for Foxglove-only startup.
 
 The first selector chooses one preset with arrow keys and Enter. For `vehicle`, `teleop`, `drive`,
-and `runtime`, the next selector lists the discovered vehicle interface profiles. Presets that enable
-live sensors then list the discovered sensor kit profiles in the same way. Existing names such as
+`e2e`, and `runtime`, the next selector lists the discovered vehicle interface profiles. Presets that
+enable live sensors then list the discovered sensor kit profiles in the same way. Existing names such as
 `drive-pca` and `drive-vesc` remain accepted as compatibility aliases for scripts, but are not shown
 in the TUI.
 
@@ -133,10 +143,12 @@ Space on each component to turn it ON, then press Enter to confirm all selected 
 Selecting `vehicle` opens the vehicle interface selector next. The same selection can be reused
 non-interactively with `--components`; available names include `sensor`, `replay`, `localization`,
 `occupancy-map`, `hd-map`, `bag-manager`, `foxglove`, `joy`, `teleop`, `operation`, `planning`,
-`control`, `rviz`, and `vehicle`. Pass
+`control`, `e2e`, `rviz`, and `vehicle`. Pass
 `--vehicle pca` or `--vehicle vesc` when a non-interactive preset/component enables `vehicle`.
-Selecting `control` also enables `planning` and the operation command mux;
-selecting `planning` alone is useful for validating the selected trajectory without publishing
+Selecting `control` also enables `planning` and the operation command mux.
+Selecting `e2e` enables E2E inference and the operation command mux but leaves the sensor and
+vehicle choices explicit. `control` and `e2e` cannot be selected together.
+Selecting `planning` alone is useful for validating the selected trajectory without publishing
 autonomous commands. Passing `--raceline` enables the C++ CSV publisher and automatically selects
 the matching two-lane planner configuration; the CSV path must be absolute inside Docker.
 When `localization` is selected interactively, the launcher asks for a map next. In non-interactive

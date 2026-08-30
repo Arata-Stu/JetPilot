@@ -21,7 +21,7 @@ python -m e2e_learning.cli.preprocess_bag \
   data.bag_path=/bags/run_001 \
   data.image_topic=/realsense/color/image_raw \
   data.odometry_topic=/visual_slam/tracking/odometry \
-  data.imu_topic=/sensors/imu \
+  data.imu_topic=/realsense/imu \
   data.trajectory_horizon_sec=1.5 \
   data.trajectory_points=10 \
   data.trajectory_scale_m=5.0 \
