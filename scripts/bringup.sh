@@ -14,7 +14,7 @@ MAP_ROOT="${MAP_ROOT:-/workspaces/map}"
 RECORD_ROOT="${RECORD_ROOT:-/workspaces/record}"
 LAUNCH_PACKAGE="${JETPILOT_LAUNCH_PACKAGE:-jetpilot_system_launch}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
-PROFILE_HELPER="${SCRIPT_DIR}/bringup_profiles.py"
+PROFILE_HELPER="${SCRIPT_DIR}/launch_profiles.py"
 PROFILE_ROOT="${BRINGUP_PROFILE_ROOT:-${PROJECT_ROOT}/ros2_ws/src/launch/jetpilot_system_launch/config/bringup_profiles}"
 
 PRESET=''

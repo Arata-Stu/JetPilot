@@ -84,8 +84,9 @@ Jetson imageだけに導入し、x86ではlaunchの既定値も無効になり�
 まず公式4.6だけでbuild・起動します。`libnvbufsurface_nvsci` 不足が再現した場合は、
 CUDA／TensorRTを再固定せず、このVPI/L4T runtimeだけを扱う小さな互換layerとして戻します。
 
-RealSenseの独自 `--no_cuda` も公式設定へ戻しました。実機buildでのみ問題が再現する場合は、
-原因とbuild logを確認してから限定的に復活させます。
+RealSense 4.56.3 / librealsense 2.56.3 の実機起動で `Pointcloud (CUDA)` callback例外が
+再現したため、RealSense layerだけは `--no_cuda` を指定します。これはlibrealsense内部の
+処理をCPU実装へ戻すもので、Isaac ROS VSLAMやTensorRTのCUDA利用は無効化しません。
 
 
 ## E2E NITROS／TensorRT移行

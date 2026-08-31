@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate and resolve JetPilot bringup profile manifests."""
+"""Validate and resolve JetPilot launch profile manifests."""
 
 from __future__ import annotations
 

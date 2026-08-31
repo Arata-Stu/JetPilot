@@ -47,9 +47,9 @@ def test_launcher_resolves_project_root_when_scripts_are_mounted_separately(
     detached_scripts = tmp_path / "scripts"
     detached_scripts.mkdir()
     detached_launcher = detached_scripts / "bringup.sh"
-    detached_helper = detached_scripts / "bringup_profiles.py"
+    detached_helper = detached_scripts / "launch_profiles.py"
     shutil.copy2(LAUNCHER, detached_launcher)
-    shutil.copy2(LAUNCHER.with_name("bringup_profiles.py"), detached_helper)
+    shutil.copy2(LAUNCHER.with_name("launch_profiles.py"), detached_helper)
     env = dict(os.environ)
     env["ROS2_WS"] = str(PROJECT_ROOT / "ros2_ws")
     env.pop("JETPILOT_PROJECT_ROOT", None)
