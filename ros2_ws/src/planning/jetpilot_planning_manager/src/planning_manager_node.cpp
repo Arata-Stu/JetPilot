@@ -127,7 +127,8 @@ PlanningManagerNode::PlanningManagerNode() : Node("planning_manager_node")
   status_pub_ = create_publisher<jetpilot_msgs::msg::PlanningManagerStatus>("/planning/manager/status", latched);
 
   junctions_sub_ = create_subscription<jetpilot_msgs::msg::JunctionArray>(
-    "/hd_map/junctions", latched, [this](const auto message) {
+    "/hd_map/junctions", latched,
+    [this](jetpilot_msgs::msg::JunctionArray::ConstSharedPtr message) {
       const auto fingerprint = junction_map_fingerprint(*message);
       const bool revision_changed = junction_map_received_ &&
         fingerprint != junction_map_fingerprint_;
@@ -155,30 +156,40 @@ PlanningManagerNode::PlanningManagerNode() : Node("planning_manager_node")
       on_section(current_section_, false);
     });
   section_sub_ = create_subscription<std_msgs::msg::String>(
-    "/localization/current_section", 10, [this](const auto message) { on_section(message->data); });
+    "/localization/current_section", 10,
+    [this](std_msgs::msg::String::ConstSharedPtr message) { on_section(message->data); });
   signal_sub_ = create_subscription<jetpilot_msgs::msg::DirectionSignal>(
-    "/perception/direction_signal", 10, [this](const auto message) { on_signal(*message); });
+    "/perception/direction_signal", 10,
+    [this](jetpilot_msgs::msg::DirectionSignal::ConstSharedPtr message) { on_signal(*message); });
   collision_sub_ = create_subscription<std_msgs::msg::Bool>(
-    "/safety/collision_detected", 10, [this](const auto message) { on_collision(message->data); });
+    "/safety/collision_detected", 10,
+    [this](std_msgs::msg::Bool::ConstSharedPtr message) { on_collision(message->data); });
   recovery_status_sub_ = create_subscription<jetpilot_msgs::msg::RecoveryStatus>(
-    "/planning/recovery/status", latched, [this](const auto message) { on_recovery_status(*message); });
+    "/planning/recovery/status", latched,
+    [this](jetpilot_msgs::msg::RecoveryStatus::ConstSharedPtr message) {
+      on_recovery_status(*message);
+    });
   route_path_sub_ = create_subscription<nav_msgs::msg::Path>(
     "/planning/route/trajectory", latched,
-    [this](const auto message) { on_route_path(*message); });
+    [this](nav_msgs::msg::Path::ConstSharedPtr message) { on_route_path(*message); });
   route_profile_sub_ = create_subscription<jetpilot_msgs::msg::Trajectory>(
     "/planning/route/trajectory_profile", latched,
-    [this](const auto message) { on_route_profile(*message); });
+    [this](jetpilot_msgs::msg::Trajectory::ConstSharedPtr message) {
+      on_route_profile(*message);
+    });
   route_diagnostics_sub_ = create_subscription<diagnostic_msgs::msg::DiagnosticArray>(
     route_diagnostics_topic_, rclcpp::QoS(rclcpp::KeepLast(10)).reliable(),
-    [this](const auto message) { on_route_diagnostics(*message); });
+    [this](diagnostic_msgs::msg::DiagnosticArray::ConstSharedPtr message) {
+      on_route_diagnostics(*message);
+    });
   recovery_profile_sub_ = create_subscription<jetpilot_msgs::msg::Trajectory>(
     "/planning/recovery/trajectory_profile", latched,
-    [this](const auto message) {
+    [this](jetpilot_msgs::msg::Trajectory::ConstSharedPtr message) {
       if (message->points.empty()) recovery_profile_.reset(); else recovery_profile_ = *message;
     });
   recovery_ready_sub_ = create_subscription<std_msgs::msg::Bool>(
     "/planning/recovery/ready", latched,
-    [this](const auto message) { recovery_ready_ = message->data; });
+    [this](std_msgs::msg::Bool::ConstSharedPtr message) { recovery_ready_ = message->data; });
   timer_ = create_wall_timer(
     std::chrono::duration_cast<std::chrono::nanoseconds>(
       std::chrono::duration<double>(1.0 / publish_rate_hz_)),

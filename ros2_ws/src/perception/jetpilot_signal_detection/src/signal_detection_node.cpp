@@ -27,12 +27,13 @@ SignalDetectionNode::SignalDetectionNode() : Node("signal_detection_node")
   const auto latched = rclcpp::QoS(1).transient_local().reliable();
   junctions_sub_ = create_subscription<jetpilot_msgs::msg::JunctionArray>(
     "/hd_map/junctions", latched,
-    [this](const auto message) { on_junctions(message); });
+    [this](jetpilot_msgs::msg::JunctionArray::SharedPtr message) { on_junctions(message); });
   section_sub_ = create_subscription<std_msgs::msg::String>(
-    "/localization/current_section", 10, [this](const auto message) { on_section(message); });
+    "/localization/current_section", 10,
+    [this](std_msgs::msg::String::SharedPtr message) { on_section(message); });
   detections_sub_ = create_subscription<vision_msgs::msg::Detection2DArray>(
     "/perception/signal/detections", 10,
-    [this](const auto message) { on_detections(message); });
+    [this](vision_msgs::msg::Detection2DArray::SharedPtr message) { on_detections(message); });
   signal_pub_ = create_publisher<jetpilot_msgs::msg::DirectionSignal>(
     "/perception/direction_signal", latched);
   watchdog_timer_ = create_wall_timer(std::chrono::milliseconds(100), [this]() { watchdog(); });
