@@ -13,6 +13,7 @@ from typing import Any, Mapping
 from .config import ConsoleConfig
 from .map_detail import load_yaml
 from .map_pipeline import (
+    DEFAULT_RACELINE_DIRECTION,
     DEFAULT_RACELINE_ACCEL_LIMIT_MPS2,
     DEFAULT_RACELINE_DECEL_LIMIT_MPS2,
     DEFAULT_RACELINE_LATERAL_ACCEL_LIMIT_MPS2,
@@ -20,6 +21,7 @@ from .map_pipeline import (
     DEFAULT_RACELINE_MIN_SPEED_MPS,
     DEFAULT_RACELINE_SAFETY_MARGIN_M,
     DEFAULT_RACELINE_VEHICLE_WIDTH_M,
+    VALID_RACELINE_DIRECTIONS,
     default_topic_config,
     localization_config_dir,
 )
@@ -2096,6 +2098,7 @@ def _generate_raceline_preflight(
         else None
     )
     clearance = _inspect_clearance_parameters(payload, report)
+    _inspect_raceline_direction(payload, report)
     _inspect_speed_profile_parameters(payload, report)
     if centerline is not None and clearance is not None:
         vehicle_width, safety_margin = clearance
@@ -2250,6 +2253,33 @@ def _inspect_clearance_parameters(
         },
     )
     return vehicle_width, safety_margin
+
+
+def _inspect_raceline_direction(payload: Mapping[str, Any], report: _Report) -> str | None:
+    raw_direction = payload.get("direction", DEFAULT_RACELINE_DIRECTION)
+    if raw_direction is None:
+        raw_direction = DEFAULT_RACELINE_DIRECTION
+    direction = raw_direction.strip().lower() if isinstance(raw_direction, str) else ""
+    if direction not in VALID_RACELINE_DIRECTIONS:
+        report.add(
+            "raceline.direction",
+            "Lap direction",
+            BLOCKED,
+            "Lap direction must be forward or reverse.",
+            remediation="Choose Forward or Reverse.",
+            details={"direction": raw_direction},
+        )
+        return None
+
+    report.resolved["direction"] = direction
+    report.add(
+        "raceline.direction",
+        "Lap direction",
+        PASS,
+        f"Raceline will be generated in the {direction} direction.",
+        details={"direction": direction},
+    )
+    return direction
 
 
 def _inspect_speed_profile_parameters(

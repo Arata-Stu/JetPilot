@@ -167,6 +167,7 @@ const state = {
     gates: [],
   },
   racelineGeneration: {
+    direction: "forward",
     vehicleWidthM: DEFAULT_RACELINE_VEHICLE_WIDTH_M,
     safetyMarginM: DEFAULT_RACELINE_SAFETY_MARGIN_M,
     maxSpeedMps: DEFAULT_RACELINE_MAX_SPEED_MPS,
@@ -184,6 +185,7 @@ const state = {
   },
   simulation: {
     source: "raceline",
+    centerlineDirection: "forward",
     playing: false,
     mapPath: "",
     rafId: 0,
@@ -1321,6 +1323,7 @@ async function refreshAll() {
   if (selectedMapReloadPath) {
     try {
       state.selectedMapDetail = await api(apiPath("/api/maps/detail", { path: selectedMapReloadPath }));
+      syncRacelineDirectionFromDetail(state.selectedMapDetail);
     } catch {
       state.selectedMapDetail = null;
     }
@@ -1969,6 +1972,7 @@ function mapStagePreflightPayload(stage, mapDir) {
     payload.path_crop_min_retained_ratio = state.hdRasterGeneration.pathCropMinRetainedRatio;
   }
   if (stage === "generate-raceline") {
+    payload.direction = state.racelineGeneration.direction;
     payload.vehicle_width_m = state.racelineGeneration.vehicleWidthM;
     payload.safety_margin_m = state.racelineGeneration.safetyMarginM;
     payload.max_speed_mps = state.racelineGeneration.maxSpeedMps;
@@ -1978,6 +1982,13 @@ function mapStagePreflightPayload(stage, mapDir) {
     payload.decel_limit_mps2 = state.racelineGeneration.decelLimitMps2;
   }
   return payload;
+}
+
+function syncRacelineDirectionFromDetail(detail) {
+  const direction = String(detail?.raceline_metadata?.direction || "").trim().toLowerCase();
+  if (["forward", "reverse"].includes(direction)) {
+    state.racelineGeneration.direction = direction;
+  }
 }
 
 function mapStageDomToken(stage, mapDir) {
@@ -6347,6 +6358,18 @@ function renderSimulationPanel(detail) {
                 ${sourceOptions.map(([value, label, disabled]) => `<option value="${value}" ${sim.source === value ? "selected" : ""} ${disabled ? "disabled" : ""}>${esc(label)}</option>`).join("")}
               </select>
             </div>
+            <div class="field full">
+              <label for="simulation-centerline-direction">Centerline direction</label>
+              <select
+                id="simulation-centerline-direction"
+                onchange="setSimulationCenterlineDirection(this.value)"
+                ${sim.source === "centerline" ? "" : "disabled"}
+              >
+                <option value="forward" ${sim.centerlineDirection === "forward" ? "selected" : ""}>Forward</option>
+                <option value="reverse" ${sim.centerlineDirection === "reverse" ? "selected" : ""}>Reverse</option>
+              </select>
+              <span class="field-hint">Simulation only. The saved Centerline is not modified.</span>
+            </div>
             ${sim.source === "custom"
               ? `<div class="field"><label>Target speed</label><input value="Custom profile" disabled /><span class="field-hint">Uses speed_mps at the nearest custom point.</span></div>`
               : simulationNumberInput("targetSpeedMps", "Target speed (m/s)", 0, 0.1)}
@@ -6411,6 +6434,14 @@ function renderRacelineClearance(detail) {
         <span class="${centerlineReady ? "ok" : "warn"}">${centerlineReady ? "Ready" : "Need centerline"}</span>
       </div>
       <div class="form-grid">
+        <div class="field full">
+          <label for="raceline-direction">Lap direction</label>
+          <select id="raceline-direction" onchange="updateRacelineDirection(this)">
+            <option value="forward" ${options.direction === "forward" ? "selected" : ""}>Forward (centerline order)</option>
+            <option value="reverse" ${options.direction === "reverse" ? "selected" : ""}>Reverse</option>
+          </select>
+          <div class="field-hint">Reverse follows the same loop in the opposite direction and swaps the left/right track widths.</div>
+        </div>
         <div class="field">
           <label for="raceline-vehicle-width">Vehicle width (m)</label>
           <input
@@ -6499,6 +6530,15 @@ function renderRacelineClearance(detail) {
   `;
 }
 
+function updateRacelineDirection(input) {
+  const direction = String(input?.value || "").trim().toLowerCase();
+  if (!["forward", "reverse"].includes(direction)) return;
+  state.racelineGeneration.direction = direction;
+  if (state.selectedMapDetail?.map?.path) {
+    scheduleRacelinePreflight(state.selectedMapDetail.map.path);
+  }
+}
+
 function updateRacelineGeneration(field, input) {
   const allowed = [
     "vehicleWidthM",
@@ -6573,6 +6613,11 @@ function updateRacelineGeneration(field, input) {
 }
 
 function racelineGenerationPayload() {
+  const directionInput = $("raceline-direction");
+  const direction = String(directionInput?.value || state.racelineGeneration.direction).trim().toLowerCase();
+  if (!["forward", "reverse"].includes(direction)) {
+    throw new Error("Lap direction must be Forward or Reverse.");
+  }
   const vehicleInput = $("raceline-vehicle-width");
   const marginInput = $("raceline-safety-margin");
   const maxSpeedInput = $("raceline-max-speed");
@@ -6633,7 +6678,9 @@ function racelineGenerationPayload() {
   state.racelineGeneration.lateralAccelLimitMps2 = lateralAccelLimitMps2;
   state.racelineGeneration.accelLimitMps2 = accelLimitMps2;
   state.racelineGeneration.decelLimitMps2 = decelLimitMps2;
+  state.racelineGeneration.direction = direction;
   return {
+    direction,
     vehicle_width_m: vehicleWidthM,
     safety_margin_m: safetyMarginM,
     max_speed_mps: maxSpeedMps,
@@ -10744,6 +10791,7 @@ async function openMapWorkspace(path) {
   render();
   try {
     const detail = await api(apiPath("/api/maps/detail", { path }));
+    syncRacelineDirectionFromDetail(detail);
     state.selectedMapDetail = detail;
     state.selectedMapPath = detail.map.path;
     const index = state.maps.findIndex((item) => item.path === path || item.path === detail.map.path);
@@ -10773,6 +10821,7 @@ async function refreshSelectedMapData(options = {}) {
     if (!state.selectedMapPath) return;
 
     const detail = await api(apiPath("/api/maps/detail", { path: state.selectedMapPath }));
+    syncRacelineDirectionFromDetail(detail);
     state.selectedMapDetail = detail;
     state.selectedMapPath = detail.map.path;
     const index = state.maps.findIndex((item) => item.path === detail.map.path);
@@ -11129,9 +11178,16 @@ function simulationPathPoints(detail = state.selectedMapDetail) {
     const raceline = normalizePoints(detail.raceline_csv?.points || []);
     if (raceline.length >= 2) return raceline;
   }
-  const laneCenterline = normalizePoints(primaryLane(detail)?.centerline || []);
-  if (laneCenterline.length >= 2) return laneCenterline;
-  return normalizePoints(detail.centerline_csv?.points || []);
+  const lane = primaryLane(detail);
+  let centerline = normalizePoints(lane?.centerline || []);
+  if (centerline.length < 2) centerline = normalizePoints(detail.centerline_csv?.points || []);
+  centerline.closedLoop = lane ? Boolean(lane.closed_loop) : simulationPathClosed(centerline);
+  if (state.simulation.source === "centerline" && state.simulation.centerlineDirection === "reverse") {
+    const reversed = [...centerline].reverse();
+    reversed.closedLoop = centerline.closedLoop;
+    return reversed;
+  }
+  return centerline;
 }
 
 function simulationPathClosed(points) {
@@ -11258,6 +11314,15 @@ function updateSimulationSetting(key, input) {
 
 function setSimulationSource(source) {
   state.simulation.source = ["centerline", "raceline", "custom"].includes(source) ? source : "raceline";
+  const directionInput = $("simulation-centerline-direction");
+  if (directionInput) directionInput.disabled = state.simulation.source !== "centerline";
+  resetSimulation();
+}
+
+function setSimulationCenterlineDirection(direction) {
+  const normalized = String(direction || "").trim().toLowerCase();
+  if (!["forward", "reverse"].includes(normalized)) return;
+  state.simulation.centerlineDirection = normalized;
   resetSimulation();
 }
 
@@ -11412,6 +11477,7 @@ function drawSimulationPreview() {
   ctx.fillRect(0, 0, width, height);
   drawGrid(ctx, width, height);
   const toPixel = mapPointProjector(detail, width, height);
+  const path = simulationPathPoints(detail);
   const lanes = detail.hd_map?.lanes || [];
   for (const lane of lanes) {
     drawPolyline(ctx, normalizePoints(lane.left_bound || []).map((point) => toPixel([point.x, point.y])), "rgba(69,196,120,0.65)", 2, lane.closed_loop);
@@ -11422,6 +11488,7 @@ function drawSimulationPreview() {
   drawPolyline(ctx, normalizePoints(detail.raceline_csv?.points || []).map((point) => toPixel([point.x, point.y])), "rgba(255,109,109,0.9)", 3, false);
   const customLine = selectedCustomLine(detail);
   if (customLine) drawCustomSpeedPolyline(ctx, customLine, toPixel, state.simulation.source === "custom" ? 4.5 : 2.5);
+  drawSimulationStartArrow(ctx, path, toPixel);
 
   const sim = state.simulation;
   drawPolyline(ctx, sim.trajectory.map((point) => toPixel([point.x, point.y])), "#ffffff", 2.5, false);
@@ -11437,7 +11504,6 @@ function drawSimulationPreview() {
   }
   drawSimulationVehicle(ctx, detail, toPixel);
 
-  const path = simulationPathPoints(detail);
   if (path.length < 2) {
     ctx.save();
     ctx.fillStyle = "#f2c94c";
@@ -11445,6 +11511,55 @@ function drawSimulationPreview() {
     ctx.fillText("Generate or select a Centerline, Raceline, or Custom line before simulation.", 18, 28);
     ctx.restore();
   }
+}
+
+function drawSimulationStartArrow(ctx, path, toPixel) {
+  if (!path || path.length < 2) return;
+  const start = toPixel([path[0].x, path[0].y]);
+  let next = null;
+  for (let index = 1; index < path.length; index += 1) {
+    const candidate = toPixel([path[index].x, path[index].y]);
+    if (Math.hypot(candidate[0] - start[0], candidate[1] - start[1]) > 1.0e-3) {
+      next = candidate;
+      break;
+    }
+  }
+  if (!next || ![...start, ...next].every(Number.isFinite)) return;
+
+  const angle = Math.atan2(next[1] - start[1], next[0] - start[0]);
+  const shaftLength = 34;
+  const tipX = start[0] + Math.cos(angle) * shaftLength;
+  const tipY = start[1] + Math.sin(angle) * shaftLength;
+  const headLength = 11;
+  const headAngle = Math.PI / 6;
+
+  ctx.save();
+  ctx.strokeStyle = "#57c7c2";
+  ctx.fillStyle = "#57c7c2";
+  ctx.lineWidth = 4;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.beginPath();
+  ctx.arc(start[0], start[1], 6, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(start[0], start[1]);
+  ctx.lineTo(tipX, tipY);
+  ctx.lineTo(tipX - Math.cos(angle - headAngle) * headLength, tipY - Math.sin(angle - headAngle) * headLength);
+  ctx.moveTo(tipX, tipY);
+  ctx.lineTo(tipX - Math.cos(angle + headAngle) * headLength, tipY - Math.sin(angle + headAngle) * headLength);
+  ctx.stroke();
+
+  ctx.font = "bold 12px ui-sans-serif, system-ui";
+  const label = "START";
+  const labelX = start[0] + 10;
+  const labelY = start[1] - 12;
+  const metrics = ctx.measureText(label);
+  ctx.fillStyle = "rgba(8, 10, 13, 0.82)";
+  ctx.fillRect(labelX - 4, labelY - 13, metrics.width + 8, 18);
+  ctx.fillStyle = "#d8fffb";
+  ctx.fillText(label, labelX, labelY);
+  ctx.restore();
 }
 
 function drawSimulationVehicle(ctx, detail, toPixel) {
@@ -11892,11 +12007,13 @@ window.runMapStage = runMapStage;
 window.updateHdRasterCropMode = updateHdRasterCropMode;
 window.updateHdRasterNumber = updateHdRasterNumber;
 window.updateRacelineGeneration = updateRacelineGeneration;
+window.updateRacelineDirection = updateRacelineDirection;
 window.toggleSimulationPlayback = toggleSimulationPlayback;
 window.stepSimulationOnce = stepSimulationOnce;
 window.resetSimulation = resetSimulation;
 window.updateSimulationSetting = updateSimulationSetting;
 window.setSimulationSource = setSimulationSource;
+window.setSimulationCenterlineDirection = setSimulationCenterlineDirection;
 window.openMapWorkspace = openMapWorkspace;
 window.refreshSelectedMap = refreshSelectedMap;
 window.toggleMapLayer = toggleMapLayer;

@@ -115,6 +115,11 @@ minimum available track width, speed profile limits, and result size/length. A
 `both` direction run writes separate metadata for the forward and reverse
 outputs.
 
+Use `--direction forward` or `--direction reverse` to select the lap direction.
+The JetPilot Console exposes the same choice in the Raceline generation panel.
+When using `scripts/create_map.sh`, the workflow asks for the direction before
+generation; `RACELINE_DIRECTION=reverse` changes its default choice.
+
 ## Section gate editor
 
 After the HD map YAML has a centerline, use `hd_map_section_gate_editor.py` to

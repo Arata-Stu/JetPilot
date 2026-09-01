@@ -17,6 +17,7 @@ ROSBAG_PLAY_ADDITIONAL_ARGS="${ROSBAG_PLAY_ADDITIONAL_ARGS:---clock}"
 ENABLE_OFFLINE_RVIZ="${ENABLE_OFFLINE_RVIZ:-true}"
 OFFLINE_RVIZ_CONFIG_FILE="${OFFLINE_RVIZ_CONFIG_FILE:-${ROS2_WS}/install/jetpilot_system_launch/share/jetpilot_system_launch/rviz/vslam_debug.rviz}"
 ENABLE_HD_MAP_WORKFLOW="${ENABLE_HD_MAP_WORKFLOW:-ask}"
+RACELINE_DIRECTION="${RACELINE_DIRECTION:-forward}"
 CAMERA_TOPIC_CONFIG_FILE="${CAMERA_TOPIC_CONFIG_FILE:-}"
 VSLAM_LANDMARKS_TOPIC="${VSLAM_LANDMARKS_TOPIC:-/visual_slam/vis/landmarks_cloud}"
 VSLAM_SNAPSHOT_WRITE_INTERVAL_S="${VSLAM_SNAPSHOT_WRITE_INTERVAL_S:-5.0}"
@@ -93,6 +94,28 @@ prompt_yes_no() {
       y|Y|yes|YES) return 0 ;;
       n|N|no|NO|"") return 1 ;;
       *) echo "Please answer y or n." >&2 ;;
+    esac
+  done
+}
+
+select_raceline_direction() {
+  local default_direction="$RACELINE_DIRECTION"
+  local answer
+
+  case "$default_direction" in
+    forward|reverse) ;;
+    *) die "RACELINE_DIRECTION must be forward or reverse" ;;
+  esac
+
+  while true; do
+    read -r -p "Lap direction: forward or reverse [${default_direction}]: " answer
+    answer="${answer:-$default_direction}"
+    case "$answer" in
+      forward|reverse)
+        printf '%s\n' "$answer"
+        return
+        ;;
+      *) echo "Please enter forward or reverse." >&2 ;;
     esac
   done
 }
@@ -482,6 +505,7 @@ run_hd_map_workflow() {
   local hd_map_editor
   local raceline_generator
   local line_visualizer
+  local raceline_direction
 
   map_name="$(basename "$map_dir")"
   hd_map_yaml="${map_dir}/${map_name}_hd_map.yaml"
@@ -516,9 +540,12 @@ run_hd_map_workflow() {
   [[ -f "$raceline_generator" ]] \
     || die "raceline generator was not found under PYTHON_WS=${PYTHON_WS}: $raceline_generator"
 
+  raceline_direction="$(select_raceline_direction)"
+
   "$PYTHON_BIN" "$raceline_generator" \
     --centerline "$centerline_csv" \
     --output "$raceline_csv" \
+    --direction "$raceline_direction" \
     --show-progress
 
   [[ -f "$line_visualizer" ]] \

@@ -572,6 +572,7 @@ class ConsoleEndpointTests(unittest.TestCase):
                 "map_dir": str(map_dir),
                 "vehicle_width_m": 0.187,
                 "safety_margin_m": 0.02,
+                "direction": "reverse",
             },
         )
 
@@ -711,6 +712,7 @@ class ConsoleEndpointTests(unittest.TestCase):
                 "map_dir": str(map_dir),
                 "vehicle_width_m": 0.187,
                 "safety_margin_m": 0.02,
+                "direction": "reverse",
             },
             tasks=tasks,
         )
@@ -722,6 +724,7 @@ class ConsoleEndpointTests(unittest.TestCase):
         command = tasks.calls[0]["command"]
         self.assertIn("--vehicle-width-m 0.187", command[2])
         self.assertIn("--safety-margin-m 0.02", command[2])
+        self.assertIn("--direction reverse", command[2])
 
         status, payload = self.post(
             "/api/maps/generate-raceline",

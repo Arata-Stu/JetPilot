@@ -521,6 +521,23 @@ lanes:
                     self.check(result, "raceline.speed_profile")["status"], BLOCKED
                 )
 
+    def test_raceline_validates_lap_direction(self) -> None:
+        path = self.ready_map()
+        reverse = evaluate_preflight(
+            self.config,
+            "generate-raceline",
+            {"map_dir": str(path), "direction": "reverse"},
+        )
+        self.assertEqual(self.check(reverse, "raceline.direction")["status"], PASS)
+        self.assertEqual(reverse["resolved"]["direction"], "reverse")
+
+        invalid = evaluate_preflight(
+            self.config,
+            "generate-raceline",
+            {"map_dir": str(path), "direction": "both"},
+        )
+        self.assertEqual(self.check(invalid, "raceline.direction")["status"], BLOCKED)
+
     def test_raceline_rejects_symlink_input_and_non_regular_output(self) -> None:
         path = self.ready_map()
         outside = Path(self.temporary_directory.name) / "outside.csv"

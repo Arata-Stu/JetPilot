@@ -410,7 +410,7 @@ editor.
 - Actions:
   - prepare landmark raster
   - edit and save HD map YAML/centerline CSV
-  - generate raceline with adjustable vehicle width and per-side boundary margin
+  - generate raceline with selectable forward/reverse lap direction, vehicle width, and per-side boundary margin
   - clone Centerline or Raceline into multiple named Custom Lines
   - edit Custom Line points, open/closed state, and per-section target speeds in the browser
   - select one validated Custom Line as the default for the next drive/transfer
@@ -547,11 +547,13 @@ values are metres and must be finite and non-negative:
 ```json
 {
   "map_dir": "/workspaces/map/course_a",
+  "direction": "reverse",
   "vehicle_width_m": 0.25,
   "safety_margin_m": 0.05
 }
 ```
 
+`direction` accepts `forward` or `reverse` and defaults to `forward`.
 The effective optimizer envelope is `vehicle_width_m + 2 * safety_margin_m`.
 The API defaults preserve the existing `0.25 m` vehicle and `0.05 m` per-side
 margin behavior. Generation keeps the existing raceline CSV layout and writes

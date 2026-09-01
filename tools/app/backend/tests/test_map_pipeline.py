@@ -142,6 +142,27 @@ class GenerateRacelineScriptTest(unittest.TestCase):
         self.assertIn("--accel-limit 2.2", script)
         self.assertIn("--decel-limit 3.1", script)
 
+    def test_passes_selected_lap_direction(self) -> None:
+        forward = generate_raceline_script(self.config, "/workspaces/map/course_a")
+        reverse = generate_raceline_script(
+            self.config,
+            "/workspaces/map/course_a",
+            direction="reverse",
+        )
+
+        self.assertIn("--direction forward", forward)
+        self.assertIn("--direction reverse", reverse)
+
+    def test_rejects_invalid_lap_direction(self) -> None:
+        for value in ("both", "sideways", "", True):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(ValueError, "forward or reverse"):
+                    generate_raceline_script(
+                        self.config,
+                        "/workspaces/map/course_a",
+                        direction=value,
+                    )
+
     def test_rejects_invalid_vehicle_clearance(self) -> None:
         for value in (-0.01, math.inf, math.nan, True):
             with self.subTest(value=value):

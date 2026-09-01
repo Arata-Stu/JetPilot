@@ -57,6 +57,21 @@ class MapDetailOdometryOverlayTest(unittest.TestCase):
         self.assertEqual(detail["odometry"]["history_stride"], 2)
         self.assertEqual(detail["stats"]["odometry_points"], 2)
 
+    def test_exposes_saved_raceline_direction(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            map_root = Path(temporary_directory)
+            map_dir = map_root / "course_a"
+            map_dir.mkdir()
+            (map_dir / "course_a_raceline.meta.json").write_text(
+                json.dumps({"direction": "reverse"}),
+                encoding="utf-8",
+            )
+
+            detail = build_map_detail(SimpleNamespace(map_root=map_root), str(map_dir))
+
+        self.assertEqual(detail["raceline_metadata"]["direction"], "reverse")
+        self.assertTrue(detail["map"]["artifacts"]["raceline_meta"]["exists"])
+
 
 class HdMapVersionTest(unittest.TestCase):
     def test_saves_and_activates_hd_map_versions_without_rebuilding_vslam(self) -> None:

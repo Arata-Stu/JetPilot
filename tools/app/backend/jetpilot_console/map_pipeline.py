@@ -14,6 +14,8 @@ DEFAULT_RACELINE_MIN_SPEED_MPS = 0.8
 DEFAULT_RACELINE_LATERAL_ACCEL_LIMIT_MPS2 = 2.5
 DEFAULT_RACELINE_ACCEL_LIMIT_MPS2 = 1.5
 DEFAULT_RACELINE_DECEL_LIMIT_MPS2 = 2.5
+DEFAULT_RACELINE_DIRECTION = "forward"
+VALID_RACELINE_DIRECTIONS = frozenset({"forward", "reverse"})
 DEFAULT_HD_RASTER_AUTO_CROP_PERCENTILE = 99.0
 DEFAULT_HD_RASTER_AUTO_CROP_MIN_RETAINED_RATIO = 0.75
 DEFAULT_HD_RASTER_PATH_CROP_DISTANCE_M = 0.0
@@ -40,6 +42,15 @@ def _positive_finite(value: float, label: str) -> float:
     if not math.isfinite(parsed) or parsed <= 0.0:
         raise ValueError(f"{label} must be a finite value greater than 0")
     return parsed
+
+
+def _raceline_direction(value: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError("direction must be forward or reverse")
+    direction = value.strip().lower()
+    if direction not in VALID_RACELINE_DIRECTIONS:
+        raise ValueError("direction must be forward or reverse")
+    return direction
 
 
 def _bounded_finite(value: float, label: str, minimum: float, maximum: float) -> float:
@@ -397,6 +408,7 @@ def generate_raceline_script(
     lateral_accel_limit_mps2: float = DEFAULT_RACELINE_LATERAL_ACCEL_LIMIT_MPS2,
     accel_limit_mps2: float = DEFAULT_RACELINE_ACCEL_LIMIT_MPS2,
     decel_limit_mps2: float = DEFAULT_RACELINE_DECEL_LIMIT_MPS2,
+    direction: str = DEFAULT_RACELINE_DIRECTION,
     preset: str | None = None,
 ) -> str:
     map_path = Path(map_dir)
@@ -410,6 +422,7 @@ def generate_raceline_script(
     lateral_accel = _positive_finite(lateral_accel_limit_mps2, "lateral_accel_limit_mps2")
     accel_limit = _positive_finite(accel_limit_mps2, "accel_limit_mps2")
     decel_limit = _positive_finite(decel_limit_mps2, "decel_limit_mps2")
+    selected_direction = _raceline_direction(direction)
     selected_preset = preset if preset else ("f110" if vehicle_width <= 0.6 else "race-stacks")
     return f"""set -euo pipefail
 {_q(config.python_bin)} {_q(config.python_ws / "map_tools" / "generate_raceline.py")} \\
@@ -422,6 +435,7 @@ def generate_raceline_script(
   --lateral-accel-limit {lateral_accel:.9g} \\
   --accel-limit {accel_limit:.9g} \\
   --decel-limit {decel_limit:.9g} \\
+  --direction {selected_direction} \\
   --preset {selected_preset} \\
   --show-progress
 """

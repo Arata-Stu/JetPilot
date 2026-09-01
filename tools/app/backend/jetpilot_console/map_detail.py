@@ -2875,6 +2875,7 @@ def _map_record(map_dir: Path, map_root: Path | None = None) -> dict[str, Any]:
         "hd_map": _artifact(map_dir / f"{name}_hd_map.yaml"),
         "centerline_csv": _artifact(map_dir / f"{name}_hd_map_centerline.csv"),
         "raceline_csv": _artifact(map_dir / f"{name}_raceline.csv"),
+        "raceline_meta": _artifact(map_dir / f"{name}_raceline.meta.json"),
         "custom_line_csv": _artifact(map_dir / f"{name}_custom_line.csv"),
         "custom_line_meta": _artifact(map_dir / f"{name}_custom_line.meta.json"),
         "line_preview": _artifact(map_dir / f"{name}_line_preview.png"),
@@ -2908,6 +2909,7 @@ def build_map_detail(config: ConsoleConfig, map_dir_value: str) -> dict[str, Any
     landmark_yaml_path = map_dir / "vslam_landmarks.yaml"
     centerline_path = map_dir / f"{name}_hd_map_centerline.csv"
     raceline_path = map_dir / f"{name}_raceline.csv"
+    raceline_meta_path = map_dir / f"{name}_raceline.meta.json"
     line_preview_path = map_dir / f"{name}_line_preview.png"
     snapshot_path = map_dir / "vslam_reference_snapshot.json"
 
@@ -2941,6 +2943,7 @@ def build_map_detail(config: ConsoleConfig, map_dir_value: str) -> dict[str, Any
         "active_custom_line_id": custom_line_catalog["active_id"],
         "centerline_csv": centerline,
         "raceline_csv": raceline,
+        "raceline_metadata": _read_json_file(raceline_meta_path),
         "odometry": odometry,
         "stats": {
             "lane_count": len(hd_map.get("lanes", [])),

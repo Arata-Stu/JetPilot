@@ -56,6 +56,7 @@ from .map_detail import (
     update_custom_line,
 )
 from .map_pipeline import (
+    DEFAULT_RACELINE_DIRECTION,
     DEFAULT_RACELINE_ACCEL_LIMIT_MPS2,
     DEFAULT_RACELINE_DECEL_LIMIT_MPS2,
     DEFAULT_RACELINE_LATERAL_ACCEL_LIMIT_MPS2,
@@ -1966,6 +1967,7 @@ find {shlex.quote(record_root)} -name metadata.yaml -printf '%TY-%Tm-%Td %TH:%TM
                 return
             title = "Prepare HD map raster"
         elif stage == "generate-raceline":
+            direction = body.get("direction", DEFAULT_RACELINE_DIRECTION)
             vehicle_width_m = body.get(
                 "vehicle_width_m",
                 DEFAULT_RACELINE_VEHICLE_WIDTH_M,
@@ -1996,6 +1998,8 @@ find {shlex.quote(record_root)} -name metadata.yaml -printf '%TY-%Tm-%Td %TH:%TM
                 accel_limit_mps2 = DEFAULT_RACELINE_ACCEL_LIMIT_MPS2
             if decel_limit_mps2 is None:
                 decel_limit_mps2 = DEFAULT_RACELINE_DECEL_LIMIT_MPS2
+            if direction is None:
+                direction = DEFAULT_RACELINE_DIRECTION
             try:
                 script = generate_raceline_script(
                     config,
@@ -2007,6 +2011,7 @@ find {shlex.quote(record_root)} -name metadata.yaml -printf '%TY-%Tm-%Td %TH:%TM
                     lateral_accel_limit_mps2=lateral_accel_limit_mps2,
                     accel_limit_mps2=accel_limit_mps2,
                     decel_limit_mps2=decel_limit_mps2,
+                    direction=direction,
                 )
             except (TypeError, ValueError) as exc:
                 self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
