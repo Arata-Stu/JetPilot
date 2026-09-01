@@ -25,9 +25,11 @@ BreadcrumbRecoveryPlannerNode::BreadcrumbRecoveryPlannerNode()
   minimum_points_ = static_cast<std::size_t>(minimum_points);
   const auto latched = rclcpp::QoS(1).transient_local().reliable();
   odometry_sub_ = create_subscription<nav_msgs::msg::Odometry>(
-    "/visual_slam/tracking/odometry", 20, [this](const auto message) { on_odometry(*message); });
+    "/visual_slam/tracking/odometry", 20,
+    [this](nav_msgs::msg::Odometry::ConstSharedPtr message) { on_odometry(*message); });
   request_sub_ = create_subscription<std_msgs::msg::Bool>(
-    "/planning/recovery/request", 10, [this](const auto message) { on_request(message->data); });
+    "/planning/recovery/request", 10,
+    [this](std_msgs::msg::Bool::ConstSharedPtr message) { on_request(message->data); });
   trajectory_pub_ = create_publisher<jetpilot_msgs::msg::Trajectory>(
     "/planning/recovery/trajectory_profile", latched);
   ready_pub_ = create_publisher<std_msgs::msg::Bool>("/planning/recovery/ready", latched);
