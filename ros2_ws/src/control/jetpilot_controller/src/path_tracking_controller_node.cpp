@@ -11,6 +11,7 @@
 #include "diagnostic_msgs/msg/diagnostic_status.hpp"
 #include "diagnostic_msgs/msg/key_value.hpp"
 #include "jetpilot_controller/path_tracking_controller_node.hpp"
+#include "jetpilot_controller/motion_direction.hpp"
 #include "tf2/LinearMath/Quaternion.h"
 #include "tf2/LinearMath/Transform.h"
 #include "tf2/LinearMath/Vector3.h"
@@ -647,6 +648,13 @@ void PathTrackingControllerNode::control_cycle()
     publish_safety_stop("typed trajectory profile is invalid");
     return;
   }
+  if (typed_profile_active &&
+      trajectory_profile_->motion_direction != jetpilot_msgs::msg::Trajectory::MOTION_FORWARD &&
+      trajectory_profile_->motion_direction != jetpilot_msgs::msg::Trajectory::MOTION_REVERSE)
+  {
+    publish_safety_stop("typed trajectory motion direction is invalid");
+    return;
+  }
   if (!typed_profile_active && trajectory_->poses.size() < 2U)
   {
     publish_safety_stop("trajectory is empty or too short");
@@ -693,6 +701,16 @@ void PathTrackingControllerNode::control_cycle()
   {
     publish_safety_stop(reason);
     return;
+  }
+  const bool reverse_motion = typed_profile_active &&
+    trajectory_profile_->motion_direction == jetpilot_msgs::msg::Trajectory::MOTION_REVERSE;
+  if (reverse_motion)
+  {
+    // Express the path in a motion-aligned frame (vehicle frame rotated by pi).
+    // All lateral algorithms can then track a reverse path using their normal
+    // forward-path geometry. The steering sign is inverted below because
+    // reverse motion inverts the bicycle model's yaw response.
+    orient_path_for_motion(input.path, true);
   }
   const auto tracking = lateral_controller_->compute(input);
   if (!tracking.valid)
@@ -754,7 +772,7 @@ void PathTrackingControllerNode::control_cycle()
 
   TrailingResult trailing;
   trailing.target_speed_mps = limited_target_speed;
-  if (trailing_controller_->params().enabled)
+  if (trailing_controller_->params().enabled && !reverse_motion)
   {
     trailing = apply_trailing_limit(limited_target_speed, *speed, input.path, path_closed);
     limited_target_speed = trailing.target_speed_mps;
@@ -771,21 +789,24 @@ void PathTrackingControllerNode::control_cycle()
   jetpilot_msgs::msg::ControlCommand command;
   command.header.stamp = now();
   command.header.frame_id = base_frame_;
-  command.steering = static_cast<float>(apply_steering_rate_limit(tracking.steering_command));
-  command.throttle = static_cast<float>(longitudinal.throttle);
+  const double physical_steering = steering_for_motion(tracking.steering_command, reverse_motion);
+  command.steering = static_cast<float>(apply_steering_rate_limit(physical_steering));
+  command.throttle = reverse_motion ? 0.0F : static_cast<float>(longitudinal.throttle);
   command.brake = static_cast<float>(longitudinal.brake);
-  command.reverse = 0.0F;
+  command.reverse = reverse_motion ? static_cast<float>(longitudinal.throttle) : 0.0F;
   command_pub_->publish(command);
 
   geometry_msgs::msg::PoseStamped lookahead;
   lookahead.header = command.header;
-  lookahead.pose.position.x = tracking.target_point.x;
-  lookahead.pose.position.y = tracking.target_point.y;
+  const auto physical_lookahead = point_from_motion_frame(tracking.target_point, reverse_motion);
+  lookahead.pose.position.x = physical_lookahead.x;
+  lookahead.pose.position.y = physical_lookahead.y;
   lookahead.pose.orientation.w = 1.0;
   lookahead_pub_->publish(lookahead);
 
-  publish_state(true, "tracking", *speed, limited_target_speed, tracking.steering_command,
-                tracking.curvature, trailing);
+  publish_state(true, reverse_motion ? "tracking_reverse" : "tracking", *speed,
+                limited_target_speed, physical_steering,
+                reverse_motion ? -tracking.curvature : tracking.curvature, trailing);
 }
 
 TrailingResult PathTrackingControllerNode::apply_trailing_limit(double planned_speed_mps,

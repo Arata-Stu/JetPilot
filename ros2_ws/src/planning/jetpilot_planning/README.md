@@ -66,6 +66,10 @@ ros2 launch jetpilot_planning jetpilot_planning.launch.xml \
 `raceline_root`を省略する場合は`raceline_csv`を絶対pathにする必要があります。
 また、標準設定では16 MiB、200,000点を上限とし、列数、NaN/Inf、非単調な`s`、
 負の`vx`、長さゼロのpathを起動時に検査します。
+起動後もCSVのatomic replaceを監視し、読込前後で同じfile revisionであることを確認できた場合だけ
+再配信します。`source_hash`指定は起動時のintegrity確認に限り、以後の有効なGUI保存では新CSVから
+計算したSHA-256を`Trajectory.source_hash`として配信します。更新CSVが欠損または不正な間は空の
+Path/Trajectoryを一度配信してfail-closedにし、次の有効なatomic replaceで自動復帰します。
 
 `route_lane_selector.raceline.param.yaml`はprimaryとracelineの両方を購読する接続例です。
 raceline/custom候補は`lane_trajectory_topics`でtyped messageを購読し、geometry、`vx/ax`、
@@ -94,8 +98,8 @@ ID、表示名、開閉路、compiled CSVのSHA-256を自動取得します。ma
 古いtrajectoryを別のSection layoutで起動しません。明示した`--custom-line-id`、`--custom-line-name`、
 `--custom-line-open/--custom-line-closed`はmanifest値より優先します。
 `custom` presetで`custom-line` componentと`--map`を指定した場合は、そのMapで有効化済みの
-canonical Custom Lineを自動選択します。line切替は次回launchに反映され、走行中のhot-swapは
-意図的に行いません。
+canonical Custom Lineを自動選択します。line ID・表示名・開閉路の切替は次回launchに反映されます。
+現在選択中lineのgeometryと速度profileを同じCSVへ保存した変更は、走行中も上記の安全なreload対象です。
 
 ## lane追加例
 

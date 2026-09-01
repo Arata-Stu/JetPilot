@@ -13,9 +13,14 @@ JetPilot 内で共有する message 定義です。operation、teleop、controll
 | `BagStatus` | `/bag/status` | record 中か、出力先 URI、最後の event を通知する |
 | `TrajectoryPoint` | `Trajectory.points[]` | pose、曲率、点ごとの速度・加速度を同じstationで保持する |
 | `Trajectory` | `/planning/*_trajectory`, `/planning/trajectory_profile` | 名前付きlineのgeometryとspeed profileをID/hash付きで原子的に運ぶ |
+| `DirectionSignal` | `/perception/direction_signal` | 時系列確定した左・直進・右の矢印信号 |
+| `JunctionArray` | `/hd_map/junctions` | signal activation sectionと方向別laneの静的対応 |
+| `PlanningManagerStatus` | `/planning/manager/status` | 通常・信号待ち・経路確定・復帰・異常の統括状態 |
+| `RecoveryStatus` | `/planning/recovery/status` | breadcrumb記録・後退・成功・失敗状態 |
 
 `Trajectory.line_id`は名前付きlineの安定ID、`display_name`はUI表示名、`source_hash`はcompiled
 CSVのcontent hashです。selectorはgeometryと速度を別topicから組み合わせず、このmessage単位で選択します。
+`motion_direction` は前進・後退を明示し、速度値はどちらも正の m/s とする。
 
 ## ControlCommand の扱い
 

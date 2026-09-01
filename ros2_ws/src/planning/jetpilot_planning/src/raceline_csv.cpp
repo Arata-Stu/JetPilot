@@ -11,6 +11,7 @@
 #include <stdexcept>
 #include <string>
 #include <system_error>
+#include <sys/stat.h>
 #include <utility>
 
 namespace jetpilot_planning
@@ -248,6 +249,44 @@ std::string sha256_hash(const std::string & contents)
 
 }  // namespace
 
+bool RacelineFileSignature::operator==(const RacelineFileSignature & other) const
+{
+  return device == other.device && inode == other.inode && size == other.size &&
+         modified_seconds == other.modified_seconds &&
+         modified_nanoseconds == other.modified_nanoseconds &&
+         changed_seconds == other.changed_seconds &&
+         changed_nanoseconds == other.changed_nanoseconds;
+}
+
+std::optional<RacelineFileSignature> raceline_file_signature(
+  const std::filesystem::path & path)
+{
+  struct stat metadata {};
+  if (::stat(path.c_str(), &metadata) != 0 || !S_ISREG(metadata.st_mode) || metadata.st_size < 0)
+  {
+    return std::nullopt;
+  }
+#if defined(__APPLE__)
+  const auto modified_seconds = metadata.st_mtimespec.tv_sec;
+  const auto modified_nanoseconds = metadata.st_mtimespec.tv_nsec;
+  const auto changed_seconds = metadata.st_ctimespec.tv_sec;
+  const auto changed_nanoseconds = metadata.st_ctimespec.tv_nsec;
+#else
+  const auto modified_seconds = metadata.st_mtim.tv_sec;
+  const auto modified_nanoseconds = metadata.st_mtim.tv_nsec;
+  const auto changed_seconds = metadata.st_ctim.tv_sec;
+  const auto changed_nanoseconds = metadata.st_ctim.tv_nsec;
+#endif
+  return RacelineFileSignature{
+    static_cast<std::uintmax_t>(metadata.st_dev),
+    static_cast<std::uintmax_t>(metadata.st_ino),
+    static_cast<std::uintmax_t>(metadata.st_size),
+    static_cast<std::int64_t>(modified_seconds),
+    static_cast<std::int64_t>(modified_nanoseconds),
+    static_cast<std::int64_t>(changed_seconds),
+    static_cast<std::int64_t>(changed_nanoseconds)};
+}
+
 std::filesystem::path resolve_raceline_csv_path(
   const std::filesystem::path & raceline_root,
   const std::filesystem::path & requested)
@@ -390,6 +429,28 @@ RacelineData load_raceline_csv(
     throw std::runtime_error("raceline CSV has zero geometric length");
   }
   return result;
+}
+
+StableRacelineData load_stable_raceline_csv(
+  const std::filesystem::path & raceline_root,
+  const std::filesystem::path & requested,
+  const RacelineCsvLimits & limits)
+{
+  const auto resolved_path = resolve_raceline_csv_path(raceline_root, requested);
+  const auto signature_before = raceline_file_signature(resolved_path);
+  if (!signature_before)
+  {
+    throw std::runtime_error(
+            "raceline CSV is not a readable regular file: " + resolved_path.string());
+  }
+  auto data = load_raceline_csv(raceline_root, requested, limits);
+  const auto signature_after = raceline_file_signature(data.source_path);
+  if (!signature_after || *signature_after != *signature_before ||
+      data.source_path != resolved_path)
+  {
+    throw std::runtime_error("raceline CSV changed while it was being loaded");
+  }
+  return {std::move(data), *signature_after};
 }
 
 }  // namespace jetpilot_planning

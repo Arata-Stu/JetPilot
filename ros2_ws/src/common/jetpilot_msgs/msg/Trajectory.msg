@@ -10,4 +10,11 @@ string display_name
 string source_hash
 
 bool closed
+
+# Direction of vehicle motion while following this trajectory. Geometry remains
+# ordered from the current/start point toward the goal in both modes.
+uint8 MOTION_FORWARD=0
+uint8 MOTION_REVERSE=1
+uint8 motion_direction
+
 TrajectoryPoint[] points

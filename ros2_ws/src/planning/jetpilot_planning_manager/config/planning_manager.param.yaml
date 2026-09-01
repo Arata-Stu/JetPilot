@@ -1,0 +1,11 @@
+planning_manager_node:
+  ros__parameters:
+    publish_rate_hz: 10.0
+    recovery_target_speed_mps: 0.20
+    current_section_timeout_s: 1.0
+    # A route is accepted only when Path, typed profile, and selector diagnostics
+    # carry the same cycle timestamp. Stop if that coherent bundle stops updating.
+    route_bundle_timeout_s: 0.5
+    default_lane_id: primary
+    route_diagnostics_topic: /planning/route/diagnostics
+    require_junction_map: true

@@ -1,0 +1,26 @@
+<launch>
+  <arg name="route_config_file" default="$(find-pkg-share jetpilot_planning_manager)/config/route_lane_selector.competition.param.yaml"/>
+  <arg name="manager_config_file" default="$(find-pkg-share jetpilot_planning_manager)/config/planning_manager.param.yaml"/>
+  <arg name="signal_config_file" default="$(find-pkg-share jetpilot_signal_detection)/config/signal_detection.param.yaml"/>
+  <arg name="recovery_config_file" default="$(find-pkg-share jetpilot_recovery_planner)/config/recovery_planner.param.yaml"/>
+  <arg name="route_diagnostics_topic" default="/planning/route/diagnostics"/>
+  <arg name="use_sim_time" default="false"/>
+
+  <include file="$(find-pkg-share jetpilot_planning)/launch/jetpilot_planning.launch.xml">
+    <arg name="config_file" value="$(var route_config_file)"/>
+    <arg name="diagnostics_topic" value="$(var route_diagnostics_topic)"/>
+    <arg name="use_sim_time" value="$(var use_sim_time)"/>
+  </include>
+  <include file="$(find-pkg-share jetpilot_signal_detection)/launch/signal_detection.launch.xml">
+    <arg name="params_file" value="$(var signal_config_file)"/>
+    <arg name="use_sim_time" value="$(var use_sim_time)"/>
+  </include>
+  <include file="$(find-pkg-share jetpilot_recovery_planner)/launch/recovery_planner.launch.xml">
+    <arg name="params_file" value="$(var recovery_config_file)"/>
+    <arg name="use_sim_time" value="$(var use_sim_time)"/>
+  </include>
+  <include file="$(find-pkg-share jetpilot_planning_manager)/launch/planning_manager.launch.xml">
+    <arg name="params_file" value="$(var manager_config_file)"/>
+    <arg name="use_sim_time" value="$(var use_sim_time)"/>
+  </include>
+</launch>

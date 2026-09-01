@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import math
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
@@ -11,13 +12,17 @@ from typing import List, Optional, Sequence, Tuple
 import rclpy
 import yaml
 from geometry_msgs.msg import Point, PoseStamped
+from jetpilot_msgs.msg import Junction as JunctionMsg
+from jetpilot_msgs.msg import JunctionArray
 from nav_msgs.msg import Path as PathMsg
+from rclpy.clock import Clock, ClockType
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from visualization_msgs.msg import Marker, MarkerArray
 
 
 Point3 = Tuple[float, float, float]
+HdMapFileSignature = Tuple[int, int, int, int, int]
 
 
 @dataclass
@@ -41,9 +46,23 @@ class SectionGate:
 class Section:
     section_id: str
     lane_id: str
+    start_gate_id: str
+    end_gate_id: str
     start_s_m: float
     end_s_m: float
     speed_override_mps: Optional[float]
+
+
+@dataclass
+class Junction:
+    junction_id: str
+    signal_id: str
+    position: Point3
+    activation_section_ids: List[str]
+    release_section_ids: List[str]
+    left_lane_id: str
+    straight_lane_id: str
+    right_lane_id: str
 
 
 @dataclass
@@ -53,6 +72,7 @@ class HdMap:
     lanes: List[Lane]
     section_gates: List[SectionGate]
     sections: List[Section]
+    junctions: List[Junction]
 
     def primary_lane(self) -> Optional[Lane]:
         for lane in self.lanes:
@@ -86,6 +106,29 @@ def read_float_or_none(value: object) -> Optional[float]:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def junction_default_position(
+    activation_section_ids: Sequence[str],
+    sections: Sequence[Section],
+    section_gates: Sequence[SectionGate],
+    lanes: Sequence[Lane],
+) -> Point3:
+    section_by_id = {section.section_id: section for section in sections}
+    gate_by_id = {gate.gate_id: gate for gate in section_gates}
+    for section_id in activation_section_ids:
+        section = section_by_id.get(section_id)
+        gate = gate_by_id.get(section.end_gate_id) if section is not None else None
+        if gate is not None and len(gate.line) == 2:
+            return (
+                0.5 * (gate.line[0][0] + gate.line[1][0]),
+                0.5 * (gate.line[0][1] + gate.line[1][1]),
+                0.5 * (gate.line[0][2] + gate.line[1][2]),
+            )
+    for lane in lanes:
+        if lane.centerline:
+            return lane.centerline[0]
+    return (0.0, 0.0, 0.0)
 
 
 def load_hd_map(path: Path, frame_override: str) -> HdMap:
@@ -151,9 +194,48 @@ def load_hd_map(path: Path, frame_override: str) -> HdMap:
                 Section(
                     section_id=str(raw_section.get("id") or f"section_{section_index:03d}"),
                     lane_id=str(raw_section.get("lane_id") or primary_lane_id),
+                    start_gate_id=str(raw_section.get("start_gate_id") or ""),
+                    end_gate_id=str(raw_section.get("end_gate_id") or ""),
                     start_s_m=start_s_m,
                     end_s_m=end_s_m,
                     speed_override_mps=read_float_or_none(raw_section.get("speed_override_mps")),
+                )
+            )
+
+    junctions: List[Junction] = []
+    raw_junctions = data.get("junctions", [])
+    if isinstance(raw_junctions, list):
+        for junction_index, raw_junction in enumerate(raw_junctions, start=1):
+            if not isinstance(raw_junction, dict):
+                continue
+            activation_sections = raw_junction.get("activation_section_ids", [])
+            if not isinstance(activation_sections, list):
+                activation_sections = []
+            release_sections = raw_junction.get("release_section_ids", [])
+            if not isinstance(release_sections, list):
+                release_sections = []
+            branches = raw_junction.get("branches", {})
+            if not isinstance(branches, dict):
+                branches = {}
+            activation_section_ids = [str(item) for item in activation_sections if str(item)]
+            raw_position = raw_junction.get("position")
+            parsed_position = read_points([raw_position]) if raw_position is not None else []
+            position = parsed_position[0] if parsed_position else junction_default_position(
+                activation_section_ids,
+                sections,
+                section_gates,
+                lanes,
+            )
+            junctions.append(
+                Junction(
+                    junction_id=str(raw_junction.get("id") or f"junction_{junction_index:03d}"),
+                    signal_id=str(raw_junction.get("signal_id") or ""),
+                    position=position,
+                    activation_section_ids=activation_section_ids,
+                    release_section_ids=[str(item) for item in release_sections if str(item)],
+                    left_lane_id=str(branches.get("left") or ""),
+                    straight_lane_id=str(branches.get("straight") or ""),
+                    right_lane_id=str(branches.get("right") or ""),
                 )
             )
 
@@ -163,7 +245,38 @@ def load_hd_map(path: Path, frame_override: str) -> HdMap:
         lanes=lanes,
         section_gates=section_gates,
         sections=sections,
+        junctions=junctions,
     )
+
+
+def hd_map_file_signature(path: Path) -> Optional[HdMapFileSignature]:
+    try:
+        metadata = path.stat()
+    except OSError:
+        return None
+    if not stat.S_ISREG(metadata.st_mode):
+        return None
+    return (
+        int(metadata.st_dev),
+        int(metadata.st_ino),
+        int(metadata.st_size),
+        int(metadata.st_mtime_ns),
+        int(metadata.st_ctime_ns),
+    )
+
+
+def load_stable_hd_map(
+    path: Path,
+    frame_override: str,
+) -> Tuple[HdMap, HdMapFileSignature]:
+    signature_before = hd_map_file_signature(path)
+    if signature_before is None:
+        raise FileNotFoundError(f"HD map YAML is not a regular readable file: {path}")
+    candidate = load_hd_map(path, frame_override)
+    signature_after = hd_map_file_signature(path)
+    if signature_after is None or signature_after != signature_before:
+        raise RuntimeError("HD map YAML changed while it was being loaded")
+    return candidate, signature_after
 
 
 def transient_local_qos() -> QoSProfile:
@@ -309,6 +422,7 @@ class HdMapPublisherNode(Node):
             if self.publish_primary_path
             else None
         )
+        self.junction_pub = self.create_publisher(JunctionArray, "/hd_map/junctions", qos)
         self.section_marker_pub = (
             self.create_publisher(MarkerArray, "section_markers", qos)
             if self.publish_section_markers
@@ -316,56 +430,142 @@ class HdMapPublisherNode(Node):
         )
 
         self.hd_map: Optional[HdMap] = None
+        self.loaded_map_signature: Optional[HdMapFileSignature] = None
+        self.rejected_map_signature: Optional[HdMapFileSignature] = None
+        self.last_load_issue_key: Optional[tuple[object, ...]] = None
+        self.clear_markers_on_next_publish = False
         self.primary_path_warning_logged = False
-        self.last_load_attempt = self.get_clock().now()
-        self.try_load_hd_map()
         self.timer = self.create_timer(1.0 / self.publish_rate_hz, self.publish_outputs)
+        self.reload_clock = Clock(clock_type=ClockType.STEADY_TIME)
+        self.reload_timer = self.create_timer(
+            self.retry_interval_sec,
+            self.reload_hd_map,
+            clock=self.reload_clock,
+        )
+        if self.try_load_hd_map():
+            # Transient-local outputs are immediately available even when the
+            # simulation clock is paused before the first regular timer tick.
+            self.publish_outputs()
+
+    def log_load_issue(self, key: tuple[object, ...], message: str, *, warning: bool = False) -> None:
+        if key == self.last_load_issue_key:
+            return
+        self.last_load_issue_key = key
+        if warning:
+            self.get_logger().warn(message)
+        else:
+            self.get_logger().error(message)
 
     def try_load_hd_map(self) -> bool:
-        self.last_load_attempt = self.get_clock().now()
         if not self.hd_map_yaml_path:
-            self.get_logger().warn("Parameter hd_map_yaml_path is empty. Waiting for a YAML path.")
+            self.log_load_issue(
+                ("empty_path",),
+                "Parameter hd_map_yaml_path is empty. Waiting for a YAML path.",
+                warning=True,
+            )
             return False
 
-        path = Path(self.hd_map_yaml_path).expanduser()
-        if not path.is_file():
-            self.get_logger().error(f"HD map YAML not found: {path}")
+        path = Path(str(self.hd_map_yaml_path)).expanduser().resolve()
+        signature = hd_map_file_signature(path)
+        if signature is None:
+            suffix = "; keeping the previous valid map" if self.hd_map is not None else ""
+            self.log_load_issue(
+                ("missing", str(path)),
+                f"HD map YAML not found or not a regular file: {path}{suffix}",
+            )
+            return False
+        if self.hd_map is not None and signature == self.loaded_map_signature:
+            self.rejected_map_signature = None
+            self.last_load_issue_key = None
+            return False
+        if self.hd_map is not None and signature == self.rejected_map_signature:
             return False
 
         try:
-            self.hd_map = load_hd_map(path.resolve(), str(self.frame_id_override))
+            candidate, stable_signature = load_stable_hd_map(path, str(self.frame_id_override))
         except Exception as exc:
-            self.get_logger().error(f"Failed to load HD map YAML {path}: {exc}")
-            self.hd_map = None
+            self.rejected_map_signature = signature
+            suffix = "; keeping the previous valid map" if self.hd_map is not None else ""
+            self.log_load_issue(
+                ("invalid", signature, type(exc).__name__, str(exc)),
+                f"Failed to load HD map YAML {path}: {exc}{suffix}",
+            )
             return False
 
-        primary_lane = self.hd_map.primary_lane()
+        reloaded = self.hd_map is not None
+        self.hd_map = candidate
+        self.loaded_map_signature = stable_signature
+        self.rejected_map_signature = None
+        self.last_load_issue_key = None
+        self.clear_markers_on_next_publish = reloaded
+        self.primary_path_warning_logged = False
+        primary_lane = candidate.primary_lane()
         primary_points = len(primary_lane.centerline) if primary_lane is not None else 0
         self.get_logger().info(
-            f"Loaded HD map YAML: {path} "
-            f"(frame={self.hd_map.frame_id}, lanes={len(self.hd_map.lanes)}, "
-            f"primary={self.hd_map.primary_lane_id}, primary_points={primary_points}, "
-            f"sections={len(self.hd_map.sections)}, gates={len(self.hd_map.section_gates)})"
+            f"{'Reloaded' if reloaded else 'Loaded'} HD map YAML: {path} "
+            f"(frame={candidate.frame_id}, lanes={len(candidate.lanes)}, "
+            f"primary={candidate.primary_lane_id}, primary_points={primary_points}, "
+            f"sections={len(candidate.sections)}, gates={len(candidate.section_gates)}, "
+            f"junctions={len(candidate.junctions)})"
         )
         return True
 
+    def reload_hd_map(self) -> None:
+        if self.try_load_hd_map():
+            # Publish the complete replacement revision once from the steady
+            # timer so GUI updates are visible while /clock is paused.
+            self.publish_outputs()
+
     def publish_outputs(self) -> None:
         if self.hd_map is None:
-            now = self.get_clock().now()
-            elapsed = max(0.0, (now.nanoseconds - self.last_load_attempt.nanoseconds) / 1.0e9)
-            if elapsed >= self.retry_interval_sec:
-                self.try_load_hd_map()
             return
 
         stamp = self.get_clock().now().to_msg()
+        if self.clear_markers_on_next_publish:
+            clear_markers = MarkerArray()
+            clear_marker = Marker()
+            clear_marker.header.frame_id = self.hd_map.frame_id
+            clear_marker.header.stamp = stamp
+            clear_marker.action = Marker.DELETEALL
+            clear_markers.markers.append(clear_marker)
+            if self.marker_pub is not None:
+                self.marker_pub.publish(clear_markers)
+            if self.section_marker_pub is not None:
+                self.section_marker_pub.publish(clear_markers)
+            self.clear_markers_on_next_publish = False
+        self.junction_pub.publish(self.build_junctions(stamp))
         if self.marker_pub is not None:
             self.marker_pub.publish(self.build_lane_markers(stamp))
         if self.section_marker_pub is not None:
             self.section_marker_pub.publish(self.build_section_markers(stamp))
         if self.path_pub is not None:
             path = self.build_primary_path(stamp)
-            if path is not None:
-                self.path_pub.publish(path)
+            if path is None:
+                # Do not leave the previous map's transient-local path active
+                # when a valid replacement has no usable primary centerline.
+                path = PathMsg()
+                path.header.frame_id = self.hd_map.frame_id
+                path.header.stamp = stamp
+            self.path_pub.publish(path)
+
+    def build_junctions(self, stamp) -> JunctionArray:
+        output = JunctionArray()
+        output.header.frame_id = self.hd_map.frame_id
+        output.header.stamp = stamp
+        for source in self.hd_map.junctions:
+            junction = JunctionMsg()
+            junction.id = source.junction_id
+            junction.signal_id = source.signal_id
+            junction.position.x = source.position[0]
+            junction.position.y = source.position[1]
+            junction.position.z = source.position[2]
+            junction.activation_section_ids = source.activation_section_ids
+            junction.release_section_ids = source.release_section_ids
+            junction.left_lane_id = source.left_lane_id
+            junction.straight_lane_id = source.straight_lane_id
+            junction.right_lane_id = source.right_lane_id
+            output.junctions.append(junction)
+        return output
 
     def build_lane_markers(self, stamp) -> MarkerArray:
         marker_array = MarkerArray()

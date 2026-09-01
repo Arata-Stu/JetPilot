@@ -16,6 +16,9 @@ Pure Pursuit controllerが入り、従来の固定値`autonomous_control_node`�
 | `jetpilot_msgs` | lane graph、trajectory、planning/controller status の共通 interface |
 | `jetpilot_hdmap_publisher` | HD map の静的情報を読み、可視化と共有用 map data を publish |
 | `jetpilot_planning` | centerline/raceline/section を使った route 選択、lane 分岐、局所軌道生成 |
+| `jetpilot_signal_detection` | YOLO検出をsection限定の時系列投票で矢印方向へ確定 |
+| `jetpilot_planning_manager` | 通常経路、信号分岐、復帰経路の優先度と最終planning出力を統括 |
+| `jetpilot_recovery_planner` | 直前のodometry breadcrumbから後退復帰軌道を生成 |
 | `jetpilot_controller` | 選択済み trajectory を追従し `/auto/control_cmd` を生成 |
 
 ファイル形式の解釈を複数 node にコピーしません。HD map の正規化処理は共有 library
@@ -37,13 +40,17 @@ flowchart LR
   LOADER --> GRAPH["Lane candidates"]
   RACELOADER --> GRAPH
   GRAPH --> ROUTE["Route selector"]
-  SIGNAL["Traffic signal state"] --> ROUTE
+  YOLO["One-stage YOLO arrow detections"] --> SIGNAL["Temporal signal decision"]
+  SIGNAL --> MANAGER["Planning manager"]
   POLICY["Shortcut / race policy"] --> ROUTE
   BLOCKED["Blocked lanes"] --> ROUTE
   ROUTE --> LOCAL["Local trajectory planner"]
   OBJECTS["Obstacles"] --> LOCAL
   POSE["Pose / velocity"] --> LOCAL
-  LOCAL --> TRAJ["Typed trajectory / compatibility Path"]
+  LOCAL --> MANAGER
+  POSE --> RECOVERY["Breadcrumb recovery planner"]
+  RECOVERY --> MANAGER
+  MANAGER --> TRAJ["Typed trajectory / compatibility Path"]
   TRAJ --> CTRL["Pure Pursuit / future MPC"]
   POSE --> CTRL
   CTRL --> CMD["/auto/control_cmd"]
@@ -80,11 +87,11 @@ connection ごとに持たせます。
 
 ## Message contract
 
-`Trajectory`と`TrajectoryPoint`は実装済みです。lane graphとstatus型は分岐実装時に追加します。
+`Trajectory`、分岐map、信号判断、planning/recovery status型は実装済みです。
 
 - `LaneGraph`, `LaneSegment`, `LaneConnection`
-- **実装済み:** `Trajectory`, `TrajectoryPoint`（pose、速度、曲率、加速度、line ID/hash、開閉路）
-- `PlanningStatus`（active route、blocked reason、trajectory age）
+- **実装済み:** `Trajectory`, `TrajectoryPoint`（pose、速度、曲率、加速度、line ID/hash、開閉路、前後進）
+- **実装済み:** `JunctionArray`, `DirectionSignal`, `PlanningManagerStatus`, `RecoveryStatus`
 - `ControllerStatus`（algorithm、tracking error、command age、ready/fault）
 
 静的 map は transient-local、trajectory と状態量は期限付きの volatile QoS とします。

@@ -1,0 +1,9 @@
+signal_detection_node:
+  ros__parameters:
+    left_class: arrow_left
+    straight_class: arrow_straight
+    right_class: arrow_right
+    minimum_confidence: 0.60
+    vote_window_size: 5
+    minimum_votes: 3
+    detection_timeout_s: 0.50

@@ -82,6 +82,11 @@ PathValidation validate_trajectory(
   {
     return {false, "empty_source_hash"};
   }
+  if (trajectory.motion_direction != jetpilot_msgs::msg::Trajectory::MOTION_FORWARD &&
+      trajectory.motion_direction != jetpilot_msgs::msg::Trajectory::MOTION_REVERSE)
+  {
+    return {false, "invalid_motion_direction"};
+  }
   if (trajectory.points.size() < min_path_poses)
   {
     return {false, "not_enough_points"};

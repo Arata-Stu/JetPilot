@@ -418,6 +418,11 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('object_detection_network_width', '224', cli=True)
     args.add_arg('object_detection_network_height', '224', cli=True)
     args.add_arg('object_detection_max_inference_fps', '15.0', cli=True)
+    args.add_arg(
+        'object_detection_decoder_param_file',
+        lu.get_path('jetpilot_object_detection', 'config/yolov8.param.yaml'),
+        cli=True)
+    args.add_arg('object_detection_detections_topic', '/perception/detections', cli=True)
 
     args.add_arg('enable_localization', False, cli=True)
     args.add_arg('localization_camera_name', 'realsense', cli=True)
@@ -799,6 +804,8 @@ def generate_launch_description() -> lut.LaunchDescription:
                 'network_width': args.object_detection_network_width,
                 'network_height': args.object_detection_network_height,
                 'max_inference_fps': args.object_detection_max_inference_fps,
+                'decoder_param_file': args.object_detection_decoder_param_file,
+                'detections_topic': args.object_detection_detections_topic,
                 'use_sim_time': args.use_sim_time,
             },
             condition=IfCondition(args.enable_object_detection),

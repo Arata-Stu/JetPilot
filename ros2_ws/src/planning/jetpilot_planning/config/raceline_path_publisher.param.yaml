@@ -10,9 +10,14 @@
     publish_typed_trajectory: true
     line_id: raceline
     line_name: Raceline
+    # Optional startup-only integrity check. Hot reloads always publish the
+    # newly computed CSV hash, so GUI saves are not pinned to this value.
     source_hash: ""
     closed: true
     frame_id: map
+    # Watch GUI atomic replacements. An invalid/missing revision publishes an
+    # empty Path/Trajectory once so the route selector fails closed.
+    reload_interval_sec: 0.5
     max_file_bytes: 16777216
     max_points: 200000
     use_sim_time: false

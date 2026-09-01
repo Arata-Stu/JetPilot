@@ -76,6 +76,25 @@ TEST(RacelineCsv, ContentHashChangesWithSpeedProfile)
   EXPECT_NE(first.source_hash, second.source_hash);
 }
 
+TEST(RacelineCsv, StableLoadDetectsAtomicReplacement)
+{
+  TemporaryDirectory temporary;
+  const auto csv = temporary.path() / "custom.csv";
+  const auto replacement = temporary.path() / "custom.next.csv";
+  write_file(csv, "0;0;0;0;0;1;0\n1;1;0;0;0;1;0\n");
+  const auto first = jetpilot_planning::load_stable_raceline_csv(
+    temporary.path(), csv.filename());
+
+  write_file(replacement, "0;0;0;0;0;0.8;0\n1;1;0;0;0;0.6;-0.1\n");
+  std::filesystem::rename(replacement, csv);
+  const auto second = jetpilot_planning::load_stable_raceline_csv(
+    temporary.path(), csv.filename());
+
+  EXPECT_NE(first.signature, second.signature);
+  EXPECT_NE(first.data.source_hash, second.data.source_hash);
+  EXPECT_DOUBLE_EQ(second.data.points.back().vx, 0.6);
+}
+
 TEST(RacelineCsv, AcceptsUncommentedShortHeader)
 {
   TemporaryDirectory temporary;

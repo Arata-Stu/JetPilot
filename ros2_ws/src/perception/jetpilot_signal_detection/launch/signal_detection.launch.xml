@@ -1,0 +1,8 @@
+<launch>
+  <arg name="params_file" default="$(find-pkg-share jetpilot_signal_detection)/config/signal_detection.param.yaml"/>
+  <arg name="use_sim_time" default="false"/>
+  <node pkg="jetpilot_signal_detection" exec="signal_detection_node" name="signal_detection_node" output="screen">
+    <param from="$(var params_file)"/>
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+  </node>
+</launch>

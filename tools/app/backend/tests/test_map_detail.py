@@ -13,10 +13,254 @@ from jetpilot_console.map_detail import (
     build_map_detail,
     create_custom_line,
     delete_custom_line,
+    load_yaml,
+    save_hd_map,
     save_hd_map_version,
+    save_junctions,
     save_section_gates,
     update_custom_line,
 )
+
+
+class MapDetailYamlTest(unittest.TestCase):
+    def test_parses_unquoted_inline_id_lists(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "junction.yaml"
+            path.write_text(
+                "activation_section_ids: [section_approach, section_signal]\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                load_yaml(path)["activation_section_ids"],
+                ["section_approach", "section_signal"],
+            )
+
+    def test_decodes_json_escaped_unicode_scalars(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "unicode.yaml"
+            path.write_text('id: "\\u4ea4\\u5dee"\n', encoding="utf-8")
+            self.assertEqual(load_yaml(path)["id"], "交差")
+
+    def test_legacy_junction_position_defaults_to_activation_end_gate_center(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            map_root = Path(temporary_directory)
+            map_dir = map_root / "legacy_junction"
+            map_dir.mkdir()
+            (map_dir / "legacy_junction_hd_map.yaml").write_text(
+                """format: tamiya_local_hd_map_v1
+primary_lane_id: "lane_001"
+lanes:
+  - id: "lane_001"
+    closed_loop: false
+    left_bound: [[0, 1, 0], [6, 1, 0]]
+    right_bound: [[0, -1, 0], [6, -1, 0]]
+    centerline: [[0, 0, 0], [6, 0, 0]]
+section_gates:
+  - id: "gate_start"
+    lane_id: "lane_001"
+    s_m: 1
+    line: [[1, -1, 0], [1, 1, 0]]
+  - id: "gate_junction"
+    lane_id: "lane_001"
+    s_m: 5
+    line: [[5, -0.75, 0], [5, 1.25, 0]]
+sections:
+  - id: "section_approach"
+    lane_id: "lane_001"
+    start_gate_id: "gate_start"
+    end_gate_id: "gate_junction"
+    start_s_m: 1
+    end_s_m: 5
+junctions:
+  - id: "junction_001"
+    signal_id: "signal_001"
+    activation_section_ids: [section_approach]
+    release_section_ids: []
+    branches:
+      left: "left"
+      straight: "straight"
+      right: "right"
+""",
+                encoding="utf-8",
+            )
+
+            detail = build_map_detail(SimpleNamespace(map_root=map_root), str(map_dir))
+
+            self.assertEqual(detail["hd_map"]["junctions"][0]["position"], [5.0, 0.25])
+
+
+class RuntimeRoutesTest(unittest.TestCase):
+    def _make_map(self, root: Path) -> tuple[SimpleNamespace, Path]:
+        map_dir = root / "runtime_routes"
+        map_dir.mkdir()
+        (map_dir / "runtime_routes_hd_map.yaml").write_text(
+            """format: tamiya_local_hd_map_v1
+primary_lane_id: "lane_001"
+lanes:
+  - id: "lane_001"
+    closed_loop: false
+    left_bound: [[0, 1, 0], [2, 1, 0]]
+    right_bound: [[0, -1, 0], [2, -1, 0]]
+    centerline: [[0, 0, 0], [2, 0, 0]]
+junctions:
+  - id: "junction_001"
+    signal_id: "signal_001"
+    position: [1, 0, 0]
+    activation_section_ids: [section_approach]
+    release_section_ids: [section_release]
+    branches:
+      left: "route_left"
+      straight: "primary"
+      right: "route_right"
+""",
+            encoding="utf-8",
+        )
+        return SimpleNamespace(map_root=root), map_dir
+
+    def _write_config(
+        self,
+        map_dir: Path,
+        *,
+        lane_ids: str,
+        path_topics: str,
+        trajectory_topics: str,
+        speeds: str,
+        default_lane_id: str = "primary",
+    ) -> None:
+        (map_dir / "competition_route.param.yaml").write_text(
+            f"""/**:
+  ros__parameters:
+    lane_ids: {lane_ids}
+    lane_path_topics: {path_topics}
+    lane_trajectory_topics: {trajectory_topics}
+    lane_target_speeds_mps: {speeds}
+    default_lane_id: "{default_lane_id}"
+    requested_lane_topic: "/planning/requested_lane"
+    current_section_topic: "/localization/current_section"
+    output_trajectory_topic: "/planning/route/trajectory"
+    output_profile_topic: "/planning/route/trajectory_profile"
+    target_speed_topic: "/planning/route/target_speed"
+    selected_lane_topic: "/planning/route/selected_lane"
+    ready_topic: "/planning/route/ready"
+    diagnostics_topic: "/planning/route/diagnostics"
+    require_requested_lane_heartbeat: true
+    requested_lane_timeout_sec: 0.5
+    current_section_timeout_sec: 1.0
+""",
+            encoding="utf-8",
+        )
+
+    def test_runtime_routes_is_unconfigured_without_config(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            config, map_dir = self._make_map(Path(temporary_directory))
+
+            detail = build_map_detail(config, str(map_dir))
+            runtime = detail["runtime_routes"]
+
+            self.assertEqual(runtime["status"], "unconfigured")
+            self.assertEqual(runtime["configured_lane_ids"], [])
+            self.assertEqual(
+                runtime["missing_branch_ids"],
+                ["primary", "route_left", "route_right"],
+            )
+            self.assertEqual(runtime["issues"], [])
+            self.assertEqual(detail["map"]["competition_route_status"], "unconfigured")
+            self.assertFalse(detail["map"]["competition_routes_ready"])
+            self.assertEqual(
+                runtime["config_path"],
+                str((map_dir / "competition_route.param.yaml").resolve()),
+            )
+
+    def test_runtime_routes_ready_with_consistent_wildcard_config(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            config, map_dir = self._make_map(Path(temporary_directory))
+            self._write_config(
+                map_dir,
+                lane_ids="[primary, route_left, route_right]",
+                path_topics='[/hd_map/primary_centerline_path, "", ""]',
+                trajectory_topics='["", /planning/left, /planning/right]',
+                speeds="[1.0, 0.8, 0.8]",
+            )
+
+            detail = build_map_detail(config, str(map_dir))
+            runtime = detail["runtime_routes"]
+
+            self.assertEqual(runtime["status"], "ready")
+            self.assertEqual(
+                runtime["configured_lane_ids"],
+                ["primary", "route_left", "route_right"],
+            )
+            self.assertEqual(runtime["missing_branch_ids"], [])
+            self.assertEqual(runtime["issues"], [])
+            self.assertEqual(detail["map"]["competition_route_status"], "ready")
+            self.assertTrue(detail["map"]["competition_routes_ready"])
+
+    def test_runtime_routes_warns_for_missing_junction_branch(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            config, map_dir = self._make_map(Path(temporary_directory))
+            self._write_config(
+                map_dir,
+                lane_ids="[primary, route_left]",
+                path_topics='[/hd_map/primary_centerline_path, ""]',
+                trajectory_topics='["", /planning/left]',
+                speeds="[1.0, 0.8]",
+            )
+
+            runtime = build_map_detail(config, str(map_dir))["runtime_routes"]
+
+            self.assertEqual(runtime["status"], "warning")
+            self.assertEqual(runtime["missing_branch_ids"], ["route_right"])
+            self.assertIn("route_right", " ".join(runtime["issues"]))
+
+    def test_runtime_routes_reports_invalid_parallel_arrays_defaults_and_topics(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            config, map_dir = self._make_map(Path(temporary_directory))
+            self._write_config(
+                map_dir,
+                lane_ids="[primary, route_left]",
+                path_topics="[/planning/route/trajectory]",
+                trajectory_topics='["", /planning/left]',
+                speeds="[1.0, -0.5]",
+                default_lane_id="missing",
+            )
+
+            runtime = build_map_detail(config, str(map_dir))["runtime_routes"]
+            issues = " ".join(runtime["issues"])
+
+            self.assertEqual(runtime["status"], "invalid")
+            self.assertEqual(runtime["configured_lane_ids"], ["primary", "route_left"])
+            self.assertIn("equal lengths", issues)
+            self.assertIn("finite non-negative", issues)
+            self.assertIn("default_lane_id is not present", issues)
+            self.assertIn("must not equal output_trajectory_topic", issues)
+
+    def test_runtime_routes_rejects_topics_not_connected_to_competition_manager(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            config, map_dir = self._make_map(Path(temporary_directory))
+            self._write_config(
+                map_dir,
+                lane_ids="[primary, route_left, route_right]",
+                path_topics='[/hd_map/primary_centerline_path, "", ""]',
+                trajectory_topics='["", /planning/left, /planning/right]',
+                speeds="[1.0, 0.8, 0.8]",
+            )
+            config_path = map_dir / "competition_route.param.yaml"
+            config_path.write_text(
+                config_path.read_text(encoding="utf-8")
+                .replace(
+                    'ready_topic: "/planning/route/ready"',
+                    'ready_topic: "/planning/ready"',
+                )
+                .replace("require_requested_lane_heartbeat: true", "require_requested_lane_heartbeat: false"),
+                encoding="utf-8",
+            )
+
+            runtime = build_map_detail(config, str(map_dir))["runtime_routes"]
+            issues = " ".join(runtime["issues"])
+
+            self.assertEqual(runtime["status"], "invalid")
+            self.assertIn("ready_topic must be /planning/route/ready", issues)
+            self.assertIn("require_requested_lane_heartbeat must be true", issues)
 
 
 class MapDetailOdometryOverlayTest(unittest.TestCase):
@@ -392,6 +636,14 @@ sections:
             stale_detail = build_map_detail(config, str(map_dir))
             self.assertEqual(stale_detail["active_custom_line_id"], "")
             self.assertTrue(stale_detail["custom_lines"][0]["section_layout_stale"])
+            stale_route = next(
+                item
+                for item in stale_detail["junction_route_catalog"]
+                if item["id"] == line["id"]
+            )
+            self.assertFalse(stale_route["eligible"])
+            self.assertIn("section layout is stale", stale_route["issue"])
+            self.assertNotIn(line["id"], stale_detail["junction_route_ids"])
 
     def test_world_gate_intersections_define_sections_when_custom_station_differs_from_hd_station(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
@@ -556,6 +808,306 @@ sections:
             self.assertEqual(detail["active_custom_line_id"], "")
             self.assertIn("exactly once", detail["custom_line_catalog"]["active_issue"])
             self.assertFalse((map_dir / "section_course_custom_line.csv").exists())
+
+    def test_junction_save_round_trips_topology_and_position(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            config, map_dir = self._make_section_map(Path(temporary_directory))
+            detail = save_junctions(
+                config,
+                {
+                    "map_dir": str(map_dir),
+                    "junctions": [
+                        {
+                            "id": "junction_01",
+                            "signal_id": "signal_01",
+                            "position": [5.0, 0.25],
+                            "activation_section_ids": ["section_a"],
+                            "release_section_ids": ["section_b"],
+                            "branches": {
+                                "left": "lane_001",
+                                "straight": "lane_001",
+                                "right": "lane_001",
+                            },
+                        }
+                    ],
+                },
+            )
+
+            junction = detail["hd_map"]["junctions"][0]
+            self.assertEqual(junction["id"], "junction_01")
+            self.assertEqual(junction["signal_id"], "signal_01")
+            self.assertEqual(junction["position"], [5.0, 0.25])
+            self.assertEqual(junction["activation_section_ids"], ["section_a"])
+            self.assertEqual(junction["release_section_ids"], ["section_b"])
+            self.assertEqual(junction["branches"]["right"], "lane_001")
+            self.assertEqual(detail["stats"]["junction_count"], 1)
+
+    def test_junction_save_rejects_ambiguous_or_unknown_sections(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            config, map_dir = self._make_section_map(Path(temporary_directory))
+            common = {
+                "position": [5.0, 0.0],
+                "release_section_ids": ["section_b"],
+                "branches": {"left": "lane_001", "straight": "lane_001", "right": "lane_001"},
+            }
+            with self.assertRaisesRegex(ValueError, "unknown section"):
+                save_junctions(
+                    config,
+                    {
+                        "map_dir": str(map_dir),
+                        "junctions": [
+                            {
+                                **common,
+                                "id": "junction_01",
+                                "signal_id": "signal_01",
+                                "activation_section_ids": ["missing"],
+                            }
+                        ],
+                    },
+                )
+            with self.assertRaisesRegex(ValueError, "already assigned"):
+                save_junctions(
+                    config,
+                    {
+                        "map_dir": str(map_dir),
+                        "junctions": [
+                            {
+                                **common,
+                                "id": "junction_01",
+                                "signal_id": "signal_01",
+                                "activation_section_ids": ["section_a"],
+                            },
+                            {
+                                **common,
+                                "id": "junction_02",
+                                "signal_id": "signal_02",
+                                "activation_section_ids": ["section_a"],
+                            },
+                        ],
+                    },
+                )
+
+    def test_junction_save_requires_release_and_known_routes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            config, map_dir = self._make_section_map(Path(temporary_directory))
+            junction = {
+                "id": "junction_01",
+                "signal_id": "signal_01",
+                "position": [5.0, 0.0],
+                "activation_section_ids": ["section_a"],
+                "release_section_ids": [],
+                "branches": {
+                    "left": "lane_001",
+                    "straight": "lane_001",
+                    "right": "lane_001",
+                },
+            }
+            with self.assertRaisesRegex(ValueError, "release section"):
+                save_junctions(
+                    config,
+                    {"map_dir": str(map_dir), "junctions": [junction]},
+                )
+
+            junction["release_section_ids"] = ["section_b"]
+            junction["branches"]["right"] = "route_typo"
+            with self.assertRaisesRegex(ValueError, "unknown right route"):
+                save_junctions(
+                    config,
+                    {"map_dir": str(map_dir), "junctions": [junction]},
+                )
+
+    def test_stale_custom_line_is_excluded_from_junction_routes_and_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            config, map_dir = self._make_section_map(Path(temporary_directory))
+            detail = create_custom_line(
+                config,
+                {"map_dir": str(map_dir), "name": "Stale branch", "base": "centerline"},
+            )
+            line_id = detail["custom_lines"][0]["id"]
+            eligible = next(
+                item for item in detail["junction_route_catalog"] if item["id"] == line_id
+            )
+            self.assertTrue(eligible["eligible"])
+            self.assertIn(line_id, detail["junction_route_ids"])
+
+            centerline_path = map_dir / "section_course_hd_map_centerline.csv"
+            centerline_path.write_text(
+                centerline_path.read_text(encoding="utf-8") + "# source revision\n",
+                encoding="utf-8",
+            )
+            stale_detail = build_map_detail(config, str(map_dir))
+            stale = next(
+                item
+                for item in stale_detail["junction_route_catalog"]
+                if item["id"] == line_id
+            )
+            self.assertFalse(stale["eligible"])
+            self.assertIn("source has changed", stale["issue"])
+            self.assertNotIn(line_id, stale_detail["junction_route_ids"])
+
+            with self.assertRaisesRegex(ValueError, "unknown left route"):
+                save_junctions(
+                    config,
+                    {
+                        "map_dir": str(map_dir),
+                        "junctions": [
+                            {
+                                "id": "junction_01",
+                                "signal_id": "signal_01",
+                                "position": [5.0, 0.0],
+                                "activation_section_ids": ["section_a"],
+                                "release_section_ids": ["section_b"],
+                                "branches": {
+                                    "left": line_id,
+                                    "straight": "lane_001",
+                                    "right": "lane_001",
+                                },
+                            }
+                        ],
+                    },
+                )
+
+    def test_invalid_custom_line_is_excluded_from_junction_routes_and_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            config, map_dir = self._make_section_map(Path(temporary_directory))
+            detail = create_custom_line(
+                config,
+                {"map_dir": str(map_dir), "name": "Broken branch", "base": "centerline"},
+            )
+            line_id = detail["custom_lines"][0]["id"]
+            (map_dir / "custom_lines" / line_id / "trajectory.csv").write_text(
+                "corrupted\n",
+                encoding="utf-8",
+            )
+
+            invalid_detail = build_map_detail(config, str(map_dir))
+            invalid = next(
+                item
+                for item in invalid_detail["junction_route_catalog"]
+                if item["id"] == line_id
+            )
+            self.assertFalse(invalid["eligible"])
+            self.assertTrue(invalid["issue"])
+            self.assertNotIn(line_id, invalid_detail["junction_route_ids"])
+
+            with self.assertRaisesRegex(ValueError, "unknown left route"):
+                save_junctions(
+                    config,
+                    {
+                        "map_dir": str(map_dir),
+                        "junctions": [
+                            {
+                                "id": "junction_01",
+                                "signal_id": "signal_01",
+                                "position": [5.0, 0.0],
+                                "activation_section_ids": ["section_a"],
+                                "release_section_ids": ["section_b"],
+                                "branches": {
+                                    "left": line_id,
+                                    "straight": "lane_001",
+                                    "right": "lane_001",
+                                },
+                            }
+                        ],
+                    },
+                )
+
+    def test_geometry_save_rejects_removing_a_topology_lane(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            config, map_dir = self._make_section_map(Path(temporary_directory))
+            hd_map_path = map_dir / "section_course_hd_map.yaml"
+            centerline_path = map_dir / "section_course_hd_map_centerline.csv"
+            original_hd_map = hd_map_path.read_text(encoding="utf-8")
+            original_centerline = centerline_path.read_text(encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "references unknown lane"):
+                save_hd_map(
+                    config,
+                    {
+                        "map_dir": str(map_dir),
+                        "primary_lane_id": "renamed_lane",
+                        "lanes": [
+                            {
+                                "id": "renamed_lane",
+                                "closed_loop": False,
+                                "left_bound": [[0, 1], [5, 1], [10, 1]],
+                                "right_bound": [[0, -1], [5, -1], [10, -1]],
+                                "centerline": [[0, 0], [5, 0], [10, 0]],
+                            }
+                        ],
+                    },
+                )
+
+            self.assertEqual(hd_map_path.read_text(encoding="utf-8"), original_hd_map)
+            self.assertEqual(centerline_path.read_text(encoding="utf-8"), original_centerline)
+
+    def test_custom_line_delete_rejects_junction_reference(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            config, map_dir = self._make_section_map(Path(temporary_directory))
+            detail = create_custom_line(
+                config,
+                {"map_dir": str(map_dir), "name": "Branch route", "base": "centerline"},
+            )
+            line_id = detail["custom_lines"][0]["id"]
+            save_junctions(
+                config,
+                {
+                    "map_dir": str(map_dir),
+                    "junctions": [
+                        {
+                            "id": "junction_01",
+                            "signal_id": "signal_01",
+                            "position": [5.0, 0.0],
+                            "activation_section_ids": ["section_a"],
+                            "release_section_ids": ["section_b"],
+                            "branches": {
+                                "left": line_id,
+                                "straight": "lane_001",
+                                "right": "lane_001",
+                            },
+                        }
+                    ],
+                },
+            )
+
+            with self.assertRaisesRegex(ValueError, "referenced by junction"):
+                delete_custom_line(config, {"map_dir": str(map_dir), "id": line_id})
+            self.assertTrue((map_dir / "custom_lines" / line_id).is_dir())
+
+    def test_gate_save_rejects_removing_a_junction_section(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            config, map_dir = self._make_section_map(Path(temporary_directory))
+            save_junctions(
+                config,
+                {
+                    "map_dir": str(map_dir),
+                    "junctions": [
+                        {
+                            "id": "junction_01",
+                            "signal_id": "signal_01",
+                                "position": [7.0, 0.0],
+                                "activation_section_ids": ["section_b"],
+                                "release_section_ids": ["section_a"],
+                                "branches": {
+                                    "left": "lane_001",
+                                    "straight": "lane_001",
+                                    "right": "lane_001",
+                            },
+                        }
+                    ],
+                },
+            )
+            with self.assertRaisesRegex(ValueError, "unknown section"):
+                save_section_gates(
+                    config,
+                    {
+                        "map_dir": str(map_dir),
+                        "section_gates": [
+                            {"id": "gate_001", "lane_id": "lane_001", "s_m": 2, "line": [[2, -1], [2, 1]]},
+                            {"id": "gate_002", "lane_id": "lane_001", "s_m": 5, "line": [[5, -1], [5, 1]]},
+                        ],
+                    },
+                )
 
     def test_gate_save_makes_duplicate_fallback_ids_unique(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

@@ -12,6 +12,7 @@ ament_auto_add_library(${PROJECT_NAME}_core SHARED
   src/kinematic_mpc.cpp
   src/longitudinal_controller.cpp
   src/map_pursuit.cpp
+  src/motion_direction.cpp
   src/pure_pursuit.cpp
   src/trajectory_speed_profile.cpp
   src/trailing_controller.cpp

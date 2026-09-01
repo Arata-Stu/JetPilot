@@ -8,6 +8,7 @@
 #include "jetpilot_controller/longitudinal_controller.hpp"
 #include "jetpilot_controller/kinematic_mpc.hpp"
 #include "jetpilot_controller/map_pursuit.hpp"
+#include "jetpilot_controller/motion_direction.hpp"
 #include "jetpilot_controller/pure_pursuit.hpp"
 #include "jetpilot_controller/trailing_controller.hpp"
 #include "jetpilot_controller/trajectory_speed_profile.hpp"
@@ -361,6 +362,27 @@ TEST(TrailingController, WrapsGapOnClosedPath)
 
   EXPECT_TRUE(result.active);
   EXPECT_NEAR(result.gap_m, 1.5, 1.0e-9);
+}
+
+TEST(MotionDirection, ConvertsReversePathAndSteeringBackToVehicleFrame)
+{
+  std::vector<Point2d> path{{0.0, 0.0}, {-1.0, 0.2}};
+  orient_path_for_motion(path, true);
+  EXPECT_DOUBLE_EQ(path[1].x, 1.0);
+  EXPECT_DOUBLE_EQ(path[1].y, -0.2);
+
+  PurePursuit controller(PurePursuitParams{});
+  TrackingInput input;
+  input.path = path;
+  input.path_closed_override = false;
+  const auto tracking = controller.compute(input);
+  ASSERT_TRUE(tracking.valid) << tracking.reason;
+  EXPECT_LT(tracking.steering_command, 0.0);
+  EXPECT_GT(steering_for_motion(tracking.steering_command, true), 0.0);
+
+  const auto lookahead = point_from_motion_frame(tracking.target_point, true);
+  EXPECT_LT(lookahead.x, 0.0);
+  EXPECT_GT(lookahead.y, 0.0);
 }
 
 }  // namespace

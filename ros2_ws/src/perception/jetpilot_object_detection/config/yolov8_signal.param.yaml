@@ -1,0 +1,14 @@
+yolov8_decoder:
+  ros__parameters:
+    output_tensor_name: output_tensor
+    # Must match the class-index order used when labeling/training.
+    class_names: [arrow_left, arrow_straight, arrow_right]
+    network_width: 224
+    network_height: 224
+    source_width: 424
+    source_height: 240
+    confidence_threshold: 0.35
+    nms_threshold: 0.45
+    max_detections: 20
+    tensor_layout: channel_major
+    resize_mode: letterbox

@@ -1,0 +1,11 @@
+/**:
+  ros__parameters:
+    requested_lane_topic: /planning/requested_lane
+    output_trajectory_topic: /planning/route/trajectory
+    output_profile_topic: /planning/route/trajectory_profile
+    target_speed_topic: /planning/route/target_speed
+    selected_lane_topic: /planning/route/selected_lane
+    ready_topic: /planning/route/ready
+    diagnostics_topic: /planning/route/diagnostics
+    require_requested_lane_heartbeat: true
+    requested_lane_timeout_sec: 0.5

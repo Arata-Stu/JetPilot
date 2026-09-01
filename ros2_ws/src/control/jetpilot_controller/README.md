@@ -89,3 +89,6 @@ Pure Pursuitがtrajectoryを追従し、trailingは縦方向の速度上限だ�
 相手車両が自車より前方にいない、`trailing_max_gap_m`より遠い、またはodometryがtimeoutした場合は
 trailingを解除し、planningのtarget speedへ戻ります。閉路ではtrajectory長でgapをwrapします。
 相手odometryのframeは`base_frame`またはTFで`base_frame`へ変換できるframeにしてください。
+# 後退軌道
+
+`jetpilot_msgs/Trajectory.motion_direction=MOTION_REVERSE` の場合、軌道形状を後退運動座標へ変換してステアを計算し、縦制御出力を `throttle` ではなく `reverse` に出力する。速度プロファイル値そのものは前進時と同様に正の m/s で記述する。

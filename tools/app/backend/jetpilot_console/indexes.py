@@ -219,6 +219,11 @@ def _collapse_map_dirs(map_root: Path, candidates: Iterable[Path]) -> list[Path]
 
 
 def scan_maps(map_root: Path) -> list[dict[str, object]]:
+    # Imported lazily because map_detail reuses the low-level artifact helpers
+    # in this module. The summary only reads HD-map junction metadata and the
+    # optional competition route config; it does not build the full map detail.
+    from .map_detail import competition_route_summary
+
     maps: list[dict[str, object]] = []
     for map_dir in _collapse_map_dirs(map_root, _candidate_map_dirs(map_root)):
         name = map_dir.name
@@ -242,7 +247,10 @@ def scan_maps(map_root: Path) -> list[dict[str, object]]:
             artifacts["custom_line_csv"]["exists"] and artifacts["custom_line_meta"]["exists"]
         )
         driving_line_ready = bool(artifacts["raceline_csv"]["exists"] or custom_line_ready)
-        complete_runtime = localization_ready and driving_line_ready
+        competition_routes = competition_route_summary(map_dir)
+        competition_route_status = str(competition_routes["status"])
+        competition_routes_ready = bool(competition_routes["ready"])
+        complete_runtime = localization_ready and driving_line_ready and competition_routes_ready
         maps.append(
             {
                 "name": name,
@@ -251,6 +259,8 @@ def scan_maps(map_root: Path) -> list[dict[str, object]]:
                 "size_bytes": _dir_size(map_dir),
                 "modified_at": _iso_mtime(map_dir),
                 "artifacts": artifacts,
+                "competition_route_status": competition_route_status,
+                "competition_routes_ready": competition_routes_ready,
                 "complete_runtime_bundle": complete_runtime,
             }
         )

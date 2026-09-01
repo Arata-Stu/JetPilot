@@ -30,6 +30,14 @@ marker と path は YAML の `frame_id` を使います。必要なら
 
 `hd_map_section_localizer_node.py` は `map -> base_link` TF を周期 lookup し、section gate と lane centerline から現在 section を推定します。車両位置が lane から `max_lane_distance_m` より離れている場合や TF が取れない場合は `unknown` を publish し、planning 側の watchdog が停止判断できるようにします。
 
+## HD map のホットリロード
+
+publisher と section localizer は `retry_interval_sec` ごとに、simulation clockとは独立した
+steady clockで HD map YAML の更新を確認します。Web Console などがファイルを atomic replaceすると、
+`/clock` のpause中でも候補mapを検証し、読込みに成功した場合だけ切り替えます。publisherは旧markerを
+DELETEALLして新map・Junction・primary pathを即時再配信し、localizerは旧Sectionを`unknown`へ即時
+無効化します。保存途中や不正な YAML は採用せず、直前に正常読込みできた map を使い続けます。
+
 ## Run
 
 ```bash
@@ -84,3 +92,20 @@ ros2 launch jetpilot_system_launch bringup.launch.py \
 
 bagには制御topicも含まれるため、詳細は
 [`docs/rosbag_replay_safety.md`](../../../../docs/rosbag_replay_safety.md) を参照してください。
+# 分岐信号
+
+固定された信号位置と分岐先は HD map に記述し、`/hd_map/junctions` として配信する。
+
+```yaml
+junctions:
+  - id: junction_01
+    signal_id: signal_01
+    position: [4.2, 1.8, 0.0]
+    activation_section_ids: [before_junction_01]
+    # Required: clear the committed branch when routes merge again.
+    release_section_ids: [after_merge_01]
+    branches:
+      left: lane_left_01
+      straight: lane_straight_01
+      right: lane_right_01
+```

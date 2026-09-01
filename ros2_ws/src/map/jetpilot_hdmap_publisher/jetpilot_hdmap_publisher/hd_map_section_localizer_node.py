@@ -10,6 +10,7 @@ from typing import Optional, Sequence, Tuple
 import rclpy
 import tf2_ros
 from geometry_msgs.msg import TransformStamped
+from rclpy.clock import Clock, ClockType
 from rclpy.duration import Duration
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
@@ -19,10 +20,12 @@ from visualization_msgs.msg import Marker
 
 from jetpilot_hdmap_publisher.hd_map_publisher_node import (
     HdMap,
+    HdMapFileSignature,
     Lane,
     Section,
     cumulative_s,
-    load_hd_map,
+    hd_map_file_signature,
+    load_stable_hd_map,
     section_points,
     to_geometry_point,
 )
@@ -110,31 +113,78 @@ class HdMapSectionLocalizerNode(Node):
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
         self.hd_map: Optional[HdMap] = None
+        self.loaded_map_signature: Optional[HdMapFileSignature] = None
+        self.rejected_map_signature: Optional[HdMapFileSignature] = None
+        self.last_load_issue_key: Optional[tuple[object, ...]] = None
         self.current_section = "unknown"
-        self.last_load_attempt = self.get_clock().now()
-        self.try_load_hd_map()
         self.timer = self.create_timer(1.0 / self.update_rate_hz, self.on_timer)
+        self.reload_clock = Clock(clock_type=ClockType.STEADY_TIME)
+        self.reload_timer = self.create_timer(
+            self.retry_interval_sec,
+            self.reload_hd_map,
+            clock=self.reload_clock,
+        )
+        self.try_load_hd_map()
+
+    def log_load_issue(self, key: tuple[object, ...], message: str, *, warning: bool = False) -> None:
+        if key == self.last_load_issue_key:
+            return
+        self.last_load_issue_key = key
+        if warning:
+            self.get_logger().warn(message)
+        else:
+            self.get_logger().error(message)
 
     def try_load_hd_map(self) -> bool:
-        self.last_load_attempt = self.get_clock().now()
         if not self.hd_map_yaml_path:
-            self.get_logger().warn("Parameter hd_map_yaml_path is empty. Waiting for a YAML path.")
+            self.log_load_issue(
+                ("empty_path",),
+                "Parameter hd_map_yaml_path is empty. Waiting for a YAML path.",
+                warning=True,
+            )
             return False
-        path = Path(self.hd_map_yaml_path).expanduser()
-        if not path.is_file():
-            self.get_logger().error(f"HD map YAML not found: {path}")
+        path = Path(str(self.hd_map_yaml_path)).expanduser().resolve()
+        signature = hd_map_file_signature(path)
+        if signature is None:
+            suffix = "; keeping the previous valid map" if self.hd_map is not None else ""
+            self.log_load_issue(
+                ("missing", str(path)),
+                f"HD map YAML not found or not a regular file: {path}{suffix}",
+            )
+            return False
+        if self.hd_map is not None and signature == self.loaded_map_signature:
+            self.rejected_map_signature = None
+            self.last_load_issue_key = None
+            return False
+        if self.hd_map is not None and signature == self.rejected_map_signature:
             return False
         try:
-            self.hd_map = load_hd_map(path.resolve(), str(self.frame_id_override))
+            candidate, stable_signature = load_stable_hd_map(path, str(self.frame_id_override))
         except Exception as exc:  # noqa: BLE001
-            self.hd_map = None
-            self.get_logger().error(f"Failed to load HD map YAML {path}: {exc}")
+            self.rejected_map_signature = signature
+            suffix = "; keeping the previous valid map" if self.hd_map is not None else ""
+            self.log_load_issue(
+                ("invalid", signature, type(exc).__name__, str(exc)),
+                f"Failed to load HD map YAML {path}: {exc}{suffix}",
+            )
             return False
+        reloaded = self.hd_map is not None
+        self.hd_map = candidate
+        self.loaded_map_signature = stable_signature
+        self.rejected_map_signature = None
+        self.last_load_issue_key = None
         self.get_logger().info(
-            f"Loaded HD map sections: {path} "
-            f"(sections={len(self.hd_map.sections)}, frame={self.hd_map.frame_id}, base={self.base_frame})"
+            f"{'Reloaded' if reloaded else 'Loaded'} HD map sections: {path} "
+            f"(sections={len(candidate.sections)}, frame={candidate.frame_id}, base={self.base_frame})"
         )
+        # Do not leave a transient-local section from a previous map visible
+        # while TF for this revision is unavailable. Publish on initial load as
+        # well so startup is deterministic while /clock is paused.
+        self.publish_current_section("unknown")
         return True
+
+    def reload_hd_map(self) -> None:
+        self.try_load_hd_map()
 
     def lookup_pose(self) -> Optional[Point3]:
         if self.hd_map is None:
@@ -224,13 +274,10 @@ class HdMapSectionLocalizerNode(Node):
 
     def on_timer(self) -> None:
         if self.hd_map is None:
-            now = self.get_clock().now()
-            elapsed = max(0.0, (now.nanoseconds - self.last_load_attempt.nanoseconds) / 1.0e9)
-            if elapsed >= self.retry_interval_sec:
-                self.try_load_hd_map()
             return
         pose = self.lookup_pose()
         if pose is None:
+            self.publish_current_section("unknown")
             return
         self.publish_current_section(self.resolve_section(pose))
 

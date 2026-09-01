@@ -1,0 +1,9 @@
+breadcrumb_recovery_planner_node:
+  ros__parameters:
+    sample_spacing_m: 0.05
+    history_length_m: 3.0
+    recovery_distance_m: 0.70
+    goal_tolerance_m: 0.10
+    timeout_s: 6.0
+    reverse_speed_mps: 0.20
+    minimum_points: 4

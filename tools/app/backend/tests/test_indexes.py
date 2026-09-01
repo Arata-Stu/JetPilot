@@ -60,6 +60,88 @@ class MapIndexTest(unittest.TestCase):
         self.assertEqual(len(maps), 1)
         self.assertFalse(maps[0]["complete_runtime_bundle"])
 
+    def test_junction_route_readiness_is_included_without_building_map_detail(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            map_root = Path(temporary_directory)
+            map_dir = self._make_localized_map(map_root, "course_a")
+            (map_dir / "course_a_raceline.csv").write_text("# route\n", encoding="utf-8")
+            (map_dir / "course_a_hd_map.yaml").write_text(
+                """format: tamiya_local_hd_map_v1
+junctions:
+  - id: "junction_001"
+    signal_id: "signal_001"
+    branches:
+      left: "route_left"
+      straight: "primary"
+      right: "route_right"
+""",
+                encoding="utf-8",
+            )
+
+            unconfigured = scan_maps(map_root)[0]
+            self.assertEqual(unconfigured["competition_route_status"], "unconfigured")
+            self.assertFalse(unconfigured["competition_routes_ready"])
+            self.assertFalse(unconfigured["complete_runtime_bundle"])
+
+            config_path = map_dir / "competition_route.param.yaml"
+            config_path.write_text("invalid: true\n", encoding="utf-8")
+            invalid = scan_maps(map_root)[0]
+            self.assertEqual(invalid["competition_route_status"], "invalid")
+            self.assertFalse(invalid["complete_runtime_bundle"])
+
+            config_path.write_text(
+                """/**:
+  ros__parameters:
+    lane_ids: [primary, route_left]
+    lane_path_topics: [/hd_map/primary, ""]
+    lane_trajectory_topics: ["", /planning/left]
+    lane_target_speeds_mps: [1.0, 0.8]
+    default_lane_id: "primary"
+    requested_lane_topic: /planning/requested_lane
+    current_section_topic: /localization/current_section
+    output_trajectory_topic: /planning/route/trajectory
+    output_profile_topic: /planning/route/trajectory_profile
+    target_speed_topic: /planning/route/target_speed
+    selected_lane_topic: /planning/route/selected_lane
+    ready_topic: /planning/route/ready
+    diagnostics_topic: /planning/route/diagnostics
+    require_requested_lane_heartbeat: true
+    requested_lane_timeout_sec: 0.5
+    current_section_timeout_sec: 1.0
+""",
+                encoding="utf-8",
+            )
+            warning = scan_maps(map_root)[0]
+            self.assertEqual(warning["competition_route_status"], "warning")
+            self.assertFalse(warning["complete_runtime_bundle"])
+
+            config_path.write_text(
+                """/**:
+  ros__parameters:
+    lane_ids: [primary, route_left, route_right]
+    lane_path_topics: [/hd_map/primary, "", ""]
+    lane_trajectory_topics: ["", /planning/left, /planning/right]
+    lane_target_speeds_mps: [1.0, 0.8, 0.8]
+    default_lane_id: "primary"
+    requested_lane_topic: /planning/requested_lane
+    current_section_topic: /localization/current_section
+    output_trajectory_topic: /planning/route/trajectory
+    output_profile_topic: /planning/route/trajectory_profile
+    target_speed_topic: /planning/route/target_speed
+    selected_lane_topic: /planning/route/selected_lane
+    ready_topic: /planning/route/ready
+    diagnostics_topic: /planning/route/diagnostics
+    require_requested_lane_heartbeat: true
+    requested_lane_timeout_sec: 0.5
+    current_section_timeout_sec: 1.0
+""",
+                encoding="utf-8",
+            )
+            ready = scan_maps(map_root)[0]
+            self.assertEqual(ready["competition_route_status"], "ready")
+            self.assertTrue(ready["competition_routes_ready"])
+            self.assertTrue(ready["complete_runtime_bundle"])
+
 
 if __name__ == "__main__":
     unittest.main()

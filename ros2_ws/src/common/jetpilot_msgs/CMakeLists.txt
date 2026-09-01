@@ -12,8 +12,13 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   msg/BagRequest.msg
   msg/BagStatus.msg
   msg/ControlCommand.msg
+  msg/DirectionSignal.msg
+  msg/Junction.msg
+  msg/JunctionArray.msg
   msg/OperationModeRequest.msg
   msg/OperationModeState.msg
+  msg/PlanningManagerStatus.msg
+  msg/RecoveryStatus.msg
   msg/TrajectoryPoint.msg
   msg/Trajectory.msg
   DEPENDENCIES geometry_msgs std_msgs

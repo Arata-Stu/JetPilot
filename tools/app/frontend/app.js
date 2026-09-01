@@ -117,27 +117,33 @@ const state = {
   localIps: [],
   selectedMapPath: null,
   selectedMapDetail: null,
+  mapWorkspaceMode: "geometry",
+  mapTopologyTool: "junctions",
+  mapLayerSelectionsByMode: {},
   mapLayers: {
     landmark: true,
     left_bound: true,
     right_bound: true,
     centerline: true,
-    raceline: true,
-    custom_line: true,
+    raceline: false,
+    custom_line: false,
     odometry: false,
-    section_gates: true,
-    section_labels: true,
+    section_gates: false,
+    section_labels: false,
+    junctions: false,
   },
   mapEditor: {
     enabled: false,
     mapPath: "",
     activeField: "left_bound",
     dirty: false,
+    revision: 0,
     selected: null,
     dragging: null,
     zoom: 1,
     showCenterline: true,
     primaryLaneId: "lane_001",
+    activeLaneId: "lane_001",
     lanes: [],
     undoStack: [],
     redoStack: [],
@@ -151,6 +157,7 @@ const state = {
     selectedId: "",
     workingLine: null,
     dirty: false,
+    revision: 0,
     selectedPointIndex: null,
     draggingIndex: null,
     dragSnapshot: null,
@@ -163,9 +170,21 @@ const state = {
     enabled: false,
     mapPath: "",
     dirty: false,
+    revision: 0,
     selectedGateId: "",
     gates: [],
   },
+  junctionEditor: {
+    enabled: false,
+    mapPath: "",
+    dirty: false,
+    revision: 0,
+    selectedJunctionId: "",
+    junctions: [],
+    placing: false,
+    dragging: false,
+  },
+  simulationPanelOpen: false,
   racelineGeneration: {
     direction: "forward",
     vehicleWidthM: DEFAULT_RACELINE_VEHICLE_WIDTH_M,
@@ -359,6 +378,7 @@ const tabs = [
 const mapPreviewImages = new Map();
 const preflightRequests = new Map();
 let selectedMapRefreshInFlight = false;
+let selectedMapContextGeneration = 0;
 let mapBuildPreflightTimer = null;
 let racelinePreflightTimer = null;
 let analysisPreflightTimer = null;
@@ -368,6 +388,40 @@ let fpvPeerConnection = null;
 let fpvPeerSessionId = "";
 let fpvRemoteStream = null;
 let fpvLifecycleGeneration = 0;
+
+function beginSelectedMapContext(mapPath) {
+  selectedMapContextGeneration += 1;
+  return {
+    generation: selectedMapContextGeneration,
+    mapPath: String(mapPath || ""),
+  };
+}
+
+function captureSelectedMapContext(mapPath = state.selectedMapPath) {
+  return {
+    generation: selectedMapContextGeneration,
+    mapPath: String(mapPath || ""),
+  };
+}
+
+function selectedMapContextIsCurrent(context) {
+  return Boolean(
+    context
+    && context.generation === selectedMapContextGeneration
+    && context.mapPath
+    && state.selectedMapPath === context.mapPath,
+  );
+}
+
+function commitSelectedMapDetail(context, detail) {
+  const responsePath = String(detail?.map?.path || "");
+  if (!selectedMapContextIsCurrent(context) || responsePath !== context.mapPath) return false;
+  state.selectedMapDetail = detail;
+  state.selectedMapPath = responsePath;
+  const mapIndex = state.maps.findIndex((item) => item.path === responsePath);
+  if (mapIndex >= 0) state.maps[mapIndex] = detail.map;
+  return true;
+}
 
 const $ = (id) => document.getElementById(id);
 const esc = (value) =>
@@ -968,6 +1022,10 @@ function actionButtonLabel(key, label, busyLabel = "Working...") {
   return actionBusy(key) ? busyLabel : label;
 }
 
+function mapEditorInteractionLocked() {
+  return actionBusy("hd-map-version:activate");
+}
+
 function beginAction(key, message = "") {
   if (!key || actionBusy(key)) return false;
   state.ui.pendingActions[key] = { message, startedAt: Date.now() };
@@ -1312,20 +1370,24 @@ async function refreshAll() {
     resetFpvWebRtcPlaybackState();
   }
   let selectedMapReloadPath = null;
+  let selectedMapReloadContext = null;
   if (state.selectedMapPath && !state.maps.some((item) => item.path === state.selectedMapPath)) {
     const replacement = state.maps.find((item) => item.path.startsWith(`${state.selectedMapPath}/`))
       || state.maps.find((item) => state.selectedMapPath.startsWith(`${item.path}/`));
     state.selectedMapPath = replacement?.path || null;
     state.selectedMapDetail = null;
     selectedMapReloadPath = replacement?.path || null;
+    selectedMapReloadContext = beginSelectedMapContext(selectedMapReloadPath);
   }
   if (!state.selectedTaskId && state.tasks[0]) state.selectedTaskId = state.tasks[0].task_id;
   if (selectedMapReloadPath) {
     try {
-      state.selectedMapDetail = await api(apiPath("/api/maps/detail", { path: selectedMapReloadPath }));
-      syncRacelineDirectionFromDetail(state.selectedMapDetail);
+      const detail = await api(apiPath("/api/maps/detail", { path: selectedMapReloadPath }));
+      if (commitSelectedMapDetail(selectedMapReloadContext, detail)) {
+        syncRacelineDirectionFromDetail(detail);
+      }
     } catch {
-      state.selectedMapDetail = null;
+      if (selectedMapContextIsCurrent(selectedMapReloadContext)) state.selectedMapDetail = null;
     }
   }
   forceVisiblePreflightOnce = true;
@@ -1353,9 +1415,34 @@ function setTab(tab) {
   render();
 }
 
+const renderScrollPositions = new Map();
+
+function captureRenderScrollPositions(root) {
+  if (!root?.querySelectorAll) return;
+  for (const element of root.querySelectorAll("[data-scroll-key]")) {
+    const key = element.dataset.scrollKey;
+    if (!key) continue;
+    renderScrollPositions.set(key, {
+      left: element.scrollLeft,
+      top: element.scrollTop,
+    });
+  }
+}
+
+function restoreRenderScrollPositions(root) {
+  if (!root?.querySelectorAll) return;
+  for (const element of root.querySelectorAll("[data-scroll-key]")) {
+    const position = renderScrollPositions.get(element.dataset.scrollKey);
+    if (!position) continue;
+    element.scrollLeft = position.left;
+    element.scrollTop = position.top;
+  }
+}
+
 function render() {
   stopAnalysisAnimationFrame();
   const app = $("app");
+  captureRenderScrollPositions(app);
   app.innerHTML = `
     <div class="app">
       <header class="topbar">
@@ -1380,6 +1467,7 @@ function render() {
       <div class="toast-region" id="toast-region" aria-live="polite"></div>
     </div>
   `;
+  restoreRenderScrollPositions(app);
   attachFpvRemoteStream();
   scrollLogToEnd();
   const forcePreflight = forceVisiblePreflightOnce;
@@ -1387,6 +1475,8 @@ function render() {
   requestAnimationFrame(() => {
     drawMapPreview();
     drawSimulationPreview();
+    restoreRenderScrollPositions(app);
+    requestAnimationFrame(() => restoreRenderScrollPositions(app));
     if (isAnalysisTab()) mountAnalysisViewer();
     scheduleVisiblePreflights({ force: forcePreflight });
   });
@@ -1914,6 +2004,7 @@ function pipelineMap() {
 function selectPipelineMap(path) {
   const selected = state.maps.find((item) => item.path === path);
   if (!selected) return;
+  beginSelectedMapContext(selected.path);
   state.selectedMapPath = selected.path;
   if (state.selectedMapDetail?.map?.path !== selected.path) state.selectedMapDetail = null;
   render();
@@ -3872,6 +3963,7 @@ async function deleteMapFolder(path) {
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || `${res.status} ${res.statusText}`);
     if (state.selectedMapPath === path) {
+      beginSelectedMapContext("");
       state.selectedMapPath = null;
       state.selectedMapDetail = null;
     }
@@ -6099,19 +6191,27 @@ function mapList(items = state.maps) {
               <div class="map-list-actions">
                 ${map.complete_runtime_bundle ? `<span class="status success">runtime ready</span>` : `<span class="status failed">incomplete</span>`}
                 <button class="primary" onclick="openMapWorkspace(${js(map.path)})">${selected ? "Viewing" : "Open"}</button>
-                <button onclick="copyText(${js(map.path)})">Copy</button>
-                <button onclick="copyHdMapEditorCommand(${js(map.path)})">Editor Cmd</button>
-                ${renderMapStageButton("prepare-hd-raster", map.path, "Raster")}
-                ${renderMapStageButton("generate-raceline", map.path, "Raceline")}
-                ${renderMapStageButton("generate-preview", map.path, "Preview")}
-                <button onclick="fillTransferLocal(${js(map.path)})">Transfer</button>
-                <button class="danger" onclick="deleteMapFolder(${js(map.path)})">Delete</button>
+                <details class="map-list-more">
+                  <summary>More</summary>
+                  <div class="map-list-more-actions">
+                    <button onclick="copyText(${js(map.path)})">Copy</button>
+                    <button onclick="copyHdMapEditorCommand(${js(map.path)})">Editor Cmd</button>
+                    ${renderMapStageButton("prepare-hd-raster", map.path, "Raster")}
+                    ${renderMapStageButton("generate-raceline", map.path, "Raceline")}
+                    ${renderMapStageButton("generate-preview", map.path, "Preview")}
+                    <button onclick="fillTransferLocal(${js(map.path)})">Transfer</button>
+                    <button class="danger" onclick="deleteMapFolder(${js(map.path)})">Delete</button>
+                  </div>
+                </details>
               </div>
-              <div class="map-list-preflight-grid">
-                ${renderMapStageReadiness("prepare-hd-raster", map.path, "Raster", { micro: true })}
-                ${renderMapStageReadiness("generate-raceline", map.path, "Raceline", { micro: true })}
-                ${renderMapStageReadiness("generate-preview", map.path, "Preview", { micro: true })}
-              </div>
+              <details class="map-list-readiness">
+                <summary><strong>Build checks</strong><span>Raster · Raceline · Preview</span></summary>
+                <div class="map-list-preflight-grid">
+                  ${renderMapStageReadiness("prepare-hd-raster", map.path, "Raster", { micro: true })}
+                  ${renderMapStageReadiness("generate-raceline", map.path, "Raceline", { micro: true })}
+                  ${renderMapStageReadiness("generate-preview", map.path, "Preview", { micro: true })}
+                </div>
+              </details>
             </article>`;
         })
         .join("")}
@@ -6162,15 +6262,28 @@ function renderMapWorkspace() {
           <button onclick="fillTransferLocal(${js(detail.map.path)})">Transfer</button>
         </div>
       </div>
-      <div class="map-stage-readiness-grid">
-        ${renderMapStageReadiness("prepare-hd-raster", detail.map.path, "Landmark raster")}
-        ${renderMapStageReadiness("generate-raceline", detail.map.path, "Raceline generation")}
-        ${renderMapStageReadiness("generate-preview", detail.map.path, "Preview generation")}
-      </div>
+      ${state.mapWorkspaceMode === "review" ? `
+        <details class="map-review-build-checks">
+          <summary><strong>Build checks</strong><span>Raster · Raceline · Preview</span></summary>
+          <div class="map-stage-readiness-grid">
+            ${renderMapStageReadiness("prepare-hd-raster", detail.map.path, "Landmark raster")}
+            ${renderMapStageReadiness("generate-raceline", detail.map.path, "Raceline generation")}
+            ${renderMapStageReadiness("generate-preview", detail.map.path, "Preview generation")}
+          </div>
+        </details>` : ""}
+      ${renderMapWorkspaceModes(detail)}
       <div class="map-preview-grid">
-        <div class="map-preview-shell">
+        <div class="map-preview-shell" data-scroll-key="${esc(`map-preview:${detail.map.path}`)}">
+          <div class="map-canvas-toolbar" aria-label="Map view controls">
+            <button onclick="zoomMapEditor(0.75)" aria-label="Zoom out">−</button>
+            <button onclick="resetMapEditorZoom()">Fit</button>
+            <button onclick="zoomMapEditor(1.3333333333)" aria-label="Zoom in">+</button>
+            <span id="map-editor-zoom-value">${esc(mapEditorZoomLabel())}</span>
+          </div>
           <canvas
             id="map-preview-canvas"
+            class="${state.mapEditor.enabled || state.customLineEditor.enabled || state.sectionEditor.enabled || state.junctionEditor.enabled ? "editing" : ""}"
+            ${mapEditorInteractionLocked() ? "inert aria-busy=\"true\"" : ""}
             width="900"
             height="620"
             onpointerdown="handleMapEditorPointerDown(event)"
@@ -6183,18 +6296,116 @@ function renderMapWorkspace() {
           ></canvas>
         </div>
         <aside class="map-side-panel">
-          ${renderHdRasterOptions(detail)}
-          ${renderHdMapEditor(detail)}
-          ${renderCustomLineEditor(detail)}
-          ${renderHdMapVersions(detail)}
-          ${renderRacelineClearance(detail)}
-          ${renderSectionGateEditor(detail)}
-          ${renderLayerToggles()}
-          ${renderMapInspector(detail)}
+          ${renderMapModePanel(detail)}
         </aside>
       </div>
-      ${renderSimulationPanel(detail)}
+      ${renderSimulationDisclosure(detail)}
     </div>
+  `;
+}
+
+function mapModeDefinition(mode) {
+  return {
+    geometry: ["Geometry", "Physical bounds and centerline"],
+    topology: ["Topology", "Sections, junctions and branches"],
+    routes: ["Driving Lines", "Raceline and custom routes"],
+    review: ["Review", "Readiness and final overlays"],
+  }[mode] || ["Review", "Readiness and final overlays"];
+}
+
+function renderMapWorkspaceModes(detail) {
+  const modes = ["geometry", "topology", "routes", "review"];
+  const topologyDirty = state.sectionEditor.dirty || state.junctionEditor.dirty;
+  return `
+    <nav class="map-workspace-modes" aria-label="Map workspace mode">
+      ${modes.map((mode) => {
+        const [label, description] = mapModeDefinition(mode);
+        const active = state.mapWorkspaceMode === mode;
+        const dirty = mode === "geometry" ? state.mapEditor.dirty
+          : mode === "topology" ? topologyDirty
+          : mode === "routes" ? state.customLineEditor.dirty
+          : false;
+        return `
+          <button class="map-workspace-mode ${active ? "active" : ""}" aria-pressed="${active}" onclick="setMapWorkspaceMode(${js(mode)})">
+            <span>${esc(label)}${dirty ? `<i title="Unsaved changes"><span class="sr-only">Unsaved changes</span></i>` : ""}</span>
+            <small>${esc(description)}</small>
+          </button>`;
+      }).join("")}
+    </nav>
+  `;
+}
+
+function renderTopologyToolSwitcher() {
+  const sectionsActive = state.mapTopologyTool === "sections";
+  const junctionsActive = state.mapTopologyTool === "junctions";
+  return `
+    <div class="topology-tool-switcher" role="tablist" aria-label="Topology editor">
+      <button role="tab" aria-selected="${sectionsActive}" class="${sectionsActive ? "active" : ""}" onclick="setMapTopologyTool('sections')">Section Gates</button>
+      <button role="tab" aria-selected="${junctionsActive}" class="${junctionsActive ? "active" : ""}" onclick="setMapTopologyTool('junctions')">Junctions</button>
+    </div>
+  `;
+}
+
+function renderMapModePanel(detail) {
+  const mode = state.mapWorkspaceMode;
+  let content;
+  if (mode === "geometry") {
+    content = `${renderHdMapEditor(detail)}${renderHdRasterOptions(detail)}${renderLayerToggles()}`;
+  } else if (mode === "topology") {
+    content = `${renderTopologyToolSwitcher()}${state.mapTopologyTool === "sections" ? renderSectionGateEditor(detail) : renderJunctionEditor(detail)}${renderLayerToggles()}`;
+  } else if (mode === "routes") {
+    content = `${renderCustomLineEditor(detail)}${renderRacelineClearance(detail)}${renderLayerToggles()}`;
+  } else {
+    content = `${renderMapInspector(detail)}${renderHdMapVersions(detail)}${renderLayerToggles()}`;
+  }
+  if (!mapEditorInteractionLocked()) return content;
+  return `<div class="inline-status warn" role="status">Activating the HD map version… editing is temporarily locked.</div><div inert aria-busy="true">${content}</div>`;
+}
+
+function applyMapLayerPreset(mode) {
+  const presets = {
+    geometry: { landmark: true, left_bound: true, right_bound: true, centerline: true, raceline: false, custom_line: false, odometry: false, section_gates: false, section_labels: false, junctions: false },
+    topology: { landmark: true, left_bound: false, right_bound: false, centerline: true, raceline: false, custom_line: false, odometry: false, section_gates: true, section_labels: false, junctions: true },
+    routes: { landmark: true, left_bound: true, right_bound: true, centerline: false, raceline: true, custom_line: true, odometry: false, section_gates: false, section_labels: false, junctions: true },
+    review: { landmark: true, left_bound: true, right_bound: true, centerline: true, raceline: true, custom_line: true, odometry: false, section_gates: true, section_labels: false, junctions: true },
+  };
+  Object.assign(state.mapLayers, presets[mode] || presets.review);
+}
+
+function setMapWorkspaceMode(mode) {
+  if (!["geometry", "topology", "routes", "review"].includes(mode)) return;
+  state.mapLayerSelectionsByMode[state.mapWorkspaceMode] = { ...state.mapLayers };
+  state.mapWorkspaceMode = mode;
+  state.mapEditor.enabled = false;
+  state.mapEditor.dragging = null;
+  state.customLineEditor.enabled = false;
+  state.customLineEditor.draggingIndex = null;
+  state.sectionEditor.enabled = false;
+  state.junctionEditor.enabled = false;
+  state.junctionEditor.dragging = false;
+  state.junctionEditor.placing = false;
+  const savedLayers = state.mapLayerSelectionsByMode[mode];
+  if (savedLayers) Object.assign(state.mapLayers, savedLayers);
+  else applyMapLayerPreset(mode);
+  render();
+}
+
+function setMapTopologyTool(tool) {
+  if (!["sections", "junctions"].includes(tool)) return;
+  state.mapTopologyTool = tool;
+  state.sectionEditor.enabled = false;
+  state.junctionEditor.enabled = false;
+  state.junctionEditor.placing = false;
+  state.junctionEditor.dragging = false;
+  render();
+}
+
+function renderSimulationDisclosure(detail) {
+  return `
+    <details class="simulation-disclosure" ${state.simulationPanelOpen ? "open" : ""} ontoggle="state.simulationPanelOpen = this.open">
+      <summary><strong>Simulation</strong><span>Open only when validating a selected driving line</span></summary>
+      ${renderSimulationPanel(detail)}
+    </details>
   `;
 }
 
@@ -6692,32 +6903,26 @@ function racelineGenerationPayload() {
 }
 
 function renderLayerToggles() {
-  const layers = [
-    ["landmark", "Landmark"],
-    ["left_bound", "Left bound"],
-    ["right_bound", "Right bound"],
-    ["centerline", "Centerline"],
-    ["raceline", "Raceline"],
-    ["custom_line", "Custom lines"],
-    ["odometry", "Odometry"],
-    ["section_gates", "Section gates"],
-    ["section_labels", "Labels"],
+  const groups = [
+    ["Reference", [["landmark", "Landmark"], ["odometry", "Odometry"]]],
+    ["Base HD Map", [["left_bound", "Left bound"], ["right_bound", "Right bound"], ["section_gates", "Section gates"], ["section_labels", "All section labels"], ["junctions", "Junctions"]]],
+    ["Driving Lines", [["centerline", "Centerline"], ["raceline", "Raceline"], ["custom_line", "Custom lines"]]],
   ];
   return `
-    <div class="inspector-block">
-      <h4>Layers</h4>
-      <div class="layer-grid">
-        ${layers
-          .map(
-            ([key, label]) => `
+    <details class="inspector-block layer-panel">
+      <summary><strong>Fine tune layers</strong><span>Advanced</span></summary>
+      ${groups.map(([group, layers]) => `
+        <div class="layer-group">
+          <span>${esc(group)}</span>
+          <div class="layer-grid">
+            ${layers.map(([key, label]) => `
               <label class="layer-toggle">
                 <input type="checkbox" ${state.mapLayers[key] ? "checked" : ""} onchange="toggleMapLayer(${js(key)}, this.checked)" />
                 <span>${esc(label)}</span>
-              </label>`,
-          )
-          .join("")}
-      </div>
-    </div>
+              </label>`).join("")}
+          </div>
+        </div>`).join("")}
+    </details>
   `;
 }
 
@@ -6725,7 +6930,7 @@ function renderHdMapEditor(detail) {
   const editor = ensureMapEditor(detail);
   const lane = activeEditorLane();
   const rasterReady = mapEditorRasterReady(detail);
-  const issue = editorLaneIssue(lane);
+  const issue = mapEditorCollectionIssue(editor);
   const selected = Boolean(editor.selected);
   const assist = normalizedMapEditorAssistSettings();
   const canSmooth = canSmoothSelectedEditorRange();
@@ -6745,6 +6950,15 @@ function renderHdMapEditor(detail) {
         <button id="map-editor-auto-center" onclick="regenerateEditorCenterlineFromBounds()" ${editor.enabled ? "" : "disabled"}>Auto Center</button>
         <button id="map-editor-delete" class="danger" onclick="deleteSelectedEditorPoint()" ${editor.enabled && selected ? "" : "disabled"}>Delete Pt</button>
       </div>
+      <label class="map-editor-lane-select">
+        <span>Editing lane</span>
+        <select onchange="setActiveMapEditorLane(this.value)" ${editor.enabled ? "" : "disabled"}>
+          ${editor.lanes.map((item) => {
+            const laneIssue = mapEditorLaneIssue(item, item.id === editor.primaryLaneId);
+            return `<option value="${esc(item.id)}" ${item.id === lane.id ? "selected" : ""}>${esc(item.id)}${item.id === editor.primaryLaneId ? " · primary" : ""}${laneIssue ? " · check" : ""}</option>`;
+          }).join("")}
+        </select>
+      </label>
       <div class="editor-field-row">
         ${editorFieldButton("left_bound", "Left boundary")}
         ${editorFieldButton("right_bound", "Right boundary")}
@@ -6780,12 +6994,6 @@ function renderHdMapEditor(detail) {
         <button id="map-editor-smooth" class="primary full" onclick="smoothSelectedEditorRange()" ${canSmooth ? "" : "disabled"}>Smooth Area</button>
         <div id="map-editor-assist-hint" class="field-hint full">${esc(mapEditorAssistHint())}</div>
       </div>
-      <div class="editor-zoom-row">
-        <button onclick="zoomMapEditor(0.75)">-</button>
-        <button onclick="resetMapEditorZoom()">Fit</button>
-        <button onclick="zoomMapEditor(1.3333333333)">+</button>
-        <span id="map-editor-zoom-value">${esc(mapEditorZoomLabel())}</span>
-      </div>
       <div class="editor-toggle-row">
         <label class="layer-toggle">
           <input id="map-editor-closed-loop" type="checkbox" ${lane.closed_loop ? "checked" : ""} onchange="toggleEditorClosedLoop(this.checked)" ${editor.enabled ? "" : "disabled"} />
@@ -6804,6 +7012,14 @@ function renderHdMapEditor(detail) {
 function editorFieldButton(field, label) {
   const active = state.mapEditor.activeField === field;
   return `<button id="map-editor-field-${esc(field)}" class="${active ? "active" : ""}" onclick="setMapEditorField(${js(field)})" ${state.mapEditor.enabled ? "" : "disabled"}>${esc(label)}</button>`;
+}
+
+function setActiveMapEditorLane(laneId) {
+  if (!state.mapEditor.lanes.some((lane) => lane.id === laneId)) return;
+  state.mapEditor.activeLaneId = laneId;
+  state.mapEditor.selected = null;
+  state.mapEditor.dragging = null;
+  render();
 }
 
 function renderCustomLineEditor(detail) {
@@ -6961,6 +7177,7 @@ function renderHdMapVersions(detail) {
   const activeId = detail.hd_map_versions?.active_id || "";
   const dirty = Boolean(detail.hd_map_versions?.working_copy_dirty);
   const hdReady = Boolean(detail.hd_map?.exists && detail.map?.artifacts?.centerline_csv?.exists);
+  const localEditorDirty = hasUnsavedMapEdits();
   const status = dirty ? "Working copy" : activeId ? activeId : hdReady ? "Unsaved" : "Need HD map";
   return `
     <div class="inspector-block hd-version-block">
@@ -6970,7 +7187,7 @@ function renderHdMapVersions(detail) {
       </div>
       <div class="version-save-row">
         <input id="hd-map-version-label" placeholder="optional label" ${hdReady ? "" : "disabled"} />
-        <button class="primary ${actionBusy("hd-map-version:save") ? "is-busy" : ""}" onclick="saveHdMapVersion()" ${hdReady ? "" : "disabled"} ${actionButtonAttrs("hd-map-version:save", "HD map version is saving...")}>${esc(actionButtonLabel("hd-map-version:save", "Save Ver", "Saving..."))}</button>
+        <button class="primary ${actionBusy("hd-map-version:save") ? "is-busy" : ""}" onclick="saveHdMapVersion()" ${hdReady && !localEditorDirty ? "" : "disabled"} title="${localEditorDirty ? "Save or discard editor changes first" : "Save the current files as a version"}" ${actionButtonAttrs("hd-map-version:save", "HD map version is saving...")}>${esc(actionButtonLabel("hd-map-version:save", "Save Ver", "Saving..."))}</button>
       </div>
       <div class="version-list">
         ${versions.length
@@ -6992,7 +7209,7 @@ function renderHdMapVersionRow(version, mapPath) {
         <strong>${esc(version.label || version.id)}</strong>
         <span>${esc(version.id)} / ${esc(status)}</span>
       </div>
-      <button onclick="activateHdMapVersion(${js(mapPath)}, ${js(version.id)})" ${active && matches ? "disabled" : ""}>Use</button>
+      <button onclick="activateHdMapVersion(${js(mapPath)}, ${js(version.id)})" ${active && matches ? "disabled" : ""} ${actionButtonAttrs("hd-map-version:activate", "HD map version is activating...")}>${esc(actionButtonLabel("hd-map-version:activate", "Use", "Activating..."))}</button>
     </div>
   `;
 }
@@ -7000,6 +7217,11 @@ function renderHdMapVersionRow(version, mapPath) {
 async function saveHdMapVersion() {
   const detail = state.selectedMapDetail;
   if (!detail?.map?.path) return;
+  const mapPath = detail.map.path;
+  if (hasUnsavedMapEdits()) {
+    toast("Save or discard the current editor changes before creating a version.", "error");
+    return;
+  }
   const label = String($("hd-map-version-label")?.value || "").trim();
   if (!confirmAction({
     title: "Save a new HD map version?",
@@ -7007,20 +7229,19 @@ async function saveHdMapVersion() {
     detail: label ? `Label: ${label}` : "No label set.",
   })) return;
   if (!beginAction("hd-map-version:save", "Saving HD map version")) return;
+  const requestContext = captureSelectedMapContext(mapPath);
   try {
     const saved = await api("/api/maps/save-hd-map-version", {
       method: "POST",
       body: JSON.stringify({
-        map_dir: detail.map.path,
+        map_dir: mapPath,
         label,
       }),
     });
-    state.selectedMapDetail = saved;
-    state.selectedMapPath = saved.map.path;
-    const mapIndex = state.maps.findIndex((item) => item.path === saved.map.path);
-    if (mapIndex >= 0) state.maps[mapIndex] = saved.map;
-    ensureMapEditor(saved, { force: true });
-    state.mapEditor.enabled = false;
+    if (!commitSelectedMapDetail(requestContext, saved)) {
+      toast(`HD map version saved for ${shortName(mapPath)}; the current workspace was left unchanged.`);
+      return;
+    }
     invalidateMapPreflights(saved.map.path);
     toast("HD map version saved");
     render();
@@ -7033,11 +7254,24 @@ async function saveHdMapVersion() {
 
 async function activateHdMapVersion(mapPath, versionId) {
   if (!mapPath || !versionId) return;
+  const unsaved = unsavedMapEditLabels();
   if (!confirmAction({
-    title: "Activate this HD map version?",
+    title: unsaved.length
+      ? "Discard editor changes and activate this HD map version?"
+      : "Activate this HD map version?",
     target: mapPath,
-    detail: `Version: ${versionId}`,
+    detail: `Version: ${versionId}${unsaved.length ? `\nUnsaved: ${unsaved.join(", ")}` : ""}`,
   })) return;
+  if (!beginAction("hd-map-version:activate", "Activating HD map version")) return;
+  const requestContext = beginSelectedMapContext(mapPath);
+  const editorRevisions = {
+    map: Number(state.mapEditor.revision || 0),
+    section: Number(state.sectionEditor.revision || 0),
+    junction: Number(state.junctionEditor.revision || 0),
+    customLine: Number(state.customLineEditor.revision || 0),
+  };
+  let completionNotice = "";
+  let completionType = "success";
   try {
     const saved = await api("/api/maps/activate-hd-map-version", {
       method: "POST",
@@ -7046,17 +7280,26 @@ async function activateHdMapVersion(mapPath, versionId) {
         version_id: versionId,
       }),
     });
-    state.selectedMapDetail = saved;
-    state.selectedMapPath = saved.map.path;
-    const mapIndex = state.maps.findIndex((item) => item.path === saved.map.path);
-    if (mapIndex >= 0) state.maps[mapIndex] = saved.map;
-    ensureMapEditor(saved, { force: true });
-    state.mapEditor.enabled = false;
+    if (!commitSelectedMapDetail(requestContext, saved)) return;
+    const newerEdits = {
+      map: state.mapEditor.mapPath === mapPath && Number(state.mapEditor.revision || 0) !== editorRevisions.map,
+      section: state.sectionEditor.mapPath === mapPath && Number(state.sectionEditor.revision || 0) !== editorRevisions.section,
+      junction: state.junctionEditor.mapPath === mapPath && Number(state.junctionEditor.revision || 0) !== editorRevisions.junction,
+      customLine: state.customLineEditor.mapPath === mapPath && Number(state.customLineEditor.revision || 0) !== editorRevisions.customLine,
+    };
+    syncMapEditorsFromDetail(saved);
     invalidateMapPreflights(saved.map.path);
-    toast(`Activated ${versionId}`);
-    render();
+    const discarded = Object.values(newerEdits).some(Boolean);
+    completionNotice = discarded
+      ? `Activated ${versionId}; edits attempted while activation was in progress were discarded.`
+      : `Activated ${versionId}`;
+    completionType = discarded ? "error" : "success";
   } catch (error) {
-    toast(`Version activate failed: ${error.message}`, "error");
+    completionNotice = `Version activate failed: ${error.message}`;
+    completionType = "error";
+  } finally {
+    endAction("hd-map-version:activate", { renderAfter: state.tab === "maps" });
+    if (completionNotice) toast(completionNotice, completionType);
   }
 }
 
@@ -7100,11 +7343,152 @@ function renderSectionEditorCounts(detail) {
   return `G ${gateCount} / S ${sectionCount}${selected}`;
 }
 
+function renderJunctionEditor(detail) {
+  const editor = ensureJunctionEditor(detail);
+  const junctions = junctionsForDetail(detail) || [];
+  const selected = selectedJunction();
+  const sections = detail.hd_map?.sections || [];
+  const ready = Boolean(detail.hd_map?.exists && sections.length);
+  const issue = selected ? junctionIssue(selected, detail) : "";
+  const runtimeWarning = selected ? junctionRuntimeWarning(selected, detail) : "";
+  const collectionIssue = junctionCollectionIssue(detail);
+  const status = !detail.hd_map?.exists ? "Need HD map"
+    : !sections.length ? "Need sections"
+    : collectionIssue ? "Incomplete"
+    : editor.dirty ? "Unsaved"
+    : "Authoring ready";
+  const suggestions = junctionRouteSuggestions(detail);
+  return `
+    <div class="inspector-block junction-editor-block">
+      <div class="inspector-title-row">
+        <h4>Junctions</h4>
+        <span id="junction-editor-status" aria-live="polite" class="${ready ? (collectionIssue ? "warn" : editor.dirty ? "dirty" : "ok") : "warn"}">${esc(status)}</span>
+      </div>
+      <div class="junction-toolbar">
+        <button class="${editor.enabled ? "primary" : ""}" onclick="toggleJunctionEditor()" ${ready ? "" : "disabled"}>${editor.enabled ? "Editing" : "Edit"}</button>
+        <button onclick="createJunction()" ${editor.enabled && ready ? "" : "disabled"}>New</button>
+        <button id="junction-editor-save" class="${actionBusy("junctions:save") ? "is-busy" : ""}" onclick="saveJunctionsFromEditor()" ${editor.enabled && ready && !junctionCollectionIssue(detail) ? "" : "disabled"} ${actionButtonAttrs("junctions:save", "Junctions are saving...")}>${esc(actionButtonLabel("junctions:save", "Save", "Saving..."))}</button>
+      </div>
+      <div class="junction-list" data-scroll-key="${esc(`junction-list:${detail.map.path}`)}">
+        ${junctions.length ? junctions.map((junction) => renderJunctionRow(junction, detail)).join("") : `<div class="field-hint">No junctions yet. Select Edit, then New.</div>`}
+      </div>
+      ${selected ? `
+        <div class="junction-form">
+          <div class="junction-form-heading">
+            <strong>${esc(selected.id || "New junction")}</strong>
+            <button class="danger" onclick="deleteSelectedJunction()" ${editor.enabled ? "" : "disabled"}>Delete</button>
+          </div>
+          ${issue ? `<div class="junction-validation">${esc(issue)}</div>` : ""}
+          ${!issue && runtimeWarning ? `<div class="junction-validation">${esc(runtimeWarning)}</div>` : ""}
+          <div class="form-grid junction-id-grid">
+            <div class="field">
+              <label>Junction ID</label>
+              <input value="${esc(selected.id)}" onchange="updateSelectedJunctionField('id', this.value)" ${editor.enabled ? "" : "disabled"} />
+            </div>
+            <div class="field">
+              <label>Signal ID</label>
+              <input value="${esc(selected.signal_id)}" onchange="updateSelectedJunctionField('signal_id', this.value)" ${editor.enabled ? "" : "disabled"} />
+            </div>
+          </div>
+          <div class="junction-position-card">
+            <div><strong>Map position</strong><span>Drag the selected diamond or use Place.</span></div>
+            <div class="junction-position-actions">
+              <button class="${editor.placing ? "active" : ""}" onclick="toggleJunctionPlacement()" ${editor.enabled ? "" : "disabled"}>${editor.placing ? "Click map…" : "Place"}</button>
+              <button onclick="snapSelectedJunctionToActivation()" ${editor.enabled && selected.activation_section_ids?.length ? "" : "disabled"}>Snap</button>
+            </div>
+            <label>X <input type="number" step="0.01" value="${esc(Number(selected.position?.[0] || 0).toFixed(2))}" onchange="updateSelectedJunctionPosition(0, this.value)" ${editor.enabled ? "" : "disabled"} /></label>
+            <label>Y <input type="number" step="0.01" value="${esc(Number(selected.position?.[1] || 0).toFixed(2))}" onchange="updateSelectedJunctionPosition(1, this.value)" ${editor.enabled ? "" : "disabled"} /></label>
+          </div>
+          ${renderJunctionSectionPicker("Activation sections", "activation_section_ids", selected.activation_section_ids, sections, editor.enabled)}
+          <div class="field-hint">Detection is accepted only while the vehicle is inside an activation section.</div>
+          <div class="junction-branch-grid">
+            ${["left", "straight", "right"].map((direction) => {
+              const current = String(selected.branches?.[direction] || "");
+              const known = suggestions.some((route) => route.id === current);
+              return `
+              <label>
+                <span>${direction === "left" ? "← Left" : direction === "right" ? "Right →" : "↑ Straight"}</span>
+                <select onchange="updateSelectedJunctionBranch(${js(direction)}, this.value)" ${editor.enabled ? "" : "disabled"}>
+                  <option value="">Select route…</option>
+                  ${current && !known ? `<option value="${esc(current)}" selected>Unknown · ${esc(current)}</option>` : ""}
+                  ${suggestions.map((route) => `<option value="${esc(route.id)}" ${route.id === current ? "selected" : ""} ${route.eligible ? "" : "disabled"}>${esc(route.label)}</option>`).join("")}
+                </select>
+              </label>`;
+            }).join("")}
+          </div>
+          <div class="field-hint">Only routes that exist in this map can be saved. Runtime registration is checked separately in Review.</div>
+          ${renderJunctionSectionPicker("Release sections", "release_section_ids", selected.release_section_ids, sections, editor.enabled)}
+          <div class="field-hint">Required. The committed branch is cleared when the vehicle enters a release section.</div>
+        </div>` : ""}
+      <div id="junction-editor-counts" class="editor-counts">J ${junctions.length}${selected ? ` / selected ${esc(selected.id)}` : ""}</div>
+    </div>
+  `;
+}
+
+function renderJunctionRow(junction, detail) {
+  const selected = state.junctionEditor.selectedJunctionId === junction.id;
+  const issue = junctionIssue(junction, detail);
+  return `
+    <button class="junction-row ${selected ? "selected" : ""} ${issue ? "warn" : ""}" aria-pressed="${selected}" onclick="selectJunction(${js(junction.id)})">
+      <span><strong>${esc(junction.id)}</strong><small>${esc(junction.signal_id || "No signal")}</small></span>
+      <em>${issue ? "Check" : "Ready"}</em>
+    </button>
+  `;
+}
+
+function renderJunctionSectionPicker(title, field, selectedIds, sections, enabled) {
+  const selected = new Set(selectedIds || []);
+  return `
+    <fieldset class="junction-section-picker">
+      <legend>${esc(title)}</legend>
+      <div data-scroll-key="${esc(`junction-picker:${state.selectedMapPath || ""}:${field}`)}">
+        ${sections.map((section) => `
+          <label class="junction-section-chip ${selected.has(section.id) ? "selected" : ""}">
+            <input type="checkbox" ${selected.has(section.id) ? "checked" : ""} onchange="toggleJunctionSection(${js(field)}, ${js(section.id)}, this.checked)" ${enabled ? "" : "disabled"} />
+            <span>${esc(section.id)}</span>
+          </label>`).join("")}
+      </div>
+    </fieldset>
+  `;
+}
+
+function renderRuntimeRouteReadiness(detail) {
+  const runtime = detail?.runtime_routes || { status: "unconfigured", issues: [], configured_lane_ids: [], missing_branch_ids: [] };
+  const hasJunctions = Boolean(detail?.hd_map?.junctions?.length);
+  const status = hasJunctions ? runtime.status : "not_required";
+  const labels = {
+    ready: "Runtime ready",
+    warning: "Routes missing",
+    invalid: "Config invalid",
+    unconfigured: "Not configured",
+    not_required: "Not required",
+  };
+  const issues = runtime.issues || [];
+  const message = !hasJunctions
+    ? "This map has no signal-controlled junctions."
+    : runtime.status === "unconfigured"
+    ? "Add competition_route.param.yaml to this map before driving signal-controlled branches."
+    : issues[0] || "All junction branch IDs are registered in the runtime selector config.";
+  return `
+    <div class="inspector-block runtime-route-readiness">
+      <div class="inspector-title-row">
+        <h4>Competition Routes</h4>
+        <span class="${["ready", "not_required"].includes(status) ? "ok" : "warn"}" aria-live="polite">${esc(labels[status] || status)}</span>
+      </div>
+      <div class="field-hint">${esc(message)}</div>
+      <div class="editor-counts">Registered ${esc((runtime.configured_lane_ids || []).length)}${runtime.missing_branch_ids?.length ? ` / missing ${esc(runtime.missing_branch_ids.join(", "))}` : ""}</div>
+      ${issues.slice(1, 4).map((issue) => `<div class="field-hint">${esc(issue)}</div>`).join("")}
+      <div class="path" title="${esc(runtime.config_path || "")}">competition_route.param.yaml</div>
+    </div>
+  `;
+}
+
 function renderMapInspector(detail) {
   const stats = detail.stats || {};
   const artifacts = detail.map.artifacts || {};
   const lanes = detail.hd_map?.lanes || [];
   const sections = detail.hd_map?.sections || [];
+  const junctions = detail.hd_map?.junctions || [];
   return `
     <div class="inspector-block">
       <h4>Readiness</h4>
@@ -7114,6 +7498,7 @@ function renderMapInspector(detail) {
           .join("")}
       </div>
     </div>
+    ${renderRuntimeRouteReadiness(detail)}
     <div class="inspector-block">
       <h4>Map Shape</h4>
       <div class="stat-grid">
@@ -7122,6 +7507,7 @@ function renderMapInspector(detail) {
         ${statTile("center pts", stats.primary_centerline_points || 0)}
         ${statTile("sections", stats.section_count || 0)}
         ${statTile("gates", stats.section_gate_count || 0)}
+        ${statTile("junctions", stats.junction_count || 0)}
         ${statTile("raceline pts", stats.raceline_points || 0)}
         ${statTile("custom lines", stats.custom_line_count || 0)}
         ${statTile("odom pts", stats.odometry_points || 0)}
@@ -7135,6 +7521,11 @@ function renderMapInspector(detail) {
       <h4>Sections</h4>
       ${sections.length ? sections.slice(0, 8).map(renderSectionSummary).join("") : `<div class="notice">No section gates found yet.</div>`}
       ${sections.length > 8 ? `<div class="notice">${sections.length - 8} more sections hidden in this summary.</div>` : ""}
+    </div>
+    <div class="inspector-block">
+      <h4>Junctions</h4>
+      ${junctions.length ? junctions.slice(0, 6).map(renderJunctionSummary).join("") : `<div class="notice">No junction topology configured yet.</div>`}
+      ${junctions.length > 6 ? `<div class="notice">${junctions.length - 6} more junctions hidden in this summary.</div>` : ""}
     </div>
   `;
 }
@@ -7158,6 +7549,16 @@ function renderSectionSummary(section) {
     <div class="summary-row">
       <strong>${esc(section.id)}</strong>
       <span>${esc(section.start_gate_id)} -> ${esc(section.end_gate_id)} / ${esc(speed)}</span>
+    </div>
+  `;
+}
+
+function renderJunctionSummary(junction) {
+  const branches = junction.branches || {};
+  return `
+    <div class="summary-row">
+      <strong>${esc(junction.id)} / ${esc(junction.signal_id || "no signal")}</strong>
+      <span>← ${esc(branches.left || "—")} · ↑ ${esc(branches.straight || "—")} · → ${esc(branches.right || "—")}</span>
     </div>
   `;
 }
@@ -8615,11 +9016,14 @@ function defaultEditorLane() {
   };
 }
 
-function laneForEditorFromDetail(detail) {
+function lanesForEditorFromDetail(detail) {
   const lanes = detail?.hd_map?.lanes || [];
-  const source = lanes.find((lane) => lane.primary) || lanes[0];
-  if (!source) return defaultEditorLane();
-  return cloneEditorLane({ ...source, id: source.id || "lane_001", primary: true });
+  if (!lanes.length) return [defaultEditorLane()];
+  return lanes.map((lane, index) => cloneEditorLane({
+    ...lane,
+    id: lane.id || `lane_${String(index + 1).padStart(3, "0")}`,
+    primary: Boolean(lane.primary),
+  }));
 }
 
 function ensureMapEditor(detail, options = {}) {
@@ -8627,16 +9031,20 @@ function ensureMapEditor(detail, options = {}) {
   if (!mapPath) return state.mapEditor;
   const sameMap = state.mapEditor.mapPath === mapPath;
   if (options.force || state.mapEditor.mapPath !== mapPath || !state.mapEditor.lanes.length) {
-    const lane = laneForEditorFromDetail(detail);
+    const lanes = lanesForEditorFromDetail(detail);
+    const primary = lanes.find((lane) => lane.primary) || lanes[0];
+    const revision = Number(state.mapEditor.revision || 0) + 1;
     state.mapEditor = {
       ...state.mapEditor,
       mapPath,
       dirty: false,
+      revision,
       selected: null,
       dragging: null,
       zoom: sameMap ? state.mapEditor.zoom : 1,
-      primaryLaneId: lane.id,
-      lanes: [lane],
+      primaryLaneId: primary.id,
+      activeLaneId: primary.id,
+      lanes,
       undoStack: [],
       redoStack: [],
       dragSnapshot: null,
@@ -8647,13 +9055,16 @@ function ensureMapEditor(detail, options = {}) {
 
 function activeEditorLane() {
   if (!state.mapEditor.lanes.length) state.mapEditor.lanes = [defaultEditorLane()];
-  return state.mapEditor.lanes[0];
+  return state.mapEditor.lanes.find((lane) => lane.id === state.mapEditor.activeLaneId)
+    || state.mapEditor.lanes.find((lane) => lane.id === state.mapEditor.primaryLaneId)
+    || state.mapEditor.lanes[0];
 }
 
 function captureMapEditorSnapshot() {
   return {
     lanes: state.mapEditor.lanes.map(cloneEditorLane),
     primaryLaneId: state.mapEditor.primaryLaneId,
+    activeLaneId: state.mapEditor.activeLaneId,
     activeField: state.mapEditor.activeField,
     selected: state.mapEditor.selected ? { ...state.mapEditor.selected } : null,
     dirty: state.mapEditor.dirty,
@@ -8665,6 +9076,7 @@ function restoreMapEditorSnapshot(snapshot) {
   state.mapEditor.lanes = (snapshot.lanes || []).map(cloneEditorLane);
   if (!state.mapEditor.lanes.length) state.mapEditor.lanes = [defaultEditorLane()];
   state.mapEditor.primaryLaneId = snapshot.primaryLaneId || state.mapEditor.lanes[0].id;
+  state.mapEditor.activeLaneId = snapshot.activeLaneId || state.mapEditor.primaryLaneId;
   state.mapEditor.activeField = MAP_EDITOR_FIELDS.includes(snapshot.activeField)
     ? snapshot.activeField
     : "left_bound";
@@ -8672,6 +9084,7 @@ function restoreMapEditorSnapshot(snapshot) {
   state.mapEditor.dragging = null;
   state.mapEditor.dragSnapshot = null;
   state.mapEditor.dirty = Boolean(snapshot.dirty);
+  state.mapEditor.revision = Number(state.mapEditor.revision || 0) + 1;
 }
 
 function rememberMapEditorState() {
@@ -8916,6 +9329,7 @@ function ensureCustomLineEditor(detail, options = {}) {
       selectedId: selected?.id || "",
       workingLine: selected ? cloneCustomLine(selected) : null,
       dirty: false,
+      revision: Number(editor.revision || 0) + 1,
       selectedPointIndex: null,
       draggingIndex: null,
       dragSnapshot: null,
@@ -8959,6 +9373,7 @@ function restoreCustomLineSnapshot(snapshot) {
   editor.selectedId = editor.workingLine?.id || "";
   editor.selectedPointIndex = Number.isInteger(snapshot.selectedPointIndex) ? snapshot.selectedPointIndex : null;
   editor.dirty = Boolean(snapshot.dirty);
+  editor.revision = Number(editor.revision || 0) + 1;
   editor.draggingIndex = null;
   editor.dragSnapshot = null;
 }
@@ -8994,6 +9409,7 @@ function markCustomLineDirty() {
     state.customLineEditor.workingLine.issue = "";
   }
   state.customLineEditor.dirty = true;
+  state.customLineEditor.revision = Number(state.customLineEditor.revision || 0) + 1;
   updateCustomLineChrome();
 }
 
@@ -9014,6 +9430,7 @@ function selectCustomLine(id) {
   editor.selectedId = line.id;
   editor.workingLine = cloneCustomLine(line);
   editor.dirty = false;
+  editor.revision = Number(editor.revision || 0) + 1;
   editor.selectedPointIndex = null;
   editor.draggingIndex = null;
   editor.dragSnapshot = null;
@@ -9032,10 +9449,13 @@ function toggleCustomLineEditor() {
   editor.draggingIndex = null;
   editor.dragSnapshot = null;
   if (editor.enabled) {
+    state.mapWorkspaceMode = "routes";
     state.mapEditor.enabled = false;
     state.mapEditor.selected = null;
     state.sectionEditor.enabled = false;
     state.sectionEditor.selectedGateId = "";
+    state.junctionEditor.enabled = false;
+    state.junctionEditor.dragging = false;
     state.mapLayers.custom_line = true;
   }
   render();
@@ -9201,14 +9621,21 @@ function customLineRequestSectionSpeeds(detail, line) {
 
 async function applyCustomLineResponse(payload, selectedId, options = {}) {
   let detail = payload?.detail?.map ? payload.detail : payload?.map ? payload : null;
-  if (!detail && state.selectedMapPath) detail = await api(apiPath("/api/maps/detail", { path: state.selectedMapPath }));
-  if (!detail) return null;
-  state.selectedMapDetail = detail;
-  state.selectedMapPath = detail.map.path;
-  const mapIndex = state.maps.findIndex((item) => item.path === detail.map.path);
-  if (mapIndex >= 0) state.maps[mapIndex] = detail.map;
-  ensureCustomLineEditor(detail, { force: true, selectedId, keepEnabled: Boolean(options.keepEnabled) });
-  return detail;
+  const mapPath = String(options.mapPath || options.requestContext?.mapPath || "");
+  const requestContext = options.requestContext || captureSelectedMapContext(mapPath);
+  if (!detail && mapPath) detail = await api(apiPath("/api/maps/detail", { path: mapPath }));
+  if (!detail || !commitSelectedMapDetail(requestContext, detail)) {
+    return { detail: null, preservedEditor: false };
+  }
+  const preservedEditor = Number.isFinite(options.editorRevision)
+    && state.customLineEditor.mapPath === mapPath
+    && Number(state.customLineEditor.revision || 0) !== options.editorRevision;
+  if (preservedEditor) {
+    if (state.customLineEditor.selectedId === selectedId) state.customLineEditor.dirty = true;
+  } else {
+    ensureCustomLineEditor(detail, { force: true, selectedId, keepEnabled: Boolean(options.keepEnabled) });
+  }
+  return { detail, preservedEditor };
 }
 
 async function createCustomLine() {
@@ -9231,12 +9658,15 @@ async function createCustomLine() {
     return;
   }
   if (!beginAction("custom-line:create", "Creating custom line")) return;
+  const mapPath = detail.map.path;
+  const requestContext = captureSelectedMapContext(mapPath);
+  const editorRevision = Number(state.customLineEditor.revision || 0);
   try {
     const existingIds = new Set(customLinesFromDetail(detail).map((line) => line.id));
     const result = await api("/api/maps/custom-lines/create", {
       method: "POST",
       body: JSON.stringify({
-        map_dir: detail.map.path,
+        map_dir: mapPath,
         name,
         source_type: sourceType,
         base: sourceType,
@@ -9251,13 +9681,20 @@ async function createCustomLine() {
         || returnedLines.find((line) => !existingIds.has(line.id))?.id
         || "",
     );
-    const saved = await applyCustomLineResponse(result, createdId);
-    if (saved && !createdId) {
+    const applied = await applyCustomLineResponse(result, createdId, {
+      mapPath,
+      requestContext,
+      editorRevision,
+    });
+    const saved = applied.detail;
+    if (saved && !createdId && !applied.preservedEditor) {
       const match = customLinesFromDetail(saved).find((line) => line.name === name);
       if (match) ensureCustomLineEditor(saved, { force: true, selectedId: match.id });
     }
     state.mapLayers.custom_line = true;
-    toast(`Created custom line “${name}”`);
+    toast(applied.preservedEditor
+      ? `Created custom line “${name}”; newer editor changes remain unsaved.`
+      : `Created custom line “${name}”`);
   } catch (error) {
     toast(`Custom line create failed: ${error.message}`, "error");
   } finally {
@@ -9279,11 +9716,14 @@ async function saveCustomLineChanges(options = {}) {
   }
   const actionKey = `custom-line:update:${line.id}`;
   if (!beginAction(actionKey, "Saving custom line")) return false;
+  const mapPath = detail.map.path;
+  const requestContext = captureSelectedMapContext(mapPath);
+  const editorRevision = Number(editor.revision || 0);
   try {
     const result = await api("/api/maps/custom-lines/update", {
       method: "POST",
       body: JSON.stringify({
-        map_dir: detail.map.path,
+        map_dir: mapPath,
         id: line.id,
         name: line.name,
         closed_loop: Boolean(line.closed_loop),
@@ -9292,8 +9732,15 @@ async function saveCustomLineChanges(options = {}) {
         section_speeds_mps: customLineRequestSectionSpeeds(detail, line),
       }),
     });
-    await applyCustomLineResponse(result, line.id, { keepEnabled: Boolean(options.keepEnabled) });
-    toast(options.successMessage || "Custom line saved");
+    const applied = await applyCustomLineResponse(result, line.id, {
+      keepEnabled: Boolean(options.keepEnabled),
+      mapPath,
+      requestContext,
+      editorRevision,
+    });
+    toast(applied.preservedEditor
+      ? "Custom line snapshot saved; newer edits remain unsaved."
+      : options.successMessage || "Custom line saved");
     return true;
   } catch (error) {
     toast(`Custom line save failed: ${error.message}`, "error");
@@ -9318,15 +9765,24 @@ async function activateCustomLine(id) {
       render();
       return;
     }
+    if (state.selectedMapPath !== detail.map.path || state.selectedMapDetail?.map?.path !== detail.map.path) return;
   }
   const actionKey = `custom-line:activate:${id}`;
   if (!beginAction(actionKey, "Activating custom line")) return;
+  const mapPath = detail.map.path;
+  const requestContext = captureSelectedMapContext(mapPath);
+  const editorRevision = Number(state.customLineEditor.revision || 0);
   try {
     const result = await api("/api/maps/custom-lines/activate", {
       method: "POST",
-      body: JSON.stringify({ map_dir: detail.map.path, id }),
+      body: JSON.stringify({ map_dir: mapPath, id }),
     });
-    await applyCustomLineResponse(result, id);
+    const applied = await applyCustomLineResponse(result, id, {
+      mapPath,
+      requestContext,
+      editorRevision,
+    });
+    if (!applied.detail) return;
     state.simulation.source = "custom";
     resetSimulationStateFromPath(state.selectedMapDetail);
     toast("Custom line selected for the next drive");
@@ -9349,13 +9805,22 @@ async function deleteCustomLine(id) {
   })) return;
   const actionKey = `custom-line:delete:${id}`;
   if (!beginAction(actionKey, "Deleting custom line")) return;
+  const mapPath = detail.map.path;
+  const requestContext = captureSelectedMapContext(mapPath);
+  const editorRevision = Number(state.customLineEditor.revision || 0);
   try {
     const result = await api("/api/maps/custom-lines/delete", {
       method: "POST",
-      body: JSON.stringify({ map_dir: detail.map.path, id }),
+      body: JSON.stringify({ map_dir: mapPath, id }),
     });
-    await applyCustomLineResponse(result, "");
-    toast(`Deleted custom line “${line.name}”`);
+    const applied = await applyCustomLineResponse(result, "", {
+      mapPath,
+      requestContext,
+      editorRevision,
+    });
+    toast(applied.preservedEditor
+      ? `Deleted custom line “${line.name}”; newer editor changes remain unsaved.`
+      : `Deleted custom line “${line.name}”`);
   } catch (error) {
     toast(`Custom line delete failed: ${error.message}`, "error");
   } finally {
@@ -9430,11 +9895,17 @@ function ensureSectionEditor(detail, options = {}) {
       ...state.sectionEditor,
       mapPath,
       dirty: false,
+      revision: Number(state.sectionEditor.revision || 0) + 1,
       selectedGateId: "",
       gates: (detail.hd_map?.section_gates || []).map(cloneSectionGate),
     };
   }
   return state.sectionEditor;
+}
+
+function markSectionEditorDirty() {
+  state.sectionEditor.dirty = true;
+  state.sectionEditor.revision = Number(state.sectionEditor.revision || 0) + 1;
 }
 
 function sectionEditorLane(detail) {
@@ -9470,14 +9941,18 @@ function toggleSectionEditor() {
   ensureSectionEditor(state.selectedMapDetail);
   state.sectionEditor.enabled = !state.sectionEditor.enabled;
   if (state.sectionEditor.enabled) {
+    state.mapWorkspaceMode = "topology";
+    state.mapTopologyTool = "sections";
     state.mapEditor.enabled = false;
     state.mapEditor.dragging = null;
     state.mapEditor.selected = null;
     state.customLineEditor.enabled = false;
     state.customLineEditor.draggingIndex = null;
+    state.junctionEditor.enabled = false;
+    state.junctionEditor.dragging = false;
     state.mapLayers.centerline = true;
     state.mapLayers.section_gates = true;
-    state.mapLayers.section_labels = true;
+    state.mapLayers.section_labels = false;
   }
   state.sectionEditor.selectedGateId = "";
   render();
@@ -9548,6 +10023,89 @@ function nearestSectionGate(detail, pixel, hitRadius) {
   return best?.gate || null;
 }
 
+function nearestJunctionMarker(detail, pixel, hitRadius) {
+  const canvas = $("map-preview-canvas");
+  if (!canvas) return null;
+  const toPixel = mapPointProjector(detail, canvas.width, canvas.height);
+  let best = null;
+  for (const junction of junctionsForDetail(detail)) {
+    const marker = toPixel(junction.position || [0, 0]);
+    const distance = pointDistance(pixel, marker);
+    if (distance <= hitRadius && (!best || distance < best.distance)) {
+      best = { junction, distance };
+    }
+  }
+  return best?.junction || null;
+}
+
+function handleJunctionEditorPointerDown(event) {
+  const detail = state.selectedMapDetail;
+  const isJunctionView = state.mapWorkspaceMode === "topology" && state.mapTopologyTool === "junctions";
+  if (!detail || !isJunctionView || state.junctionEditor.mapPath !== detail.map?.path) return false;
+  if (event.button != null && event.button !== 0) return false;
+  const { canvas, point, hitRadius } = canvasEventInfo(event);
+  const nearest = nearestJunctionMarker(detail, point, hitRadius * 1.5);
+  if (nearest) {
+    event.preventDefault();
+    state.junctionEditor.selectedJunctionId = nearest.id;
+    if (!state.junctionEditor.enabled) {
+      render();
+      return true;
+    }
+    state.junctionEditor.dragging = {
+      junctionId: nearest.id,
+      startPixel: [...point],
+      startPosition: [...nearest.position],
+      moved: false,
+    };
+    state.junctionEditor.placing = false;
+    if (canvas.setPointerCapture && event.pointerId != null) canvas.setPointerCapture(event.pointerId);
+    drawMapPreview();
+    return true;
+  }
+  const selected = selectedJunction();
+  if (!selected || !state.junctionEditor.placing) return false;
+  const world = mapPixelToWorld(detail, canvas.width, canvas.height, point);
+  if (!world) return false;
+  event.preventDefault();
+  selected.position = world;
+  state.junctionEditor.placing = false;
+  markJunctionEditorDirty();
+  render();
+  return true;
+}
+
+function handleJunctionEditorPointerMove(event) {
+  const detail = state.selectedMapDetail;
+  const selected = selectedJunction();
+  const drag = state.junctionEditor.dragging;
+  if (!detail || !selected || !state.junctionEditor.enabled || !drag) return;
+  event.preventDefault();
+  const { canvas, point } = canvasEventInfo(event);
+  const uiScale = canvasCssPixelScale(canvas.getContext("2d"));
+  if (!drag.moved && pointDistance(point, drag.startPixel) < 5 * uiScale) return;
+  const world = mapPixelToWorld(detail, canvas.width, canvas.height, point);
+  if (!world) return;
+  drag.moved = true;
+  selected.position = world;
+  markJunctionEditorDirty();
+  drawMapPreview();
+}
+
+function handleJunctionEditorPointerUp(event) {
+  if (!state.junctionEditor.dragging) return;
+  state.junctionEditor.dragging = false;
+  const canvas = event.currentTarget || $("map-preview-canvas");
+  if (canvas?.releasePointerCapture && event.pointerId != null) {
+    try {
+      canvas.releasePointerCapture(event.pointerId);
+    } catch {
+      // Pointer capture may already be released by the browser.
+    }
+  }
+  render();
+}
+
 function handleSectionEditorPointerDown(event) {
   const detail = state.selectedMapDetail;
   if (!detail || !state.sectionEditor.enabled || state.sectionEditor.mapPath !== detail.map?.path) return false;
@@ -9577,7 +10135,7 @@ function handleSectionEditorPointerDown(event) {
   state.sectionEditor.gates.push(gate);
   state.sectionEditor.gates.sort((a, b) => Number(a.s_m || 0) - Number(b.s_m || 0));
   state.sectionEditor.selectedGateId = gate.id;
-  state.sectionEditor.dirty = true;
+  markSectionEditorDirty();
   updateSectionEditorChrome();
   drawMapPreview();
   return true;
@@ -9587,7 +10145,7 @@ function deleteSelectedSectionGate() {
   if (!state.selectedMapDetail || !state.sectionEditor.enabled || !state.sectionEditor.selectedGateId) return;
   state.sectionEditor.gates = state.sectionEditor.gates.filter((gate) => gate.id !== state.sectionEditor.selectedGateId);
   state.sectionEditor.selectedGateId = "";
-  state.sectionEditor.dirty = true;
+  markSectionEditorDirty();
   updateSectionEditorChrome();
   drawMapPreview();
 }
@@ -9596,31 +10154,389 @@ async function saveSectionGatesFromEditor() {
   const detail = state.selectedMapDetail;
   if (!detail) return;
   ensureSectionEditor(detail);
+  const mapPath = detail.map.path;
   if (!confirmAction({
     title: "Save section gates?",
     target: detail.map.path,
     detail: `${state.sectionEditor.gates.length} gate(s) will be written.`,
   })) return;
   if (!beginAction("section-gates:save", "Saving section gates")) return;
+  const requestContext = captureSelectedMapContext(mapPath);
+  const editorRevision = Number(state.sectionEditor.revision || 0);
   try {
     const saved = await api("/api/maps/save-section-gates", {
       method: "POST",
       body: JSON.stringify({
-        map_dir: detail.map.path,
+        map_dir: mapPath,
         section_gates: state.sectionEditor.gates,
       }),
     });
-    state.selectedMapDetail = saved;
-    state.selectedMapPath = saved.map.path;
-    ensureSectionEditor(saved, { force: true });
-    state.sectionEditor.enabled = true;
-    state.sectionEditor.dirty = false;
-    toast("Section gates saved");
+    if (!commitSelectedMapDetail(requestContext, saved)) {
+      toast(`Section gates saved for ${shortName(mapPath)}; the current workspace was left unchanged.`);
+      return;
+    }
+    const hasNewerEdits = state.sectionEditor.mapPath === mapPath
+      && Number(state.sectionEditor.revision || 0) !== editorRevision;
+    if (!hasNewerEdits) {
+      ensureSectionEditor(saved, { force: true });
+      state.sectionEditor.enabled = true;
+      state.sectionEditor.dirty = false;
+    } else {
+      state.sectionEditor.dirty = true;
+    }
+    if (!state.junctionEditor.dirty) ensureJunctionEditor(saved, { force: true });
+    if (!state.customLineEditor.dirty) ensureCustomLineEditor(saved, { force: true });
+    toast(hasNewerEdits ? "Section gates snapshot saved; newer edits remain unsaved." : "Section gates saved");
     render();
   } catch (error) {
     toast(`Section gate save failed: ${error.message}`, "error");
   } finally {
     endAction("section-gates:save", { renderAfter: state.tab === "maps" });
+  }
+}
+
+function cloneJunction(junction = {}) {
+  const position = Array.isArray(junction.position) ? junction.position : [0, 0];
+  return {
+    id: String(junction.id || "junction_001"),
+    signal_id: String(junction.signal_id || "signal_001"),
+    position: [Number(position[0] || 0), Number(position[1] || 0)],
+    activation_section_ids: [...new Set((junction.activation_section_ids || []).map(String))],
+    release_section_ids: [...new Set((junction.release_section_ids || []).map(String))],
+    branches: {
+      left: String(junction.branches?.left || junction.left_lane_id || ""),
+      straight: String(junction.branches?.straight || junction.straight_lane_id || ""),
+      right: String(junction.branches?.right || junction.right_lane_id || ""),
+    },
+  };
+}
+
+function ensureJunctionEditor(detail, options = {}) {
+  const mapPath = detail?.map?.path || "";
+  if (!mapPath) return state.junctionEditor;
+  if (options.force || state.junctionEditor.mapPath !== mapPath) {
+    state.junctionEditor = {
+      ...state.junctionEditor,
+      mapPath,
+      dirty: false,
+      revision: Number(state.junctionEditor.revision || 0) + 1,
+      selectedJunctionId: "",
+      junctions: (detail.hd_map?.junctions || []).map(cloneJunction),
+      placing: false,
+      dragging: false,
+    };
+  }
+  return state.junctionEditor;
+}
+
+function markJunctionEditorDirty() {
+  state.junctionEditor.dirty = true;
+  state.junctionEditor.revision = Number(state.junctionEditor.revision || 0) + 1;
+}
+
+function junctionsForDetail(detail) {
+  if (state.junctionEditor.mapPath === detail?.map?.path) return state.junctionEditor.junctions;
+  return (detail?.hd_map?.junctions || []).map(cloneJunction);
+}
+
+function selectedJunction() {
+  return state.junctionEditor.junctions.find(
+    (junction) => junction.id === state.junctionEditor.selectedJunctionId,
+  ) || null;
+}
+
+function junctionRouteSuggestions(detail) {
+  const runtime = detail?.runtime_routes || {};
+  const runtimeUsable = ["ready", "warning"].includes(runtime.status);
+  const registered = new Set(runtime.configured_lane_ids || []);
+  const runtimeSuffix = (id) => runtimeUsable && registered.has(id)
+    ? " · Runtime ready"
+    : " · Not registered for driving";
+  const customLines = new Map(customLinesFromDetail(detail).map((line) => [line.id, line]));
+  const eligibleIds = new Set(detail?.junction_route_ids || []);
+  const backendCatalog = Array.isArray(detail?.junction_route_catalog)
+    ? detail.junction_route_catalog
+    : null;
+  const fallbackLanes = (detail?.hd_map?.lanes || []).filter((lane) => lane.id);
+  const fallbackCatalog = [
+    ...fallbackLanes.map((lane) => ({ id: lane.id, kind: "lane", eligible: true, issue: "" })),
+    ...(!fallbackLanes.some((lane) => lane.id === "primary") ? [{ id: "primary", kind: "lane_alias", eligible: true, issue: "" }] : []),
+    ...(detail?.raceline_csv?.points?.length ? [{ id: "raceline", kind: "raceline", eligible: true, issue: "" }] : []),
+    ...customLinesFromDetail(detail).map((line) => ({
+      id: line.id,
+      kind: "custom_line",
+      eligible: line.valid !== false && line.source_stale !== true && !line.section_layout_stale,
+      issue: String(line.issue || (line.source_stale ? "source has changed" : line.section_layout_stale ? "section layout is stale" : "")),
+    })),
+  ];
+  const suggestions = new Map();
+  for (const entry of backendCatalog || fallbackCatalog) {
+    const id = String(entry?.id || "");
+    if (!id) continue;
+    const kind = String(entry.kind || "route");
+    const customLine = customLines.get(id);
+    const eligible = entry.eligible !== false && (!backendCatalog || eligibleIds.has(id));
+    const issue = String(entry.issue || "").trim();
+    const baseLabel = kind === "custom_line"
+      ? `Custom · ${customLine?.name || id}`
+      : kind === "raceline"
+      ? "Generated raceline"
+      : kind === "lane_alias"
+      ? "Default route"
+      : kind === "lane"
+      ? `Lane · ${id}`
+      : `Route · ${id}`;
+    const availability = eligible ? runtimeSuffix(id) : ` · Unavailable${issue ? `: ${issue}` : ""}`;
+    suggestions.set(id, { id, label: `${baseLabel}${availability}`, eligible, issue });
+  }
+  return [...suggestions.values()];
+}
+
+function junctionRuntimeWarning(junction, detail) {
+  if (!junction) return "";
+  const runtime = detail?.runtime_routes || {};
+  if (runtime.status === "unconfigured") return "Competition route config is not set. Authoring can be saved, but this junction is not ready to drive.";
+  if (runtime.status === "invalid") return "Competition route config is invalid. Check Review before driving.";
+  const missing = new Set(runtime.missing_branch_ids || []);
+  const usedMissing = [...new Set(Object.values(junction.branches || {}).filter((id) => missing.has(id)))];
+  return usedMissing.length ? `Not registered for driving: ${usedMissing.join(", ")}` : "";
+}
+
+function junctionIssue(junction, detail) {
+  if (!String(junction?.id || "").trim()) return "Junction ID is required.";
+  if (!String(junction?.signal_id || "").trim()) return "Signal ID is required.";
+  if (!Array.isArray(junction.position) || !junction.position.slice(0, 2).every(Number.isFinite)) return "Place the junction on the map.";
+  const sectionIds = new Set((detail?.hd_map?.sections || []).map((section) => String(section.id)));
+  const activation = junction.activation_section_ids || [];
+  const release = junction.release_section_ids || [];
+  if (!activation.length) return "Select at least one activation section.";
+  if (!release.length) return "Select at least one release section.";
+  const unknown = [...new Set([...activation, ...release])].filter((id) => !sectionIds.has(String(id)));
+  if (unknown.length) return `Unknown section: ${unknown.join(", ")}`;
+  const overlap = activation.filter((id) => release.includes(id));
+  if (overlap.length) return `Activation and release overlap: ${overlap.join(", ")}`;
+  const knownRoutes = new Map(junctionRouteSuggestions(detail).map((route) => [route.id, route]));
+  for (const direction of ["left", "straight", "right"]) {
+    const routeId = String(junction.branches?.[direction] || "").trim();
+    if (!routeId) return `Assign the ${direction} route.`;
+    const route = knownRoutes.get(routeId);
+    if (!route) return `Unknown ${direction} route: ${routeId}`;
+    if (!route.eligible) return `${direction} route ${routeId} is unavailable${route.issue ? `: ${route.issue}` : "."}`;
+  }
+  const peers = state.junctionEditor.junctions.filter((item) => item !== junction);
+  if (peers.some((item) => item.id === junction.id)) return `Duplicate junction ID: ${junction.id}`;
+  if (peers.some((item) => item.signal_id === junction.signal_id)) return `Duplicate signal ID: ${junction.signal_id}`;
+  const duplicateActivation = peers.flatMap((item) => item.activation_section_ids || [])
+    .find((sectionId) => activation.includes(sectionId));
+  if (duplicateActivation) return `Activation section ${duplicateActivation} is used by another junction.`;
+  return "";
+}
+
+function junctionCollectionIssue(detail) {
+  for (const junction of state.junctionEditor.junctions) {
+    const issue = junctionIssue(junction, detail);
+    if (issue) return issue;
+  }
+  return "";
+}
+
+function toggleJunctionEditor() {
+  const detail = state.selectedMapDetail;
+  if (!detail) return;
+  ensureJunctionEditor(detail);
+  state.mapWorkspaceMode = "topology";
+  state.mapTopologyTool = "junctions";
+  state.junctionEditor.enabled = !state.junctionEditor.enabled;
+  if (state.junctionEditor.enabled) {
+    state.mapEditor.enabled = false;
+    state.customLineEditor.enabled = false;
+    state.sectionEditor.enabled = false;
+    state.mapLayers.centerline = true;
+    state.mapLayers.section_gates = true;
+    state.mapLayers.section_labels = false;
+    state.mapLayers.junctions = true;
+  } else {
+    state.junctionEditor.placing = false;
+    state.junctionEditor.dragging = false;
+  }
+  render();
+}
+
+function nextJunctionId(field = "junction") {
+  const used = new Set(state.junctionEditor.junctions.map((junction) => field === "signal" ? junction.signal_id : junction.id));
+  let index = 1;
+  while (used.has(`${field}_${String(index).padStart(3, "0")}`)) index += 1;
+  return `${field}_${String(index).padStart(3, "0")}`;
+}
+
+function junctionPositionForSection(detail, sectionId) {
+  const section = (detail?.hd_map?.sections || []).find((item) => item.id === sectionId);
+  const gate = (detail?.hd_map?.section_gates || []).find((item) => item.id === section?.end_gate_id);
+  if (gate?.line?.length >= 2) {
+    return [
+      (Number(gate.line[0][0]) + Number(gate.line[1][0])) * 0.5,
+      (Number(gate.line[0][1]) + Number(gate.line[1][1])) * 0.5,
+    ];
+  }
+  const lane = sectionEditorLane(detail);
+  return cloneMapPoint(lane?.centerline?.[0] || [0, 0]);
+}
+
+function createJunction() {
+  const detail = state.selectedMapDetail;
+  if (!detail || !state.junctionEditor.enabled) return;
+  const firstSection = detail.hd_map?.sections?.[0]?.id || "";
+  const junction = cloneJunction({
+    id: nextJunctionId("junction"),
+    signal_id: nextJunctionId("signal"),
+    position: junctionPositionForSection(detail, firstSection),
+    activation_section_ids: firstSection ? [firstSection] : [],
+    release_section_ids: [],
+    branches: { left: "", straight: "", right: "" },
+  });
+  state.junctionEditor.junctions.push(junction);
+  state.junctionEditor.selectedJunctionId = junction.id;
+  markJunctionEditorDirty();
+  state.junctionEditor.placing = true;
+  render();
+}
+
+function selectJunction(junctionId) {
+  state.junctionEditor.selectedJunctionId = junctionId;
+  state.junctionEditor.placing = false;
+  render();
+}
+
+function updateSelectedJunctionField(field, value) {
+  const junction = selectedJunction();
+  if (!junction || !state.junctionEditor.enabled) return;
+  const previousId = junction.id;
+  const nextValue = String(value || "").trim();
+  if (["id", "signal_id"].includes(field)) {
+    if (!nextValue || !/^[A-Za-z0-9_.-]+$/.test(nextValue)) {
+      toast(`${field === "id" ? "Junction" : "Signal"} ID may use letters, numbers, dots, dashes, and underscores.`, "error");
+      render();
+      return;
+    }
+    const key = field === "id" ? "id" : "signal_id";
+    if (state.junctionEditor.junctions.some((item) => item !== junction && item[key] === nextValue)) {
+      toast(`${field === "id" ? "Junction" : "Signal"} ID ${nextValue} is already in use.`, "error");
+      render();
+      return;
+    }
+  }
+  junction[field] = nextValue;
+  if (field === "id" && state.junctionEditor.selectedJunctionId === previousId) {
+    state.junctionEditor.selectedJunctionId = junction.id;
+  }
+  markJunctionEditorDirty();
+  render();
+}
+
+function updateSelectedJunctionPosition(axis, value) {
+  const junction = selectedJunction();
+  const number = Number(value);
+  if (!junction || !state.junctionEditor.enabled || !Number.isFinite(number) || ![0, 1].includes(axis)) return;
+  junction.position[axis] = number;
+  markJunctionEditorDirty();
+  render();
+}
+
+function snapSelectedJunctionToActivation() {
+  const detail = state.selectedMapDetail;
+  const junction = selectedJunction();
+  const sectionId = junction?.activation_section_ids?.[0];
+  if (!detail || !junction || !sectionId || !state.junctionEditor.enabled) return;
+  junction.position = junctionPositionForSection(detail, sectionId);
+  markJunctionEditorDirty();
+  state.junctionEditor.placing = false;
+  render();
+}
+
+function updateSelectedJunctionBranch(direction, value) {
+  const junction = selectedJunction();
+  if (!junction || !state.junctionEditor.enabled || !["left", "straight", "right"].includes(direction)) return;
+  junction.branches[direction] = String(value || "").trim();
+  markJunctionEditorDirty();
+  render();
+}
+
+function toggleJunctionSection(field, sectionId, checked) {
+  const junction = selectedJunction();
+  if (!junction || !state.junctionEditor.enabled || !["activation_section_ids", "release_section_ids"].includes(field)) return;
+  const values = new Set(junction[field] || []);
+  if (checked) values.add(sectionId); else values.delete(sectionId);
+  junction[field] = [...values];
+  if (field === "activation_section_ids" && checked) {
+    junction.release_section_ids = junction.release_section_ids.filter((id) => id !== sectionId);
+  } else if (field === "release_section_ids" && checked) {
+    junction.activation_section_ids = junction.activation_section_ids.filter((id) => id !== sectionId);
+  }
+  markJunctionEditorDirty();
+  render();
+}
+
+function toggleJunctionPlacement() {
+  if (!state.junctionEditor.enabled || !selectedJunction()) return;
+  state.junctionEditor.placing = !state.junctionEditor.placing;
+  render();
+}
+
+function deleteSelectedJunction() {
+  const selectedId = state.junctionEditor.selectedJunctionId;
+  if (!state.junctionEditor.enabled || !selectedId) return;
+  state.junctionEditor.junctions = state.junctionEditor.junctions.filter((junction) => junction.id !== selectedId);
+  state.junctionEditor.selectedJunctionId = "";
+  state.junctionEditor.placing = false;
+  markJunctionEditorDirty();
+  render();
+}
+
+async function saveJunctionsFromEditor() {
+  const detail = state.selectedMapDetail;
+  if (!detail) return;
+  const mapPath = detail.map.path;
+  const issue = junctionCollectionIssue(detail);
+  if (issue) {
+    toast(issue, "error");
+    return;
+  }
+  if (!confirmAction({
+    title: "Save junction topology?",
+    target: detail.map.path,
+    detail: `${state.junctionEditor.junctions.length} junction(s) will be written.`,
+  })) return;
+  if (!beginAction("junctions:save", "Saving junctions")) return;
+  const requestContext = captureSelectedMapContext(mapPath);
+  const editorRevision = Number(state.junctionEditor.revision || 0);
+  try {
+    const saved = await api("/api/maps/save-junctions", {
+      method: "POST",
+      body: JSON.stringify({
+        map_dir: mapPath,
+        junctions: state.junctionEditor.junctions,
+      }),
+    });
+    if (!commitSelectedMapDetail(requestContext, saved)) {
+      toast(`Junctions saved for ${shortName(mapPath)}; the current workspace was left unchanged.`);
+      return;
+    }
+    const hasNewerEdits = state.junctionEditor.mapPath === mapPath
+      && Number(state.junctionEditor.revision || 0) !== editorRevision;
+    if (!hasNewerEdits) {
+      ensureJunctionEditor(saved, { force: true });
+      state.junctionEditor.enabled = true;
+      state.junctionEditor.dirty = false;
+    } else {
+      state.junctionEditor.dirty = true;
+    }
+    if (!state.customLineEditor.dirty) ensureCustomLineEditor(saved, { force: true });
+    toast(hasNewerEdits ? "Junction snapshot saved; newer edits remain unsaved." : "Junctions saved");
+    render();
+  } catch (error) {
+    toast(`Junction save failed: ${error.message}`, "error");
+  } finally {
+    endAction("junctions:save", { renderAfter: state.tab === "maps" });
   }
 }
 
@@ -9649,6 +10565,30 @@ function editorLaneIssue(lane) {
   if ((lane.left_bound || []).length < boundPoints) return `Left needs ${boundPoints}`;
   if ((lane.right_bound || []).length < boundPoints) return `Right needs ${boundPoints}`;
   if ((lane.centerline || []).length < centerlinePoints) return `Center needs ${centerlinePoints}`;
+  return "";
+}
+
+function mapEditorLaneIssue(lane, primary) {
+  if (!lane) return "No lane";
+  if (!String(lane.id || "").trim() || !/^[A-Za-z0-9_.-]+$/.test(String(lane.id))) return "Invalid lane ID";
+  if (primary) return editorLaneIssue(lane);
+  const centerlinePoints = lane.closed_loop ? 3 : 2;
+  if ((lane.centerline || []).length < centerlinePoints) return `Center needs ${centerlinePoints}`;
+  return "";
+}
+
+function mapEditorCollectionIssue(editor = state.mapEditor) {
+  const lanes = editor.lanes || [];
+  if (!lanes.length) return "At least one lane is required";
+  const seen = new Set();
+  for (const lane of lanes) {
+    const laneId = String(lane.id || "");
+    if (seen.has(laneId)) return `Duplicate lane ID: ${laneId}`;
+    seen.add(laneId);
+    const issue = mapEditorLaneIssue(lane, laneId === editor.primaryLaneId);
+    if (issue) return `${laneId || "Lane"}: ${issue}`;
+  }
+  if (!seen.has(editor.primaryLaneId)) return "Primary lane is missing";
   return "";
 }
 
@@ -9715,10 +10655,13 @@ function toggleHdMapEditor() {
   ensureMapEditor(state.selectedMapDetail);
   state.mapEditor.enabled = !state.mapEditor.enabled;
   if (state.mapEditor.enabled) {
+    state.mapWorkspaceMode = "geometry";
     state.sectionEditor.enabled = false;
     state.sectionEditor.selectedGateId = "";
     state.customLineEditor.enabled = false;
     state.customLineEditor.draggingIndex = null;
+    state.junctionEditor.enabled = false;
+    state.junctionEditor.dragging = false;
   }
   state.mapEditor.selected = null;
   state.mapEditor.dragging = null;
@@ -9745,6 +10688,7 @@ function toggleEditorCenterline(checked) {
 
 function markMapEditorDirty() {
   state.mapEditor.dirty = true;
+  state.mapEditor.revision = Number(state.mapEditor.revision || 0) + 1;
   updateMapEditorChrome();
 }
 
@@ -9753,7 +10697,7 @@ function updateMapEditorChrome() {
   if (!detail || state.mapEditor.mapPath !== detail.map?.path) return;
   const lane = activeEditorLane();
   const rasterReady = mapEditorRasterReady(detail);
-  const issue = editorLaneIssue(lane);
+  const issue = mapEditorCollectionIssue();
   const selected = Boolean(state.mapEditor.selected);
   const status = $("map-editor-status");
   if (status) {
@@ -9811,16 +10755,16 @@ function mapCanvasFitScale(canvas, width, height) {
   const styles = window.getComputedStyle(shell);
   const paddingX = Number.parseFloat(styles.paddingLeft || "0") + Number.parseFloat(styles.paddingRight || "0");
   const paddingY = Number.parseFloat(styles.paddingTop || "0") + Number.parseFloat(styles.paddingBottom || "0");
-  const contentWidth = Math.max(260, shell.clientWidth - paddingX);
-  const contentHeight = Math.max(260, window.innerHeight * 0.68 - paddingY);
+  const contentWidth = Math.max(1, shell.clientWidth - paddingX);
+  const contentHeight = Math.max(160, window.innerHeight * 0.68 - paddingY);
   return Math.max(0.01, Math.min(contentWidth / width, contentHeight / height, 1));
 }
 
 function applyMapCanvasDisplay(canvas, width, height) {
   const fitScale = mapCanvasFitScale(canvas, width, height);
   const displayScale = fitScale * clampMapEditorZoom(state.mapEditor.zoom || 1);
-  canvas.style.width = `${Math.max(160, Math.round(width * displayScale))}px`;
-  canvas.style.height = `${Math.max(120, Math.round(height * displayScale))}px`;
+  canvas.style.width = `${Math.max(96, Math.round(width * displayScale))}px`;
+  canvas.style.height = `${Math.max(72, Math.round(height * displayScale))}px`;
 }
 
 function mapEditorAnchorFromPoint(clientX, clientY) {
@@ -9905,6 +10849,7 @@ function resetMapEditorZoom() {
 }
 
 function handleMapEditorWheel(event) {
+  if (mapEditorInteractionLocked()) return;
   if (!state.selectedMapDetail || state.mapEditor.mapPath !== state.selectedMapDetail.map?.path) return;
   if (!event.ctrlKey && !event.metaKey && !event.altKey) return;
   event.preventDefault();
@@ -10479,10 +11424,12 @@ function deleteNearestCustomLinePoint(event) {
 }
 
 function handleMapEditorPointerDown(event) {
+  if (mapEditorInteractionLocked()) return;
   if (state.customLineEditor.enabled) {
     handleCustomLinePointerDown(event);
     return;
   }
+  if (handleJunctionEditorPointerDown(event)) return;
   if (state.sectionEditor.enabled && handleSectionEditorPointerDown(event)) return;
   const detail = state.selectedMapDetail;
   if (!detail || !state.mapEditor.enabled || state.mapEditor.mapPath !== detail.map?.path) return;
@@ -10516,8 +11463,13 @@ function handleMapEditorPointerDown(event) {
 }
 
 function handleMapEditorPointerMove(event) {
+  if (mapEditorInteractionLocked()) return;
   if (state.customLineEditor.enabled) {
     handleCustomLinePointerMove(event);
+    return;
+  }
+  if (state.junctionEditor.enabled) {
+    handleJunctionEditorPointerMove(event);
     return;
   }
   const detail = state.selectedMapDetail;
@@ -10542,8 +11494,13 @@ function handleMapEditorPointerMove(event) {
 }
 
 function handleMapEditorPointerUp(event) {
+  if (mapEditorInteractionLocked()) return;
   if (state.customLineEditor.enabled) {
     handleCustomLinePointerUp(event);
+    return;
+  }
+  if (state.junctionEditor.enabled) {
+    handleJunctionEditorPointerUp(event);
     return;
   }
   if (!state.mapEditor.dragging) return;
@@ -10655,6 +11612,7 @@ function deleteNearestEditorPoint(event) {
 }
 
 function handleMapEditorDoubleClick(event) {
+  if (mapEditorInteractionLocked()) return;
   if (state.customLineEditor.enabled) {
     event.preventDefault();
     deleteNearestCustomLinePoint(event);
@@ -10663,6 +11621,10 @@ function handleMapEditorDoubleClick(event) {
   if (state.sectionEditor.enabled) {
     event.preventDefault();
     deleteSelectedSectionGate();
+    return;
+  }
+  if (state.junctionEditor.enabled) {
+    event.preventDefault();
     return;
   }
   if (!state.mapEditor.enabled) return;
@@ -10671,6 +11633,7 @@ function handleMapEditorDoubleClick(event) {
 }
 
 function handleMapEditorContextMenu(event) {
+  if (mapEditorInteractionLocked()) return;
   if (state.customLineEditor.enabled) {
     event.preventDefault();
     deleteNearestCustomLinePoint(event);
@@ -10679,6 +11642,10 @@ function handleMapEditorContextMenu(event) {
   if (state.sectionEditor.enabled) {
     event.preventDefault();
     deleteSelectedSectionGate();
+    return;
+  }
+  if (state.junctionEditor.enabled) {
+    event.preventDefault();
     return;
   }
   if (!state.mapEditor.enabled) return;
@@ -10690,8 +11657,8 @@ async function saveHdMapFromEditor() {
   const detail = state.selectedMapDetail;
   if (!detail) return;
   ensureMapEditor(detail);
-  const lane = activeEditorLane();
-  const issue = editorLaneIssue(lane);
+  const mapPath = detail.map.path;
+  const issue = mapEditorCollectionIssue();
   if (issue) {
     toast(issue, "error");
     return;
@@ -10704,27 +11671,38 @@ async function saveHdMapFromEditor() {
   })) return;
   if (!beginAction("hd-map:save", "Saving HD map")) return;
   const wasEnabled = state.mapEditor.enabled;
+  const requestContext = captureSelectedMapContext(mapPath);
+  const editorRevision = Number(state.mapEditor.revision || 0);
   try {
     const saved = await api("/api/maps/save-hd-map", {
       method: "POST",
       body: JSON.stringify({
-        map_dir: detail.map.path,
+        map_dir: mapPath,
         primary_lane_id: state.mapEditor.primaryLaneId,
         lanes: state.mapEditor.lanes,
       }),
     });
-    state.selectedMapDetail = saved;
-    state.selectedMapPath = saved.map.path;
-    const mapIndex = state.maps.findIndex((item) => item.path === saved.map.path);
-    if (mapIndex >= 0) state.maps[mapIndex] = saved.map;
-    ensureMapEditor(saved, { force: true });
-    state.mapEditor.enabled = wasEnabled;
-    state.mapEditor.dirty = false;
-    state.mapEditor.undoStack = [];
-    state.mapEditor.redoStack = [];
-    state.mapEditor.dragSnapshot = null;
+    if (!commitSelectedMapDetail(requestContext, saved)) {
+      toast(`HD map saved for ${shortName(mapPath)}; the current workspace was left unchanged.`);
+      return;
+    }
+    const hasNewerEdits = state.mapEditor.mapPath === mapPath
+      && Number(state.mapEditor.revision || 0) !== editorRevision;
+    if (!hasNewerEdits) {
+      ensureMapEditor(saved, { force: true });
+      state.mapEditor.enabled = wasEnabled;
+      state.mapEditor.dirty = false;
+      state.mapEditor.undoStack = [];
+      state.mapEditor.redoStack = [];
+      state.mapEditor.dragSnapshot = null;
+    } else {
+      state.mapEditor.dirty = true;
+    }
+    if (!state.sectionEditor.dirty) ensureSectionEditor(saved, { force: true });
+    if (!state.junctionEditor.dirty) ensureJunctionEditor(saved, { force: true });
+    if (!state.customLineEditor.dirty) ensureCustomLineEditor(saved, { force: true });
     invalidateMapPreflights(saved.map.path);
-    toast("HD map saved");
+    toast(hasNewerEdits ? "HD map snapshot saved; newer edits remain unsaved." : "HD map saved");
     render();
   } catch (error) {
     toast(`HD map save failed: ${error.message}`, "error");
@@ -10784,20 +11762,83 @@ async function runMapStage(stage, mapDir) {
   }
 }
 
-async function openMapWorkspace(path) {
+function unsavedMapEditLabels() {
+  const selectedPath = state.selectedMapPath || state.selectedMapDetail?.map?.path || "";
+  const editors = [
+    [state.mapEditor, "Geometry"],
+    [state.sectionEditor, "Section gates"],
+    [state.junctionEditor, "Junctions"],
+    [state.customLineEditor, "Driving line"],
+  ];
+  return editors
+    .filter(([editor]) => editor.dirty && (!selectedPath || !editor.mapPath || editor.mapPath === selectedPath))
+    .map(([, label]) => label);
+}
+
+function hasUnsavedMapEdits() {
+  return unsavedMapEditLabels().length > 0;
+}
+
+function confirmDiscardUnsavedMapEdits(action) {
+  const labels = unsavedMapEditLabels();
+  if (!labels.length) return true;
+  return confirmAction({
+    title: `Discard editor changes and ${action}?`,
+    target: state.selectedMapPath || "Current map",
+    detail: `Unsaved: ${labels.join(", ")}`,
+    destructive: true,
+  });
+}
+
+function syncMapEditorsFromDetail(detail) {
+  if (!detail?.map?.path) return;
+  ensureMapEditor(detail, { force: true });
+  ensureSectionEditor(detail, { force: true });
+  ensureJunctionEditor(detail, { force: true });
+  ensureCustomLineEditor(detail, { force: true });
+  state.mapEditor.enabled = false;
+  state.mapEditor.dragging = null;
+  state.sectionEditor.enabled = false;
+  state.junctionEditor.enabled = false;
+  state.junctionEditor.dragging = false;
+  state.junctionEditor.placing = false;
+  state.customLineEditor.enabled = false;
+  state.customLineEditor.draggingIndex = null;
+}
+
+async function openMapWorkspace(path, options = {}) {
+  if (!path) return;
+  const sameMap = state.selectedMapPath === path && state.selectedMapDetail?.map?.path === path;
+  if (sameMap && !options.force) {
+    state.tab = "maps";
+    render();
+    return;
+  }
+  if (!confirmDiscardUnsavedMapEdits(options.force ? "reload the map" : "open another map")) return;
+  const previousPath = state.selectedMapPath;
+  const previousDetail = state.selectedMapDetail;
+  const requestContext = beginSelectedMapContext(path);
   state.tab = "maps";
   state.selectedMapPath = path;
   state.selectedMapDetail = null;
   render();
   try {
     const detail = await api(apiPath("/api/maps/detail", { path }));
+    if (!selectedMapContextIsCurrent(requestContext)) return;
+    if (!commitSelectedMapDetail(requestContext, detail)) {
+      throw new Error("Map detail response did not match the requested map");
+    }
     syncRacelineDirectionFromDetail(detail);
-    state.selectedMapDetail = detail;
-    state.selectedMapPath = detail.map.path;
-    const index = state.maps.findIndex((item) => item.path === path || item.path === detail.map.path);
-    if (index >= 0) state.maps[index] = detail.map;
+    syncMapEditorsFromDetail(detail);
     render();
   } catch (error) {
+    if (!selectedMapContextIsCurrent(requestContext)) return;
+    const canRestorePrevious = Boolean(
+      previousPath && previousDetail?.map?.path === previousPath,
+    );
+    state.selectedMapPath = canRestorePrevious ? previousPath : null;
+    state.selectedMapDetail = canRestorePrevious ? previousDetail : null;
+    beginSelectedMapContext(canRestorePrevious ? previousPath : "");
     toast(`Map load failed: ${error.message}`, "error");
     render();
   }
@@ -10811,21 +11852,24 @@ function selectedMapReplacement(path) {
 
 async function refreshSelectedMapData(options = {}) {
   if (!state.selectedMapPath || selectedMapRefreshInFlight) return;
+  if (hasUnsavedMapEdits()) return;
   selectedMapRefreshInFlight = true;
+  const requestContext = beginSelectedMapContext(state.selectedMapPath);
   const preserveAnchor = options.preserveViewport ? mapEditorViewportCenterAnchor() : null;
   try {
     const maps = await api("/api/maps/local");
     state.maps = maps.maps || [];
-    const replacement = selectedMapReplacement(state.selectedMapPath);
-    if (replacement) state.selectedMapPath = replacement.path;
-    if (!state.selectedMapPath) return;
+    if (!selectedMapContextIsCurrent(requestContext)) return;
+    const replacement = selectedMapReplacement(requestContext.mapPath);
+    if (replacement) {
+      state.selectedMapPath = replacement.path;
+      requestContext.mapPath = replacement.path;
+    }
+    if (!requestContext.mapPath) return;
 
-    const detail = await api(apiPath("/api/maps/detail", { path: state.selectedMapPath }));
+    const detail = await api(apiPath("/api/maps/detail", { path: requestContext.mapPath }));
+    if (!commitSelectedMapDetail(requestContext, detail)) return;
     syncRacelineDirectionFromDetail(detail);
-    state.selectedMapDetail = detail;
-    state.selectedMapPath = detail.map.path;
-    const index = state.maps.findIndex((item) => item.path === detail.map.path);
-    if (index >= 0) state.maps[index] = detail.map;
 
     if (options.render === false) {
       updateTaskChrome();
@@ -10849,7 +11893,7 @@ async function refreshSelectedMapData(options = {}) {
 function refreshSelectedMap() {
   if (!state.selectedMapPath) return;
   invalidateMapPreflights(state.selectedMapPath);
-  return openMapWorkspace(state.selectedMapPath);
+  return openMapWorkspace(state.selectedMapPath, { force: true });
 }
 
 function toggleMapLayer(layer, checked) {
@@ -10929,27 +11973,48 @@ function drawGrid(ctx, width, height) {
   }
 }
 
+function canvasCssPixelScale(ctx) {
+  const canvas = ctx?.canvas;
+  if (!canvas) return 1;
+  const rect = canvas.getBoundingClientRect?.();
+  const cssWidth = Number(canvas.clientWidth) || Number(rect?.width);
+  const cssHeight = Number(canvas.clientHeight) || Number(rect?.height);
+  const scaleX = cssWidth > 0 ? canvas.width / cssWidth : NaN;
+  const scaleY = cssHeight > 0 ? canvas.height / cssHeight : NaN;
+  const scale = Math.max(
+    Number.isFinite(scaleX) && scaleX > 0 ? scaleX : 0,
+    Number.isFinite(scaleY) && scaleY > 0 ? scaleY : 0,
+  );
+  return scale > 0 ? Math.max(0.01, Math.min(100, scale)) : 1;
+}
+
 function drawMapLayers(ctx, detail, width, height) {
   const toPixel = mapPointProjector(detail, width, height);
+  const uiScale = canvasCssPixelScale(ctx);
   const editorLanes = editorLanesForDetail(detail);
   const lanes = editorLanes || detail.hd_map?.lanes || [];
   const showCenterline = state.mapLayers.centerline && (!editorLanes || state.mapEditor.showCenterline);
   if (state.mapLayers.odometry && detail.odometry?.points?.length) {
-    drawPolyline(ctx, detail.odometry.points.map(toPixel), "rgba(47, 128, 237, 0.86)", 2.5, false);
+    drawPolyline(ctx, detail.odometry.points.map(toPixel), "rgba(47, 128, 237, 0.86)", 2.5, false, uiScale);
   }
-  for (const lane of lanes) {
-    if (state.mapLayers.left_bound) drawPolyline(ctx, (lane.left_bound || []).map(toPixel), "#45c478", 3, lane.closed_loop);
-    if (state.mapLayers.right_bound) drawPolyline(ctx, (lane.right_bound || []).map(toPixel), "#d878d8", 3, lane.closed_loop);
-    if (showCenterline) drawPolyline(ctx, (lane.centerline || []).map(toPixel), "#e7c84b", lane.primary ? 4 : 2, lane.closed_loop);
+  const activeLaneId = editorLanes ? state.mapEditor.activeLaneId : "";
+  const orderedLanes = editorLanes
+    ? [...lanes.filter((lane) => lane.id !== activeLaneId), ...lanes.filter((lane) => lane.id === activeLaneId)]
+    : lanes;
+  for (const lane of orderedLanes) {
+    const active = !editorLanes || lane.id === activeLaneId;
+    if (state.mapLayers.left_bound) drawPolyline(ctx, (lane.left_bound || []).map(toPixel), active ? "#45c478" : "rgba(69, 196, 120, 0.20)", active ? 3 : 1.5, lane.closed_loop, uiScale);
+    if (state.mapLayers.right_bound) drawPolyline(ctx, (lane.right_bound || []).map(toPixel), active ? "#d878d8" : "rgba(216, 120, 216, 0.20)", active ? 3 : 1.5, lane.closed_loop, uiScale);
+    if (showCenterline) drawPolyline(ctx, (lane.centerline || []).map(toPixel), active ? "#e7c84b" : "rgba(231, 200, 75, 0.22)", active ? (lane.primary ? 4 : 3) : 1.5, lane.closed_loop, uiScale);
   }
   if (editorLanes) {
-    drawEditorPointHandles(ctx, detail, toPixel);
+    drawEditorPointHandles(ctx, detail, toPixel, uiScale);
   }
-  if (!editorLanes && state.mapLayers.centerline) {
-    drawPolyline(ctx, (detail.centerline_csv?.points || []).map(toPixel), "#5aa8ff", 2, false);
+  if (!editorLanes && state.mapLayers.centerline && !lanes.some((lane) => (lane.centerline || []).length >= 2)) {
+    drawPolyline(ctx, (detail.centerline_csv?.points || []).map(toPixel), "#5aa8ff", 2, false, uiScale);
   }
   if (state.mapLayers.raceline) {
-    drawPolyline(ctx, (detail.raceline_csv?.points || []).map(toPixel), "#ff6d6d", 3, false);
+    drawPolyline(ctx, (detail.raceline_csv?.points || []).map(toPixel), "#ff6d6d", 3, false, uiScale);
   }
   if (state.mapLayers.custom_line) {
     const customLines = customLinesForDrawing(detail);
@@ -10958,24 +12023,241 @@ function drawMapLayers(ctx, detail, width, height) {
     for (const line of customLines) {
       const selected = line.id === selectedId;
       const active = line.id === activeId || Boolean(line.active);
-      if (selected || active) drawCustomSpeedPolyline(ctx, line, toPixel, selected ? 4.5 : 3);
-      else drawPolyline(ctx, customLineCoordinates(line).map(toPixel), "rgba(87, 199, 194, 0.34)", 1.5, line.closed_loop);
+      if (selected || active) drawCustomSpeedPolyline(ctx, line, toPixel, selected ? 4.5 : 3, uiScale);
+      else drawPolyline(ctx, customLineCoordinates(line).map(toPixel), "rgba(87, 199, 194, 0.34)", 1.5, line.closed_loop, uiScale);
     }
-    drawCustomLinePointHandles(ctx, detail, toPixel);
+    drawCustomLinePointHandles(ctx, detail, toPixel, uiScale);
+  }
+  const directionMarker = mapDirectionMarker(detail, lanes);
+  if (directionMarker) {
+    drawStartDirectionMarker(ctx, directionMarker.points.map(toPixel), directionMarker.color, uiScale);
   }
   if (state.mapLayers.section_gates) {
     const gates = sectionGatesForDetail(detail) || detail.hd_map?.section_gates || [];
     for (const gate of gates) {
       const line = (gate.line || []).map(toPixel);
       const selected = state.sectionEditor.enabled && gate.id === state.sectionEditor.selectedGateId;
-      drawPolyline(ctx, line, selected ? "#57c7c2" : "#ffffff", selected ? 4 : 2, false);
-      if (state.mapLayers.section_labels && line.length >= 2) {
+      drawPolyline(ctx, line, selected ? "#57c7c2" : "#ffffff", selected ? 4 : 2, false, uiScale);
+      if ((state.mapLayers.section_labels || selected) && line.length >= 2) {
         const x = (line[0][0] + line[1][0]) * 0.5;
         const y = (line[0][1] + line[1][1]) * 0.5;
-        drawLabel(ctx, gate.id, x + 6, y - 6);
+        drawLabel(ctx, gate.id, x + 6 * uiScale, y - 6 * uiScale, uiScale);
       }
     }
   }
+  if (state.mapLayers.junctions) drawJunctionLayers(ctx, detail, toPixel, uiScale);
+}
+
+function mapDirectionMarker(detail, lanes) {
+  if (["routes", "review"].includes(state.mapWorkspaceMode) && state.mapLayers.custom_line) {
+    const lines = customLinesForDrawing(detail);
+    const selectedId = state.customLineEditor.mapPath === detail.map?.path
+      ? state.customLineEditor.selectedId
+      : "";
+    const activeId = activeCustomLineId(detail);
+    const line = lines.find((item) => item.id === selectedId)
+      || lines.find((item) => item.id === activeId || item.active);
+    const points = line ? customLineCoordinates(line) : [];
+    if (points.length >= 2) return { points, color: "#57c7c2" };
+  }
+  if (["routes", "review"].includes(state.mapWorkspaceMode) && state.mapLayers.raceline) {
+    const points = detail.raceline_csv?.points || [];
+    if (points.length >= 2) return { points, color: "#ff6d6d" };
+  }
+  if (state.mapLayers.centerline) {
+    const lane = state.mapEditor.enabled ? activeEditorLane() : lanes.find((item) => item.primary) || lanes[0];
+    const points = lane?.centerline || detail.centerline_csv?.points || [];
+    if (points.length >= 2) return { points, color: "#e7c84b" };
+  }
+  return null;
+}
+
+function drawStartDirectionMarker(ctx, points, color, uiScale = 1) {
+  const clean = points.filter((point) => Array.isArray(point) && point.every(Number.isFinite));
+  if (clean.length < 2) return;
+  const start = clean[0];
+  const next = clean.slice(1).find((point) => pointDistance(start, point) >= 8 * uiScale) || clean[1];
+  const dx = next[0] - start[0];
+  const dy = next[1] - start[1];
+  const length = Math.hypot(dx, dy);
+  if (!Number.isFinite(length) || length < 2 * uiScale) return;
+  const ux = dx / length;
+  const uy = dy / length;
+  const arrowLength = Math.min(26 * uiScale, Math.max(12 * uiScale, length * 0.72));
+  const tip = [start[0] + ux * arrowLength, start[1] + uy * arrowLength];
+  const head = 7 * uiScale;
+  ctx.save();
+  ctx.strokeStyle = "rgba(5, 8, 11, 0.84)";
+  ctx.lineWidth = 7 * uiScale;
+  ctx.beginPath();
+  ctx.moveTo(start[0], start[1]);
+  ctx.lineTo(tip[0], tip[1]);
+  ctx.stroke();
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  ctx.lineWidth = 3 * uiScale;
+  ctx.beginPath();
+  ctx.moveTo(start[0], start[1]);
+  ctx.lineTo(tip[0], tip[1]);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(tip[0], tip[1]);
+  ctx.lineTo(tip[0] - ux * head - uy * head * 0.62, tip[1] - uy * head + ux * head * 0.62);
+  ctx.lineTo(tip[0] - ux * head + uy * head * 0.62, tip[1] - uy * head - ux * head * 0.62);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = "#0b0d10";
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2 * uiScale;
+  ctx.beginPath();
+  ctx.arc(start[0], start[1], 5 * uiScale, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  drawLabel(ctx, "START", start[0] + 9 * uiScale, start[1] - 9 * uiScale, uiScale);
+  ctx.restore();
+}
+
+function junctionRoutePoints(detail, routeId) {
+  const id = String(routeId || "");
+  const lanes = detail?.hd_map?.lanes || [];
+  const primary = lanes.find((lane) => lane.primary) || lanes[0];
+  const lane = id === "primary" ? primary : lanes.find((item) => item.id === id);
+  if (lane?.centerline?.length) return lane.centerline;
+  if (id === "raceline") return detail?.raceline_csv?.points || [];
+  const line = customLinesForDrawing(detail).find((item) => item.id === id);
+  return line ? customLineCoordinates(line) : [];
+}
+
+function junctionBranchTarget(detail, junction, routeId) {
+  const points = junctionRoutePoints(detail, routeId);
+  if (points.length < 2) return null;
+  const origin = junction.position || [0, 0];
+  let nearest = 0;
+  let nearestDistance = Infinity;
+  for (let index = 0; index < points.length; index += 1) {
+    const distance = pointDistance(origin, points[index]);
+    if (distance < nearestDistance) {
+      nearest = index;
+      nearestDistance = distance;
+    }
+  }
+  const minimumArrowLengthM = 1.4;
+  for (let offset = 1; offset < points.length; offset += 1) {
+    const index = Math.min(points.length - 1, nearest + offset);
+    if (pointDistance(origin, points[index]) >= minimumArrowLengthM) return points[index];
+    if (index === points.length - 1) break;
+  }
+  for (let offset = 1; offset < points.length; offset += 1) {
+    const index = Math.max(0, nearest - offset);
+    if (pointDistance(origin, points[index]) >= minimumArrowLengthM) return points[index];
+    if (index === 0) break;
+  }
+  return points[nearest];
+}
+
+function drawCanvasArrow(ctx, start, end, color, label, uiScale = 1) {
+  const dx = end[0] - start[0];
+  const dy = end[1] - start[1];
+  const length = Math.hypot(dx, dy);
+  if (!Number.isFinite(length) || length < 8 * uiScale) return;
+  const ux = dx / length;
+  const uy = dy / length;
+  const tip = [end[0], end[1]];
+  const head = 8 * uiScale;
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  ctx.lineWidth = 2.5 * uiScale;
+  ctx.setLineDash([7 * uiScale, 5 * uiScale]);
+  ctx.beginPath();
+  ctx.moveTo(start[0], start[1]);
+  ctx.lineTo(tip[0], tip[1]);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.beginPath();
+  ctx.moveTo(tip[0], tip[1]);
+  ctx.lineTo(tip[0] - ux * head - uy * head * 0.55, tip[1] - uy * head + ux * head * 0.55);
+  ctx.lineTo(tip[0] - ux * head + uy * head * 0.55, tip[1] - uy * head - ux * head * 0.55);
+  ctx.closePath();
+  ctx.fill();
+  drawLabel(
+    ctx,
+    label,
+    start[0] + dx * 0.62 + 4 * uiScale,
+    start[1] + dy * 0.62 - 4 * uiScale,
+    uiScale,
+  );
+  ctx.restore();
+}
+
+function drawJunctionSectionGateHighlights(ctx, detail, junction, toPixel, uiScale = 1) {
+  const sections = detail?.hd_map?.sections || [];
+  const gates = detail?.hd_map?.section_gates || [];
+  const drawForSections = (ids, color) => {
+    const gateIds = new Set();
+    for (const section of sections) {
+      if (!ids.includes(section.id)) continue;
+      gateIds.add(section.start_gate_id);
+      gateIds.add(section.end_gate_id);
+    }
+    for (const gate of gates) {
+      if (!gateIds.has(gate.id)) continue;
+      drawPolyline(ctx, (gate.line || []).map(toPixel), color, 4, false, uiScale);
+    }
+  };
+  drawForSections(junction.activation_section_ids || [], "rgba(255, 181, 82, 0.95)");
+  drawForSections(junction.release_section_ids || [], "rgba(87, 199, 194, 0.92)");
+}
+
+function drawJunctionLayers(ctx, detail, toPixel, uiScale = 1) {
+  const junctions = junctionsForDetail(detail);
+  const showSelection = state.mapWorkspaceMode === "topology" && state.mapTopologyTool === "junctions";
+  const selectedId = showSelection ? state.junctionEditor.selectedJunctionId : "";
+  const selected = junctions.find((junction) => junction.id === selectedId);
+  if (selected) drawJunctionSectionGateHighlights(ctx, detail, selected, toPixel, uiScale);
+  for (const junction of junctions) {
+    if (junction === selected) continue;
+    drawJunctionMarker(ctx, junction, toPixel, false, uiScale);
+  }
+  if (!selected) return;
+  const start = toPixel(selected.position || [0, 0]);
+  const branches = [
+    ["left", "L", "#ffb552"],
+    ["straight", "S", "#5aa8ff"],
+    ["right", "R", "#d878d8"],
+  ];
+  for (const [direction, label, color] of branches) {
+    const target = junctionBranchTarget(detail, selected, selected.branches?.[direction]);
+    if (target) drawCanvasArrow(ctx, start, toPixel(target), color, label, uiScale);
+  }
+  drawJunctionMarker(ctx, selected, toPixel, true, uiScale);
+}
+
+function drawJunctionMarker(ctx, junction, toPixel, selected, uiScale = 1) {
+  const [x, y] = toPixel(junction.position || [0, 0]);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+  const radius = (selected ? 9 : 6) * uiScale;
+  ctx.save();
+  if (selected) {
+    ctx.strokeStyle = "rgba(87, 199, 194, 0.42)";
+    ctx.lineWidth = 8 * uiScale;
+    ctx.beginPath();
+    ctx.arc(x, y, 12 * uiScale, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  ctx.fillStyle = selected ? "#57c7c2" : "#ffb552";
+  ctx.strokeStyle = "#0b0d10";
+  ctx.lineWidth = 2 * uiScale;
+  ctx.beginPath();
+  ctx.moveTo(x, y - radius);
+  ctx.lineTo(x + radius, y);
+  ctx.lineTo(x, y + radius);
+  ctx.lineTo(x - radius, y);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  if (selected) drawLabel(ctx, junction.id, x + 12 * uiScale, y - 12 * uiScale, uiScale);
+  ctx.restore();
 }
 
 function customLineSpeedColor(speed, maxSpeed) {
@@ -10984,13 +12266,13 @@ function customLineSpeedColor(speed, maxSpeed) {
   return `hsl(${hue.toFixed(0)} 88% 62%)`;
 }
 
-function drawCustomSpeedPolyline(ctx, line, toPixel, width = 4) {
+function drawCustomSpeedPolyline(ctx, line, toPixel, width = 4, uiScale = 1) {
   const points = line?.points || [];
   if (points.length < 2) return;
   const maxSpeed = Math.max(DEFAULT_RACELINE_MAX_SPEED_MPS, ...points.map((point) => Number(point.speed_mps) || 0));
   const segmentCount = line.closed_loop && points.length >= 3 ? points.length : points.length - 1;
   ctx.save();
-  ctx.lineWidth = width;
+  ctx.lineWidth = width * uiScale;
   ctx.lineJoin = "round";
   ctx.lineCap = "round";
   for (let index = 0; index < segmentCount; index += 1) {
@@ -11008,13 +12290,13 @@ function drawCustomSpeedPolyline(ctx, line, toPixel, width = 4) {
   if (first.every(Number.isFinite)) {
     ctx.fillStyle = customLineSpeedColor(points[0].speed_mps, maxSpeed);
     ctx.beginPath();
-    ctx.arc(first[0], first[1], Math.max(4, width + 1), 0, Math.PI * 2);
+    ctx.arc(first[0], first[1], Math.max(4, width + 1) * uiScale, 0, Math.PI * 2);
     ctx.fill();
   }
   ctx.restore();
 }
 
-function drawCustomLinePointHandles(ctx, detail, toPixel) {
+function drawCustomLinePointHandles(ctx, detail, toPixel, uiScale = 1) {
   const editor = state.customLineEditor;
   const line = editor.workingLine;
   if (!editor.enabled || editor.mapPath !== detail?.map?.path || !line) return;
@@ -11027,16 +12309,16 @@ function drawCustomLinePointHandles(ctx, detail, toPixel) {
     const selected = editor.selectedPointIndex === index;
     ctx.fillStyle = customLineSpeedColor(point.speed_mps, maxSpeed);
     ctx.strokeStyle = selected ? "#ffffff" : "rgba(8, 10, 12, 0.9)";
-    ctx.lineWidth = selected ? 3 : 2;
+    ctx.lineWidth = (selected ? 3 : 2) * uiScale;
     ctx.beginPath();
-    ctx.arc(x, y, selected ? 6.5 : 4.5, 0, Math.PI * 2);
+    ctx.arc(x, y, (selected ? 6.5 : 4.5) * uiScale, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
   }
   ctx.restore();
 }
 
-function drawEditorPointHandles(ctx, detail, toPixel) {
+function drawEditorPointHandles(ctx, detail, toPixel, uiScale = 1) {
   if (!state.mapEditor.enabled || state.mapEditor.mapPath !== detail?.map?.path) return;
   const lane = activeEditorLane();
   const selected = state.mapEditor.selected;
@@ -11055,8 +12337,8 @@ function drawEditorPointHandles(ctx, detail, toPixel) {
       ctx.beginPath();
       ctx.fillStyle = color;
       ctx.strokeStyle = isSelected ? "#ffffff" : "rgba(8, 10, 12, 0.86)";
-      ctx.lineWidth = isSelected ? 3 : 2;
-      ctx.arc(x, y, isSelected ? 6 : 4.5, 0, Math.PI * 2);
+      ctx.lineWidth = (isSelected ? 3 : 2) * uiScale;
+      ctx.arc(x, y, (isSelected ? 6 : 4.5) * uiScale, 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
     }
@@ -11064,12 +12346,12 @@ function drawEditorPointHandles(ctx, detail, toPixel) {
   ctx.restore();
 }
 
-function drawPolyline(ctx, points, color, width, closed) {
+function drawPolyline(ctx, points, color, width, closed, uiScale = 1) {
   const clean = points.filter((point) => Array.isArray(point) && Number.isFinite(point[0]) && Number.isFinite(point[1]));
   if (clean.length < 2) return;
   ctx.save();
   ctx.strokeStyle = color;
-  ctx.lineWidth = width;
+  ctx.lineWidth = width * uiScale;
   ctx.lineJoin = "round";
   ctx.lineCap = "round";
   ctx.beginPath();
@@ -11079,17 +12361,17 @@ function drawPolyline(ctx, points, color, width, closed) {
   ctx.stroke();
   ctx.fillStyle = color;
   ctx.beginPath();
-  ctx.arc(clean[0][0], clean[0][1], Math.max(3, width + 1), 0, Math.PI * 2);
+  ctx.arc(clean[0][0], clean[0][1], Math.max(3, width + 1) * uiScale, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
 }
 
-function drawLabel(ctx, text, x, y) {
+function drawLabel(ctx, text, x, y, uiScale = 1) {
   ctx.save();
-  ctx.font = "12px ui-sans-serif, system-ui";
+  ctx.font = `${12 * uiScale}px ui-sans-serif, system-ui`;
   const metrics = ctx.measureText(text);
   ctx.fillStyle = "rgba(8, 10, 12, 0.78)";
-  ctx.fillRect(x - 4, y - 15, metrics.width + 8, 19);
+  ctx.fillRect(x - 4 * uiScale, y - 15 * uiScale, metrics.width + 8 * uiScale, 19 * uiScale);
   ctx.fillStyle = "#f2f5f8";
   ctx.fillText(text, x, y);
   ctx.restore();
@@ -12146,7 +13428,7 @@ setInterval(() => {
 }, 2000);
 
 window.addEventListener("keydown", (event) => {
-  if (state.tab !== "maps" || isEditingField()) return;
+  if (state.tab !== "maps" || isEditingField() || mapEditorInteractionLocked()) return;
   const key = String(event.key || "").toLowerCase();
   if (state.customLineEditor.enabled) {
     if ((event.metaKey || event.ctrlKey) && key === "z") {
@@ -12176,14 +13458,30 @@ window.addEventListener("keydown", (event) => {
   }
 });
 
-window.addEventListener("beforeunload", () => {
-  if (!state.fpv.starting && !fpvReceiverCanAutoStop(state.fpv.browserStatus)) return;
-  const sessionId = state.fpv.browserStatus?.session_id || "";
-  closeFpvPeerConnection();
-  if (!sessionId || !navigator.sendBeacon) return;
-  const body = new Blob(
-    [JSON.stringify({ session_id: sessionId })],
-    { type: "application/json" },
-  );
-  navigator.sendBeacon("/api/fpv/stop", body);
+let mapResizeFrame = null;
+window.addEventListener("resize", () => {
+  if (mapResizeFrame != null) cancelAnimationFrame(mapResizeFrame);
+  mapResizeFrame = requestAnimationFrame(() => {
+    mapResizeFrame = null;
+    drawMapPreview();
+    drawSimulationPreview();
+  });
+});
+
+window.addEventListener("beforeunload", (event) => {
+  if (state.fpv.starting || fpvReceiverCanAutoStop(state.fpv.browserStatus)) {
+    const sessionId = state.fpv.browserStatus?.session_id || "";
+    closeFpvPeerConnection();
+    if (sessionId && navigator.sendBeacon) {
+      const body = new Blob(
+        [JSON.stringify({ session_id: sessionId })],
+        { type: "application/json" },
+      );
+      navigator.sendBeacon("/api/fpv/stop", body);
+    }
+  }
+  if (hasUnsavedMapEdits()) {
+    event.preventDefault();
+    event.returnValue = "";
+  }
 });

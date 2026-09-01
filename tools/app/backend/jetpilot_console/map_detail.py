@@ -37,6 +37,7 @@ CUSTOM_LINE_DEFAULT_MAX_SPEED_MPS = 3.0
 CUSTOM_LINE_DEFAULT_LATERAL_ACCEL_LIMIT_MPS2 = 2.5
 CUSTOM_LINE_DEFAULT_ACCEL_LIMIT_MPS2 = 1.5
 CUSTOM_LINE_DEFAULT_DECEL_LIMIT_MPS2 = 2.5
+COMPETITION_ROUTE_CONFIG_FILE = "competition_route.param.yaml"
 
 
 def _is_relative_to(path: Path, root: Path) -> bool:
@@ -77,6 +78,42 @@ def _strip_comment(line: str) -> str:
     return line
 
 
+def _split_inline_yaml_values(value: str) -> list[str]:
+    values: list[str] = []
+    current: list[str] = []
+    quote = ""
+    escaped = False
+    depth = 0
+    for char in value:
+        if escaped:
+            current.append(char)
+            escaped = False
+            continue
+        if char == "\\" and quote:
+            current.append(char)
+            escaped = True
+            continue
+        if char in {"'", '"'}:
+            if quote == char:
+                quote = ""
+            elif not quote:
+                quote = char
+            current.append(char)
+            continue
+        if not quote:
+            if char in "[({":
+                depth += 1
+            elif char in "])}" and depth > 0:
+                depth -= 1
+            elif char == "," and depth == 0:
+                values.append("".join(current).strip())
+                current = []
+                continue
+        current.append(char)
+    values.append("".join(current).strip())
+    return values
+
+
 def _clean_scalar(value: str) -> Any:
     text = value.strip()
     if text == "":
@@ -89,12 +126,20 @@ def _clean_scalar(value: str) -> Any:
     if lowered == "false":
         return False
     if len(text) >= 2 and text[0] == text[-1] and text[0] in {"'", '"'}:
+        if text[0] == '"':
+            try:
+                return json.loads(text)
+            except (json.JSONDecodeError, TypeError):
+                pass
         return text[1:-1]
     if text.startswith("[") and text.endswith("]"):
         try:
             return literal_eval(text)
         except (SyntaxError, ValueError):
-            return text
+            inner = text[1:-1].strip()
+            if not inner:
+                return []
+            return [_clean_scalar(item) for item in _split_inline_yaml_values(inner)]
     try:
         if any(char in text for char in ".eE"):
             return float(text)
@@ -420,6 +465,42 @@ def _append_preserved_sections(lines: list[str], sections: Any) -> None:
             lines.append(f"  - id: {_quote_yaml_string(f'section_{index:03d}')}")
 
 
+def _append_preserved_junctions(lines: list[str], junctions: Any) -> None:
+    if not isinstance(junctions, list) or not junctions:
+        return
+    lines.append("junctions:")
+    for index, junction in enumerate(junctions, start=1):
+        if not isinstance(junction, dict):
+            continue
+        junction_id = _sanitize_id(str(junction.get("id") or ""), f"junction_{index:03d}")
+        signal_id = _sanitize_id(str(junction.get("signal_id") or ""), f"signal_{index:03d}")
+        sections = junction.get("activation_section_ids", [])
+        if not isinstance(sections, list):
+            sections = []
+        release_sections = junction.get("release_section_ids", [])
+        if not isinstance(release_sections, list):
+            release_sections = []
+        branches = junction.get("branches", {})
+        if not isinstance(branches, dict):
+            branches = {}
+        lines.append(f"  - id: {_quote_yaml_string(junction_id)}")
+        lines.append(f"    signal_id: {_quote_yaml_string(signal_id)}")
+        position = _as_point(junction.get("position")) or [0.0, 0.0]
+        lines.append(
+            f"    position: [{_fmt_float(position[0])}, {_fmt_float(position[1])}, 0.0]"
+        )
+        section_values = ", ".join(_quote_yaml_string(str(value)) for value in sections if str(value))
+        lines.append(f"    activation_section_ids: [{section_values}]")
+        release_values = ", ".join(
+            _quote_yaml_string(str(value)) for value in release_sections if str(value)
+        )
+        lines.append(f"    release_section_ids: [{release_values}]")
+        lines.append("    branches:")
+        lines.append(f"      left: {_quote_yaml_string(str(branches.get('left') or ''))}")
+        lines.append(f"      straight: {_quote_yaml_string(str(branches.get('straight') or ''))}")
+        lines.append(f"      right: {_quote_yaml_string(str(branches.get('right') or ''))}")
+
+
 def _write_hd_map_yaml(
     output_path: Path,
     raster: dict[str, Any],
@@ -428,6 +509,7 @@ def _write_hd_map_yaml(
     centerline_csv_path: Path,
     previous_data: dict[str, Any],
 ) -> None:
+    output_mode = output_path.stat().st_mode & 0o777 if output_path.exists() else 0o644
     origin = raster.get("origin_xy_yaw") or [0.0, 0.0, 0.0]
     lines = [
         "format: tamiya_local_hd_map_v1",
@@ -462,7 +544,30 @@ def _write_hd_map_yaml(
         _append_world_points(lines, "centerline", lane["centerline"])
     _append_preserved_section_gates(lines, previous_data.get("section_gates"))
     _append_preserved_sections(lines, previous_data.get("sections"))
-    output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    _append_preserved_junctions(lines, previous_data.get("junctions"))
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=output_path.parent,
+            prefix=f".{output_path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary_path = Path(handle.name)
+            handle.write("\n".join(lines) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary_path, output_mode)
+        os.replace(temporary_path, output_path)
+    finally:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink()
+            except FileNotFoundError:
+                pass
 
 
 def _write_centerline_csv(path: Path, lane: dict[str, Any]) -> None:
@@ -541,6 +646,239 @@ def _payload_section_gates(value: Any, lane_ids: set[str]) -> list[dict[str, Any
             }
         )
     return sorted(gates, key=lambda gate: (str(gate["lane_id"]), float(gate["s_m"]), str(gate["id"])))
+
+
+def _string_id_list(value: Any, field_name: str) -> list[str]:
+    if not isinstance(value, list):
+        raise ValueError(f"{field_name} must be a list")
+    output: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        raw = str(item or "").strip()
+        if not raw:
+            continue
+        normalized = _sanitize_id(raw, "")
+        if not normalized:
+            raise ValueError(f"{field_name} contains an invalid ID")
+        if normalized not in seen:
+            seen.add(normalized)
+            output.append(normalized)
+    return output
+
+
+def _junction_default_position(
+    activation_section_ids: list[str],
+    sections: list[dict[str, Any]],
+    gates: list[dict[str, Any]],
+    lanes: list[dict[str, Any]],
+) -> list[float]:
+    section_by_id = {str(section.get("id") or ""): section for section in sections}
+    gate_by_id = {str(gate.get("id") or ""): gate for gate in gates}
+    for section_id in activation_section_ids:
+        section = section_by_id.get(section_id)
+        gate = gate_by_id.get(str(section.get("end_gate_id") or "")) if section else None
+        line = _as_points(gate.get("line"))[:2] if gate else []
+        if len(line) == 2:
+            return [0.5 * (line[0][0] + line[1][0]), 0.5 * (line[0][1] + line[1][1])]
+    for lane in lanes:
+        centerline = _as_points(lane.get("centerline"))
+        if centerline:
+            return list(centerline[0])
+    return [0.0, 0.0]
+
+
+def _payload_junctions(
+    value: Any,
+    sections: list[dict[str, Any]],
+    gates: list[dict[str, Any]],
+    lanes: list[dict[str, Any]],
+    known_route_ids: set[str],
+) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        raise ValueError("junctions must be a list")
+    section_ids = {str(section.get("id") or "") for section in sections}
+    used_junction_ids: set[str] = set()
+    used_signal_ids: set[str] = set()
+    activation_owners: dict[str, str] = {}
+    junctions: list[dict[str, Any]] = []
+    for index, raw_junction in enumerate(value, start=1):
+        if not isinstance(raw_junction, dict):
+            raise ValueError(f"junctions[{index - 1}] must be an object")
+        junction_id = _sanitize_id(str(raw_junction.get("id") or ""), "")
+        signal_id = _sanitize_id(str(raw_junction.get("signal_id") or ""), "")
+        if not junction_id:
+            raise ValueError(f"junctions[{index - 1}].id is required")
+        if not signal_id:
+            raise ValueError(f"junction {junction_id} requires signal_id")
+        if junction_id in used_junction_ids:
+            raise ValueError(f"duplicate junction ID: {junction_id}")
+        if signal_id in used_signal_ids:
+            raise ValueError(f"duplicate signal ID: {signal_id}")
+        used_junction_ids.add(junction_id)
+        used_signal_ids.add(signal_id)
+
+        activation = _string_id_list(
+            raw_junction.get("activation_section_ids"),
+            f"junction {junction_id} activation_section_ids",
+        )
+        release = _string_id_list(
+            raw_junction.get("release_section_ids", []),
+            f"junction {junction_id} release_section_ids",
+        )
+        if not activation:
+            raise ValueError(f"junction {junction_id} requires at least one activation section")
+        if not release:
+            raise ValueError(f"junction {junction_id} requires at least one release section")
+        unknown_sections = sorted((set(activation) | set(release)) - section_ids)
+        if unknown_sections:
+            raise ValueError(
+                f"junction {junction_id} references unknown section(s): {', '.join(unknown_sections)}"
+            )
+        overlap = sorted(set(activation) & set(release))
+        if overlap:
+            raise ValueError(
+                f"junction {junction_id} uses section(s) for both activation and release: {', '.join(overlap)}"
+            )
+        for section_id in activation:
+            owner = activation_owners.get(section_id)
+            if owner:
+                raise ValueError(
+                    f"activation section {section_id} is already assigned to junction {owner}"
+                )
+            activation_owners[section_id] = junction_id
+
+        branches = raw_junction.get("branches")
+        if not isinstance(branches, dict):
+            raise ValueError(f"junction {junction_id} branches must be an object")
+        normalized_branches: dict[str, str] = {}
+        for direction in ("left", "straight", "right"):
+            route_id = _sanitize_id(str(branches.get(direction) or ""), "")
+            if not route_id:
+                raise ValueError(f"junction {junction_id} requires a {direction} route")
+            if route_id not in known_route_ids:
+                raise ValueError(
+                    f"junction {junction_id} references unknown {direction} route: {route_id}"
+                )
+            normalized_branches[direction] = route_id
+
+        raw_position = raw_junction.get("position")
+        if raw_position is None:
+            position = _junction_default_position(activation, sections, gates, lanes)
+        else:
+            parsed_positions = _payload_points([raw_position])
+            if not parsed_positions:
+                raise ValueError(f"junction {junction_id} position must contain finite x/y values")
+            position = parsed_positions[0]
+
+        junctions.append(
+            {
+                "id": junction_id,
+                "signal_id": signal_id,
+                "position": position,
+                "activation_section_ids": activation,
+                "release_section_ids": release,
+                "branches": normalized_branches,
+            }
+        )
+    return junctions
+
+
+def _custom_line_junction_route_issue(item: dict[str, Any]) -> str:
+    if not bool(item.get("valid")):
+        detail = str(item.get("issue") or "").strip()
+        return detail or "custom line is invalid"
+    if item.get("source_stale") is True:
+        return "custom line source has changed; update the line before using it as a branch"
+    if bool(item.get("section_layout_stale")):
+        return "custom line section layout is stale; update the line before using it as a branch"
+    return ""
+
+
+def _junction_route_catalog(
+    map_dir: Path,
+    lane_ids: set[str],
+    custom_line_catalog: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = [
+        {"id": lane_id, "kind": "lane", "eligible": True, "issue": ""}
+        for lane_id in sorted(lane_ids)
+        if lane_id
+    ]
+    if "primary" not in lane_ids:
+        entries.append({"id": "primary", "kind": "lane_alias", "eligible": True, "issue": ""})
+    if (map_dir / f"{map_dir.name}_raceline.csv").is_file():
+        entries.append({"id": "raceline", "kind": "raceline", "eligible": True, "issue": ""})
+
+    catalog = custom_line_catalog if custom_line_catalog is not None else _read_custom_lines(map_dir)
+    for item in catalog.get("items", []):
+        if not isinstance(item, dict):
+            continue
+        route_id = str(item.get("id") or "")
+        if not route_id:
+            continue
+        issue = _custom_line_junction_route_issue(item)
+        entries.append(
+            {
+                "id": route_id,
+                "kind": "custom_line",
+                "eligible": not issue,
+                "issue": issue,
+            }
+        )
+    return entries
+
+
+def _known_junction_route_ids(
+    map_dir: Path,
+    lane_ids: set[str],
+    custom_line_catalog: dict[str, Any] | None = None,
+) -> set[str]:
+    return {
+        str(item["id"])
+        for item in _junction_route_catalog(map_dir, lane_ids, custom_line_catalog)
+        if item.get("eligible") and str(item.get("id") or "")
+    }
+
+
+def _validated_hd_topology(
+    map_dir: Path,
+    previous_data: dict[str, Any],
+    lanes: list[dict[str, Any]],
+) -> dict[str, Any]:
+    lane_ids = {str(lane.get("id") or "") for lane in lanes}
+    gates = [gate for gate in previous_data.get("section_gates", []) if isinstance(gate, dict)]
+    gate_ids = {str(gate.get("id") or "") for gate in gates}
+    for gate in gates:
+        lane_id = str(gate.get("lane_id") or "")
+        if lane_id and lane_id not in lane_ids:
+            raise ValueError(
+                f"section gate {gate.get('id') or '<unnamed>'} references unknown lane: {lane_id}"
+            )
+
+    sections = [
+        section for section in previous_data.get("sections", []) if isinstance(section, dict)
+    ]
+    for section in sections:
+        section_id = str(section.get("id") or "<unnamed>")
+        lane_id = str(section.get("lane_id") or "")
+        if lane_id and lane_id not in lane_ids:
+            raise ValueError(f"section {section_id} references unknown lane: {lane_id}")
+        for field_name in ("start_gate_id", "end_gate_id"):
+            gate_id = str(section.get(field_name) or "")
+            if gate_id and gate_id not in gate_ids:
+                raise ValueError(
+                    f"section {section_id} references unknown {field_name}: {gate_id}"
+                )
+
+    validated = dict(previous_data)
+    validated["junctions"] = _payload_junctions(
+        previous_data.get("junctions", []),
+        sections,
+        gates,
+        lanes,
+        _known_junction_route_ids(map_dir, lane_ids),
+    )
+    return validated
 
 
 def _section_preserve_key(section: dict[str, Any]) -> tuple[str, str, str]:
@@ -688,7 +1026,7 @@ def _raster_from_map_yaml(map_yaml_path: Path) -> dict[str, Any] | None:
 
 def _read_hd_map(path: Path) -> tuple[dict[str, Any], dict[str, Any] | None]:
     if not path.exists():
-        return {"exists": False, "lanes": [], "section_gates": [], "sections": []}, None
+        return {"exists": False, "lanes": [], "section_gates": [], "sections": [], "junctions": []}, None
     data = load_yaml(path)
     primary_lane_id = str(data.get("primary_lane_id") or "")
     lanes = []
@@ -745,6 +1083,38 @@ def _read_hd_map(path: Path) -> tuple[dict[str, Any], dict[str, Any] | None]:
             }
         )
 
+    junctions = []
+    for raw_junction in data.get("junctions", []) or []:
+        if not isinstance(raw_junction, dict):
+            continue
+        branches = raw_junction.get("branches", {})
+        activation_sections = raw_junction.get("activation_section_ids", [])
+        if not isinstance(activation_sections, list):
+            activation_sections = []
+        release_sections = raw_junction.get("release_section_ids", [])
+        if not isinstance(release_sections, list):
+            release_sections = []
+        activation_section_ids = [str(value) for value in activation_sections]
+        raw_position = raw_junction.get("position")
+        position = _as_point(raw_position) if raw_position is not None else None
+        if position is None:
+            position = _junction_default_position(
+                activation_section_ids,
+                sections,
+                gates,
+                lanes,
+            )
+        junctions.append(
+            {
+                "id": str(raw_junction.get("id") or f"junction_{len(junctions) + 1:03d}"),
+                "signal_id": str(raw_junction.get("signal_id") or ""),
+                "position": position,
+                "activation_section_ids": activation_section_ids,
+                "release_section_ids": [str(value) for value in release_sections],
+                "branches": dict(branches) if isinstance(branches, dict) else {},
+            }
+        )
+
     return (
         {
             "exists": True,
@@ -753,6 +1123,7 @@ def _read_hd_map(path: Path) -> tuple[dict[str, Any], dict[str, Any] | None]:
             "lanes": lanes,
             "section_gates": gates,
             "sections": sections,
+            "junctions": junctions,
         },
         _raster_from_hd_map(path, data),
     )
@@ -2779,6 +3150,21 @@ def delete_custom_line(config: ConsoleConfig, payload: dict[str, Any]) -> dict[s
     line_dir = _custom_line_path(map_dir, custom_line_id)
     if not line_dir.exists() or not line_dir.is_dir():
         raise FileNotFoundError(f"custom line not found: {custom_line_id}")
+    hd_map_path = map_dir / f"{map_dir.name}_hd_map.yaml"
+    if hd_map_path.is_file():
+        hd_data = load_yaml(hd_map_path)
+        for junction in hd_data.get("junctions", []) or []:
+            if not isinstance(junction, dict):
+                continue
+            branches = junction.get("branches", {})
+            if isinstance(branches, dict) and custom_line_id in {
+                str(branches.get(direction) or "")
+                for direction in ("left", "straight", "right")
+            }:
+                raise ValueError(
+                    f"custom line {custom_line_id} is referenced by junction "
+                    f"{junction.get('id') or '<unnamed>'}"
+                )
     active_id, _ = _canonical_custom_line_active(map_dir)
     canonical = _canonical_custom_line_paths(map_dir)
     canonical_meta = _read_json_file(canonical["meta"])
@@ -2864,7 +3250,11 @@ def _refresh_active_custom_line_after_hd_change(map_dir: Path) -> None:
         )
 
 
-def _map_record(map_dir: Path, map_root: Path | None = None) -> dict[str, Any]:
+def _map_record(
+    map_dir: Path,
+    map_root: Path | None = None,
+    competition_routes: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     name = map_dir.name
     artifacts = {
         "cuvgl_map": _artifact(map_dir / "cuvgl_map"),
@@ -2886,7 +3276,10 @@ def _map_record(map_dir: Path, map_root: Path | None = None) -> dict[str, Any]:
     active_custom_line_id, _ = _canonical_custom_line_active(map_dir)
     custom_line_ready = bool(active_custom_line_id)
     driving_line_ready = bool(artifacts["raceline_csv"]["exists"] or custom_line_ready)
-    complete_runtime = localization_ready and driving_line_ready
+    route_summary = competition_routes or competition_route_summary(map_dir)
+    competition_route_status = str(route_summary["status"])
+    competition_routes_ready = bool(route_summary["ready"])
+    complete_runtime = localization_ready and driving_line_ready and competition_routes_ready
     return {
         "name": name,
         "display_name": _display_name(map_root, map_dir) if map_root is not None else name,
@@ -2895,8 +3288,232 @@ def _map_record(map_dir: Path, map_root: Path | None = None) -> dict[str, Any]:
         "modified_at": _iso_mtime(map_dir),
         "fingerprint": directory_fingerprint(map_dir),
         "artifacts": artifacts,
+        "competition_route_status": competition_route_status,
+        "competition_routes_ready": competition_routes_ready,
         "complete_runtime_bundle": complete_runtime,
     }
+
+
+def _junction_branch_ids(hd_map: dict[str, Any]) -> set[str]:
+    branch_ids: set[str] = set()
+    for junction in hd_map.get("junctions", []) or []:
+        if not isinstance(junction, dict):
+            continue
+        branches = junction.get("branches", {})
+        if not isinstance(branches, dict):
+            continue
+        for direction in ("left", "straight", "right"):
+            route_id = str(branches.get(direction) or "").strip()
+            if route_id:
+                branch_ids.add(route_id)
+    return branch_ids
+
+
+def _route_string_array(
+    parameters: dict[str, Any],
+    field_name: str,
+    issues: list[str],
+) -> list[str]:
+    raw_values = parameters.get(field_name)
+    if not isinstance(raw_values, list):
+        issues.append(f"{field_name} must be an array")
+        return []
+    values: list[str] = []
+    for index, raw_value in enumerate(raw_values):
+        if not isinstance(raw_value, str):
+            issues.append(f"{field_name}[{index}] must be a string")
+            values.append("")
+            continue
+        values.append(raw_value.strip())
+    return values
+
+
+def _runtime_routes(map_dir: Path, hd_map: dict[str, Any]) -> dict[str, Any]:
+    config_path = map_dir / COMPETITION_ROUTE_CONFIG_FILE
+    branch_ids = _junction_branch_ids(hd_map)
+    result: dict[str, Any] = {
+        "status": "unconfigured",
+        "configured_lane_ids": [],
+        "missing_branch_ids": sorted(branch_ids),
+        "issues": [],
+        "config_path": str(config_path),
+    }
+    if config_path.is_symlink():
+        result["status"] = "invalid"
+        result["issues"] = ["competition route config must be a regular file"]
+        return result
+    if not config_path.exists():
+        return result
+    if not config_path.is_file():
+        result["status"] = "invalid"
+        result["issues"] = ["competition route config must be a regular file"]
+        return result
+
+    try:
+        data = load_yaml(config_path)
+    except OSError as exc:
+        result["status"] = "invalid"
+        result["issues"] = [f"competition route config could not be read: {exc}"]
+        return result
+
+    issues: list[str] = []
+    wildcard = data.get("/**")
+    if not isinstance(wildcard, dict):
+        issues.append("competition route config requires a '/**' mapping")
+        parameters: dict[str, Any] = {}
+    else:
+        raw_parameters = wildcard.get("ros__parameters")
+        if not isinstance(raw_parameters, dict):
+            issues.append("competition route config requires a ros__parameters mapping")
+            parameters = {}
+        else:
+            parameters = raw_parameters
+
+    lane_ids = _route_string_array(parameters, "lane_ids", issues)
+    lane_path_topics = _route_string_array(parameters, "lane_path_topics", issues)
+    lane_trajectory_topics = _route_string_array(
+        parameters,
+        "lane_trajectory_topics",
+        issues,
+    )
+    raw_speeds = parameters.get("lane_target_speeds_mps")
+    if not isinstance(raw_speeds, list):
+        issues.append("lane_target_speeds_mps must be an array")
+        speeds: list[float | None] = []
+    else:
+        speeds = []
+        for index, raw_speed in enumerate(raw_speeds):
+            if isinstance(raw_speed, bool) or not isinstance(raw_speed, (int, float)):
+                issues.append(f"lane_target_speeds_mps[{index}] must be a finite non-negative number")
+                speeds.append(None)
+                continue
+            speed = float(raw_speed)
+            if not math.isfinite(speed) or speed < 0.0:
+                issues.append(f"lane_target_speeds_mps[{index}] must be a finite non-negative number")
+                speeds.append(None)
+            else:
+                speeds.append(speed)
+
+    configured_lane_ids = [lane_id for lane_id in lane_ids if lane_id]
+    result["configured_lane_ids"] = configured_lane_ids
+    if not lane_ids:
+        issues.append("lane_ids must not be empty")
+    if any(not lane_id for lane_id in lane_ids):
+        issues.append("lane_ids must not contain empty values")
+    duplicate_lane_ids = sorted(
+        {lane_id for lane_id in configured_lane_ids if configured_lane_ids.count(lane_id) > 1}
+    )
+    if duplicate_lane_ids:
+        issues.append(f"lane_ids contains duplicates: {', '.join(duplicate_lane_ids)}")
+
+    array_lengths = {
+        len(lane_ids),
+        len(lane_path_topics),
+        len(lane_trajectory_topics),
+        len(speeds),
+    }
+    if len(array_lengths) != 1:
+        issues.append(
+            "lane_ids, lane_path_topics, lane_trajectory_topics, and "
+            "lane_target_speeds_mps must have equal lengths"
+        )
+
+    pair_count = min(len(lane_ids), len(lane_path_topics), len(lane_trajectory_topics))
+    for index in range(pair_count):
+        if not lane_path_topics[index] and not lane_trajectory_topics[index]:
+            lane_label = lane_ids[index] or str(index)
+            issues.append(f"lane {lane_label} requires a path or trajectory topic")
+
+    for field_name, topics in (
+        ("lane_path_topics", lane_path_topics),
+        ("lane_trajectory_topics", lane_trajectory_topics),
+    ):
+        nonempty = [topic for topic in topics if topic]
+        duplicates = sorted({topic for topic in nonempty if nonempty.count(topic) > 1})
+        if duplicates:
+            issues.append(f"{field_name} contains duplicates: {', '.join(duplicates)}")
+
+    default_lane_id = parameters.get("default_lane_id")
+    if not isinstance(default_lane_id, str) or not default_lane_id.strip():
+        issues.append("default_lane_id must be a non-empty string")
+    elif default_lane_id.strip() not in set(configured_lane_ids):
+        issues.append(f"default_lane_id is not present in lane_ids: {default_lane_id.strip()}")
+    elif default_lane_id.strip() != "primary":
+        issues.append("default_lane_id must be primary for the competition planning manager")
+
+    competition_topics = {
+        "requested_lane_topic": "/planning/requested_lane",
+        "current_section_topic": "/localization/current_section",
+        "output_trajectory_topic": "/planning/route/trajectory",
+        "output_profile_topic": "/planning/route/trajectory_profile",
+        "target_speed_topic": "/planning/route/target_speed",
+        "selected_lane_topic": "/planning/route/selected_lane",
+        "ready_topic": "/planning/route/ready",
+        "diagnostics_topic": "/planning/route/diagnostics",
+    }
+    resolved_topics: dict[str, str] = {}
+    for field_name, expected_topic in competition_topics.items():
+        raw_topic = parameters.get(field_name)
+        if not isinstance(raw_topic, str) or not raw_topic.strip():
+            issues.append(f"{field_name} must be a non-empty string")
+            resolved_topics[field_name] = ""
+            continue
+        topic = raw_topic.strip()
+        resolved_topics[field_name] = topic
+        if topic != expected_topic:
+            issues.append(
+                f"{field_name} must be {expected_topic} for the competition planning manager"
+            )
+
+    output_trajectory_topic = resolved_topics["output_trajectory_topic"]
+    output_profile_topic = resolved_topics["output_profile_topic"]
+    if output_trajectory_topic and output_trajectory_topic in lane_path_topics:
+        issues.append("a lane path input must not equal output_trajectory_topic")
+    if output_profile_topic and output_profile_topic in lane_trajectory_topics:
+        issues.append("a lane trajectory input must not equal output_profile_topic")
+
+    if parameters.get("require_requested_lane_heartbeat") is not True:
+        issues.append("require_requested_lane_heartbeat must be true for competition driving")
+    for field_name in ("requested_lane_timeout_sec", "current_section_timeout_sec"):
+        raw_timeout = parameters.get(field_name)
+        if (
+            isinstance(raw_timeout, bool)
+            or not isinstance(raw_timeout, (int, float))
+            or not math.isfinite(float(raw_timeout))
+            or float(raw_timeout) <= 0.0
+        ):
+            issues.append(f"{field_name} must be a finite positive number")
+
+    missing_branch_ids = sorted(branch_ids - set(configured_lane_ids))
+    result["missing_branch_ids"] = missing_branch_ids
+    if missing_branch_ids:
+        issues.append(
+            "junction branch routes are not registered in lane_ids: "
+            + ", ".join(missing_branch_ids)
+        )
+    result["issues"] = issues
+    result["status"] = "invalid" if any(
+        not issue.startswith("junction branch routes are not registered") for issue in issues
+    ) else ("warning" if missing_branch_ids else "ready")
+    return result
+
+
+def competition_route_summary(map_dir: Path) -> dict[str, Any]:
+    """Return the lightweight competition-route readiness used by map indexes and detail."""
+    hd_map_path = map_dir / f"{map_dir.name}_hd_map.yaml"
+    if not hd_map_path.is_file():
+        return {"status": "not_required", "ready": True}
+    try:
+        hd_map, _ = _read_hd_map(hd_map_path)
+    except (OSError, TypeError, ValueError, OverflowError):
+        return {"status": "invalid", "ready": False}
+    if not hd_map.get("junctions"):
+        return {"status": "not_required", "ready": True}
+    try:
+        status = str(_runtime_routes(map_dir, hd_map).get("status") or "invalid")
+    except (OSError, TypeError, ValueError, OverflowError):
+        status = "invalid"
+    return {"status": status, "ready": status == "ready"}
 
 
 def build_map_detail(config: ConsoleConfig, map_dir_value: str) -> dict[str, Any]:
@@ -2931,16 +3548,35 @@ def build_map_detail(config: ConsoleConfig, map_dir_value: str) -> dict[str, Any
     )
     primary_lane = next((lane for lane in hd_map.get("lanes", []) if lane.get("primary")), None)
     custom_line_catalog = _read_custom_lines(map_dir)
+    junction_route_catalog = _junction_route_catalog(
+        map_dir,
+        {str(lane.get("id") or "") for lane in hd_map.get("lanes", [])},
+        custom_line_catalog,
+    )
+    runtime_routes = _runtime_routes(map_dir, hd_map)
+    competition_routes = (
+        {
+            "status": str(runtime_routes.get("status") or "invalid"),
+            "ready": runtime_routes.get("status") == "ready",
+        }
+        if hd_map.get("junctions")
+        else {"status": "not_required", "ready": True}
+    )
 
     return {
-        "map": _map_record(map_dir, config.map_root),
+        "map": _map_record(map_dir, config.map_root, competition_routes),
         "raster": raster,
         "preview_image_url": preview_image,
         "hd_map": hd_map,
+        "runtime_routes": runtime_routes,
         "hd_map_versions": _read_hd_map_versions(map_dir),
         "custom_lines": custom_line_catalog["items"],
         "custom_line_catalog": custom_line_catalog,
         "active_custom_line_id": custom_line_catalog["active_id"],
+        "junction_route_catalog": junction_route_catalog,
+        "junction_route_ids": [
+            str(item["id"]) for item in junction_route_catalog if item.get("eligible")
+        ],
         "centerline_csv": centerline,
         "raceline_csv": raceline,
         "raceline_metadata": _read_json_file(raceline_meta_path),
@@ -2952,6 +3588,7 @@ def build_map_detail(config: ConsoleConfig, map_dir_value: str) -> dict[str, Any
             "primary_centerline_length_m": primary_lane.get("centerline_length_m", 0.0) if primary_lane else 0.0,
             "section_gate_count": len(hd_map.get("section_gates", [])),
             "section_count": len(hd_map.get("sections", [])),
+            "junction_count": len(hd_map.get("junctions", [])),
             "speed_override_count": speed_override_count,
             "raceline_points": raceline["count"],
             "custom_line_count": len(custom_line_catalog["items"]),
@@ -3019,8 +3656,16 @@ def save_hd_map(config: ConsoleConfig, payload: dict[str, Any]) -> dict[str, Any
     if output_issue is not None:
         raise ValueError(f"Lane {primary_lane_id} cannot be saved for raceline export: {output_issue}.")
 
+    validated_previous_data = _validated_hd_topology(map_dir, previous_data, lanes)
     hd_map_path.parent.mkdir(parents=True, exist_ok=True)
-    _write_hd_map_yaml(hd_map_path, raster, lanes, primary_lane_id, centerline_path, previous_data)
+    _write_hd_map_yaml(
+        hd_map_path,
+        raster,
+        lanes,
+        primary_lane_id,
+        centerline_path,
+        validated_previous_data,
+    )
     _write_centerline_csv(centerline_path, primary_lane)
     _refresh_active_custom_line_after_hd_change(map_dir)
     return build_map_detail(config, str(map_dir))
@@ -3144,6 +3789,14 @@ def save_section_gates(config: ConsoleConfig, payload: dict[str, Any]) -> dict[s
     updated_data["section_gates"] = gates
     updated_data["sections"] = _build_sections_for_gates(data.get("sections"), gates, lanes)
 
+    updated_data["junctions"] = _payload_junctions(
+        data.get("junctions", []),
+        updated_data["sections"],
+        gates,
+        lanes,
+        _known_junction_route_ids(map_dir, lane_ids),
+    )
+
     exports = data.get("exports")
     centerline_path = None
     if isinstance(exports, dict):
@@ -3152,5 +3805,60 @@ def save_section_gates(config: ConsoleConfig, payload: dict[str, Any]) -> dict[s
         centerline_path = map_dir / f"{name}_hd_map_centerline.csv"
 
     _write_hd_map_yaml(hd_map_path, raster, lanes, primary_lane_id, centerline_path, updated_data)
+    _refresh_active_custom_line_after_hd_change(map_dir)
+    return build_map_detail(config, str(map_dir))
+
+
+def save_junctions(config: ConsoleConfig, payload: dict[str, Any]) -> dict[str, Any]:
+    map_dir_value = str(payload.get("map_dir") or "")
+    if not map_dir_value:
+        raise ValueError("map_dir is required")
+    map_dir = resolve_allowed_path(config, map_dir_value)
+    if not map_dir.exists() or not map_dir.is_dir():
+        raise FileNotFoundError(f"map folder not found: {map_dir}")
+
+    name = map_dir.name
+    hd_map_path = map_dir / f"{name}_hd_map.yaml"
+    if not hd_map_path.exists():
+        raise FileNotFoundError(
+            "HD map YAML is required before editing junctions. Save the HD map first."
+        )
+    data = load_yaml(hd_map_path)
+    raster = _raster_from_hd_map(hd_map_path, data)
+    if not raster:
+        raise ValueError(
+            "HD map source_raster metadata is missing. Re-save the HD map before editing junctions."
+        )
+    lanes = _lanes_from_hd_data(data)
+    if not lanes:
+        raise ValueError("HD map has no lanes")
+    lane_ids = {str(lane["id"]) for lane in lanes}
+    sections = [section for section in data.get("sections", []) if isinstance(section, dict)]
+    gates = [gate for gate in data.get("section_gates", []) if isinstance(gate, dict)]
+    junctions = _payload_junctions(
+        payload.get("junctions"),
+        sections,
+        gates,
+        lanes,
+        _known_junction_route_ids(map_dir, lane_ids),
+    )
+    updated_data = dict(data)
+    updated_data["junctions"] = junctions
+
+    primary_lane_id = _sanitize_id(str(data.get("primary_lane_id") or ""), lanes[0]["id"])
+    if primary_lane_id not in lane_ids:
+        primary_lane_id = lanes[0]["id"]
+    exports = data.get("exports")
+    centerline_path = None
+    if isinstance(exports, dict):
+        centerline_path = _resolve_embedded_path(
+            exports.get("primary_centerline_csv"), hd_map_path.parent
+        )
+    if centerline_path is None:
+        centerline_path = map_dir / f"{name}_hd_map_centerline.csv"
+
+    _write_hd_map_yaml(
+        hd_map_path, raster, lanes, primary_lane_id, centerline_path, updated_data
+    )
     _refresh_active_custom_line_after_hd_change(map_dir)
     return build_map_detail(config, str(map_dir))

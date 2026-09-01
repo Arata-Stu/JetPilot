@@ -387,8 +387,13 @@ editor.
 ### HD Map Workspace
 
 - Browser canvas editor for the landmark raster.
+- Four focused modes keep the inspector compact:
+  - Geometry for physical bounds and centerlines
+  - Topology for Section Gates and Junctions
+  - Driving Lines for Raceline and named Custom Lines
+  - Review for readiness, versions, and final overlays
 - Current editor scope:
-  - one primary lane
+  - preserve every lane while selecting one lane to edit
   - left/right bound point add, move, and delete
   - closed/open loop toggle
   - fit/zoom controls with scroll-based pan
@@ -402,11 +407,28 @@ editor.
   - generated centerline
   - generated raceline
   - every named custom line, with the selected line colored by point speed
+  - a `START` tangent arrow on the active centerline/raceline/custom line
   - section gates
+  - junction markers; only the selected junction shows activation/release gates and Left/Straight/Right branch arrows
 - Right-side inspector:
   - closed/open loop
   - artifact status
   - lane and section summaries
+  - Junction ID, Signal ID, map position, required activation/release Sections, and three branch routes
+- Junction route choices are validated against map lanes, Raceline, and named
+  Custom Lines. Invalid or stale Custom Lines cannot be saved as branches.
+  Review separately checks those authoring IDs against the optional map-local
+  `competition_route.param.yaml`, including the manager-facing `/planning/route/*`
+  topics, diagnostics, heartbeat, and watchdog settings. A route can exist in
+  the map while still being clearly marked as not registered for driving.
+- Layer switches are grouped under an Advanced disclosure, Simulation is closed
+  by default, and map-list readiness details are collapsed until requested.
+- The workspace stacks the canvas and inspector on narrower windows and keeps
+  the Map navigation usable on phone-sized viewports. Canvas labels, junction
+  diamonds, and direction arrows keep a readable on-screen size when scaled.
+- Unsaved Geometry, Section, Junction, and Driving Line edits survive mode
+  switches. Reload, map changes, version activation, and browser close warn
+  before discarding them; editor and canvas scroll positions are preserved.
 - Actions:
   - prepare landmark raster
   - edit and save HD map YAML/centerline CSV
@@ -519,6 +541,8 @@ POST /api/preflight
 POST /api/maps/build-vgl-vslam
 POST /api/maps/prepare-hd-raster
 POST /api/maps/save-hd-map
+POST /api/maps/save-section-gates
+POST /api/maps/save-junctions
 POST /api/maps/generate-raceline
 POST /api/maps/custom-lines/create
 POST /api/maps/custom-lines/update
@@ -647,16 +671,15 @@ The browser editor currently implements:
 - centerline generation from bounds
 - save/load existing HD map YAML
 - primary centerline CSV export
-- preservation of existing `section_gates` and `sections` blocks on save
+- all-lane preservation with an active-lane selector
+- undo/redo and local curve smoothing assistance
+- Section Gate and Junction editing
+- preservation of `section_gates`, `sections`, and `junctions` across geometry saves
 
 Then add:
 
-- lane selection
-- undo/redo
-- curve assist
-- VSLAM path overlay
-- raceline overlay
-- section gates
+- lane add/duplicate/delete operations
+- direct lane naming and primary-lane reassignment
 
 ## MVP Build Order
 

@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>jetpilot_planning_manager</name>
+  <version>0.1.0</version>
+  <description>Arbitrates route, signal branch selection, and collision recovery.</description>
+  <maintainer email="user@example.com">user</maintainer>
+  <license>Apache-2.0</license>
+  <buildtool_depend>ament_cmake_auto</buildtool_depend>
+  <depend>builtin_interfaces</depend>
+  <depend>diagnostic_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>jetpilot_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>rclcpp</depend>
+  <depend>std_msgs</depend>
+  <exec_depend>jetpilot_planning</exec_depend>
+  <exec_depend>jetpilot_recovery_planner</exec_depend>
+  <exec_depend>jetpilot_signal_detection</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>
