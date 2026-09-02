@@ -5,7 +5,6 @@
     lane_trajectory_topics: ["", /planning/raceline_trajectory]
     lane_target_speeds_mps: [1.0, 1.5]
     default_lane_id: raceline
-    section_lane_rules: []
     fallback_to_default_lane: false
 
     requested_lane_topic: /planning/requested_lane

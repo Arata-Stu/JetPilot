@@ -293,6 +293,10 @@ junctions:
 
             config_path = map_dir / "competition_route.param.yaml"
             self.assertTrue(config_path.is_file())
+            self.assertNotIn(
+                "section_lane_rules:",
+                config_path.read_text(encoding="utf-8"),
+            )
             self.assertEqual(detail["runtime_routes"]["status"], "ready")
             self.assertEqual(
                 detail["runtime_routes"]["routes"],
@@ -304,6 +308,33 @@ junctions:
                         "target_speed_mps": 1.0,
                     }
                 ],
+            )
+
+    def test_explicit_empty_section_rules_are_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            config, map_dir = self._make_map(Path(temporary_directory))
+            self._write_config(
+                map_dir,
+                lane_ids="[primary, route_left, route_right]",
+                path_topics='[/hd_map/primary_centerline_path, /planning/left, /planning/right]',
+                trajectory_topics='["", "", ""]',
+                speeds="[1.0, 0.8, 0.8]",
+            )
+            config_path = map_dir / "competition_route.param.yaml"
+            config_path.write_text(
+                config_path.read_text(encoding="utf-8").replace(
+                    '    default_lane_id: "primary"\n',
+                    '    default_lane_id: "primary"\n    section_lane_rules: []\n',
+                ),
+                encoding="utf-8",
+            )
+
+            runtime = build_map_detail(config, str(map_dir))["runtime_routes"]
+
+            self.assertEqual(runtime["status"], "invalid")
+            self.assertIn(
+                "empty section_lane_rules must be omitted because ROS 2 cannot infer its array type",
+                runtime["issues"],
             )
 
     def test_ui_payload_rejects_route_without_runtime_topic(self) -> None:

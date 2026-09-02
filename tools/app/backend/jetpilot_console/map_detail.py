@@ -3501,6 +3501,16 @@ def _runtime_routes(map_dir: Path, hd_map: dict[str, Any]) -> dict[str, Any]:
 
     if parameters.get("require_requested_lane_heartbeat") is not True:
         issues.append("require_requested_lane_heartbeat must be true for competition driving")
+    if "section_lane_rules" in parameters:
+        section_lane_rules = parameters.get("section_lane_rules")
+        if section_lane_rules == []:
+            issues.append(
+                "empty section_lane_rules must be omitted because ROS 2 cannot infer its array type"
+            )
+        elif not isinstance(section_lane_rules, list) or any(
+            not isinstance(rule, str) for rule in section_lane_rules
+        ):
+            issues.append("section_lane_rules must be an array of strings")
     for field_name in ("requested_lane_timeout_sec", "current_section_timeout_sec"):
         raw_timeout = parameters.get(field_name)
         if (
@@ -3585,7 +3595,8 @@ def _write_competition_route_yaml(
             f"    lane_trajectory_topics: {yaml_array([route['trajectory_topic'] for route in routes])}",
             f"    lane_target_speeds_mps: {yaml_array([route['target_speed_mps'] for route in routes])}",
             '    default_lane_id: "primary"',
-            "    section_lane_rules: []",
+            # ROS 2 cannot infer a parameter type from an empty YAML sequence.
+            # Omit optional rules so the node's typed empty-array default is used.
             "    fallback_to_default_lane: false",
             "",
             '    requested_lane_topic: "/planning/requested_lane"',

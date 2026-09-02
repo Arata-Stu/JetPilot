@@ -6,7 +6,6 @@
     lane_trajectory_topics: [""]
     lane_target_speeds_mps: [1.0]
     default_lane_id: primary
-    section_lane_rules: []
     fallback_to_default_lane: false
     requested_lane_topic: /planning/requested_lane
     current_section_topic: /localization/current_section

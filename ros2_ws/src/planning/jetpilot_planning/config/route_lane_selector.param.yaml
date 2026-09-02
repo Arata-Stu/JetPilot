@@ -11,7 +11,6 @@
 
     # Optional entries use "section_id=lane_id". Example:
     # section_lane_rules: [shortcut_entry=shortcut]
-    section_lane_rules: []
     # Fail closed: if a requested shortcut/avoidance lane disappears, publish
     # ready=false instead of silently driving back onto the primary lane.
     fallback_to_default_lane: false
