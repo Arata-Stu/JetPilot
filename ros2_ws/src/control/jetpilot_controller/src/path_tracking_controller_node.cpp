@@ -2,7 +2,9 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <iomanip>
 #include <limits>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -12,11 +14,13 @@
 #include "diagnostic_msgs/msg/key_value.hpp"
 #include "jetpilot_controller/path_tracking_controller_node.hpp"
 #include "jetpilot_controller/motion_direction.hpp"
+#include "std_msgs/msg/header.hpp"
 #include "tf2/LinearMath/Quaternion.h"
 #include "tf2/LinearMath/Transform.h"
 #include "tf2/LinearMath/Vector3.h"
 #include "tf2/exceptions.h"
 #include "tf2/time.h"
+#include "visualization_msgs/msg/marker.hpp"
 
 namespace jetpilot_controller
 {
@@ -94,6 +98,8 @@ void PathTrackingControllerNode::declare_and_read_parameters()
   command_topic_ = declare_parameter<std::string>("command_topic", "/auto/control_cmd");
   diagnostics_topic_ =
     declare_parameter<std::string>("diagnostics_topic", "/controller/diagnostics");
+  tracking_markers_topic_ = declare_parameter<std::string>(
+    "tracking_markers_topic", "/controller/tracking_markers");
 
   control_rate_hz_ = declare_parameter<double>("control_rate_hz", 30.0);
   trajectory_timeout_s_ = declare_parameter<double>("trajectory_timeout_s", 0.5);
@@ -208,9 +214,9 @@ void PathTrackingControllerNode::declare_and_read_parameters()
     }
   }
 
-  if (base_frame_.empty())
+  if (base_frame_.empty() || tracking_markers_topic_.empty())
   {
-    throw std::invalid_argument("base_frame must not be empty");
+    throw std::invalid_argument("base_frame and tracking_markers_topic must not be empty");
   }
   if (!(control_rate_hz_ > 0.0))
   {
@@ -342,6 +348,8 @@ void PathTrackingControllerNode::create_interfaces()
                                                      rclcpp::QoS(1).transient_local().reliable());
   lookahead_pub_ =
     create_publisher<geometry_msgs::msg::PoseStamped>("/controller/lookahead_point", command_qos);
+  tracking_markers_pub_ = create_publisher<visualization_msgs::msg::MarkerArray>(
+    tracking_markers_topic_, command_qos);
   diagnostics_pub_ =
     create_publisher<diagnostic_msgs::msg::DiagnosticArray>(diagnostics_topic_, 10);
 }
@@ -804,6 +812,10 @@ void PathTrackingControllerNode::control_cycle()
   lookahead.pose.orientation.w = 1.0;
   lookahead_pub_->publish(lookahead);
 
+  publish_tracking_visualization(
+    input.path, tracking, reverse_motion,
+    typed_profile_active ? trajectory_profile_->line_id : "trajectory", command.header.stamp);
+
   publish_state(true, reverse_motion ? "tracking_reverse" : "tracking", *speed,
                 limited_target_speed, physical_steering,
                 reverse_motion ? -tracking.curvature : tracking.curvature, trailing);
@@ -882,12 +894,219 @@ void PathTrackingControllerNode::publish_safety_stop(const std::string & reason)
   command.brake = static_cast<float>(safety_brake_command_);
   command.reverse = 0.0F;
   command_pub_->publish(command);
+  publish_tracking_stop_visualization(reason, command.header.stamp);
   previous_steering_command_ = 0.0;
   last_control_at_ = std::chrono::steady_clock::now();
 
   RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "Controller safety stop: %s",
                        reason.c_str());
   publish_state(false, reason, 0.0, 0.0, 0.0, 0.0, TrailingResult{});
+}
+
+void PathTrackingControllerNode::publish_tracking_visualization(
+  const std::vector<Point2d> & path, const TrackingResult & tracking, const bool reverse_motion,
+  const std::string & line_id, const builtin_interfaces::msg::Time & stamp)
+{
+  if (path.empty() || tracking.nearest_index >= path.size() ||
+      tracking.target_index >= path.size())
+  {
+    return;
+  }
+
+  const auto header = [this, &stamp]()
+  {
+    std_msgs::msg::Header result;
+    result.stamp = stamp;
+    result.frame_id = base_frame_;
+    return result;
+  }();
+  const auto physical_point = [reverse_motion](const Point2d & point)
+  {
+    const auto physical = point_from_motion_frame(point, reverse_motion);
+    geometry_msgs::msg::Point result;
+    result.x = physical.x;
+    result.y = physical.y;
+    result.z = 0.04;
+    return result;
+  };
+  const auto lifetime = rclcpp::Duration::from_seconds(0.25);
+
+  visualization_msgs::msg::MarkerArray array;
+  visualization_msgs::msg::Marker remove_stop;
+  remove_stop.header = header;
+  remove_stop.ns = "tracking_status";
+  remove_stop.id = 0;
+  remove_stop.action = visualization_msgs::msg::Marker::DELETE;
+  array.markers.push_back(std::move(remove_stop));
+
+  visualization_msgs::msg::Marker segment;
+  segment.header = header;
+  segment.ns = "active_tracking";
+  segment.id = 0;
+  segment.type = visualization_msgs::msg::Marker::LINE_STRIP;
+  segment.action = visualization_msgs::msg::Marker::ADD;
+  segment.pose.orientation.w = 1.0;
+  segment.scale.x = 0.055;
+  segment.color.r = 0.0F;
+  segment.color.g = 0.85F;
+  segment.color.b = 1.0F;
+  segment.color.a = 1.0F;
+  segment.lifetime = lifetime;
+
+  std::size_t current = tracking.nearest_index;
+  if (current > 0U)
+  {
+    --current;
+  }
+  else if (tracking.path_closed)
+  {
+    current = path.size() - 1U;
+  }
+  const std::size_t maximum_points = path.size() + 1U;
+  bool target_added = false;
+  for (std::size_t count = 0U; count < maximum_points; ++count)
+  {
+    segment.points.push_back(physical_point(path[current]));
+    if (current == tracking.target_index)
+    {
+      target_added = true;
+      if (!tracking.path_closed && current + 1U >= path.size())
+      {
+        break;
+      }
+      current = (current + 1U) % path.size();
+      segment.points.push_back(physical_point(path[current]));
+      break;
+    }
+    if (!tracking.path_closed && current + 1U >= path.size())
+    {
+      break;
+    }
+    current = (current + 1U) % path.size();
+  }
+  if (!target_added || segment.points.size() < 2U)
+  {
+    segment.points.clear();
+    segment.points.push_back(physical_point(path[tracking.nearest_index]));
+    segment.points.push_back(physical_point(path[tracking.target_index]));
+  }
+  array.markers.push_back(std::move(segment));
+
+  visualization_msgs::msg::Marker nearest;
+  nearest.header = header;
+  nearest.ns = "active_tracking";
+  nearest.id = 1;
+  nearest.type = visualization_msgs::msg::Marker::SPHERE;
+  nearest.action = visualization_msgs::msg::Marker::ADD;
+  nearest.pose.position = physical_point(path[tracking.nearest_index]);
+  nearest.pose.orientation.w = 1.0;
+  nearest.scale.x = 0.10;
+  nearest.scale.y = 0.10;
+  nearest.scale.z = 0.10;
+  nearest.color.r = 1.0F;
+  nearest.color.g = 1.0F;
+  nearest.color.b = 1.0F;
+  nearest.color.a = 1.0F;
+  nearest.lifetime = lifetime;
+  array.markers.push_back(std::move(nearest));
+
+  const auto target_point = physical_point(tracking.target_point);
+  visualization_msgs::msg::Marker target;
+  target.header = header;
+  target.ns = "active_tracking";
+  target.id = 2;
+  target.type = visualization_msgs::msg::Marker::SPHERE;
+  target.action = visualization_msgs::msg::Marker::ADD;
+  target.pose.position = target_point;
+  target.pose.orientation.w = 1.0;
+  target.scale.x = 0.16;
+  target.scale.y = 0.16;
+  target.scale.z = 0.16;
+  target.color.r = 1.0F;
+  target.color.g = 0.35F;
+  target.color.b = 0.0F;
+  target.color.a = 1.0F;
+  target.lifetime = lifetime;
+  array.markers.push_back(std::move(target));
+
+  visualization_msgs::msg::Marker arrow;
+  arrow.header = header;
+  arrow.ns = "active_tracking";
+  arrow.id = 3;
+  arrow.type = visualization_msgs::msg::Marker::ARROW;
+  arrow.action = visualization_msgs::msg::Marker::ADD;
+  arrow.pose.orientation.w = 1.0;
+  geometry_msgs::msg::Point origin;
+  origin.z = 0.04;
+  arrow.points = {origin, target_point};
+  arrow.scale.x = 0.025;
+  arrow.scale.y = 0.08;
+  arrow.scale.z = 0.08;
+  arrow.color.r = 1.0F;
+  arrow.color.g = 0.35F;
+  arrow.color.b = 0.0F;
+  arrow.color.a = 0.9F;
+  arrow.lifetime = lifetime;
+  array.markers.push_back(std::move(arrow));
+
+  visualization_msgs::msg::Marker label;
+  label.header = header;
+  label.ns = "active_tracking";
+  label.id = 4;
+  label.type = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;
+  label.action = visualization_msgs::msg::Marker::ADD;
+  label.pose.position = target_point;
+  label.pose.position.z = 0.22;
+  label.pose.orientation.w = 1.0;
+  label.scale.z = 0.12;
+  label.color.r = 1.0F;
+  label.color.g = 0.85F;
+  label.color.b = 0.2F;
+  label.color.a = 1.0F;
+  std::ostringstream text;
+  text << line_id << " | LOOKAHEAD " << std::fixed << std::setprecision(2)
+       << tracking.lookahead_distance_m << " m";
+  label.text = text.str();
+  label.lifetime = lifetime;
+  array.markers.push_back(std::move(label));
+
+  tracking_markers_pub_->publish(array);
+}
+
+void PathTrackingControllerNode::publish_tracking_stop_visualization(
+  const std::string & reason, const builtin_interfaces::msg::Time & stamp)
+{
+  visualization_msgs::msg::MarkerArray array;
+  for (int id = 0; id <= 4; ++id)
+  {
+    visualization_msgs::msg::Marker marker;
+    marker.header.stamp = stamp;
+    marker.header.frame_id = base_frame_;
+    marker.ns = "active_tracking";
+    marker.id = id;
+    marker.action = visualization_msgs::msg::Marker::DELETE;
+    array.markers.push_back(std::move(marker));
+  }
+
+  visualization_msgs::msg::Marker status;
+  status.header.stamp = stamp;
+  status.header.frame_id = base_frame_;
+  status.ns = "tracking_status";
+  status.id = 0;
+  status.type = visualization_msgs::msg::Marker::TEXT_VIEW_FACING;
+  status.action = visualization_msgs::msg::Marker::ADD;
+  status.pose.position.x = 0.35;
+  status.pose.position.z = 0.25;
+  status.pose.orientation.w = 1.0;
+  status.scale.z = 0.11;
+  status.color.r = 1.0F;
+  status.color.g = 0.2F;
+  status.color.b = 0.2F;
+  status.color.a = 1.0F;
+  status.text = "NO TRACKING | " + reason;
+  status.lifetime = rclcpp::Duration::from_seconds(0.25);
+  array.markers.push_back(std::move(status));
+  tracking_markers_pub_->publish(array);
 }
 
 void PathTrackingControllerNode::publish_state(bool ready, const std::string & message,

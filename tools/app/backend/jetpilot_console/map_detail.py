@@ -3515,11 +3515,13 @@ def _runtime_routes(map_dir: Path, hd_map: dict[str, Any]) -> dict[str, Any]:
         raw_timeout = parameters.get(field_name)
         if (
             isinstance(raw_timeout, bool)
-            or not isinstance(raw_timeout, (int, float))
+            # These parameters are declared as doubles by the ROS 2 node.
+            # An integer YAML scalar is not implicitly converted by rclcpp.
+            or not isinstance(raw_timeout, float)
             or not math.isfinite(float(raw_timeout))
             or float(raw_timeout) <= 0.0
         ):
-            issues.append(f"{field_name} must be a finite positive number")
+            issues.append(f"{field_name} must be a finite positive YAML float")
 
     missing_branch_ids = sorted(branch_ids - set(configured_lane_ids))
     result["missing_branch_ids"] = missing_branch_ids
@@ -3586,6 +3588,11 @@ def _write_competition_route_yaml(
     def yaml_array(values: list[Any]) -> str:
         return json.dumps(values, ensure_ascii=True, separators=(", ", ": "))
 
+    def yaml_float(value: float) -> str:
+        # json.dumps preserves the decimal point for integral float values,
+        # keeping the scalar compatible with rclcpp double parameters.
+        return json.dumps(float(value), allow_nan=False)
+
     content = "\n".join(
         [
             "/**:",
@@ -3610,9 +3617,9 @@ def _write_competition_route_yaml(
             "",
             "    publish_rate_hz: 10.0",
             "    path_timeout_sec: 0.0",
-            f"    requested_lane_timeout_sec: {requested_lane_timeout_sec:g}",
+            f"    requested_lane_timeout_sec: {yaml_float(requested_lane_timeout_sec)}",
             "    require_requested_lane_heartbeat: true",
-            f"    current_section_timeout_sec: {current_section_timeout_sec:g}",
+            f"    current_section_timeout_sec: {yaml_float(current_section_timeout_sec)}",
             "    min_path_poses: 2",
             "    min_path_length_m: 0.10",
             "",

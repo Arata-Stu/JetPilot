@@ -18,7 +18,8 @@ _DEFAULT_FOXGLOVE_TOPIC_WHITELIST = (
     "'^/localization/(pose_hint_required|pose_hint_state|current_section|"
     "current_section_marker)$', "
     "'^/visual_slam/tracking/odometry$', '^/visual_localization/pose$', "
-    "'^/hd_map/(lane_markers|section_markers|primary_centerline_path)$']"
+    "'^/hd_map/(lane_markers|section_markers|primary_centerline_path)$', "
+    "'^/controller/(tracking_markers|lookahead_point)$']"
 )
 _DEFAULT_FOXGLOVE_CLIENT_TOPIC_WHITELIST = "['^/initialpose$']"
 _ABSOLUTE_TOPIC_PATTERN = re.compile(
@@ -46,6 +47,7 @@ _REPLAY_ISOLATED_TOPICS = (
     '/planning/ready',
     '/controller/ready',
     '/controller/lookahead_point',
+    '/controller/tracking_markers',
     '/bag/request',
     '/bag/status',
     '/commands/motor/duty_cycle',

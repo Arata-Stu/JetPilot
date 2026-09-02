@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "builtin_interfaces/msg/time.hpp"
 #include "diagnostic_msgs/msg/diagnostic_array.hpp"
 #include "geometry_msgs/msg/point.hpp"
 #include "geometry_msgs/msg/pose_stamped.hpp"
@@ -27,6 +28,7 @@
 #include "std_msgs/msg/string.hpp"
 #include "tf2_ros/buffer.h"
 #include "tf2_ros/transform_listener.h"
+#include "visualization_msgs/msg/marker_array.hpp"
 
 namespace jetpilot_controller
 {
@@ -63,6 +65,12 @@ private:
   TrailingResult apply_trailing_limit(double planned_speed_mps, double current_speed_mps,
                                       const std::vector<Point2d> & path, bool path_closed);
   void publish_safety_stop(const std::string & reason);
+  void publish_tracking_visualization(const std::vector<Point2d> & path,
+                                      const TrackingResult & tracking, bool reverse_motion,
+                                      const std::string & line_id,
+                                      const builtin_interfaces::msg::Time & stamp);
+  void publish_tracking_stop_visualization(const std::string & reason,
+                                           const builtin_interfaces::msg::Time & stamp);
   void publish_state(bool ready, const std::string & message, double current_speed_mps,
                      double target_speed_mps, double steering_command, double curvature,
                      const TrailingResult & trailing);
@@ -78,6 +86,7 @@ private:
   std::string opponent_odometry_topic_;
   std::string command_topic_;
   std::string diagnostics_topic_;
+  std::string tracking_markers_topic_;
 
   double control_rate_hz_{30.0};
   double trajectory_timeout_s_{0.5};
@@ -140,6 +149,7 @@ private:
   rclcpp::Publisher<jetpilot_msgs::msg::ControlCommand>::SharedPtr command_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr ready_pub_;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr lookahead_pub_;
+  rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr tracking_markers_pub_;
   rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr diagnostics_pub_;
   rclcpp::TimerBase::SharedPtr timer_;
 };

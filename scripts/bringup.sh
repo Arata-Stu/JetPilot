@@ -52,7 +52,7 @@ ARG_VALUES=()
 EXTRA_LAUNCH_ARGS=()
 CUSTOM_COMPONENTS=''
 SENSOR_KIT_RTP_TOPICS=()
-FOXGLOVE_DEFAULT_TOPIC_WHITELIST="['^/tf$', '^/tf_static$', '^/clock$', '^/(.*/)?diagnostics$', '^/localization/(pose_hint_required|pose_hint_state|current_section|current_section_marker)$', '^/visual_slam/tracking/odometry$', '^/visual_localization/pose$', '^/hd_map/(lane_markers|section_markers|primary_centerline_path)$']"
+FOXGLOVE_DEFAULT_TOPIC_WHITELIST="['^/tf$', '^/tf_static$', '^/clock$', '^/(.*/)?diagnostics$', '^/localization/(pose_hint_required|pose_hint_state|current_section|current_section_marker)$', '^/visual_slam/tracking/odometry$', '^/visual_localization/pose$', '^/hd_map/(lane_markers|section_markers|primary_centerline_path)$', '^/controller/(tracking_markers|lookahead_point)$']"
 FOXGLOVE_DEFAULT_CLIENT_TOPIC_WHITELIST="['^/initialpose$']"
 
 die() {

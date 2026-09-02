@@ -17,6 +17,7 @@ path_tracking_controller_node:
     opponent_odometry_topic: /perception/opponent/odometry
     command_topic: /auto/control_cmd
     diagnostics_topic: /controller/diagnostics
+    tracking_markers_topic: /controller/tracking_markers
 
     # Every required input has a steady-clock watchdog. A timeout produces a stop.
     control_rate_hz: 30.0

@@ -293,10 +293,13 @@ junctions:
 
             config_path = map_dir / "competition_route.param.yaml"
             self.assertTrue(config_path.is_file())
+            generated_config = config_path.read_text(encoding="utf-8")
             self.assertNotIn(
                 "section_lane_rules:",
-                config_path.read_text(encoding="utf-8"),
+                generated_config,
             )
+            self.assertIn("requested_lane_timeout_sec: 0.5", generated_config)
+            self.assertIn("current_section_timeout_sec: 1.0", generated_config)
             self.assertEqual(detail["runtime_routes"]["status"], "ready")
             self.assertEqual(
                 detail["runtime_routes"]["routes"],
@@ -334,6 +337,33 @@ junctions:
             self.assertEqual(runtime["status"], "invalid")
             self.assertIn(
                 "empty section_lane_rules must be omitted because ROS 2 cannot infer its array type",
+                runtime["issues"],
+            )
+
+    def test_integer_timeout_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            config, map_dir = self._make_map(Path(temporary_directory))
+            self._write_config(
+                map_dir,
+                lane_ids="[primary, route_left, route_right]",
+                path_topics='[/hd_map/primary_centerline_path, /planning/left, /planning/right]',
+                trajectory_topics='["", "", ""]',
+                speeds="[1.0, 0.8, 0.8]",
+            )
+            config_path = map_dir / "competition_route.param.yaml"
+            config_path.write_text(
+                config_path.read_text(encoding="utf-8").replace(
+                    "current_section_timeout_sec: 1.0",
+                    "current_section_timeout_sec: 1",
+                ),
+                encoding="utf-8",
+            )
+
+            runtime = build_map_detail(config, str(map_dir))["runtime_routes"]
+
+            self.assertEqual(runtime["status"], "invalid")
+            self.assertIn(
+                "current_section_timeout_sec must be a finite positive YAML float",
                 runtime["issues"],
             )
 

@@ -17,11 +17,20 @@ operation command muxを通してPCA9685/VESCのどちらにも同じ正規化�
 | output | `/auto/control_cmd` | `jetpilot_msgs/msg/ControlCommand` | 正規化steer/throttle/brake |
 | output | `/controller/ready` | `std_msgs/msg/Bool` | 走行指令を生成できているか |
 | output | `/controller/lookahead_point` | `geometry_msgs/msg/PoseStamped` | `base_link`上の追従点 |
+| output | `/controller/tracking_markers` | `visualization_msgs/msg/MarkerArray` | 現在追従中の局所経路・最近傍点・追従点 |
 | output | `/controller/diagnostics` | `diagnostic_msgs/msg/DiagnosticArray` | 停止理由と制御値 |
 
 plannerのPath frameから`base_link`へのTFが必要です。通常はlocalizationが`map -> odom`、
 VSLAMが`odom -> base_link`を供給します。
 plannerの標準publish周期は10 Hzで、controllerの0.5秒watchdogへheartbeatも兼ねます。
+
+## Foxglove tracking visualization
+
+`/controller/tracking_markers`は経路全体を重ねず、controllerが現在使っている局所区間だけを表示します。
+シアン線が追従区間、白点が最近傍path点、オレンジ点と矢印がlookahead目標です。ラベルには選択中の
+`line_id`とlookahead距離を表示します。安全停止中は古い追従表示を消し、赤い`NO TRACKING`と停止理由へ
+切り替えます。Foxgloveの3D panelでこのMarkerArray topicを有効にしてください。標準bringupではこの
+topicだけを通信許可しており、camera/image topicは追加しません。
 
 ## Safety behavior
 
