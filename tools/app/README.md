@@ -657,7 +657,9 @@ the task list when parseable.
 
 For Map pushes, the notebook source field offers the Map directories already
 discovered under the local Map root as type-ahead suggestions. The Jetson
-destination remains the configured remote Map root unless the operator edits it.
+destination field remains the configured remote Map root unless the operator
+edits it; transfer creates `<remote Map root>/<relative local Map path>/`, copies
+the bundle there, and updates the adjacent `latest` symlink after rsync succeeds.
 
 ## HD Map Editor Design
 

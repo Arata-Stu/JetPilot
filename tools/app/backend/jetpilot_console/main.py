@@ -7,6 +7,7 @@ import glob
 import json
 import mimetypes
 import os
+import posixpath
 import re
 import select
 import shlex
@@ -1500,16 +1501,31 @@ find {shlex.quote(record_root)} -name metadata.yaml -printf '%TY-%Tm-%Td %TH:%TM
                 )
                 remote_path = validate_remote_absolute_path(
                     remote_path,
-                    label="remote map destination",
+                    label="remote map root",
                 )
             except ValueError as exc:
                 self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
                 return
+            relative_map_path = Path(local_path).relative_to(config.map_root).as_posix()
+            remote_map_dir = validate_remote_absolute_path(
+                posixpath.join(remote_path.rstrip("/"), relative_map_path),
+                label="remote map destination",
+            )
+            remote_parent = posixpath.dirname(remote_map_dir)
+            map_name = posixpath.basename(remote_map_dir)
+            remote_prepare = "mkdir -p -- {map_dir}".format(
+                map_dir=shlex.quote(remote_map_dir)
+            )
+            remote_activate = "ln -sfn -- {name} {latest}".format(
+                name=shlex.quote(map_name),
+                latest=shlex.quote(posixpath.join(remote_parent, "latest")),
+            )
             script = (
                 f"set -euo pipefail\nssh {shlex.quote(remote)} "
-                f"{shlex.quote('mkdir -p ' + shlex.quote(remote_path))}\n"
+                f"{shlex.quote(remote_prepare)}\n"
                 f"rsync -avhP --protect-args {shlex.quote(local_path.rstrip('/') + '/')} "
-                f"{shlex.quote(remote + ':' + remote_path.rstrip('/') + '/')}\n"
+                f"{shlex.quote(remote + ':' + remote_map_dir.rstrip('/') + '/')}\n"
+                f"ssh {shlex.quote(remote)} {shlex.quote(remote_activate)}\n"
             )
             title = "Transfer notebook to Jetson"
 

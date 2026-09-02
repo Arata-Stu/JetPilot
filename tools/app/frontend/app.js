@@ -7838,6 +7838,10 @@ function renderJetsonTransfers() {
     .filter((map) => map?.path)
     .map((map) => `<option value="${esc(map.path)}">${esc(map.display_name || map.name || shortName(map.path))}</option>`)
     .join("");
+  const pushDestinationPreview = jetsonPushDestinationPreview(
+    pushLocalPath,
+    config.jetson_map_root || "",
+  );
   const sequences = jetsonRosbagSequences();
   pruneSelectedJetsonPullPaths(sequences);
   const selectedPullPaths = selectedJetsonPullPaths();
@@ -7918,7 +7922,11 @@ function renderJetsonTransfers() {
             <datalist id="push-local-map-options">${pushMapOptions}</datalist>
             <div class="field-hint">Suggestions come from Map directories already discovered under ${esc(config.map_root || "the local Map root")}.</div>
           </div>
-          <div class="field full"><label>To Jetson</label><input id="push-remote" value="${esc(config.jetson_map_root || "")}" /></div>
+          <div class="field full">
+            <label>To Jetson map root</label>
+            <input id="push-remote" value="${esc(config.jetson_map_root || "")}" oninput="updateJetsonPushPreview()" />
+            <div id="push-destination-preview" class="field-hint">Result: ${esc(pushDestinationPreview || "Select a local Map")}</div>
+          </div>
           <div class="actions full">
             <button class="primary ${actionBusy("jetson:push") ? "is-busy" : ""}" onclick="startJetsonPush()" ${actionButtonAttrs("jetson:push", "Push transfer is starting...")}>${esc(actionButtonLabel("jetson:push", "Start Push", "Starting Push..."))}</button>
             <button onclick="copyPushCommand()">Copy Command</button>
@@ -13043,6 +13051,28 @@ function drawSimulationVehicle(ctx, detail, toPixel) {
 
 function updateJetsonPushLocal(path) {
   state.jetsonTransfer.pushLocalPath = String(path || "");
+  updateJetsonPushPreview();
+}
+
+function jetsonPushDestinationPreview(localPath, remoteRoot) {
+  const localMapRoot = trimTrailingSlash(state.config?.map_root || "");
+  const normalizedRemoteRoot = trimTrailingSlash(remoteRoot || "");
+  const relativeMap = localPath.startsWith(`${localMapRoot}/`)
+    ? localPath.slice(localMapRoot.length + 1)
+    : shortName(localPath);
+  return localPath && normalizedRemoteRoot
+    ? `${normalizedRemoteRoot}/${relativeMap}`
+    : normalizedRemoteRoot;
+}
+
+function updateJetsonPushPreview() {
+  const preview = $("push-destination-preview");
+  if (!preview) return;
+  const destination = jetsonPushDestinationPreview(
+    $("push-local")?.value || state.jetsonTransfer.pushLocalPath,
+    $("push-remote")?.value || state.config?.jetson_map_root,
+  );
+  preview.textContent = `Result: ${destination || "Select a local Map"}`;
 }
 
 function fillTransferLocal(path) {
@@ -13522,6 +13552,7 @@ window.updateCompetitionRouteTimeout = updateCompetitionRouteTimeout;
 window.saveCompetitionRoutes = saveCompetitionRoutes;
 window.fillTransferLocal = fillTransferLocal;
 window.updateJetsonPushLocal = updateJetsonPushLocal;
+window.updateJetsonPushPreview = updateJetsonPushPreview;
 window.inspectJetson = inspectJetson;
 window.copyJetsonInspect = copyJetsonInspect;
 window.setJetsonHost = setJetsonHost;
