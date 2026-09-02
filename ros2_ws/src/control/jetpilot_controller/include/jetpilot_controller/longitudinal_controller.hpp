@@ -1,6 +1,8 @@
 #ifndef JETPILOT_CONTROLLER__LONGITUDINAL_CONTROLLER_HPP_
 #define JETPILOT_CONTROLLER__LONGITUDINAL_CONTROLLER_HPP_
 
+#include <vector>
+
 namespace jetpilot_controller
 {
 
@@ -10,6 +12,8 @@ struct LongitudinalParams
   double throttle_ki{0.0};
   double throttle_kd{0.0};
   double throttle_feedforward{0.05};
+  std::vector<double> throttle_feedforward_speeds_mps;
+  std::vector<double> throttle_feedforward_commands;
   double throttle_integral_error_limit{1.0};
   double brake_kp{0.5};
   double speed_deadband_mps{0.05};
@@ -40,6 +44,8 @@ public:
   const LongitudinalParams & params() const noexcept;
 
 private:
+  double feedforward_for_speed(double target_speed_mps) const noexcept;
+
   LongitudinalParams params_;
   double integral_error_{0.0};
   double previous_error_{0.0};

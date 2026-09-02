@@ -1,11 +1,14 @@
 <launch>
   <arg name="config_file" default="$(find-pkg-share jetpilot_controller)/config/controller.param.yaml"/>
+  <arg name="throttle_calibration_file"
+       default="$(find-pkg-share jetpilot_controller)/config/throttle_calibration.empty.param.yaml"/>
   <arg name="diagnostics_topic" default="/controller/diagnostics"/>
   <arg name="use_sim_time" default="false"/>
 
   <node pkg="jetpilot_controller" exec="path_tracking_controller_node"
         name="path_tracking_controller_node" output="screen">
     <param from="$(var config_file)"/>
+    <param from="$(var throttle_calibration_file)"/>
     <param name="diagnostics_topic" value="$(var diagnostics_topic)"/>
     <param name="use_sim_time" value="$(var use_sim_time)"/>
   </node>

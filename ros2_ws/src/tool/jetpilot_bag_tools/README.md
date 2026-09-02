@@ -1,5 +1,41 @@
 # jetpilot_bag_tools
 
+## Throttle-speed calibration
+
+Record straight runs at several fixed forward throttle commands. Keep steering close to zero and
+hold each command for at least 6 seconds so the final 2 seconds can be checked for steady speed.
+Start with the low-speed operating range (for example 0.20, 0.25, 0.30, 0.35); do not start with
+full throttle.
+
+```bash
+ros2 bag record \
+  /vehicle/control_cmd \
+  /visual_slam/tracking/odometry \
+  /operation_mode/state
+```
+
+Analyze the completed bag in a sourced ROS 2 environment:
+
+```bash
+ros2 run jetpilot_bag_tools calibrate_throttle_from_bag.py /path/to/bag
+```
+
+The tool rejects turning, braking, reverse, short, and still-accelerating segments. It writes:
+
+- `throttle_speed_calibration.csv`: compact measured table;
+- `throttle_speed_calibration.json`: points plus accepted/rejected run diagnostics;
+- `controller_throttle_calibration.param.yaml`: controller feedforward arrays.
+
+Multiple throttle stages belong in one bag; zero/changing-command intervals split the stages and
+repeated commands are aggregated. Stationary low-command points remain in CSV/JSON as useful ESC
+dead-zone measurements, but speeds below `--minimum-steady-speed-mps` (default 0.05 m/s) are
+excluded from the controller interpolation table.
+
+Pass the generated controller YAML to bringup as
+`control_throttle_calibration_file:=/path/to/controller_throttle_calibration.param.yaml`.
+The controller linearly interpolates target speed to throttle feedforward, then applies PID only
+to the remaining error.
+
 JetPilot 用の rosbag 操作 package です。joystick や UI から `/bag/request` を publish するだけで、走行中の記録開始・停止と状態監視を行えます。
 
 ## Node

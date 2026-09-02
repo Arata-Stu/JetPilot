@@ -85,6 +85,8 @@ Pure Pursuit は planner の `Path` を `base_link` 座標へ変換し、現在�
 longitudinal側はfeed-forwardを基準に、target speedとodometry speedの差をPID補正して
 throttle/brakeを出します。目標速度が正ならdeadband内でもfeed-forwardを維持し、
 Tamiya ESCでneutralへ落ちることによる断続的なエンジンブレーキを避けます。
+`throttle_feedforward_speeds_mps`と`throttle_feedforward_commands`を指定すると、
+固定値の代わりに実車キャリブレーション表を線形補間します。
 `minimum_moving_throttle_command`は有効な走行目標がある間の下限を定め、
 `active_braking_enabled: false`では通常追従中の明示brakeを禁止します。
 目標速度ゼロと安全停止ではPID状態をresetします。active brakingを有効にした場合は、

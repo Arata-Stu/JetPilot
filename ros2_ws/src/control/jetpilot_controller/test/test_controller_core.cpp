@@ -234,6 +234,22 @@ TEST(LongitudinalController, HoldsFeedforwardInsideDeadband)
   EXPECT_DOUBLE_EQ(command.brake, 0.0);
 }
 
+TEST(LongitudinalController, InterpolatesCalibratedFeedforwardMap)
+{
+  LongitudinalParams params;
+  params.throttle_kp = 0.0;
+  params.throttle_ki = 0.0;
+  params.throttle_kd = 0.0;
+  params.speed_deadband_mps = 0.0;
+  params.brake_activation_error_mps = 1.0;
+  params.throttle_feedforward_speeds_mps = {0.3, 0.6, 1.0};
+  params.throttle_feedforward_commands = {0.2, 0.25, 0.3};
+  LongitudinalController controller(params);
+
+  EXPECT_NEAR(controller.compute(0.45, 0.45).throttle, 0.225, 1.0e-9);
+  EXPECT_NEAR(controller.compute(2.0, 2.0).throttle, 0.3, 1.0e-9);
+}
+
 TEST(LongitudinalController, IntegralTermBuildsAndResetClearsIt)
 {
   LongitudinalParams params;

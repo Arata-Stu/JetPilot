@@ -76,6 +76,10 @@ path_tracking_controller_node:
     throttle_ki: 0.10
     throttle_kd: 0.0
     throttle_feedforward: 0.20
+    # Optional calibrated map. When populated, target speed is linearly
+    # interpolated to a feedforward command instead of the scalar above.
+    # throttle_feedforward_speeds_mps: [0.3, 0.6, 1.0]
+    # throttle_feedforward_commands: [0.20, 0.25, 0.30]
     throttle_integral_error_limit: 1.0
     brake_kp: 0.5
     speed_deadband_mps: 0.02

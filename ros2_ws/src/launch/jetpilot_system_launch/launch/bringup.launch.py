@@ -373,6 +373,12 @@ def generate_launch_description() -> lut.LaunchDescription:
         'control_param',
         lu.get_path('jetpilot_controller', 'config/controller.param.yaml'),
         cli=True)
+    args.add_arg(
+        'control_throttle_calibration_file',
+        lu.get_path(
+            'jetpilot_controller',
+            'config/throttle_calibration.empty.param.yaml'),
+        cli=True)
     args.add_arg('controller_diagnostics_topic', '/controller/diagnostics', cli=True)
 
     args.add_arg('enable_planning', False, cli=True)
@@ -807,6 +813,7 @@ def generate_launch_description() -> lut.LaunchDescription:
             'launch/control.launch.py',
             launch_arguments={
                 'control_param': args.control_param,
+                'throttle_calibration_file': args.control_throttle_calibration_file,
                 'diagnostics_topic': args.controller_diagnostics_topic,
                 'use_sim_time': args.use_sim_time,
             },

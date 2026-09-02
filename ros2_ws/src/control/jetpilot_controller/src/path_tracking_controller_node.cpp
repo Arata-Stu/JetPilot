@@ -181,6 +181,12 @@ void PathTrackingControllerNode::declare_and_read_parameters()
   longitudinal_params.throttle_kd = declare_parameter<double>("throttle_kd", 0.0);
   longitudinal_params.throttle_feedforward =
     declare_parameter<double>("throttle_feedforward", 0.20);
+  longitudinal_params.throttle_feedforward_speeds_mps =
+    declare_parameter<std::vector<double>>(
+      "throttle_feedforward_speeds_mps", std::vector<double>{});
+  longitudinal_params.throttle_feedforward_commands =
+    declare_parameter<std::vector<double>>(
+      "throttle_feedforward_commands", std::vector<double>{});
   longitudinal_params.throttle_integral_error_limit =
     declare_parameter<double>("throttle_integral_error_limit", 1.0);
   longitudinal_params.throttle_acceleration_feedforward =

@@ -45,11 +45,51 @@ LongitudinalController::LongitudinalController(LongitudinalParams params)
   {
     throw std::invalid_argument("longitudinal command limits must be in [0, 1]");
   }
+  if (params_.throttle_feedforward_speeds_mps.size() !=
+    params_.throttle_feedforward_commands.size())
+  {
+    throw std::invalid_argument("throttle feedforward map arrays must have equal lengths");
+  }
+  for (std::size_t index = 0; index < params_.throttle_feedforward_speeds_mps.size(); ++index)
+  {
+    const double speed = params_.throttle_feedforward_speeds_mps[index];
+    const double command = params_.throttle_feedforward_commands[index];
+    if (!std::isfinite(speed) || speed < 0.0 || !std::isfinite(command) || command < 0.0 ||
+      command > 1.0 || (index > 0 && speed <= params_.throttle_feedforward_speeds_mps[index - 1]))
+    {
+      throw std::invalid_argument(
+        "throttle feedforward speeds must increase and commands must be in [0, 1]");
+    }
+  }
 }
 
 const LongitudinalParams & LongitudinalController::params() const noexcept
 {
   return params_;
+}
+
+double LongitudinalController::feedforward_for_speed(const double target_speed_mps) const noexcept
+{
+  const auto & speeds = params_.throttle_feedforward_speeds_mps;
+  const auto & commands = params_.throttle_feedforward_commands;
+  if (speeds.empty())
+  {
+    return params_.throttle_feedforward;
+  }
+  if (target_speed_mps <= speeds.front())
+  {
+    return commands.front();
+  }
+  if (target_speed_mps >= speeds.back())
+  {
+    return commands.back();
+  }
+  const auto upper = std::upper_bound(speeds.begin(), speeds.end(), target_speed_mps);
+  const std::size_t upper_index = static_cast<std::size_t>(upper - speeds.begin());
+  const std::size_t lower_index = upper_index - 1U;
+  const double ratio = (target_speed_mps - speeds[lower_index]) /
+    (speeds[upper_index] - speeds[lower_index]);
+  return commands[lower_index] + ratio * (commands[upper_index] - commands[lower_index]);
 }
 
 LongitudinalCommand LongitudinalController::compute(
@@ -72,6 +112,7 @@ LongitudinalCommand LongitudinalController::compute(
   }
 
   const double error = target - speed;
+  const double feedforward = feedforward_for_speed(target);
   if (params_.active_braking_enabled &&
     (error < -params_.brake_activation_error_mps || target_acceleration_mps2 < 0.0))
   {
@@ -84,18 +125,20 @@ LongitudinalCommand LongitudinalController::compute(
   }
 
   const double controlled_error = std::abs(error) <= params_.speed_deadband_mps ? 0.0 : error;
-  const double derivative = previous_error_valid_ ? (controlled_error - previous_error_) / dt_s : 0.0;
+  const double derivative = previous_error_valid_ ?
+    (controlled_error - previous_error_) / dt_s : 0.0;
   const double candidate_integral = std::clamp(
     integral_error_ + controlled_error * dt_s,
     -params_.throttle_integral_error_limit, params_.throttle_integral_error_limit);
   const auto throttle_for_integral = [&](const double integral) {
-      return params_.throttle_feedforward + params_.throttle_kp * controlled_error +
+      return feedforward + params_.throttle_kp * controlled_error +
              params_.throttle_ki * integral + params_.throttle_kd * derivative +
              params_.throttle_acceleration_feedforward *
              std::max(0.0, target_acceleration_mps2);
     };
   const double candidate_throttle = throttle_for_integral(candidate_integral);
-  const bool saturating_high = candidate_throttle > params_.max_throttle_command && controlled_error > 0.0;
+  const bool saturating_high =
+    candidate_throttle > params_.max_throttle_command && controlled_error > 0.0;
   const bool saturating_low =
     candidate_throttle < params_.minimum_moving_throttle_command && controlled_error < 0.0;
   if (!saturating_high && !saturating_low)
