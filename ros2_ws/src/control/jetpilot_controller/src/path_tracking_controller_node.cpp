@@ -176,15 +176,21 @@ void PathTrackingControllerNode::declare_and_read_parameters()
     declare_parameter<double>("mpc_terminal_path_error_weight", 2.0);
 
   LongitudinalParams longitudinal_params;
-  longitudinal_params.throttle_kp = declare_parameter<double>("throttle_kp", 0.5);
+  longitudinal_params.throttle_kp = declare_parameter<double>("throttle_kp", 0.15);
+  longitudinal_params.throttle_ki = declare_parameter<double>("throttle_ki", 0.10);
+  longitudinal_params.throttle_kd = declare_parameter<double>("throttle_kd", 0.0);
   longitudinal_params.throttle_feedforward =
-    declare_parameter<double>("throttle_feedforward", 0.05);
+    declare_parameter<double>("throttle_feedforward", 0.20);
+  longitudinal_params.throttle_integral_error_limit =
+    declare_parameter<double>("throttle_integral_error_limit", 1.0);
   longitudinal_params.throttle_acceleration_feedforward =
     declare_parameter<double>("throttle_acceleration_feedforward", 0.0);
   longitudinal_params.brake_kp = declare_parameter<double>("brake_kp", 0.5);
   longitudinal_params.brake_deceleration_feedforward =
     declare_parameter<double>("brake_deceleration_feedforward", 0.0);
   longitudinal_params.speed_deadband_mps = declare_parameter<double>("speed_deadband_mps", 0.05);
+  longitudinal_params.brake_activation_error_mps =
+    declare_parameter<double>("brake_activation_error_mps", 0.20);
   longitudinal_params.max_throttle_command =
     declare_parameter<double>("max_throttle_command", 0.35);
   longitudinal_params.max_brake_command = declare_parameter<double>("max_brake_command", 0.3);
@@ -799,7 +805,7 @@ void PathTrackingControllerNode::control_cycle()
     profile_acceleration_mps2 = 0.0;
   }
   const auto longitudinal = longitudinal_controller_->compute(
-    limited_target_speed, *speed, profile_acceleration_mps2);
+    limited_target_speed, *speed, profile_acceleration_mps2, 1.0 / control_rate_hz_);
 
   jetpilot_msgs::msg::ControlCommand command;
   command.header.stamp = now();
@@ -905,6 +911,7 @@ void PathTrackingControllerNode::publish_safety_stop(const std::string & reason)
   command_pub_->publish(command);
   publish_tracking_stop_visualization(reason, command.header.stamp);
   previous_steering_command_ = 0.0;
+  longitudinal_controller_->reset();
   last_control_at_ = std::chrono::steady_clock::now();
 
   RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "Controller safety stop: %s",

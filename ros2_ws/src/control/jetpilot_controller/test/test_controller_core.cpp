@@ -212,12 +212,30 @@ TEST(LongitudinalController, BrakesOverspeedAndRespectsLimit)
   EXPECT_DOUBLE_EQ(command.brake, 0.2);
 }
 
-TEST(LongitudinalController, HoldsNeutralInsideDeadband)
+TEST(LongitudinalController, HoldsFeedforwardInsideDeadband)
 {
   LongitudinalController controller(LongitudinalParams{});
   const auto command = controller.compute(1.0, 1.01);
-  EXPECT_DOUBLE_EQ(command.throttle, 0.0);
+  EXPECT_DOUBLE_EQ(command.throttle, 0.05);
   EXPECT_DOUBLE_EQ(command.brake, 0.0);
+}
+
+TEST(LongitudinalController, IntegralTermBuildsAndResetClearsIt)
+{
+  LongitudinalParams params;
+  params.throttle_kp = 0.0;
+  params.throttle_ki = 0.5;
+  params.throttle_kd = 0.0;
+  params.throttle_feedforward = 0.2;
+  params.speed_deadband_mps = 0.0;
+  params.brake_activation_error_mps = 1.0;
+  params.max_throttle_command = 1.0;
+  LongitudinalController controller(params);
+
+  EXPECT_NEAR(controller.compute(1.0, 0.5, 0.0, 1.0).throttle, 0.45, 1.0e-9);
+  EXPECT_NEAR(controller.compute(1.0, 0.5, 0.0, 1.0).throttle, 0.70, 1.0e-9);
+  EXPECT_DOUBLE_EQ(controller.compute(0.0, 0.0, 0.0, 1.0).throttle, 0.0);
+  EXPECT_NEAR(controller.compute(1.0, 0.5, 0.0, 1.0).throttle, 0.45, 1.0e-9);
 }
 
 TEST(LongitudinalController, AppliesOptionalAccelerationFeedforward)
@@ -228,7 +246,7 @@ TEST(LongitudinalController, AppliesOptionalAccelerationFeedforward)
   LongitudinalController controller(params);
 
   const auto accelerating = controller.compute(1.0, 1.0, 0.5);
-  EXPECT_NEAR(accelerating.throttle, 0.05, 1.0e-9);
+  EXPECT_NEAR(accelerating.throttle, 0.1, 1.0e-9);
   EXPECT_DOUBLE_EQ(accelerating.brake, 0.0);
 
   const auto braking = controller.compute(1.0, 1.0, -0.5);

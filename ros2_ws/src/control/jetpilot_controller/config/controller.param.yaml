@@ -70,14 +70,19 @@ path_tracking_controller_node:
     mpc_steering_weight: 0.15
     mpc_terminal_path_error_weight: 2.0
 
-    # Simple bounded longitudinal controller. A lateral-acceleration limit reduces
-    # target speed in tight curves before throttle/brake are calculated.
-    throttle_kp: 0.5
-    throttle_feedforward: 0.05
+    # Feedforward + PID speed controller. Tamiya ESC applies strong drag at zero,
+    # so feedforward remains active inside the speed deadband while moving.
+    throttle_kp: 0.15
+    throttle_ki: 0.10
+    throttle_kd: 0.0
+    throttle_feedforward: 0.20
+    throttle_integral_error_limit: 1.0
     brake_kp: 0.5
-    speed_deadband_mps: 0.05
-    max_throttle_command: 0.15
-    max_brake_command: 0.3
+    speed_deadband_mps: 0.02
+    # Do not switch from holding throttle to braking for small odometry noise.
+    brake_activation_error_mps: 0.20
+    max_throttle_command: 0.25
+    max_brake_command: 0.15
     max_lateral_accel_mps2: 2.0
     # Use the minimum custom/raceline speed inside this forward window so the
     # controller starts slowing before a manually marked slow section.
