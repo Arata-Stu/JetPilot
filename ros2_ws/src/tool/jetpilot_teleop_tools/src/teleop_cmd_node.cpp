@@ -16,7 +16,14 @@ TeleopCmdNode::TeleopCmdNode() : Node("teleop_cmd_node")
   brake_button_ = declare_parameter<int>("brake_button", -1);
   deadman_button_ = declare_parameter<int>("deadman_button", 3);
   steering_scale_ = declare_numeric_parameter("steering_scale", 1.0);
-  throttle_scale_ = declare_numeric_parameter("throttle_scale", 1.0);
+  throttle_scale_step_ = std::max(0.0, declare_numeric_parameter("throttle_scale_step", 0.05));
+  throttle_scale_min_ = std::clamp(
+    declare_numeric_parameter("throttle_scale_min", 0.0), 0.0, 1.0);
+  throttle_scale_max_ = std::clamp(
+    declare_numeric_parameter("throttle_scale_max", 1.0), throttle_scale_min_, 1.0);
+  throttle_scale_.store(std::clamp(
+    declare_numeric_parameter("throttle_scale", 1.0),
+    throttle_scale_min_, throttle_scale_max_));
   reverse_scale_ = declare_numeric_parameter("reverse_scale", 1.0);
   brake_value_ = std::clamp(declare_numeric_parameter("brake_value", 1.0), 0.0, 1.0);
   deadzone_ = std::clamp(declare_numeric_parameter("deadzone", 0.05), 0.0, 1.0);
@@ -29,10 +36,33 @@ TeleopCmdNode::TeleopCmdNode() : Node("teleop_cmd_node")
   reverse_trigger_max_ = declare_numeric_parameter("reverse_trigger_max", trigger_max_);
   reverse_trigger_inverted_ = declare_parameter<bool>("reverse_trigger_inverted", false);
 
+  parameter_callback_handle_ = add_on_set_parameters_callback(
+    [this](const std::vector<rclcpp::Parameter> & parameters) {
+      return handle_parameters(parameters);
+    });
+
   joy_sub_ = create_subscription<sensor_msgs::msg::Joy>(
     "/joy", 10, [this](const sensor_msgs::msg::Joy::SharedPtr msg) { handle_joy(*msg); });
+  speed_offset_inc_sub_ = create_subscription<std_msgs::msg::Bool>(
+    "/speed_offset_inc", 10, [this](const std_msgs::msg::Bool::SharedPtr msg) {
+      if (msg->data)
+      {
+        adjust_throttle_scale(1.0);
+      }
+    });
+  speed_offset_dec_sub_ = create_subscription<std_msgs::msg::Bool>(
+    "/speed_offset_dec", 10, [this](const std_msgs::msg::Bool::SharedPtr msg) {
+      if (msg->data)
+      {
+        adjust_throttle_scale(-1.0);
+      }
+    });
   const auto qos_cmd = rclcpp::QoS(rclcpp::KeepLast(1)).best_effort();
   cmd_pub_ = create_publisher<jetpilot_msgs::msg::ControlCommand>("/teleop/control_cmd", qos_cmd);
+
+  // Keep introspection (`ros2 param get`) consistent when an out-of-range startup value was
+  // clamped above.
+  set_parameter(rclcpp::Parameter("throttle_scale", throttle_scale_.load()));
 }
 
 double TeleopCmdNode::declare_numeric_parameter(const std::string & name,
@@ -91,6 +121,54 @@ double TeleopCmdNode::normalized_trigger(const sensor_msgs::msg::Joy & joy, cons
   return std::clamp(normalized * scale, 0.0, 1.0);
 }
 
+void TeleopCmdNode::adjust_throttle_scale(const double direction)
+{
+  const double previous = throttle_scale_.load();
+  const double requested = std::clamp(
+    previous + direction * throttle_scale_step_, throttle_scale_min_, throttle_scale_max_);
+  if (std::abs(requested - previous) < 1.0e-9)
+  {
+    RCLCPP_INFO(get_logger(), "Throttle scale remains at limit %.3f", previous);
+    return;
+  }
+
+  const auto result = set_parameter(rclcpp::Parameter("throttle_scale", requested));
+  if (!result.successful)
+  {
+    RCLCPP_WARN(get_logger(), "Failed to change throttle scale: %s", result.reason.c_str());
+  }
+}
+
+rcl_interfaces::msg::SetParametersResult TeleopCmdNode::handle_parameters(
+  const std::vector<rclcpp::Parameter> & parameters)
+{
+  rcl_interfaces::msg::SetParametersResult result;
+  result.successful = true;
+  for (const auto & parameter : parameters)
+  {
+    if (parameter.get_name() != "throttle_scale")
+    {
+      continue;
+    }
+    if (parameter.get_type() != rclcpp::ParameterType::PARAMETER_DOUBLE)
+    {
+      result.successful = false;
+      result.reason = "throttle_scale must be a double";
+      return result;
+    }
+    const double value = parameter.as_double();
+    if (!std::isfinite(value) || value < throttle_scale_min_ || value > throttle_scale_max_)
+    {
+      result.successful = false;
+      result.reason = "throttle_scale must be within configured min/max";
+      return result;
+    }
+    throttle_scale_.store(value);
+    RCLCPP_INFO(get_logger(), "Throttle scale changed to %.3f", value);
+  }
+  return result;
+}
+
 void TeleopCmdNode::handle_joy(const sensor_msgs::msg::Joy & joy)
 {
   jetpilot_msgs::msg::ControlCommand cmd;
@@ -106,7 +184,7 @@ void TeleopCmdNode::handle_joy(const sensor_msgs::msg::Joy & joy)
                               : 0.0;
     cmd.steering = static_cast<float>(std::clamp(steering, -1.0, 1.0));
     cmd.throttle = static_cast<float>(
-      normalized_trigger(joy, throttle_axis_, throttle_scale_, throttle_trigger_min_,
+      normalized_trigger(joy, throttle_axis_, throttle_scale_.load(), throttle_trigger_min_,
                          throttle_trigger_max_, throttle_trigger_inverted_));
     cmd.reverse = static_cast<float>(normalized_trigger(joy, reverse_axis_, reverse_scale_,
                                                         reverse_trigger_min_, reverse_trigger_max_,

@@ -6942,6 +6942,7 @@ function renderHdMapEditor(detail) {
   const selected = Boolean(editor.selected);
   const assist = normalizedMapEditorAssistSettings();
   const canSmooth = canSmoothSelectedEditorRange();
+  const reverseIssue = mapEditorDirectionReverseIssue(detail, lane);
   const status = !rasterReady ? "Raster required" : issue || (editor.dirty ? "Unsaved" : "Ready");
   const canSave = editor.enabled && rasterReady && !issue;
   return `
@@ -6956,6 +6957,7 @@ function renderHdMapEditor(detail) {
         <button id="map-editor-redo" onclick="redoMapEditor()" ${editor.enabled && editor.redoStack.length ? "" : "disabled"}>Redo</button>
         <button id="map-editor-save" class="${actionBusy("hd-map:save") ? "is-busy" : ""}" onclick="saveHdMapFromEditor()" ${canSave ? "" : "disabled"} ${actionButtonAttrs("hd-map:save", "HD map is saving...")}>${esc(actionButtonLabel("hd-map:save", "Save", "Saving..."))}</button>
         <button id="map-editor-auto-center" onclick="regenerateEditorCenterlineFromBounds()" ${editor.enabled ? "" : "disabled"}>Auto Center</button>
+        <button id="map-editor-reverse-direction" onclick="reverseActiveMapEditorLaneDirection()" ${editor.enabled && !reverseIssue ? "" : "disabled"} title="${esc(reverseIssue || "Reverse centerline order and swap left/right boundaries")}">Reverse Direction</button>
         <button id="map-editor-delete" class="danger" onclick="deleteSelectedEditorPoint()" ${editor.enabled && selected ? "" : "disabled"}>Delete Pt</button>
       </div>
       <label class="map-editor-lane-select">
@@ -10866,6 +10868,63 @@ function toggleEditorCenterline(checked) {
   drawMapPreview();
 }
 
+function reverseDirectionPolyline(points, closedLoop) {
+  const cloned = cloneMapPolyline(points || []);
+  if (closedLoop && cloned.length > 1) {
+    return [cloned[0], ...cloned.slice(1).reverse()];
+  }
+  return cloned.reverse();
+}
+
+function mapEditorDirectionReverseIssue(detail, lane = activeEditorLane()) {
+  if (!lane) return "No lane selected";
+  if ((lane.centerline || []).length < 2) return "Centerline needs at least two points";
+  const mapPath = detail?.map?.path || "";
+  const gates = state.sectionEditor.mapPath === mapPath
+    ? state.sectionEditor.gates
+    : (detail?.hd_map?.section_gates || []);
+  if (gates.some((gate) => String(gate.lane_id || "") === String(lane.id || ""))) {
+    return "Remove this lane's Section Gates before reversing direction";
+  }
+  const sections = detail?.hd_map?.sections || [];
+  if (sections.some((section) => String(section.lane_id || "") === String(lane.id || ""))) {
+    return "Remove this lane's Sections before reversing direction";
+  }
+  const junctions = state.junctionEditor.mapPath === mapPath
+    ? state.junctionEditor.junctions
+    : (detail?.hd_map?.junctions || []);
+  if (junctions.length) return "Remove Junctions before reversing lane direction";
+  return "";
+}
+
+function reverseActiveMapEditorLaneDirection() {
+  const detail = state.selectedMapDetail;
+  if (!detail || !state.mapEditor.enabled) return;
+  ensureMapEditor(detail);
+  const lane = activeEditorLane();
+  const issue = mapEditorDirectionReverseIssue(detail, lane);
+  if (issue) {
+    toast(issue, "error");
+    return;
+  }
+  if (!confirmAction({
+    title: "Reverse lane direction?",
+    target: lane.id,
+    detail: "The START position stays fixed. Centerline order will reverse, and left/right boundaries will swap. Save HD Map to apply it.",
+  })) return;
+  rememberMapEditorState();
+  const oldLeft = lane.left_bound;
+  const oldRight = lane.right_bound;
+  lane.centerline = reverseDirectionPolyline(lane.centerline, lane.closed_loop);
+  lane.left_bound = reverseDirectionPolyline(oldRight, lane.closed_loop);
+  lane.right_bound = reverseDirectionPolyline(oldLeft, lane.closed_loop);
+  state.mapEditor.selected = null;
+  state.mapEditor.dragging = null;
+  markMapEditorDirty();
+  updateMapEditorChrome();
+  drawMapPreview();
+}
+
 function markMapEditorDirty() {
   state.mapEditor.dirty = true;
   state.mapEditor.revision = Number(state.mapEditor.revision || 0) + 1;
@@ -10894,6 +10953,12 @@ function updateMapEditorChrome() {
   if (redo) redo.disabled = !(state.mapEditor.enabled && state.mapEditor.redoStack.length);
   const autoCenter = $("map-editor-auto-center");
   if (autoCenter) autoCenter.disabled = !(state.mapEditor.enabled && (lane.left_bound || []).length >= 2 && (lane.right_bound || []).length >= 2);
+  const reverseDirection = $("map-editor-reverse-direction");
+  if (reverseDirection) {
+    const reverseIssue = mapEditorDirectionReverseIssue(detail, lane);
+    reverseDirection.disabled = !(state.mapEditor.enabled && !reverseIssue);
+    reverseDirection.title = reverseIssue || "Reverse centerline order and swap left/right boundaries";
+  }
   const smooth = $("map-editor-smooth");
   if (smooth) smooth.disabled = !canSmoothSelectedEditorRange();
   const assist = normalizedMapEditorAssistSettings();
@@ -13529,6 +13594,7 @@ window.undoMapEditor = undoMapEditor;
 window.redoMapEditor = redoMapEditor;
 window.toggleEditorClosedLoop = toggleEditorClosedLoop;
 window.toggleEditorCenterline = toggleEditorCenterline;
+window.reverseActiveMapEditorLaneDirection = reverseActiveMapEditorLaneDirection;
 window.updateMapEditorAssistNumber = updateMapEditorAssistNumber;
 window.smoothSelectedEditorRange = smoothSelectedEditorRange;
 window.regenerateEditorCenterlineFromBounds = regenerateEditorCenterlineFromBounds;

@@ -25,6 +25,18 @@ Joystick 入力を JetPilot の mode request、bag request、正規化 control c
 
 `teleop_cmd_node` は deadman button が押されている間だけ joystick 値を指令へ変換します。deadman が無効または離されている場合は steering/throttle/brake/reverse をすべて0にします。
 
+`/speed_offset_inc` または `/speed_offset_dec` に `std_msgs/msg/Bool(data=true)` を1回送ると、`throttle_scale_step` ずつスロットルスケールを変更します。範囲は `throttle_scale_min` から `throttle_scale_max` までに制限され、現在値は `ros2 param get /teleop_cmd_node throttle_scale` で確認できます。D-padの既存割り当ては変更しません。
+
+たとえば、初期値を0.10にして10秒ごとに4回増加させ、最終的に0.30にする場合は次のように実行します。
+
+```bash
+ros2 param set /teleop_cmd_node throttle_scale 0.10
+for step in 1 2 3 4; do
+  sleep 10
+  ros2 topic pub --once /speed_offset_inc std_msgs/msg/Bool "{data: true}"
+done
+```
+
 steering は `steering_axis` に deadzone と scale をかけ、`[-1.0, 1.0]` に clamp します。throttle と reverse は trigger axis を `trigger_min` から `trigger_max` の範囲で `[0.0, 1.0]` に正規化し、個別の min/max/inverted parameter で controller ごとの差を吸収します。brake button が押された場合は `brake_value` を出します。
 
 ## Button algorithm

@@ -1,11 +1,15 @@
 #ifndef JETPILOT_TELEOP_TOOLS__TELEOP_CMD_NODE_HPP_
 #define JETPILOT_TELEOP_TOOLS__TELEOP_CMD_NODE_HPP_
 
+#include <atomic>
 #include <string>
+#include <vector>
 
 #include "jetpilot_msgs/msg/control_command.hpp"
+#include "rcl_interfaces/msg/set_parameters_result.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/joy.hpp"
+#include "std_msgs/msg/bool.hpp"
 
 namespace jetpilot_teleop_tools
 {
@@ -22,6 +26,9 @@ private:
   double apply_deadzone(double value) const;
   double normalized_trigger(const sensor_msgs::msg::Joy & joy, int axis, double scale,
                             double trigger_min, double trigger_max, bool inverted) const;
+  void adjust_throttle_scale(double direction);
+  rcl_interfaces::msg::SetParametersResult handle_parameters(
+    const std::vector<rclcpp::Parameter> & parameters);
   void handle_joy(const sensor_msgs::msg::Joy & joy);
 
   int steering_axis_;
@@ -30,7 +37,10 @@ private:
   int brake_button_;
   int deadman_button_;
   double steering_scale_;
-  double throttle_scale_;
+  std::atomic<double> throttle_scale_;
+  double throttle_scale_step_;
+  double throttle_scale_min_;
+  double throttle_scale_max_;
   double reverse_scale_;
   double brake_value_;
   double deadzone_;
@@ -43,7 +53,10 @@ private:
   double reverse_trigger_max_;
   bool reverse_trigger_inverted_;
   rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr joy_sub_;
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr speed_offset_inc_sub_;
+  rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr speed_offset_dec_sub_;
   rclcpp::Publisher<jetpilot_msgs::msg::ControlCommand>::SharedPtr cmd_pub_;
+  rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr parameter_callback_handle_;
 };
 
 }  // namespace jetpilot_teleop_tools

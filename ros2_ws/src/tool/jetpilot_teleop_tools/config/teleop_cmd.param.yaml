@@ -8,6 +8,10 @@ teleop_cmd_node:
     # Normalize the observed joystick axis so stick-left is positive in ROS.
     steering_scale: -1.0
     throttle_scale: 1.0
+    # /speed_offset_inc and /speed_offset_dec change throttle_scale by this step.
+    throttle_scale_step: 0.05
+    throttle_scale_min: 0.0
+    throttle_scale_max: 1.0
     reverse_scale: 1.0
     brake_value: 1.0
     deadzone: 0.05
