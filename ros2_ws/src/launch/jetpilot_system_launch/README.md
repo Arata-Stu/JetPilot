@@ -2,6 +2,28 @@
 
 JetPilot 全体の bringup をまとめる launch package です。tool、operation、planning、control、E2E inference、sensor、localization、vehicle interface を個別に有効化し、topic 名と安全条件を1箇所で揃えます。
 
+## Competition rule-based bringup
+
+`scripts/bringup.sh`のTUIには`competition` presetがあります。これを選ぶと、live sensor、
+localization、HD map publisher、section localizer、YOLO、信号分岐planning manager、
+breadcrumb recovery planner、path-tracking controller、operation manager、選択したvehicle
+interfaceをまとめて起動します。
+
+```bash
+./scripts/bringup.sh
+```
+
+TUIで`competition`を選び、vehicle、sensor kit、mapを指定してください。選択するmapには
+`competition_route.param.yaml`が必要です。非対話で起動する場合は次のとおりです。
+
+```bash
+./scripts/bringup.sh competition --vehicle vesc \
+  --map /workspaces/map/course_a
+```
+
+このpresetはYOLO出力を`/perception/signal/detections`へ接続し、通常版とcompetition版の
+route selectorが同時起動しないようにします。
+
 ## 主な launch
 
 | Launch | 用途 |

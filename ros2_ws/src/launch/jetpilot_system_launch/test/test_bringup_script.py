@@ -75,6 +75,7 @@ def test_presets_are_listed() -> None:
         "drive",
         "e2e",
         "runtime",
+        "competition",
         "localization",
         "localize-live",
         "replay-localization",
@@ -268,6 +269,51 @@ def test_e2e_preset_enables_direct_control_stack_without_rule_based_control() ->
     assert "enable_control:=false" in output
     assert "enable_localization:=false" in output
     assert "E2E inference: true" in output
+
+
+def test_competition_preset_enables_complete_rule_based_stack() -> None:
+    output = run_launcher(
+        "competition",
+        "--vehicle",
+        "vesc",
+        "--map",
+        "/workspaces/map/course_a",
+        "--dry-run",
+    ).stdout
+
+    for argument in (
+        "enable_sensor_kit:=true",
+        "enable_localization:=true",
+        "enable_hd_map_publisher:=true",
+        "enable_section_localizer:=true",
+        "enable_competition_planning:=true",
+        "enable_object_detection:=true",
+        "object_detection_detections_topic:=/perception/signal/detections",
+        "enable_control:=true",
+        "enable_operation:=true",
+        "enable_vehicle:=true",
+        "competition_route_config_file:=/workspaces/map/course_a/competition_route.param.yaml",
+    ):
+        assert argument in output
+    assert "enable_planning:=false" in output
+    assert "enable_e2e_inference:=false" in output
+
+
+def test_competition_and_standard_planning_cannot_start_together() -> None:
+    result = run_launcher(
+        "competition",
+        "--vehicle",
+        "vesc",
+        "--map",
+        "/workspaces/map/course_a",
+        "--set",
+        "enable_planning:=true",
+        "--dry-run",
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "cannot both be true" in result.stderr
 
 
 def test_x86_disables_jetson_stats_by_default() -> None:

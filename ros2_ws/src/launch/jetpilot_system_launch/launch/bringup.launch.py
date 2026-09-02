@@ -194,12 +194,21 @@ def _validate_replay_vehicle_safety(context):
 def _validate_autonomous_command_source(context):
     controller_enabled = _launch_bool(context, 'enable_control')
     e2e_enabled = _launch_bool(context, 'enable_e2e_inference')
+    planning_enabled = _launch_bool(context, 'enable_planning')
+    competition_planning_enabled = _launch_bool(
+        context, 'enable_competition_planning')
 
     if controller_enabled and e2e_enabled:
         raise RuntimeError(
             'Unsafe launch configuration rejected: enable_control and '
             'enable_e2e_inference cannot both be true because both publish '
             '/auto/control_cmd. Select exactly one autonomous command source.'
+        )
+    if planning_enabled and competition_planning_enabled:
+        raise RuntimeError(
+            'Unsafe launch configuration rejected: enable_planning and '
+            'enable_competition_planning cannot both be true because both start '
+            'a route_lane_selector_node.'
         )
 
     return []
@@ -350,6 +359,35 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('custom_source_hash', '', cli=True)
     args.add_arg('custom_closed', True, cli=True)
     args.add_arg('planning_diagnostics_topic', '/planning/diagnostics', cli=True)
+    args.add_arg('enable_competition_planning', False, cli=True)
+    args.add_arg(
+        'competition_route_config_file',
+        lu.get_path(
+            'jetpilot_planning_manager',
+            'config/route_lane_selector.competition.param.yaml'),
+        cli=True)
+    args.add_arg(
+        'competition_manager_config_file',
+        lu.get_path(
+            'jetpilot_planning_manager',
+            'config/planning_manager.param.yaml'),
+        cli=True)
+    args.add_arg(
+        'competition_signal_config_file',
+        lu.get_path(
+            'jetpilot_signal_detection',
+            'config/signal_detection.param.yaml'),
+        cli=True)
+    args.add_arg(
+        'competition_recovery_config_file',
+        lu.get_path(
+            'jetpilot_recovery_planner',
+            'config/recovery_planner.param.yaml'),
+        cli=True)
+    args.add_arg(
+        'competition_route_diagnostics_topic',
+        '/planning/route/diagnostics',
+        cli=True)
 
     args.add_arg('enable_sensor_kit', False, cli=True)
     args.add_arg('sensor_kit_interface_pkg', 'jetpilot_system_launch', cli=True)
@@ -641,6 +679,21 @@ def generate_launch_description() -> lut.LaunchDescription:
                 'use_sim_time': args.use_sim_time,
             },
             condition=IfCondition(args.enable_planning),
+        ))
+
+    actions.append(
+        lu.include(
+            'jetpilot_planning_manager',
+            'launch/competition_planning.launch.xml',
+            launch_arguments={
+                'route_config_file': args.competition_route_config_file,
+                'manager_config_file': args.competition_manager_config_file,
+                'signal_config_file': args.competition_signal_config_file,
+                'recovery_config_file': args.competition_recovery_config_file,
+                'route_diagnostics_topic': args.competition_route_diagnostics_topic,
+                'use_sim_time': args.use_sim_time,
+            },
+            condition=IfCondition(args.enable_competition_planning),
         ))
 
     actions.append(

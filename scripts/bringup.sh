@@ -110,6 +110,7 @@ teleop               Joy/teleop/operation + selected vehicle interface
 drive                Live sensor + joy/teleop/operation + selected vehicle interface
 e2e                  Live RealSense + E2E inference + joy/teleop/operation + vehicle
 runtime              Live sensor/localization/teleop + Foxglove pose fallback + vehicle (map required)
+competition          Signal-aware rule planner + recovery + controller + live runtime (map required)
 custom               Interactive component selection; all components start OFF
 EOF
 }
@@ -168,6 +169,8 @@ Examples:
   $(basename "$0") --preset vehicle --vehicle pca
   $(basename "$0") --preset drive --vehicle vesc
   $(basename "$0") --preset e2e --vehicle vesc
+  $(basename "$0") --preset competition --vehicle vesc \
+    --map /workspaces/map/course_a
   $(basename "$0") --preset localization --map /workspaces/map/course_a
   $(basename "$0") --preset localization --map /workspaces/map/course_a \
     --localization-init map-origin
@@ -205,7 +208,7 @@ known_preset() {
   case "$1" in
     sensor|localization-only|localization|localize-live|replay-localization|\
       offline-vslam|offline-vslam-map|offline-localization|\
-      vehicle|teleop|drive|e2e|runtime|\
+      vehicle|teleop|drive|e2e|runtime|competition|\
       vehicle-pca|vehicle-vesc|teleop-pca|teleop-vesc|\
       drive-pca|drive-vesc|runtime-pca|runtime-vesc|custom) return 0 ;;
     *) return 1 ;;
@@ -281,10 +284,13 @@ set_base_args() {
   set_arg foxglove_client_topic_whitelist "$FOXGLOVE_DEFAULT_CLIENT_TOPIC_WHITELIST"
   set_arg enable_operation false
   set_arg enable_planning false
+  set_arg enable_competition_planning false
+  set_arg competition_route_config_file ''
   set_arg enable_raceline_publisher false
   set_arg enable_custom_trajectory_publisher false
   set_arg enable_control false
   set_arg enable_e2e_inference false
+  set_arg enable_object_detection false
   set_arg enable_sensor_kit false
   set_arg enable_localization false
   set_arg enable_vslam true
@@ -864,6 +870,20 @@ apply_preset() {
       REQUIRES_VEHICLE=true
       REQUIRES_MAP=true
       ;;
+    competition)
+      enable_teleop_stack
+      set_arg enable_sensor_kit true
+      enable_live_localization_stack
+      set_arg enable_hd_map_publisher true
+      set_arg enable_section_localizer true
+      set_arg enable_planning false
+      set_arg enable_competition_planning true
+      set_arg enable_object_detection true
+      set_arg object_detection_detections_topic /perception/signal/detections
+      set_arg enable_control true
+      REQUIRES_VEHICLE=true
+      REQUIRES_MAP=true
+      ;;
     vehicle-pca)
       apply_vehicle pca
       ;;
@@ -1103,6 +1123,18 @@ apply_custom_component_token() {
     planning)
       set_arg enable_planning true
       ;;
+    competition-planning)
+      enable_localization_stack
+      set_arg enable_hd_map_publisher true
+      set_arg enable_section_localizer true
+      set_arg enable_planning false
+      set_arg enable_competition_planning true
+      set_arg enable_object_detection true
+      set_arg object_detection_detections_topic /perception/signal/detections
+      set_arg enable_control true
+      set_arg enable_operation true
+      REQUIRES_MAP=true
+      ;;
     raceline)
       set_arg enable_planning true
       set_arg enable_raceline_publisher true
@@ -1314,6 +1346,7 @@ interactive_custom() {
     'rc-serial          RC serial reader'
     'operation          Operation manager'
     'planning           Route/lane planning only'
+    'competition-planning Signal planner + recovery + controller'
     'raceline           Planning with generated raceline CSV'
     'custom-line        Planning with named custom line + speed CSV'
     'control            Planning + Pure Pursuit control'
@@ -1539,6 +1572,10 @@ validate_configuration() {
     && is_true "$(get_arg enable_e2e_inference)"; then
     die 'enable_control and enable_e2e_inference cannot be enabled together; both publish /auto/control_cmd'
   fi
+  if is_true "$(get_arg enable_planning)" \
+    && is_true "$(get_arg enable_competition_planning)"; then
+    die 'enable_planning and enable_competition_planning cannot both be true'
+  fi
   if [[ "$REQUIRES_VEHICLE" == 'true' ]] && ! is_true "$vehicle"; then
     die "preset '$PRESET' requires --vehicle PROFILE (see --list-vehicles)"
   fi
@@ -1614,6 +1651,21 @@ validate_configuration() {
     fi
     set_arg map_dir "$MAP_DIR"
   fi
+  if is_true "$(get_arg enable_competition_planning)"; then
+    [[ -n "$MAP_DIR" ]] || die 'competition planning requires --map PATH'
+    is_true "$(get_arg enable_hd_map_publisher)" \
+      || die 'competition planning requires enable_hd_map_publisher=true'
+    is_true "$(get_arg enable_section_localizer)" \
+      || die 'competition planning requires enable_section_localizer=true'
+    local competition_route_config
+    competition_route_config="$(get_arg competition_route_config_file 2>/dev/null || true)"
+    if [[ -z "$competition_route_config" ]]; then
+      competition_route_config="${MAP_DIR%/}/competition_route.param.yaml"
+      set_arg competition_route_config_file "$competition_route_config"
+    fi
+    [[ "$DRY_RUN" == 'true' || -f "$competition_route_config" ]] \
+      || die "competition route config does not exist: $competition_route_config"
+  fi
   if [[ -n "$ROSBAG" ]]; then
     [[ "$DRY_RUN" == 'true' || -f "${ROSBAG%/}/metadata.yaml" ]] \
       || die "rosbag metadata.yaml does not exist: $ROSBAG"
@@ -1675,8 +1727,14 @@ ensure_ros_environment() {
   if is_true "$(get_arg enable_planning)"; then
     packages+=(jetpilot_planning)
   fi
+  if is_true "$(get_arg enable_competition_planning)"; then
+    packages+=(jetpilot_planning_manager)
+  fi
   if is_true "$(get_arg enable_control)"; then
     packages+=(jetpilot_controller)
+  fi
+  if is_true "$(get_arg enable_object_detection)"; then
+    packages+=(jetpilot_object_detection)
   fi
   if is_true "$(get_arg enable_e2e_inference)"; then
     packages+=(jetpilot_e2e_inference)
@@ -1743,6 +1801,7 @@ print_summary() {
     "$(get_arg enable_tool)" "$(get_arg enable_teleop)"
   printf '  operation    : %s\n' "$(get_arg enable_operation)"
   printf '  planning     : %s\n' "$(get_arg enable_planning)"
+  printf '  competition  : %s\n' "$(get_arg enable_competition_planning)"
   printf '  raceline     : %s\n' "${RACELINE_CSV:-none}"
   printf '  custom line  : %s\n' "${CUSTOM_LINE_CSV:-none}"
   printf '  control      : %s\n' "$(get_arg enable_control)"
