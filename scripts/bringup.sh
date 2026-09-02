@@ -110,6 +110,7 @@ teleop               Joy/teleop/operation + selected vehicle interface
 drive                Live sensor + joy/teleop/operation + selected vehicle interface
 e2e                  Live RealSense + E2E inference + joy/teleop/operation + vehicle
 runtime              Live sensor/localization/teleop + Foxglove pose fallback + vehicle (map required)
+map-view             Live localization + HD map + Foxglove initial pose (map required, no actuator)
 competition          Signal-aware rule planner + recovery + controller + live runtime (map required)
 custom               Interactive component selection; all components start OFF
 EOF
@@ -178,6 +179,7 @@ Examples:
     --localization-init foxglove
   $(basename "$0") --preset localization --map /workspaces/map/course_a \
     --vslam-mode vio
+  $(basename "$0") --preset map-view --map /workspaces/map/course_a
   $(basename "$0") custom --components sensor,hd-map,foxglove \\
     --map /workspaces/map/course_a
   $(basename "$0") replay-localization --bag /workspaces/record/run_01 \\
@@ -208,7 +210,7 @@ known_preset() {
   case "$1" in
     sensor|localization-only|localization|localize-live|replay-localization|\
       offline-vslam|offline-vslam-map|offline-localization|\
-      vehicle|teleop|drive|e2e|runtime|competition|\
+      vehicle|teleop|drive|e2e|runtime|map-view|competition|\
       vehicle-pca|vehicle-vesc|teleop-pca|teleop-vesc|\
       drive-pca|drive-vesc|runtime-pca|runtime-vesc|custom) return 0 ;;
     *) return 1 ;;
@@ -735,6 +737,8 @@ normalize_localization_init_mode() {
   if [[ -n "$CLI_LOCALIZATION_INIT" ]]; then
     # A named mode is authoritative over contradictory generic --set overrides.
     set_localization_init_mode "$CLI_LOCALIZATION_INIT"
+  elif [[ "$LOCALIZATION_INIT_MODE" == 'foxglove' ]]; then
+    set_localization_init_mode foxglove
   elif is_true "$(get_arg vslam_localize_on_startup)"; then
     LOCALIZATION_INIT_MODE='map-origin'
   else
@@ -868,6 +872,14 @@ apply_preset() {
       set_arg enable_sensor_kit true
       enable_live_localization_stack
       REQUIRES_VEHICLE=true
+      REQUIRES_MAP=true
+      ;;
+    map-view)
+      set_arg enable_sensor_kit true
+      enable_live_localization_stack
+      set_arg enable_hd_map_publisher true
+      set_arg enable_section_localizer true
+      LOCALIZATION_INIT_MODE='foxglove'
       REQUIRES_MAP=true
       ;;
     competition)
@@ -1233,11 +1245,6 @@ discover_map() {
     done < <(find "$MAP_ROOT" -mindepth 1 -maxdepth 3 -type d \
       \( -name cuvgl_map -o -name cuvslam_map \) -exec dirname {} \; \
       | sort -ru | head -50)
-  fi
-  if ((${#options[@]} == 1)); then
-    MAP_DIR="${options[0]}"
-    printf 'Selected map : %s\n' "$MAP_DIR" >&2
-    return
   fi
   options+=('パスを手入力...')
   selected="$(choose_one 'Map directory' "${options[@]}")" || exit $?
@@ -1664,7 +1671,7 @@ validate_configuration() {
       set_arg competition_route_config_file "$competition_route_config"
     fi
     [[ "$DRY_RUN" == 'true' || -f "$competition_route_config" ]] \
-      || die "competition route config does not exist: $competition_route_config"
+      || die "competition route config does not exist: $competition_route_config (use the map-view preset for Foxglove/HD-map inspection)"
   fi
   if [[ -n "$ROSBAG" ]]; then
     [[ "$DRY_RUN" == 'true' || -f "${ROSBAG%/}/metadata.yaml" ]] \
@@ -1991,6 +1998,9 @@ if [[ "$PRESET" == 'custom' ]]; then
     interactive_custom
   fi
 fi
+if [[ "$REQUIRES_MAP" == 'true' && -z "$MAP_DIR" && "$INTERACTIVE" == 'true' ]]; then
+  discover_map
+fi
 if [[ -n "${CLI_VEHICLE:-}" ]]; then
   apply_vehicle "$CLI_VEHICLE"
 fi
@@ -2025,9 +2035,6 @@ if [[ -n "$RVIZ_CONFIG" ]]; then
   set_arg rviz_config_file "$resolved_rviz_config"
 fi
 
-if [[ "$REQUIRES_MAP" == 'true' && -z "$MAP_DIR" && "$INTERACTIVE" == 'true' ]]; then
-  discover_map
-fi
 if [[ "$REQUIRES_ROSBAG" == 'true' && -z "$ROSBAG" && "$INTERACTIVE" == 'true' ]]; then
   discover_rosbag
 fi

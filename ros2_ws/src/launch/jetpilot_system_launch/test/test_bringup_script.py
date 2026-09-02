@@ -75,6 +75,7 @@ def test_presets_are_listed() -> None:
         "drive",
         "e2e",
         "runtime",
+        "map-view",
         "competition",
         "localization",
         "localize-live",
@@ -297,6 +298,44 @@ def test_competition_preset_enables_complete_rule_based_stack() -> None:
         assert argument in output
     assert "enable_planning:=false" in output
     assert "enable_e2e_inference:=false" in output
+
+
+def test_map_view_preset_enables_foxglove_hd_map_without_actuation() -> None:
+    output = run_launcher(
+        "map-view",
+        "--map",
+        "/workspaces/map/course_a",
+        "--dry-run",
+    ).stdout
+
+    for argument in (
+        "enable_sensor_kit:=true",
+        "enable_localization:=true",
+        "enable_foxglove:=true",
+        "enable_vgl:=false",
+        "enable_hd_map_publisher:=true",
+        "enable_section_localizer:=true",
+    ):
+        assert argument in output
+    assert "enable_competition_planning:=false" in output
+    assert "enable_planning:=false" in output
+    assert "enable_control:=false" in output
+    assert "enable_vehicle:=false" in output
+    assert "VSLAM init   : foxglove (/initialpose required; VGL off)" in output
+
+
+def test_required_map_is_selected_before_vehicle_and_sensor_prompts() -> None:
+    source = LAUNCHER.read_text(encoding="utf-8")
+    selection = source.index(
+        'if [[ "$REQUIRES_MAP" == \'true\' && -z "$MAP_DIR" '
+        '&& "$INTERACTIVE" == \'true\' ]]; then\n  discover_map'
+    )
+    vehicle = source.index("configure_vehicle_interactively", selection)
+    sensor = source.index("configure_sensor_kit_interactively", selection)
+
+    assert selection < vehicle
+    assert selection < sensor
+    assert 'if ((${#options[@]} == 1)); then\n    MAP_DIR="${options[0]}"' not in source
 
 
 def test_competition_and_standard_planning_cannot_start_together() -> None:

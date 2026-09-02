@@ -24,6 +24,13 @@ TUIで`competition`を選び、vehicle、sensor kit、mapを指定してくだ�
 このpresetはYOLO出力を`/perception/signal/detections`へ接続し、通常版とcompetition版の
 route selectorが同時起動しないようにします。
 
+HD mapをFoxgloveで確認して`/initialpose`を配置するだけなら、競技用route設定を要求しない
+`map-view` presetを使用します。VGLとactuatorは起動せず、Foxglove入力を待ちます。
+
+```bash
+./scripts/bringup.sh map-view --map /workspaces/map/course_a
+```
+
 ## 主な launch
 
 | Launch | 用途 |
