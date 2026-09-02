@@ -31,9 +31,12 @@ path_tracking_controller_node:
     require_localization_state: true
     localization_state_timeout_s: 1.5
     require_target_speed: true
-    fallback_target_speed_mps: 0.3
-    # Conservative commissioning limit. Raise only after steering calibration.
-    max_target_speed_mps: 0.3
+    # The measured minimum sustainable speed of the Tamiya 15.5T setup is
+    # approximately 0.8 m/s at throttle 0.10.
+    fallback_target_speed_mps: 0.8
+    # Upper bound of the calibrated 15.5T feedforward table. The route/profile
+    # target and lateral-acceleration limit can still request a lower speed.
+    max_target_speed_mps: 4.813
     stop_at_path_end: true
     goal_tolerance_m: 0.25
 
@@ -75,11 +78,12 @@ path_tracking_controller_node:
     throttle_kp: 0.15
     throttle_ki: 0.10
     throttle_kd: 0.0
-    throttle_feedforward: 0.20
-    # Optional calibrated map. When populated, target speed is linearly
-    # interpolated to a feedforward command instead of the scalar above.
-    # throttle_feedforward_speeds_mps: [0.3, 0.6, 1.0]
-    # throttle_feedforward_commands: [0.20, 0.25, 0.30]
+    # Scalar fallback for configurations that explicitly clear the calibrated map.
+    throttle_feedforward: 0.10
+    # Tamiya 15.5T motor, measured on 2026-09-03. Target speed is linearly
+    # interpolated between these points. The 0.10 point is the agreed estimate.
+    throttle_feedforward_speeds_mps: [0.800, 1.646, 2.366, 3.061, 3.415, 3.982, 4.813]
+    throttle_feedforward_commands: [0.100, 0.150, 0.200, 0.250, 0.300, 0.350, 0.450]
     throttle_integral_error_limit: 1.0
     brake_kp: 0.5
     speed_deadband_mps: 0.02
@@ -87,9 +91,9 @@ path_tracking_controller_node:
     brake_activation_error_mps: 0.20
     # Tamiya ESC treats zero throttle like strong engine braking. During valid
     # forward tracking, keep at least this command and do not request brake.
-    minimum_moving_throttle_command: 0.20
+    minimum_moving_throttle_command: 0.10
     active_braking_enabled: false
-    max_throttle_command: 0.25
+    max_throttle_command: 0.45
     max_brake_command: 0.15
     max_lateral_accel_mps2: 2.0
     # Use the minimum custom/raceline speed inside this forward window so the

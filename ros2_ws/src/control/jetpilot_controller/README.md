@@ -87,6 +87,9 @@ throttle/brakeを出します。目標速度が正ならdeadband内でもfeed-fo
 Tamiya ESCでneutralへ落ちることによる断続的なエンジンブレーキを避けます。
 `throttle_feedforward_speeds_mps`と`throttle_feedforward_commands`を指定すると、
 固定値の代わりに実車キャリブレーション表を線形補間します。
+標準`controller.param.yaml`にはTamiya 15.5T motorの2026-09-03実測値を設定しており、
+`throttle=0.10`の点だけは合意した`0.80 m/s`の推定値です。別motorや駆動系では専用の
+calibration fileで上書きしてください。
 `minimum_moving_throttle_command`は有効な走行目標がある間の下限を定め、
 `active_braking_enabled: false`では通常追従中の明示brakeを禁止します。
 目標速度ゼロと安全停止ではPID状態をresetします。active brakingを有効にした場合は、
