@@ -191,9 +191,13 @@ void PathTrackingControllerNode::declare_and_read_parameters()
   longitudinal_params.speed_deadband_mps = declare_parameter<double>("speed_deadband_mps", 0.05);
   longitudinal_params.brake_activation_error_mps =
     declare_parameter<double>("brake_activation_error_mps", 0.20);
+  longitudinal_params.minimum_moving_throttle_command =
+    declare_parameter<double>("minimum_moving_throttle_command", 0.0);
   longitudinal_params.max_throttle_command =
     declare_parameter<double>("max_throttle_command", 0.35);
   longitudinal_params.max_brake_command = declare_parameter<double>("max_brake_command", 0.3);
+  longitudinal_params.active_braking_enabled =
+    declare_parameter<bool>("active_braking_enabled", true);
   longitudinal_controller_ = std::make_unique<LongitudinalController>(longitudinal_params);
 
   TrailingParams trailing_params;

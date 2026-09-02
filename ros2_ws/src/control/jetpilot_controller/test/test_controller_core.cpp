@@ -212,6 +212,20 @@ TEST(LongitudinalController, BrakesOverspeedAndRespectsLimit)
   EXPECT_DOUBLE_EQ(command.brake, 0.2);
 }
 
+TEST(LongitudinalController, DisabledBrakingKeepsMovingThrottleFloor)
+{
+  LongitudinalParams params;
+  params.throttle_kp = 0.5;
+  params.throttle_feedforward = 0.2;
+  params.minimum_moving_throttle_command = 0.2;
+  params.active_braking_enabled = false;
+  LongitudinalController controller(params);
+
+  const auto command = controller.compute(0.3, 0.6);
+  EXPECT_DOUBLE_EQ(command.throttle, 0.2);
+  EXPECT_DOUBLE_EQ(command.brake, 0.0);
+}
+
 TEST(LongitudinalController, HoldsFeedforwardInsideDeadband)
 {
   LongitudinalController controller(LongitudinalParams{});

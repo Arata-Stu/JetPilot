@@ -85,7 +85,10 @@ Pure Pursuit は planner の `Path` を `base_link` 座標へ変換し、現在�
 longitudinal側はfeed-forwardを基準に、target speedとodometry speedの差をPID補正して
 throttle/brakeを出します。目標速度が正ならdeadband内でもfeed-forwardを維持し、
 Tamiya ESCでneutralへ落ちることによる断続的なエンジンブレーキを避けます。
-目標速度ゼロ、安全停止、十分な過速度ではPID状態をresetします。typed trajectoryが
+`minimum_moving_throttle_command`は有効な走行目標がある間の下限を定め、
+`active_braking_enabled: false`では通常追従中の明示brakeを禁止します。
+目標速度ゼロと安全停止ではPID状態をresetします。active brakingを有効にした場合は、
+十分な過速度でもPID状態をresetしてbrakeへ切り替えます。typed trajectoryが
 選択されている場合は、現在位置をlineへ射影して点ごとの速度・加速度を補間し、
 `trajectory_speed_lookahead_m`区間内の最小速度を先読みします。最終速度はprofile、
 `/planning/target_speed`、`max_target_speed_mps`、曲率由来上限、trailing上限の最小値です。

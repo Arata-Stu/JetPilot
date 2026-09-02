@@ -21,6 +21,7 @@ LongitudinalController::LongitudinalController(LongitudinalParams params)
     !std::isfinite(params_.brake_deceleration_feedforward) ||
     !std::isfinite(params_.speed_deadband_mps) ||
     !std::isfinite(params_.brake_activation_error_mps) ||
+    !std::isfinite(params_.minimum_moving_throttle_command) ||
     !std::isfinite(params_.max_throttle_command) ||
     !std::isfinite(params_.max_brake_command))
   {
@@ -31,12 +32,14 @@ LongitudinalController::LongitudinalController(LongitudinalParams params)
     params_.throttle_feedforward < 0.0 || params_.throttle_integral_error_limit < 0.0 ||
     params_.throttle_acceleration_feedforward < 0.0 || params_.brake_kp < 0.0 ||
     params_.brake_deceleration_feedforward < 0.0 || params_.speed_deadband_mps < 0.0 ||
+    params_.minimum_moving_throttle_command < 0.0 ||
     params_.brake_activation_error_mps < params_.speed_deadband_mps)
   {
     throw std::invalid_argument(
       "longitudinal gains and limits must be >= 0 and brake activation must cover deadband");
   }
   if (
+    params_.minimum_moving_throttle_command > params_.max_throttle_command ||
     params_.max_throttle_command < 0.0 || params_.max_throttle_command > 1.0 ||
     params_.max_brake_command < 0.0 || params_.max_brake_command > 1.0)
   {
@@ -69,7 +72,9 @@ LongitudinalCommand LongitudinalController::compute(
   }
 
   const double error = target - speed;
-  if (error < -params_.brake_activation_error_mps || target_acceleration_mps2 < 0.0) {
+  if (params_.active_braking_enabled &&
+    (error < -params_.brake_activation_error_mps || target_acceleration_mps2 < 0.0))
+  {
     reset();
     command.brake = std::clamp(
       params_.brake_kp * std::max(0.0, -error) +
@@ -91,14 +96,16 @@ LongitudinalCommand LongitudinalController::compute(
     };
   const double candidate_throttle = throttle_for_integral(candidate_integral);
   const bool saturating_high = candidate_throttle > params_.max_throttle_command && controlled_error > 0.0;
-  const bool saturating_low = candidate_throttle < 0.0 && controlled_error < 0.0;
+  const bool saturating_low =
+    candidate_throttle < params_.minimum_moving_throttle_command && controlled_error < 0.0;
   if (!saturating_high && !saturating_low)
   {
     integral_error_ = candidate_integral;
   }
   previous_error_ = controlled_error;
   previous_error_valid_ = true;
-  command.throttle = std::clamp(throttle_for_integral(integral_error_), 0.0,
+  command.throttle = std::clamp(throttle_for_integral(integral_error_),
+                                params_.minimum_moving_throttle_command,
                                 params_.max_throttle_command);
   return command;
 }

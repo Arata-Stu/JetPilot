@@ -81,6 +81,10 @@ path_tracking_controller_node:
     speed_deadband_mps: 0.02
     # Do not switch from holding throttle to braking for small odometry noise.
     brake_activation_error_mps: 0.20
+    # Tamiya ESC treats zero throttle like strong engine braking. During valid
+    # forward tracking, keep at least this command and do not request brake.
+    minimum_moving_throttle_command: 0.20
+    active_braking_enabled: false
     max_throttle_command: 0.25
     max_brake_command: 0.15
     max_lateral_accel_mps2: 2.0

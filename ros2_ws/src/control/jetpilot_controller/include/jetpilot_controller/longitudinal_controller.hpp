@@ -14,8 +14,10 @@ struct LongitudinalParams
   double brake_kp{0.5};
   double speed_deadband_mps{0.05};
   double brake_activation_error_mps{0.05};
+  double minimum_moving_throttle_command{0.0};
   double max_throttle_command{0.35};
   double max_brake_command{0.3};
+  bool active_braking_enabled{true};
   double throttle_acceleration_feedforward{0.0};
   double brake_deceleration_feedforward{0.0};
 };
