@@ -487,6 +487,24 @@ def test_realsense_vio_topic_and_d455_mount_offset_are_configured() -> None:
     assert "args.add_arg('vehicle_description_camera_y', '0.0115'" in bringup_source
 
 
+def test_image_processing_components_share_one_top_level_container() -> None:
+    bringup_source = (
+        PROJECT_ROOT
+        / "ros2_ws/src/launch/jetpilot_system_launch/launch/bringup.launch.py"
+    ).read_text(encoding="utf-8")
+
+    assert "def _create_processing_component_container(context):" in bringup_source
+    assert (
+        "args.add_arg('localization_container_name', 'multi_sensor_container'"
+        in bringup_source
+    )
+    assert (
+        "OpaqueFunction(function=_create_processing_component_container)"
+        in bringup_source
+    )
+    assert bringup_source.count("'run_standalone': False") >= 4
+
+
 def test_openeb_raw_recording_follows_bag_manager_session() -> None:
     project_root = LAUNCHER.parents[1]
     bringup_source = (

@@ -9,6 +9,7 @@ import yaml
 from launch.actions import OpaqueFunction
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, OrSubstitution
+from launch_ros.actions import ComposableNodeContainer
 
 
 _TRUE_VALUES = {'1', 'true', 'yes', 'on'}
@@ -212,6 +213,47 @@ def _validate_autonomous_command_source(context):
         )
 
     return []
+
+
+def _create_processing_component_container(context):
+    sensor_enabled = _launch_bool(context, 'enable_sensor_kit')
+    e2e_enabled = _launch_bool(context, 'enable_e2e_inference')
+    object_detection_enabled = _launch_bool(context, 'enable_object_detection')
+    localization_enabled = _launch_bool(context, 'enable_localization')
+
+    sensor_processing_enabled = (
+        sensor_enabled or e2e_enabled or object_detection_enabled)
+    if not sensor_processing_enabled and not localization_enabled:
+        return []
+
+    sensor_container_name = LaunchConfiguration(
+        'sensor_kit_container_name').perform(context).strip()
+    localization_container_name = LaunchConfiguration(
+        'localization_container_name').perform(context).strip()
+
+    if sensor_processing_enabled and localization_enabled:
+        if sensor_container_name != localization_container_name:
+            raise RuntimeError(
+                'Sensor/perception and localization share one processing component '
+                'container; sensor_kit_container_name and '
+                'localization_container_name must match.')
+        container_name = sensor_container_name
+    elif sensor_processing_enabled:
+        container_name = sensor_container_name
+    else:
+        container_name = localization_container_name
+
+    if not container_name:
+        raise RuntimeError('The processing component container name cannot be empty.')
+
+    return [ComposableNodeContainer(
+        name=container_name,
+        namespace='',
+        package='rclcpp_components',
+        executable='component_container_mt',
+        composable_node_descriptions=[],
+        output='screen',
+    )]
 
 
 def _validate_foxglove_whitelist(value: str, name: str) -> None:
@@ -464,8 +506,7 @@ def generate_launch_description() -> lut.LaunchDescription:
 
     args.add_arg('enable_localization', False, cli=True)
     args.add_arg('localization_camera_name', 'realsense', cli=True)
-    args.add_arg('localization_container_name', 'nova_container', cli=True)
-    args.add_arg('localization_run_standalone', True, cli=True)
+    args.add_arg('localization_container_name', 'multi_sensor_container', cli=True)
     args.add_arg('map_dir', '', cli=True)
     args.add_arg('localization_base_frame', 'base_link', cli=True)
     args.add_arg('enable_vslam', True, cli=True)
@@ -592,6 +633,9 @@ def generate_launch_description() -> lut.LaunchDescription:
     actions.append(OpaqueFunction(function=_validate_autonomous_command_source))
     actions.append(OpaqueFunction(function=_validate_replay_vehicle_safety))
     actions.append(OpaqueFunction(function=_validate_foxglove_configuration))
+    # The top-level launch owns the single image-processing container. Sensor,
+    # localization, and perception launch files only load their composable nodes.
+    actions.append(OpaqueFunction(function=_create_processing_component_container))
 
     rosbag_replay_enabled = lut.AndSubstitution(
         _LaunchBoolean(args.enable_rosbag_replay),
@@ -777,9 +821,7 @@ def generate_launch_description() -> lut.LaunchDescription:
                 'sensor_interface_launch': args.sensor_kit_interface_launch,
                 'camera_name': args.sensor_kit_camera_name,
                 'container_name': args.sensor_kit_container_name,
-                # The sensor launch owns the shared component_container_mt.
-                # E2E inference below loads into this exact container.
-                'run_standalone': True,
+                'run_standalone': False,
                 'enable_depth': args.sensor_kit_enable_depth,
                 'enable_color': args.sensor_kit_enable_color,
                 'enable_rtp_stream': args.sensor_kit_enable_rtp_stream,
@@ -826,8 +868,7 @@ def generate_launch_description() -> lut.LaunchDescription:
             'launch/e2e_tensor_rt.launch.py',
             launch_arguments={
                 'container_name': args.sensor_kit_container_name,
-                'run_standalone': lut.NotSubstitution(
-                    _LaunchBoolean(args.enable_sensor_kit)),
+                'run_standalone': False,
                 'image_topic': args.e2e_image_topic,
                 'camera_info_topic': args.e2e_camera_info_topic,
                 'control_cmd_topic': args.e2e_control_cmd_topic,
@@ -847,8 +888,7 @@ def generate_launch_description() -> lut.LaunchDescription:
             'launch/yolov8_tensor_rt.launch.py',
             launch_arguments={
                 'container_name': args.sensor_kit_container_name,
-                'run_standalone': lut.NotSubstitution(
-                    _LaunchBoolean(args.enable_sensor_kit)),
+                'run_standalone': False,
                 'image_topic': args.object_detection_image_topic,
                 'camera_info_topic': args.object_detection_camera_info_topic,
                 'model_root': args.object_detection_model_root,
@@ -871,7 +911,7 @@ def generate_launch_description() -> lut.LaunchDescription:
             launch_arguments={
                 'camera_name': args.localization_camera_name,
                 'container_name': args.localization_container_name,
-                'run_standalone': args.localization_run_standalone,
+                'run_standalone': False,
                 'map_dir': args.map_dir,
                 'localization_base_frame': args.localization_base_frame,
                 'enable_vslam': args.enable_vslam,
