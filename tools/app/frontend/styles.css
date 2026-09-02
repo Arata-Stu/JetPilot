@@ -1947,6 +1947,49 @@ tr:last-child td {
   white-space: normal;
 }
 
+.competition-route-editor {
+  margin-top: 10px;
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+
+.competition-route-editor > summary {
+  cursor: pointer;
+  color: var(--cyan);
+  font-weight: 700;
+}
+
+.competition-route-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 9px;
+}
+
+.competition-route-row {
+  display: grid;
+  gap: 7px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #101411;
+  padding: 9px;
+}
+
+.competition-route-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.competition-route-heading span {
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.competition-route-timeouts {
+  margin-top: 9px;
+}
+
 .junction-position-card {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

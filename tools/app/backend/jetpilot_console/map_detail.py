@@ -3334,6 +3334,7 @@ def _runtime_routes(map_dir: Path, hd_map: dict[str, Any]) -> dict[str, Any]:
     result: dict[str, Any] = {
         "status": "unconfigured",
         "configured_lane_ids": [],
+        "routes": [],
         "missing_branch_ids": sorted(branch_ids),
         "issues": [],
         "config_path": str(config_path),
@@ -3396,6 +3397,32 @@ def _runtime_routes(map_dir: Path, hd_map: dict[str, Any]) -> dict[str, Any]:
 
     configured_lane_ids = [lane_id for lane_id in lane_ids if lane_id]
     result["configured_lane_ids"] = configured_lane_ids
+    route_count = max(
+        len(lane_ids),
+        len(lane_path_topics),
+        len(lane_trajectory_topics),
+        len(speeds),
+    )
+    result["routes"] = [
+        {
+            "id": lane_ids[index] if index < len(lane_ids) else "",
+            "path_topic": lane_path_topics[index] if index < len(lane_path_topics) else "",
+            "trajectory_topic": (
+                lane_trajectory_topics[index]
+                if index < len(lane_trajectory_topics)
+                else ""
+            ),
+            "target_speed_mps": speeds[index] if index < len(speeds) else None,
+        }
+        for index in range(route_count)
+    ]
+    result["default_lane_id"] = str(parameters.get("default_lane_id") or "")
+    result["requested_lane_timeout_sec"] = parameters.get(
+        "requested_lane_timeout_sec"
+    )
+    result["current_section_timeout_sec"] = parameters.get(
+        "current_section_timeout_sec"
+    )
     if not lane_ids:
         issues.append("lane_ids must not be empty")
     if any(not lane_id for lane_id in lane_ids):
@@ -3514,6 +3541,186 @@ def competition_route_summary(map_dir: Path) -> dict[str, Any]:
     except (OSError, TypeError, ValueError, OverflowError):
         status = "invalid"
     return {"status": status, "ready": status == "ready"}
+
+
+def _competition_route_topic(value: Any, field_name: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"{field_name} must be a string")
+    topic = value.strip()
+    if topic and (not topic.startswith("/") or any(char.isspace() for char in topic)):
+        raise ValueError(f"{field_name} must be an absolute ROS topic without whitespace")
+    return topic
+
+
+def _competition_route_number(
+    value: Any,
+    field_name: str,
+    *,
+    allow_zero: bool = False,
+) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{field_name} must be a finite number")
+    number = float(value)
+    if not math.isfinite(number) or number < 0.0 or (not allow_zero and number == 0.0):
+        qualifier = "non-negative" if allow_zero else "positive"
+        raise ValueError(f"{field_name} must be a finite {qualifier} number")
+    return number
+
+
+def _write_competition_route_yaml(
+    path: Path,
+    routes: list[dict[str, Any]],
+    requested_lane_timeout_sec: float,
+    current_section_timeout_sec: float,
+) -> None:
+    def yaml_array(values: list[Any]) -> str:
+        return json.dumps(values, ensure_ascii=True, separators=(", ", ": "))
+
+    content = "\n".join(
+        [
+            "/**:",
+            "  ros__parameters:",
+            f"    lane_ids: {yaml_array([route['id'] for route in routes])}",
+            f"    lane_path_topics: {yaml_array([route['path_topic'] for route in routes])}",
+            f"    lane_trajectory_topics: {yaml_array([route['trajectory_topic'] for route in routes])}",
+            f"    lane_target_speeds_mps: {yaml_array([route['target_speed_mps'] for route in routes])}",
+            '    default_lane_id: "primary"',
+            "    section_lane_rules: []",
+            "    fallback_to_default_lane: false",
+            "",
+            '    requested_lane_topic: "/planning/requested_lane"',
+            '    current_section_topic: "/localization/current_section"',
+            '    output_trajectory_topic: "/planning/route/trajectory"',
+            '    output_profile_topic: "/planning/route/trajectory_profile"',
+            '    target_speed_topic: "/planning/route/target_speed"',
+            '    selected_lane_topic: "/planning/route/selected_lane"',
+            '    ready_topic: "/planning/route/ready"',
+            '    diagnostics_topic: "/planning/route/diagnostics"',
+            "",
+            "    publish_rate_hz: 10.0",
+            "    path_timeout_sec: 0.0",
+            f"    requested_lane_timeout_sec: {requested_lane_timeout_sec:g}",
+            "    require_requested_lane_heartbeat: true",
+            f"    current_section_timeout_sec: {current_section_timeout_sec:g}",
+            "    min_path_poses: 2",
+            "    min_path_length_m: 0.10",
+            "",
+        ]
+    )
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary_path = Path(handle.name)
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, path)
+    finally:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink()
+            except FileNotFoundError:
+                pass
+
+
+def save_competition_routes(
+    config: ConsoleConfig,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    map_dir_value = str(payload.get("map_dir") or "")
+    if not map_dir_value:
+        raise ValueError("map_dir is required")
+    map_dir = resolve_allowed_path(config, map_dir_value)
+    if not map_dir.is_dir():
+        raise FileNotFoundError(f"map folder not found: {map_dir}")
+
+    hd_map_path = map_dir / f"{map_dir.name}_hd_map.yaml"
+    if not hd_map_path.is_file():
+        raise FileNotFoundError("HD map YAML is required before configuring competition routes")
+    hd_map, _ = _read_hd_map(hd_map_path)
+    lane_ids = {str(lane.get("id") or "") for lane in hd_map.get("lanes", [])}
+    eligible_ids = {
+        str(item["id"])
+        for item in _junction_route_catalog(map_dir, lane_ids, _read_custom_lines(map_dir))
+        if item.get("eligible")
+    }
+
+    raw_routes = payload.get("routes")
+    if not isinstance(raw_routes, list) or not raw_routes:
+        raise ValueError("routes must be a non-empty array")
+    if len(raw_routes) > 128:
+        raise ValueError("routes must contain at most 128 entries")
+    routes: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for index, raw_route in enumerate(raw_routes):
+        if not isinstance(raw_route, dict):
+            raise ValueError(f"routes[{index}] must be an object")
+        route_id = str(raw_route.get("id") or "").strip()
+        if not route_id:
+            raise ValueError(f"routes[{index}].id is required")
+        if route_id in seen_ids:
+            raise ValueError(f"duplicate route ID: {route_id}")
+        if route_id not in eligible_ids:
+            raise ValueError(f"route is not available in this map: {route_id}")
+        seen_ids.add(route_id)
+        path_topic = _competition_route_topic(
+            raw_route.get("path_topic", ""), f"routes[{index}].path_topic"
+        )
+        trajectory_topic = _competition_route_topic(
+            raw_route.get("trajectory_topic", ""),
+            f"routes[{index}].trajectory_topic",
+        )
+        if not path_topic and not trajectory_topic:
+            raise ValueError(f"route {route_id} requires a Path or Trajectory topic")
+        routes.append(
+            {
+                "id": route_id,
+                "path_topic": path_topic,
+                "trajectory_topic": trajectory_topic,
+                "target_speed_mps": _competition_route_number(
+                    raw_route.get("target_speed_mps"),
+                    f"routes[{index}].target_speed_mps",
+                    allow_zero=True,
+                ),
+            }
+        )
+
+    if "primary" not in seen_ids:
+        raise ValueError("primary route is required")
+    missing_branch_ids = sorted(_junction_branch_ids(hd_map) - seen_ids)
+    if missing_branch_ids:
+        raise ValueError(
+            "junction branch routes are missing: " + ", ".join(missing_branch_ids)
+        )
+    for field_name in ("path_topic", "trajectory_topic"):
+        topics = [str(route[field_name]) for route in routes if route[field_name]]
+        duplicates = sorted({topic for topic in topics if topics.count(topic) > 1})
+        if duplicates:
+            raise ValueError(f"{field_name} contains duplicate topics: {', '.join(duplicates)}")
+
+    requested_timeout = _competition_route_number(
+        payload.get("requested_lane_timeout_sec", 0.5),
+        "requested_lane_timeout_sec",
+    )
+    section_timeout = _competition_route_number(
+        payload.get("current_section_timeout_sec", 1.0),
+        "current_section_timeout_sec",
+    )
+    config_path = map_dir / COMPETITION_ROUTE_CONFIG_FILE
+    if config_path.is_symlink():
+        raise ValueError("competition route config must be a regular file")
+    _write_competition_route_yaml(config_path, routes, requested_timeout, section_timeout)
+    detail = build_map_detail(config, str(map_dir))
+    if detail.get("runtime_routes", {}).get("status") != "ready":
+        raise RuntimeError("saved competition route config did not pass runtime validation")
+    return detail
 
 
 def build_map_detail(config: ConsoleConfig, map_dir_value: str) -> dict[str, Any]:

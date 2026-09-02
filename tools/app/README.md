@@ -421,6 +421,10 @@ editor.
   `competition_route.param.yaml`, including the manager-facing `/planning/route/*`
   topics, diagnostics, heartbeat, and watchdog settings. A route can exist in
   the map while still being clearly marked as not registered for driving.
+- Review can generate and atomically save `competition_route.param.yaml` from
+  the Junction branch IDs. Primary, Raceline, and the first Custom Line receive
+  known topic defaults; routes without a runtime publisher remain incomplete
+  until the operator assigns the topic that is actually published.
 - Layer switches are grouped under an Advanced disclosure, Simulation is closed
   by default, and map-list readiness details are collapsed until requested.
 - The workspace stacks the canvas and inspector on narrower windows and keeps

@@ -184,6 +184,13 @@ const state = {
     placing: false,
     dragging: false,
   },
+  competitionRouteEditor: {
+    mapPath: "",
+    routes: [],
+    requestedLaneTimeoutSec: 0.5,
+    currentSectionTimeoutSec: 1.0,
+    dirty: false,
+  },
   simulationPanelOpen: false,
   racelineGeneration: {
     direction: "forward",
@@ -7452,6 +7459,73 @@ function renderJunctionSectionPicker(title, field, selectedIds, sections, enable
   `;
 }
 
+function ensureCompetitionRouteEditor(detail) {
+  const runtime = detail?.runtime_routes || {};
+  const mapPath = String(detail?.map?.path || "");
+  const editor = state.competitionRouteEditor;
+  if (editor.mapPath === mapPath && editor.dirty) return editor;
+  const catalog = new Map((detail?.junction_route_catalog || []).map((item) => [String(item.id || ""), item]));
+  const existingRoutes = new Map((runtime.routes || []).map((route) => [String(route.id || ""), route]));
+  const requiredIds = ["primary"];
+  for (const junction of detail?.hd_map?.junctions || []) {
+    for (const direction of ["left", "straight", "right"]) {
+      const routeId = String(junction?.branches?.[direction] || "");
+      if (routeId && !requiredIds.includes(routeId)) requiredIds.push(routeId);
+    }
+  }
+  for (const routeId of existingRoutes.keys()) {
+    if (routeId && !requiredIds.includes(routeId)) requiredIds.push(routeId);
+  }
+  let customTopicAssigned = false;
+  const routes = requiredIds.map((routeId) => {
+    const existing = existingRoutes.get(routeId) || {};
+    const kind = String(catalog.get(routeId)?.kind || (routeId === "primary" ? "lane_alias" : "route"));
+    let pathTopic = String(existing.path_topic || "");
+    let trajectoryTopic = String(existing.trajectory_topic || "");
+    if (!pathTopic && !trajectoryTopic) {
+      if (routeId === "primary") pathTopic = "/hd_map/primary_centerline_path";
+      else if (kind === "raceline") {
+        pathTopic = "/planning/raceline_path";
+        trajectoryTopic = "/planning/raceline_trajectory";
+      } else if (kind === "custom_line" && !customTopicAssigned) {
+        trajectoryTopic = "/planning/custom_trajectory";
+        customTopicAssigned = true;
+      }
+    } else if (kind === "custom_line" && trajectoryTopic === "/planning/custom_trajectory") {
+      customTopicAssigned = true;
+    }
+    const targetSpeed = Number(existing.target_speed_mps);
+    return {
+      id: routeId,
+      kind,
+      path_topic: pathTopic,
+      trajectory_topic: trajectoryTopic,
+      target_speed_mps: Number.isFinite(targetSpeed) ? targetSpeed : 1.0,
+    };
+  });
+  state.competitionRouteEditor = {
+    mapPath,
+    routes,
+    requestedLaneTimeoutSec: Number(runtime.requested_lane_timeout_sec) > 0 ? Number(runtime.requested_lane_timeout_sec) : 0.5,
+    currentSectionTimeoutSec: Number(runtime.current_section_timeout_sec) > 0 ? Number(runtime.current_section_timeout_sec) : 1.0,
+    dirty: false,
+  };
+  return state.competitionRouteEditor;
+}
+
+function updateCompetitionRouteField(routeId, field, value) {
+  const route = state.competitionRouteEditor.routes.find((item) => item.id === routeId);
+  if (!route || !["path_topic", "trajectory_topic", "target_speed_mps"].includes(field)) return;
+  route[field] = field === "target_speed_mps" ? Number(value) : String(value);
+  state.competitionRouteEditor.dirty = true;
+}
+
+function updateCompetitionRouteTimeout(field, value) {
+  if (!['requestedLaneTimeoutSec', 'currentSectionTimeoutSec'].includes(field)) return;
+  state.competitionRouteEditor[field] = Number(value);
+  state.competitionRouteEditor.dirty = true;
+}
+
 function renderRuntimeRouteReadiness(detail) {
   const runtime = detail?.runtime_routes || { status: "unconfigured", issues: [], configured_lane_ids: [], missing_branch_ids: [] };
   const hasJunctions = Boolean(detail?.hd_map?.junctions?.length);
@@ -7469,6 +7543,29 @@ function renderRuntimeRouteReadiness(detail) {
     : runtime.status === "unconfigured"
     ? "Add competition_route.param.yaml to this map before driving signal-controlled branches."
     : issues[0] || "All junction branch IDs are registered in the runtime selector config.";
+  const editor = ensureCompetitionRouteEditor(detail);
+  const routeRows = editor.routes.map((route) => {
+    const routeId = route.id;
+    const kind = route.kind;
+    const pathTopic = route.path_topic;
+    const trajectoryTopic = route.trajectory_topic;
+    const targetSpeed = route.target_speed_mps;
+    const kindLabel = {
+      lane: "HD lane",
+      lane_alias: "Primary",
+      raceline: "Raceline",
+      custom_line: "Custom line",
+    }[kind] || "Route";
+    const missingPublisher = !pathTopic && !trajectoryTopic;
+    return `
+      <div class="competition-route-row" data-route-id="${esc(routeId)}">
+        <div class="competition-route-heading"><strong>${esc(routeId)}</strong><span>${esc(kindLabel)}</span></div>
+        <label>Path topic<input class="competition-route-path" value="${esc(pathTopic)}" placeholder="/route/path" oninput="updateCompetitionRouteField(${js(routeId)}, 'path_topic', this.value)" /></label>
+        <label>Trajectory topic<input class="competition-route-trajectory" value="${esc(trajectoryTopic)}" placeholder="/route/trajectory" oninput="updateCompetitionRouteField(${js(routeId)}, 'trajectory_topic', this.value)" /></label>
+        <label>Speed limit (m/s)<input class="competition-route-speed" type="number" min="0" step="0.05" value="${esc(targetSpeed)}" oninput="updateCompetitionRouteField(${js(routeId)}, 'target_speed_mps', this.value)" /></label>
+        ${missingPublisher ? `<div class="junction-validation">This route has no publisher topic yet. Assign the topic actually published at runtime.</div>` : ""}
+      </div>`;
+  }).join("");
   return `
     <div class="inspector-block runtime-route-readiness">
       <div class="inspector-title-row">
@@ -7479,8 +7576,72 @@ function renderRuntimeRouteReadiness(detail) {
       <div class="editor-counts">Registered ${esc((runtime.configured_lane_ids || []).length)}${runtime.missing_branch_ids?.length ? ` / missing ${esc(runtime.missing_branch_ids.join(", "))}` : ""}</div>
       ${issues.slice(1, 4).map((issue) => `<div class="field-hint">${esc(issue)}</div>`).join("")}
       <div class="path" title="${esc(runtime.config_path || "")}">competition_route.param.yaml</div>
+      <details class="competition-route-editor" ${runtime.status === "unconfigured" ? "open" : ""}>
+        <summary>${runtime.status === "unconfigured" ? "Create route config" : "Edit route config"}</summary>
+        <div class="field-hint">Routes are taken from Junction branches. Topics must match publishers that actually run during competition.</div>
+        <div class="competition-route-list">${routeRows}</div>
+        <div class="form-grid competition-route-timeouts">
+          <label>Route heartbeat timeout (s)<input id="competition-route-request-timeout" type="number" min="0.05" step="0.05" value="${esc(editor.requestedLaneTimeoutSec)}" oninput="updateCompetitionRouteTimeout('requestedLaneTimeoutSec', this.value)" /></label>
+          <label>Section timeout (s)<input id="competition-route-section-timeout" type="number" min="0.05" step="0.05" value="${esc(editor.currentSectionTimeoutSec)}" oninput="updateCompetitionRouteTimeout('currentSectionTimeoutSec', this.value)" /></label>
+        </div>
+        <div class="field-hint">Only one Custom Line publisher is currently assigned automatically. Additional routes need distinct publisher topics.</div>
+        <div class="actions"><button class="primary" onclick="saveCompetitionRoutes()">Generate &amp; Save YAML</button></div>
+      </details>
     </div>
   `;
+}
+
+async function saveCompetitionRoutes() {
+  const detail = state.selectedMapDetail;
+  const mapPath = detail?.map?.path || "";
+  if (!mapPath) return;
+  const routes = state.competitionRouteEditor.routes.map((route) => ({
+    id: route.id,
+    path_topic: String(route.path_topic || "").trim(),
+    trajectory_topic: String(route.trajectory_topic || "").trim(),
+    target_speed_mps: Number(route.target_speed_mps),
+  }));
+  const missingTopic = routes.find((route) => !route.path_topic && !route.trajectory_topic);
+  if (missingTopic) {
+    toast(`Route ${missingTopic.id} needs a publisher topic.`, "error");
+    return;
+  }
+  const requestTimeout = Number(state.competitionRouteEditor.requestedLaneTimeoutSec);
+  const sectionTimeout = Number(state.competitionRouteEditor.currentSectionTimeoutSec);
+  if (!Number.isFinite(requestTimeout) || requestTimeout <= 0 || !Number.isFinite(sectionTimeout) || sectionTimeout <= 0) {
+    toast("Competition route timeouts must be positive numbers.", "error");
+    return;
+  }
+  if (!confirmAction({
+    title: "Generate competition route config?",
+    target: `${mapPath}/competition_route.param.yaml`,
+    detail: `${routes.length} routes will be registered. Existing config will be replaced atomically.`,
+  })) return;
+  if (!beginAction("competition-routes:save", "Saving competition routes")) return;
+  const requestContext = captureSelectedMapContext(mapPath);
+  try {
+    const saved = await api("/api/maps/save-competition-routes", {
+      method: "POST",
+      body: JSON.stringify({
+        map_dir: mapPath,
+        routes,
+        requested_lane_timeout_sec: requestTimeout,
+        current_section_timeout_sec: sectionTimeout,
+      }),
+    });
+    if (!commitSelectedMapDetail(requestContext, saved)) {
+      toast(`Competition route config saved for ${shortName(mapPath)}.`);
+      return;
+    }
+    state.competitionRouteEditor.dirty = false;
+    invalidateMapPreflights(mapPath);
+    toast("competition_route.param.yaml generated");
+    render();
+  } catch (error) {
+    if (!captureMapTaskConflict(error)) toast(`Route config save failed: ${error.message}`, "error");
+  } finally {
+    endAction("competition-routes:save", { renderAfter: state.tab === "maps" });
+  }
 }
 
 function renderMapInspector(detail) {
@@ -11769,6 +11930,7 @@ function unsavedMapEditLabels() {
     [state.sectionEditor, "Section gates"],
     [state.junctionEditor, "Junctions"],
     [state.customLineEditor, "Driving line"],
+    [state.competitionRouteEditor, "Competition routes"],
   ];
   return editors
     .filter(([editor]) => editor.dirty && (!selectedPath || !editor.mapPath || editor.mapPath === selectedPath))

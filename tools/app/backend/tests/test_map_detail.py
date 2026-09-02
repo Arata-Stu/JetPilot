@@ -16,6 +16,7 @@ from jetpilot_console.map_detail import (
     load_yaml,
     save_hd_map,
     save_hd_map_version,
+    save_competition_routes,
     save_junctions,
     save_section_gates,
     update_custom_line,
@@ -261,6 +262,70 @@ junctions:
             self.assertEqual(runtime["status"], "invalid")
             self.assertIn("ready_topic must be /planning/route/ready", issues)
             self.assertIn("require_requested_lane_heartbeat must be true", issues)
+
+    def test_ui_payload_generates_ready_competition_route_config(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            config, map_dir = self._make_map(Path(temporary_directory))
+            hd_map_path = map_dir / "runtime_routes_hd_map.yaml"
+            hd_map_path.write_text(
+                hd_map_path.read_text(encoding="utf-8")
+                .replace('left: "route_left"', 'left: "primary"')
+                .replace('right: "route_right"', 'right: "primary"'),
+                encoding="utf-8",
+            )
+
+            detail = save_competition_routes(
+                config,
+                {
+                    "map_dir": str(map_dir),
+                    "routes": [
+                        {
+                            "id": "primary",
+                            "path_topic": "/hd_map/primary_centerline_path",
+                            "trajectory_topic": "",
+                            "target_speed_mps": 1.0,
+                        }
+                    ],
+                    "requested_lane_timeout_sec": 0.5,
+                    "current_section_timeout_sec": 1.0,
+                },
+            )
+
+            config_path = map_dir / "competition_route.param.yaml"
+            self.assertTrue(config_path.is_file())
+            self.assertEqual(detail["runtime_routes"]["status"], "ready")
+            self.assertEqual(
+                detail["runtime_routes"]["routes"],
+                [
+                    {
+                        "id": "primary",
+                        "path_topic": "/hd_map/primary_centerline_path",
+                        "trajectory_topic": "",
+                        "target_speed_mps": 1.0,
+                    }
+                ],
+            )
+
+    def test_ui_payload_rejects_route_without_runtime_topic(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            config, map_dir = self._make_map(Path(temporary_directory))
+
+            with self.assertRaisesRegex(ValueError, "requires a Path or Trajectory topic"):
+                save_competition_routes(
+                    config,
+                    {
+                        "map_dir": str(map_dir),
+                        "routes": [
+                            {
+                                "id": "primary",
+                                "path_topic": "",
+                                "trajectory_topic": "",
+                                "target_speed_mps": 1.0,
+                            }
+                        ],
+                    },
+                )
+            self.assertFalse((map_dir / "competition_route.param.yaml").exists())
 
 
 class MapDetailOdometryOverlayTest(unittest.TestCase):

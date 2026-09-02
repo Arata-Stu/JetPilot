@@ -50,6 +50,7 @@ from .map_detail import (
     delete_custom_line,
     directory_fingerprint,
     resolve_allowed_path,
+    save_competition_routes,
     save_hd_map,
     save_hd_map_version,
     save_junctions,
@@ -599,6 +600,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/maps/save-junctions":
             self._save_junctions(body)
+            return
+        if path == "/api/maps/save-competition-routes":
+            self._save_competition_routes(body)
             return
 
         self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
@@ -1234,6 +1238,32 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
         except Exception as exc:
             self._json({"error": f"failed to save junctions: {exc}"}, HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    def _save_competition_routes(self, body: dict[str, Any]) -> None:
+        try:
+            map_dir = resolve_allowed_path(
+                self.server.state.config, str(body.get("map_dir") or "")
+            )
+            with self.server.state.tasks.guard_resources([f"map-dir:{map_dir}"]):
+                result = save_competition_routes(self.server.state.config, body)
+            self._json(result)
+        except TaskResourceConflict as exc:
+            self._json(
+                {
+                    "error": "The Map is in use by an analysis or Map task. Stop it or wait for it to finish.",
+                    "active_task": exc.active_task,
+                },
+                HTTPStatus.CONFLICT,
+            )
+        except FileNotFoundError as exc:
+            self._json({"error": str(exc)}, HTTPStatus.NOT_FOUND)
+        except ValueError as exc:
+            self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+        except Exception as exc:
+            self._json(
+                {"error": f"failed to save competition routes: {exc}"},
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+            )
 
     def _local_file(self, query: dict[str, list[str]]) -> None:
         file_value = query.get("path", [""])[0]
