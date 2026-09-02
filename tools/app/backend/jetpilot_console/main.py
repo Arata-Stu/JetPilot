@@ -7,7 +7,6 @@ import glob
 import json
 import mimetypes
 import os
-import posixpath
 import re
 import select
 import shlex
@@ -1485,7 +1484,7 @@ find {shlex.quote(record_root)} -name metadata.yaml -printf '%TY-%Tm-%Td %TH:%TM
             title = "Transfer Jetson to notebook"
         else:
             local_path = str(body.get("local_path") or "")
-            remote_path = str(body.get("remote_path") or "")
+            remote_path = str(body.get("remote_path") or config.jetson_map_root)
             if not local_path:
                 self._json({"error": "local_path is required"}, HTTPStatus.BAD_REQUEST)
                 return
@@ -1499,11 +1498,6 @@ find {shlex.quote(record_root)} -name metadata.yaml -printf '%TY-%Tm-%Td %TH:%TM
                         require_directory=True,
                     )
                 )
-                if not remote_path:
-                    remote_path = posixpath.join(
-                        config.jetson_map_root.rstrip("/"),
-                        Path(local_path).name,
-                    )
                 remote_path = validate_remote_absolute_path(
                     remote_path,
                     label="remote map destination",

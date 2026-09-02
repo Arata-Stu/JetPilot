@@ -301,8 +301,6 @@ const state = {
     currentIndex: 0,
     total: 0,
     pushLocalPath: "",
-    pushRemotePath: "",
-    pushRemoteManual: false,
   },
   preflight: {
     entries: {},
@@ -7759,19 +7757,19 @@ function renderJetsonTarget() {
     <div class="form-grid jetson-target">
       <div class="field">
         <label>Jetson host</label>
-        <input id="jetson-host" value="${esc(host)}" oninput="updateJetsonTargetField('host', this.value)" />
+        <input id="jetson-host" value="${esc(host)}" />
       </div>
       <div class="field">
         <label>SSH user</label>
-        <input id="jetson-user" value="${esc(user)}" oninput="updateJetsonTargetField('user', this.value)" />
+        <input id="jetson-user" value="${esc(user)}" />
       </div>
       <div class="field full">
         <label>Remote map root</label>
-        <input id="jetson-map-root" value="${esc(mapRoot)}" oninput="updateJetsonTargetField('map_root', this.value)" />
+        <input id="jetson-map-root" value="${esc(mapRoot)}" />
       </div>
       <div class="field full">
         <label>Remote rosbag root</label>
-        <input id="jetson-record-root" value="${esc(recordRoot)}" oninput="updateJetsonTargetField('record_root', this.value)" />
+        <input id="jetson-record-root" value="${esc(recordRoot)}" />
       </div>
       <div class="actions full">
         <button class="primary" onclick="inspectJetson()" ${state.jetsonInspectBusy ? "disabled" : ""}>
@@ -7836,8 +7834,10 @@ function renderJetsonSummary() {
 function renderJetsonTransfers() {
   const config = state.config || {};
   const pushLocalPath = state.jetsonTransfer.pushLocalPath || "";
-  const pushRemotePath = state.jetsonTransfer.pushRemotePath
-    || predictedJetsonMapPath(pushLocalPath);
+  const pushMapOptions = (state.maps || [])
+    .filter((map) => map?.path)
+    .map((map) => `<option value="${esc(map.path)}">${esc(map.display_name || map.name || shortName(map.path))}</option>`)
+    .join("");
   const sequences = jetsonRosbagSequences();
   pruneSelectedJetsonPullPaths(sequences);
   const selectedPullPaths = selectedJetsonPullPaths();
@@ -7912,15 +7912,15 @@ function renderJetsonTransfers() {
       <section class="transfer-card">
         <h3>Push map bundle</h3>
         <div class="form-grid">
-          <div class="field full"><label>From notebook</label><input id="push-local" value="${esc(pushLocalPath)}" placeholder="${esc(config.map_root || "")}/course_a" oninput="updateJetsonPushLocal(this.value)" /></div>
           <div class="field full">
-            <label>To Jetson</label>
-            <input id="push-remote" value="${esc(pushRemotePath)}" placeholder="${esc(config.jetson_map_root || "")}/course_a" oninput="updateJetsonPushRemote(this.value)" />
-            <div class="field-hint">Suggested from Remote map root + the selected Map directory name.</div>
+            <label>From notebook</label>
+            <input id="push-local" list="push-local-map-options" value="${esc(pushLocalPath)}" placeholder="Start typing a Map name or path" oninput="updateJetsonPushLocal(this.value)" autocomplete="off" />
+            <datalist id="push-local-map-options">${pushMapOptions}</datalist>
+            <div class="field-hint">Suggestions come from Map directories already discovered under ${esc(config.map_root || "the local Map root")}.</div>
           </div>
+          <div class="field full"><label>To Jetson</label><input id="push-remote" value="${esc(config.jetson_map_root || "")}" /></div>
           <div class="actions full">
             <button class="primary ${actionBusy("jetson:push") ? "is-busy" : ""}" onclick="startJetsonPush()" ${actionButtonAttrs("jetson:push", "Push transfer is starting...")}>${esc(actionButtonLabel("jetson:push", "Start Push", "Starting Push..."))}</button>
-            <button onclick="resetJetsonPushDestination()">Use Suggested Path</button>
             <button onclick="copyPushCommand()">Copy Command</button>
           </div>
         </div>
@@ -13041,46 +13041,12 @@ function drawSimulationVehicle(ctx, detail, toPixel) {
   ctx.restore();
 }
 
-function jetsonMapRootForTransfer() {
-  return trimTrailingSlash(
-    state.jetsonTarget?.map_root
-      || state.jetsonInspect?.map_root
-      || state.config?.jetson_map_root
-      || "",
-  );
-}
-
-function predictedJetsonMapPath(localPath) {
-  const root = jetsonMapRootForTransfer();
-  const mapName = mapNameFromPath(localPath || "");
-  return root && localPath ? `${root}/${mapName}` : root;
-}
-
 function updateJetsonPushLocal(path) {
   state.jetsonTransfer.pushLocalPath = String(path || "");
-  if (!state.jetsonTransfer.pushRemoteManual) {
-    state.jetsonTransfer.pushRemotePath = predictedJetsonMapPath(path);
-    if ($("push-remote")) $("push-remote").value = state.jetsonTransfer.pushRemotePath;
-  }
-}
-
-function updateJetsonPushRemote(path) {
-  state.jetsonTransfer.pushRemotePath = String(path || "");
-  state.jetsonTransfer.pushRemoteManual = true;
-}
-
-function resetJetsonPushDestination() {
-  state.jetsonTransfer.pushRemoteManual = false;
-  state.jetsonTransfer.pushRemotePath = predictedJetsonMapPath(
-    state.jetsonTransfer.pushLocalPath || $("push-local")?.value || "",
-  );
-  if ($("push-remote")) $("push-remote").value = state.jetsonTransfer.pushRemotePath;
 }
 
 function fillTransferLocal(path) {
   state.jetsonTransfer.pushLocalPath = String(path || "");
-  state.jetsonTransfer.pushRemoteManual = false;
-  state.jetsonTransfer.pushRemotePath = predictedJetsonMapPath(path);
   state.tab = "jetson";
   render();
 }
@@ -13123,16 +13089,6 @@ function copyJetsonInspect() {
 function setJetsonHost(host) {
   const input = $("jetson-host");
   if (input) input.value = host;
-  updateJetsonTargetField("host", host);
-}
-
-function updateJetsonTargetField(field, value) {
-  if (!["host", "user", "map_root", "record_root"].includes(field)) return;
-  state.jetsonTarget = { ...(state.jetsonTarget || {}), [field]: String(value || "") };
-  if (field === "map_root" && !state.jetsonTransfer.pushRemoteManual) {
-    state.jetsonTransfer.pushRemotePath = predictedJetsonMapPath(state.jetsonTransfer.pushLocalPath);
-    if ($("push-remote")) $("push-remote").value = state.jetsonTransfer.pushRemotePath;
-  }
 }
 
 function jetsonTarget() {
@@ -13322,7 +13278,6 @@ function startJetsonPush() {
     local: $("push-local").value,
   };
   state.jetsonTransfer.pushLocalPath = paths.local;
-  state.jetsonTransfer.pushRemotePath = paths.remote;
   const target = jetsonTarget();
   if (!confirmAction({
     title: "Push map bundle to Jetson?",
@@ -13567,12 +13522,9 @@ window.updateCompetitionRouteTimeout = updateCompetitionRouteTimeout;
 window.saveCompetitionRoutes = saveCompetitionRoutes;
 window.fillTransferLocal = fillTransferLocal;
 window.updateJetsonPushLocal = updateJetsonPushLocal;
-window.updateJetsonPushRemote = updateJetsonPushRemote;
-window.resetJetsonPushDestination = resetJetsonPushDestination;
 window.inspectJetson = inspectJetson;
 window.copyJetsonInspect = copyJetsonInspect;
 window.setJetsonHost = setJetsonHost;
-window.updateJetsonTargetField = updateJetsonTargetField;
 window.startTransfer = startTransfer;
 window.useJetsonRosbag = useJetsonRosbag;
 window.pullJetsonRosbag = pullJetsonRosbag;

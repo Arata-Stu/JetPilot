@@ -655,10 +655,9 @@ Jetson inspection should collect:
 Transfer tasks should stream the original command output and expose progress in
 the task list when parseable.
 
-For Map pushes, the Console suggests `<remote map root>/<local Map directory
-name>`. Operators can override the destination, then restore the prediction
-with `Use Suggested Path`. The backend applies the same safe fallback when the
-remote destination is omitted.
+For Map pushes, the notebook source field offers the Map directories already
+discovered under the local Map root as type-ahead suggestions. The Jetson
+destination remains the configured remote Map root unless the operator edits it.
 
 ## HD Map Editor Design
 
