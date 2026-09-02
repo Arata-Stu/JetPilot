@@ -789,6 +789,7 @@ def test_calibration_preset_uses_mapless_vslam_and_bag_manager() -> None:
     assert "enable_vehicle:=true" in output
     assert "enable_bag_manager:=true" in output
     assert "bag_manager.calibration.param.yaml" in output
+    assert "speed_offset_inc_uses_localization_button:=true" in output
     assert "enable_localization:=true" in output
     assert "enable_vslam:=true" in output
     assert "vslam_enable_slam:=false" in output

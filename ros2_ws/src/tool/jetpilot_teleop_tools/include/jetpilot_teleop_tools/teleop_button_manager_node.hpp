@@ -55,10 +55,12 @@ private:
   int last_held_mode_request_{-1};
   std::vector<HoldState> states_;
   ButtonRisingEdge localization_trigger_button_;
+  ButtonRisingEdge speed_offset_inc_button_;
   rclcpp::Publisher<jetpilot_msgs::msg::OperationModeRequest>::SharedPtr mode_pub_;
   rclcpp::Publisher<jetpilot_msgs::msg::BagRequest>::SharedPtr bag_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr steer_offset_inc_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr steer_offset_dec_pub_;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr speed_offset_inc_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr localization_trigger_pub_;
   rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr joy_sub_;
 };

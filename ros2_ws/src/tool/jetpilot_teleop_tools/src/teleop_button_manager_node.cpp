@@ -24,6 +24,8 @@ TeleopButtonManagerNode::TeleopButtonManagerNode() : Node("teleop_button_manager
   steer_offset_axis_threshold_ = std::clamp(
     declare_numeric_parameter("steer_offset_axis_threshold", 0.5), 0.01, 1.0);
   const int localization_trigger_button = declare_parameter<int>("localization_trigger_button", -1);
+  const bool speed_offset_inc_uses_localization_button =
+    declare_parameter<bool>("speed_offset_inc_uses_localization_button", false);
   localization_trigger_topic_ =
     declare_parameter<std::string>("localization_trigger_topic", "/localization/trigger");
   if (localization_trigger_topic_.empty())
@@ -44,9 +46,19 @@ TeleopButtonManagerNode::TeleopButtonManagerNode() : Node("teleop_button_manager
   button_assignments.steer_offset_dec_button = steer_offset_dec_button_;
   const auto localization_conflict =
     find_localization_button_conflict(localization_trigger_button, button_assignments);
-  localization_trigger_button_.configure(localization_trigger_button,
-                                         !localization_conflict.has_value());
-  if (localization_trigger_button < 0)
+  speed_offset_inc_button_.configure(
+    localization_trigger_button, speed_offset_inc_uses_localization_button);
+  localization_trigger_button_.configure(
+    localization_trigger_button,
+    !speed_offset_inc_uses_localization_button && !localization_conflict.has_value());
+  if (speed_offset_inc_uses_localization_button && localization_trigger_button >= 0)
+  {
+    RCLCPP_INFO(
+      get_logger(),
+      "Button %d is assigned to throttle scale increase; localization trigger is disabled",
+      localization_trigger_button);
+  }
+  else if (localization_trigger_button < 0)
   {
     RCLCPP_INFO(get_logger(), "Localization trigger button is disabled");
   }
@@ -64,6 +76,7 @@ TeleopButtonManagerNode::TeleopButtonManagerNode() : Node("teleop_button_manager
   bag_pub_ = create_publisher<jetpilot_msgs::msg::BagRequest>("/bag/request", 10);
   steer_offset_inc_pub_ = create_publisher<std_msgs::msg::Bool>("/steer_offset_inc", 10);
   steer_offset_dec_pub_ = create_publisher<std_msgs::msg::Bool>("/steer_offset_dec", 10);
+  speed_offset_inc_pub_ = create_publisher<std_msgs::msg::Bool>("/speed_offset_inc", 10);
   localization_trigger_pub_ =
     create_publisher<std_msgs::msg::Bool>(localization_trigger_topic_, 10);
   joy_sub_ = create_subscription<sensor_msgs::msg::Joy>(
@@ -223,6 +236,10 @@ void TeleopButtonManagerNode::handle_joy(const sensor_msgs::msg::Joy & joy)
   if (localization_trigger_button_.update(joy.buttons))
   {
     publish_bool(localization_trigger_pub_);
+  }
+  if (speed_offset_inc_button_.update(joy.buttons))
+  {
+    publish_bool(speed_offset_inc_pub_);
   }
 }
 

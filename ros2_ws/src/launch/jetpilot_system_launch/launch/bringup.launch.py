@@ -325,6 +325,7 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('enable_bag_manager', True, cli=True)
     args.add_arg('enable_joy', True, cli=True)
     args.add_arg('enable_teleop', True, cli=True)
+    args.add_arg('speed_offset_inc_uses_localization_button', False, cli=True)
     args.add_arg('enable_rc_serial', False, cli=True)
     args.add_arg('enable_jetson_stats', is_jetson_platform(), cli=True)
     args.add_arg('jetson_stats_diagnostics_topic', '/jetson/diagnostics', cli=True)
@@ -756,6 +757,8 @@ def generate_launch_description() -> lut.LaunchDescription:
                 'bag_manager_param': args.bag_manager_param,
                 'teleop_cmd_param': args.teleop_cmd_param,
                 'teleop_button_mapping_param': args.teleop_button_mapping_param,
+                'speed_offset_inc_uses_localization_button':
+                    args.speed_offset_inc_uses_localization_button,
                 'serial_reader_param': args.serial_reader_param,
                 'enable_bag_manager': args.enable_bag_manager,
                 'enable_joy': lut.AndSubstitution(

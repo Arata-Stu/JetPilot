@@ -27,6 +27,8 @@ Joystick 入力を JetPilot の mode request、bag request、正規化 control c
 
 `/speed_offset_inc` または `/speed_offset_dec` に `std_msgs/msg/Bool(data=true)` を1回送ると、`throttle_scale_step` ずつスロットルスケールを変更します。範囲は `throttle_scale_min` から `throttle_scale_max` までに制限され、現在値は `ros2 param get /teleop_cmd_node throttle_scale` で確認できます。D-padの既存割り当ては変更しません。
 
+`speed_offset_inc_uses_localization_button=true`の場合は、通常localization triggerに使うボタンを一時的に`/speed_offset_inc`へ割り当てます。`calibration` presetがこの切替を使用し、通常presetではlocalization triggerの割り当てを維持します。
+
 たとえば、初期値を0.10にして10秒ごとに4回増加させ、最終的に0.30にする場合は次のように実行します。
 
 ```bash

@@ -278,6 +278,7 @@ set_base_args() {
   set_arg enable_bag_manager false
   set_arg enable_joy false
   set_arg enable_teleop false
+  set_arg speed_offset_inc_uses_localization_button false
   set_arg enable_rc_serial false
   set_arg enable_jetson_stats "$enable_jetson_stats"
   set_arg enable_vslam_snapshot false
@@ -867,6 +868,7 @@ apply_preset() {
       set_arg enable_sensor_kit true
       enable_drive_stack
       set_arg enable_bag_manager true
+      set_arg speed_offset_inc_uses_localization_button true
       set_arg bag_manager_param \
         "${PROJECT_ROOT}/ros2_ws/src/launch/jetpilot_system_launch/config/tool/bag_manager.calibration.param.yaml"
       set_arg enable_localization true

@@ -68,6 +68,11 @@ Common presets:
   --map /workspaces/map/course_a
 ```
 
+The `calibration` preset temporarily reuses the configured localization-trigger button (OPTIONS in
+the DualShock 4 profile) as a one-shot `/speed_offset_inc` button. Each press increases
+`teleop_cmd_node.throttle_scale` by `throttle_scale_step`. Other presets keep the button assigned to
+the localization trigger, and no speed-decrease button is assigned.
+
 The `e2e` preset enables the sensor kit, E2E inference, joy/teleop, the operation command mux, and
 the selected vehicle interface. Localization, planning, and the rule-based controller remain OFF.
 Override the deployed model when needed with `--set e2e_model_root:=/absolute/path/in/docker`.
