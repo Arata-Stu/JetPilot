@@ -1225,26 +1225,59 @@ apply_custom_components() {
   fi
 }
 
+has_named_hd_map() {
+  local map_dir="$1"
+  local map_name
+
+  map_name="$(basename -- "${map_dir%/}")"
+  [[ -f "${map_dir%/}/${map_name}_hd_map.yaml" ]]
+}
+
+is_discoverable_map() {
+  local map_dir="$1"
+
+  [[ -d "$map_dir" ]] || return 1
+
+  if is_true "$(get_arg enable_competition_planning 2>/dev/null || false)"; then
+    [[ -f "${map_dir%/}/competition_route.param.yaml" ]] \
+      && has_named_hd_map "$map_dir"
+    return
+  fi
+
+  if is_true "$(get_arg enable_hd_map_publisher 2>/dev/null || false)"; then
+    has_named_hd_map "$map_dir"
+    return
+  fi
+
+  [[ -d "${map_dir%/}/cuvgl_map" \
+    || -d "${map_dir%/}/cuvslam_map" ]] \
+    || has_named_hd_map "$map_dir"
+}
+
 discover_map() {
   local path
   local selected
   local options=()
 
-  [[ -n "$MAP_DIR" && -d "$MAP_DIR" ]] && append_unique_option "$MAP_DIR"
-  [[ -d "${MAP_ROOT%/}/latest" ]] && append_unique_option "${MAP_ROOT%/}/latest"
+  if [[ -n "$MAP_DIR" ]] && is_discoverable_map "$MAP_DIR"; then
+    append_unique_option "$MAP_DIR"
+  fi
+  if is_discoverable_map "${MAP_ROOT%/}/latest"; then
+    append_unique_option "${MAP_ROOT%/}/latest"
+  fi
   if [[ -d "$MAP_ROOT" ]]; then
-    if [[ -d "${MAP_ROOT%/}/cuvgl_map" || -d "${MAP_ROOT%/}/cuvslam_map" ]]; then
+    if is_discoverable_map "${MAP_ROOT%/}"; then
       append_unique_option "${MAP_ROOT%/}"
     fi
     while IFS= read -r path; do
-      append_unique_option "$path"
-    done < <(find "$MAP_ROOT" -mindepth 1 -maxdepth 1 -type d \
-      | sort -r | head -50)
-    while IFS= read -r path; do
-      append_unique_option "$path"
+      if is_discoverable_map "$path"; then
+        append_unique_option "$path"
+        if ((${#options[@]} >= 50)); then
+          break
+        fi
+      fi
     done < <(find "$MAP_ROOT" -mindepth 1 -maxdepth 3 -type d \
-      \( -name cuvgl_map -o -name cuvslam_map \) -exec dirname {} \; \
-      | sort -ru | head -50)
+      | sort -r)
   fi
   options+=('パスを手入力...')
   selected="$(choose_one 'Map directory' "${options[@]}")" || exit $?
@@ -1664,6 +1697,10 @@ validate_configuration() {
       || die 'competition planning requires enable_hd_map_publisher=true'
     is_true "$(get_arg enable_section_localizer)" \
       || die 'competition planning requires enable_section_localizer=true'
+    local competition_hd_map
+    competition_hd_map="${MAP_DIR%/}/$(basename -- "${MAP_DIR%/}")_hd_map.yaml"
+    [[ "$DRY_RUN" == 'true' || -f "$competition_hd_map" ]] \
+      || die "competition HD map does not exist: $competition_hd_map"
     local competition_route_config
     competition_route_config="$(get_arg competition_route_config_file 2>/dev/null || true)"
     if [[ -z "$competition_route_config" ]]; then

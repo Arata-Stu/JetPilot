@@ -300,6 +300,37 @@ def test_competition_preset_enables_complete_rule_based_stack() -> None:
     assert "enable_e2e_inference:=false" in output
 
 
+def test_map_discovery_filters_candidates_for_the_selected_preset() -> None:
+    launcher_source = LAUNCHER.read_text(encoding="utf-8")
+
+    assert "is_discoverable_map()" in launcher_source
+    assert 'competition_route.param.yaml' in launcher_source
+    assert "has_named_hd_map \"$map_dir\"" in launcher_source
+    assert 'if is_discoverable_map "$path"; then' in launcher_source
+    assert 'find "$MAP_ROOT" -mindepth 1 -maxdepth 1 -type d' not in launcher_source
+
+
+def test_competition_rejects_map_without_named_hd_map(tmp_path: Path) -> None:
+    map_dir = tmp_path / "course_a"
+    map_dir.mkdir()
+    (map_dir / "competition_route.param.yaml").write_text(
+        "planning_manager_node:\n  ros__parameters: {}\n",
+        encoding="utf-8",
+    )
+
+    result = run_launcher(
+        "competition",
+        "--vehicle",
+        "vesc",
+        "--map",
+        str(map_dir),
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "competition HD map does not exist" in result.stderr
+
+
 def test_map_view_preset_enables_foxglove_hd_map_without_actuation() -> None:
     output = run_launcher(
         "map-view",
