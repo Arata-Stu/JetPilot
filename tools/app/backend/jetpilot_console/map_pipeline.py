@@ -248,9 +248,9 @@ echo "[stage] offline eval for cuVSLAM snapshot"
 setsid ros2 launch {_q(config.launch_package)} bringup.launch.py \\
   use_sim_time:=true \\
   enable_rosbag_replay:=true \\
-  replay_additional_args:='--clock' \\
+  replay_additional_args:='--clock --start-paused' \\
   rosbag_start_delay_s:=0.0 \\
-  rosbag_shutdown_on_exit:=true \\
+  rosbag_shutdown_on_exit:=false \\
   enable_operation:=false \\
   enable_control:=false \\
   enable_vehicle:=false \\
@@ -281,33 +281,38 @@ setsid ros2 launch {_q(config.launch_package)} bringup.launch.py \\
   map_dir:="$generated_map_dir" &
 offline_launch_pid=$!
 offline_ready=0
-for offline_attempt in $(seq 1 60); do
+for offline_attempt in $(seq 1 120); do
   if ! kill -0 "$offline_launch_pid" 2>/dev/null; then
     echo "offline eval launch exited before graph became observable"
-    wait "$offline_launch_pid" 2>/dev/null || true
-    offline_launch_pid=""
+    offline_stop_launch TERM || true
     exit 22
   fi
   offline_nodes="$(ros2 node list 2>/dev/null || true)"
-  if [[ "$offline_nodes" == *nova_container* ]] && [[ "$offline_nodes" == *vslam_reference_snapshot_recorder* ]] && [[ "$offline_nodes" == *rosbag2_player* ]]; then
-    offline_ready=1
-    break
+  if [[ "$offline_nodes" == *visual_slam_node* ]] && [[ "$offline_nodes" == *vslam_reference_snapshot_recorder* ]] && [[ "$offline_nodes" == *rosbag2_player* ]]; then
+    offline_path_publishers="$(offline_topic_publishers /visual_slam/tracking/slam_path)"
+    offline_odom_publishers="$(offline_topic_publishers /visual_slam/tracking/odometry)"
+    if [ "${{offline_path_publishers:-0}}" -gt 0 ] && [ "${{offline_odom_publishers:-0}}" -gt 0 ]; then
+      offline_ready=1
+      break
+    fi
   fi
   sleep 1
 done
 if [ "$offline_ready" -ne 1 ]; then
-  echo "offline eval readiness timed out after 60 seconds; launch graph or rosbag player did not become available"
+  echo "offline eval readiness timed out after 120 seconds; VSLAM publishers did not become available"
   echo "[debug] nodes: $(ros2 node list 2>/dev/null | tr '\n' ' ' || true)"
+  offline_log_topic_counts
   offline_stop_launch TERM || true
   exit 23
 fi
-echo "[stage] offline eval graph ready; rosbag replay is live"
-offline_nodes="$(ros2 node list 2>/dev/null || true)"
-if [[ "$offline_nodes" != *visual_slam_node* ]]; then
-  echo "[debug] visual_slam_node is not listed before replay; continuing because it may be a composable node inside nova_container"
-fi
+echo "[stage] offline eval graph ready; starting paused rosbag replay"
 offline_log_topic_counts
 echo "[stage] VGL is disabled; relying on VSLAM localize_on_startup identity pose"
+if ! ros2 service call /rosbag2_player/resume rosbag2_interfaces/srv/Resume '{{}}'; then
+  offline_stop_launch TERM || true
+  echo "offline eval could not resume the paused rosbag replay"
+  exit 24
+fi
 offline_snapshot_seen=0
 for offline_attempt in $(seq 1 300); do
   if [ -s "$snapshot" ]; then
@@ -326,16 +331,40 @@ done
 if [ "$offline_snapshot_seen" -ne 1 ]; then
   offline_log_topic_counts
   offline_stop_launch TERM 5 || true
-  echo "offline eval produced no VSLAM snapshot messages during live rosbag replay"
+  echo "offline eval produced no VSLAM snapshot messages after replay started"
   exit 25
 fi
-echo "[stage] VSLAM snapshot created; waiting for live replay to finish"
-wait "$offline_launch_pid" 2>/dev/null || offline_launch_status=$?
-offline_launch_pid=""
-offline_launch_status="${{offline_launch_status:-0}}"
-if [ "$offline_launch_status" -ne 0 ] && [ "$offline_launch_status" -ne 130 ]; then
-  echo "offline eval launch exited with status $offline_launch_status"
-  exit "$offline_launch_status"
+echo "[stage] VSLAM snapshot created; waiting for rosbag replay to drain"
+offline_replay_finished=0
+for offline_attempt in $(seq 1 600); do
+  if ! kill -0 "$offline_launch_pid" 2>/dev/null; then
+    break
+  fi
+  offline_nodes="$(ros2 node list 2>/dev/null || true)"
+  if [[ "$offline_nodes" != *rosbag2_player* ]]; then
+    offline_replay_finished=1
+    break
+  fi
+  sleep 1
+done
+if [ "$offline_replay_finished" -ne 1 ]; then
+  offline_stop_launch TERM 5 || true
+  echo "offline eval rosbag replay did not finish within 600 seconds"
+  exit 26
+fi
+if [ ! -s "$snapshot" ]; then
+  offline_stop_launch TERM 5 || true
+  echo "refusing to drain an empty run: VSLAM snapshot is missing"
+  exit 25
+fi
+echo "[stage] rosbag replay finished; stopping offline eval to flush the final snapshot"
+offline_stop_status=0
+offline_stop_launch INT 20 || offline_stop_status=$?
+if [ "$offline_stop_status" -ne 0 ] && [ "$offline_stop_status" -ne 130 ]; then
+  echo "offline eval did not stop after SIGINT; forcing termination"
+  kill -KILL "-$offline_launch_pid" 2>/dev/null || kill -KILL "$offline_launch_pid" 2>/dev/null || true
+  offline_launch_pid=""
+  exit 27
 fi
 trap - EXIT
 """
