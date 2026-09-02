@@ -108,6 +108,7 @@ offline-localization Rosbag replay + VGL/VSLAM localization + RViz (bag/map requ
 vehicle              Selected vehicle interface only
 teleop               Joy/teleop/operation + selected vehicle interface
 drive                Live sensor + joy/teleop/operation + selected vehicle interface
+calibration          Live sensor + mapless VSLAM odometry + teleop + vehicle + bag recording
 e2e                  Live RealSense + E2E inference + joy/teleop/operation + vehicle
 runtime              Live sensor/localization/teleop + Foxglove pose fallback + vehicle (map required)
 map-view             Live localization + HD map + Foxglove initial pose (map required, no actuator)
@@ -169,6 +170,7 @@ Options:
 Examples:
   $(basename "$0") --preset vehicle --vehicle pca
   $(basename "$0") --preset drive --vehicle vesc
+  $(basename "$0") --preset calibration --vehicle jpbb
   $(basename "$0") --preset e2e --vehicle vesc
   $(basename "$0") --preset competition --vehicle vesc \
     --map /workspaces/map/course_a
@@ -210,7 +212,7 @@ known_preset() {
   case "$1" in
     sensor|localization-only|localization|localize-live|replay-localization|\
       offline-vslam|offline-vslam-map|offline-localization|\
-      vehicle|teleop|drive|e2e|runtime|map-view|competition|\
+      vehicle|teleop|drive|calibration|e2e|runtime|map-view|competition|\
       vehicle-pca|vehicle-vesc|teleop-pca|teleop-vesc|\
       drive-pca|drive-vesc|runtime-pca|runtime-vesc|custom) return 0 ;;
     *) return 1 ;;
@@ -859,6 +861,21 @@ apply_preset() {
     drive)
       set_arg enable_sensor_kit true
       enable_drive_stack
+      REQUIRES_VEHICLE=true
+      ;;
+    calibration)
+      set_arg enable_sensor_kit true
+      enable_drive_stack
+      set_arg enable_bag_manager true
+      set_arg bag_manager_param \
+        "${PROJECT_ROOT}/ros2_ws/src/launch/jetpilot_system_launch/config/tool/bag_manager.calibration.param.yaml"
+      set_arg enable_localization true
+      set_arg enable_vslam true
+      set_arg vslam_enable_slam false
+      set_arg vslam_localize_on_startup false
+      set_arg enable_vgl false
+      set_arg enable_localization_manager false
+      set_arg publish_vehicle_description true
       REQUIRES_VEHICLE=true
       ;;
     e2e)
@@ -1825,15 +1842,19 @@ print_summary() {
   printf '  localization : %s\n' "$(get_arg enable_localization)"
   if is_true "$(get_arg enable_localization)"; then
     printf '  VSLAM mode   : %s\n' "$(get_arg vslam_mode)"
-    case "$LOCALIZATION_INIT_MODE" in
-      map-origin)
-        printf '  VSLAM init   : map-origin (VGL off; restart with pose-hint on failure)\n'
-        ;;
-      foxglove)
-        printf '  VSLAM init   : foxglove (/initialpose required; VGL off)\n'
-        ;;
-      *) printf '  VSLAM init   : pose-hint\n' ;;
-    esac
+    if ! is_true "$(get_arg enable_localization_manager)" && [[ -z "$MAP_DIR" ]]; then
+      printf '  VSLAM init   : mapless odometry (no saved map load/save)\n'
+    else
+      case "$LOCALIZATION_INIT_MODE" in
+        map-origin)
+          printf '  VSLAM init   : map-origin (VGL off; restart with pose-hint on failure)\n'
+          ;;
+        foxglove)
+          printf '  VSLAM init   : foxglove (/initialpose required; VGL off)\n'
+          ;;
+        *) printf '  VSLAM init   : pose-hint\n' ;;
+      esac
+    fi
   fi
   if is_true "$(get_arg enable_foxglove)"; then
     printf '  Foxglove     : bind %s:%s\n' \
@@ -1843,6 +1864,7 @@ print_summary() {
   fi
   printf '  tool/teleop  : %s / %s\n' \
     "$(get_arg enable_tool)" "$(get_arg enable_teleop)"
+  printf '  bag manager  : %s\n' "$(get_arg enable_bag_manager)"
   printf '  operation    : %s\n' "$(get_arg enable_operation)"
   printf '  planning     : %s\n' "$(get_arg enable_planning)"
   printf '  competition  : %s\n' "$(get_arg enable_competition_planning)"

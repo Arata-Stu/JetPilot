@@ -25,6 +25,9 @@ Common presets:
 /workspaces/scripts/bringup.sh drive --vehicle pca
 /workspaces/scripts/bringup.sh drive --vehicle vesc
 
+# Throttle calibration: live sensor + mapless VSLAM odometry + teleop + vehicle + bag manager
+/workspaces/scripts/bringup.sh calibration --vehicle jpbb
+
 # Live RealSense RGB + TensorRT E2E direct control + manual/STOP fallback
 /workspaces/scripts/bringup.sh e2e --vehicle vesc
 
@@ -133,7 +136,7 @@ mode explicitly. The older combination `pose-hint --set enable_vgl:=false` remai
 `--localization-init foxglove` is the explicit and self-contained form for Foxglove-only startup.
 
 The first selector chooses one preset with arrow keys and Enter. For `vehicle`, `teleop`, `drive`,
-`e2e`, and `runtime`, the next selector lists the discovered vehicle interface profiles. Presets that
+`calibration`, `e2e`, and `runtime`, the next selector lists the discovered vehicle interface profiles. Presets that
 enable live sensors then list the discovered sensor kit profiles in the same way. Existing names such as
 `drive-pca` and `drive-vesc` remain accepted as compatibility aliases for scripts, but are not shown
 in the TUI.

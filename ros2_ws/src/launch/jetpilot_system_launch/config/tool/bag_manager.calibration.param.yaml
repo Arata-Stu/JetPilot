@@ -1,0 +1,49 @@
+bag_manager_node:
+  ros__parameters:
+    output_dir: "/workspaces/record"
+    record_all: false
+    # Minimal throttle/speed calibration dataset. Camera images remain available
+    # to live VSLAM but are intentionally excluded from the bag.
+    topics:
+      - /joy
+      - /teleop/control_cmd
+      - /vehicle/control_cmd
+      - /operation_mode/request
+      - /operation_mode/state
+      - /speed_offset_inc
+      - /speed_offset_dec
+      - /bag/request
+      - /bag/status
+      - /commands/motor/speed
+      - /commands/motor/brake
+      - /commands/servo/position
+      - /sensors/core
+      - /sensors/imu
+      - /sensors/imu/raw
+      - /sensors/servo_position_command
+      - /visual_slam/tracking/odometry
+      - /localization/vslam/diagnostics
+      - /tf
+      - /tf_static
+      - /robot_description
+      - /joint_states
+      - /jetson/diagnostics
+    exclude_topics: []
+    storage_id: "mcap"
+    serialization_format: ""
+    max_bag_size: 0
+    recording_split_duration_s: 0
+    max_cache_size: 0
+    compression_mode: ""
+    compression_format: ""
+    compression_queue_size: 0
+    compression_threads: 0
+    qos_profile_overrides_path: ""
+    include_hidden_topics: false
+    no_discovery: false
+    snapshot_mode: false
+    start_paused: false
+    extra_args: []
+    status_period_s: 1.0
+    raw_recording_request_topic: ""
+    recording_start_timeout_s: 5.0

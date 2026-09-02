@@ -73,6 +73,7 @@ def test_presets_are_listed() -> None:
         "vehicle",
         "teleop",
         "drive",
+        "calibration",
         "e2e",
         "runtime",
         "map-view",
@@ -771,6 +772,33 @@ def test_foxglove_custom_component_uses_hd_map_defaults() -> None:
     assert "lane_markers" in enabled_output
     assert "diagnostics" in enabled_output
     assert "Foxglove     : bind 0.0.0.0:8767" in enabled_output
+
+
+def test_calibration_preset_uses_mapless_vslam_and_bag_manager() -> None:
+    output = run_launcher(
+        "calibration",
+        "--vehicle",
+        "vesc",
+        "--dry-run",
+    ).stdout
+
+    assert "enable_sensor_kit:=true" in output
+    assert "enable_joy:=true" in output
+    assert "enable_teleop:=true" in output
+    assert "enable_operation:=true" in output
+    assert "enable_vehicle:=true" in output
+    assert "enable_bag_manager:=true" in output
+    assert "bag_manager.calibration.param.yaml" in output
+    assert "enable_localization:=true" in output
+    assert "enable_vslam:=true" in output
+    assert "vslam_enable_slam:=false" in output
+    assert "vslam_localize_on_startup:=false" in output
+    assert "enable_vgl:=false" in output
+    assert "enable_localization_manager:=false" in output
+    assert "enable_planning:=false" in output
+    assert "enable_control:=false" in output
+    assert "map          : none" in output
+    assert "VSLAM init   : mapless odometry (no saved map load/save)" in output
 
 
 def test_live_localization_presets_start_foxglove_pose_fallback() -> None:
@@ -2037,6 +2065,7 @@ def test_every_noninteractive_preset_emits_unique_launch_arguments(tmp_path: Pat
         "vehicle",
         "teleop",
         "drive",
+        "calibration",
         "e2e",
         "runtime",
         "vehicle-pca",
@@ -2050,7 +2079,7 @@ def test_every_noninteractive_preset_emits_unique_launch_arguments(tmp_path: Pat
     )
     for preset in presets:
         arguments = [preset, "--dry-run"]
-        if preset in {"vehicle", "teleop", "drive", "e2e", "runtime"}:
+        if preset in {"vehicle", "teleop", "drive", "calibration", "e2e", "runtime"}:
             arguments += ["--vehicle", "vesc"]
         if preset in {
             "localization-only",
