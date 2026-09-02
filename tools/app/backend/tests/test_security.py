@@ -644,6 +644,30 @@ class ConsoleEndpointTests(unittest.TestCase):
                 status, _ = self.post(endpoint, body)
                 self.assertEqual(status, 400)
 
+    def test_map_push_infers_remote_destination_from_map_directory_name(self) -> None:
+        map_dir = self.config.map_root / "course_a"
+        map_dir.mkdir(parents=True)
+        manager = TaskManager(self.config.state_dir, self.config.repo_root)
+
+        with patch.object(manager, "_run_task", return_value=None):
+            status, payload = self.post(
+                "/api/transfers/local-to-jetson",
+                {
+                    "host": "jetson.local",
+                    "user": "tamiya",
+                    "local_path": str(map_dir),
+                    "remote_path": "",
+                },
+                tasks=manager,
+            )
+
+        self.assertEqual(status, 201)
+        task = manager.get_task(str(payload["task"]["task_id"]))
+        self.assertIsNotNone(task)
+        assert task is not None
+        command = " ".join(task.command)
+        self.assertIn(f"{self.config.jetson_map_root}/course_a", command)
+
     def test_config_canonicalizes_symlinked_workspace_roots(self) -> None:
         root = Path(self.temporary_directory.name)
         real_map_root = root / "real-map"

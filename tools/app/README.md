@@ -655,6 +655,11 @@ Jetson inspection should collect:
 Transfer tasks should stream the original command output and expose progress in
 the task list when parseable.
 
+For Map pushes, the Console suggests `<remote map root>/<local Map directory
+name>`. Operators can override the destination, then restore the prediction
+with `Use Suggested Path`. The backend applies the same safe fallback when the
+remote destination is omitted.
+
 ## HD Map Editor Design
 
 Keep the HD map file format compatible with the current Python tools:
