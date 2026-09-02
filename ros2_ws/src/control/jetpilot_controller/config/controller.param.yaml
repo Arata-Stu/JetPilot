@@ -31,8 +31,9 @@ path_tracking_controller_node:
     require_localization_state: true
     localization_state_timeout_s: 1.5
     require_target_speed: true
-    fallback_target_speed_mps: 0.5
-    max_target_speed_mps: 3.0
+    fallback_target_speed_mps: 0.3
+    # Conservative commissioning limit. Raise only after steering calibration.
+    max_target_speed_mps: 0.3
     stop_at_path_end: true
     goal_tolerance_m: 0.25
 
@@ -75,7 +76,7 @@ path_tracking_controller_node:
     throttle_feedforward: 0.05
     brake_kp: 0.5
     speed_deadband_mps: 0.05
-    max_throttle_command: 0.35
+    max_throttle_command: 0.15
     max_brake_command: 0.3
     max_lateral_accel_mps2: 2.0
     # Use the minimum custom/raceline speed inside this forward window so the

@@ -7501,7 +7501,7 @@ function ensureCompetitionRouteEditor(detail) {
       kind,
       path_topic: pathTopic,
       trajectory_topic: trajectoryTopic,
-      target_speed_mps: Number.isFinite(targetSpeed) ? targetSpeed : 1.0,
+      target_speed_mps: Number.isFinite(targetSpeed) ? targetSpeed : 0.3,
     };
   });
   state.competitionRouteEditor = {

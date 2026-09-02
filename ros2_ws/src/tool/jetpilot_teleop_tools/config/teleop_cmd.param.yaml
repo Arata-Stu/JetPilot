@@ -5,7 +5,8 @@ teleop_cmd_node:
     reverse_axis: 2
     brake_button: -1
     deadman_button: 3
-    steering_scale: 1.0
+    # Normalize the observed joystick axis so stick-left is positive in ROS.
+    steering_scale: -1.0
     throttle_scale: 1.0
     reverse_scale: 1.0
     brake_value: 1.0
