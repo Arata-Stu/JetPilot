@@ -19,6 +19,7 @@
 #include "jetpilot_controller/trailing_controller.hpp"
 #include "jetpilot_controller/trajectory_speed_profile.hpp"
 #include "jetpilot_msgs/msg/control_command.hpp"
+#include "jetpilot_msgs/msg/planning_manager_status.hpp"
 #include "jetpilot_msgs/msg/trajectory.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "nav_msgs/msg/path.hpp"
@@ -131,6 +132,7 @@ private:
   bool planning_ready_{false};
   bool planning_ready_received_{false};
   bool localization_confirmed_{false};
+  std::string active_planning_lane_id_;
   double target_speed_mps_{0.0};
   double previous_steering_command_{0.0};
   std::optional<SteadyTime> last_control_at_;
@@ -144,6 +146,8 @@ private:
   rclcpp::Subscription<std_msgs::msg::Float32>::SharedPtr target_speed_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr planning_ready_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr localization_state_sub_;
+  rclcpp::Subscription<jetpilot_msgs::msg::PlanningManagerStatus>::SharedPtr
+    planning_manager_status_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odometry_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr opponent_odometry_sub_;
   rclcpp::Publisher<jetpilot_msgs::msg::ControlCommand>::SharedPtr command_pub_;

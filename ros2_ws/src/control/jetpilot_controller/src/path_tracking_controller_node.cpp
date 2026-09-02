@@ -320,6 +320,13 @@ void PathTrackingControllerNode::create_interfaces()
                                                planning_ready_ = message->data;
                                                planning_ready_received_ = true;
                                              });
+  planning_manager_status_sub_ =
+    create_subscription<jetpilot_msgs::msg::PlanningManagerStatus>(
+      "/planning/manager/status", latched_qos,
+      [this](const jetpilot_msgs::msg::PlanningManagerStatus::SharedPtr message)
+      {
+        active_planning_lane_id_ = message->active_lane_id;
+      });
   localization_state_sub_ = create_subscription<std_msgs::msg::String>(
     localization_state_topic_, latched_qos,
     [this](const std_msgs::msg::String::SharedPtr message)
@@ -812,9 +819,11 @@ void PathTrackingControllerNode::control_cycle()
   lookahead.pose.orientation.w = 1.0;
   lookahead_pub_->publish(lookahead);
 
+  const std::string active_line_id = typed_profile_active
+    ? trajectory_profile_->line_id
+    : (active_planning_lane_id_.empty() ? "trajectory" : active_planning_lane_id_);
   publish_tracking_visualization(
-    input.path, tracking, reverse_motion,
-    typed_profile_active ? trajectory_profile_->line_id : "trajectory", command.header.stamp);
+    input.path, tracking, reverse_motion, active_line_id, command.header.stamp);
 
   publish_state(true, reverse_motion ? "tracking_reverse" : "tracking", *speed,
                 limited_target_speed, physical_steering,
