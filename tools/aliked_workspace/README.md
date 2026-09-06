@@ -117,6 +117,19 @@ python3 lab.py inspect --name 424x240
 
 この段階では小さいONNXのcuVGL互換性はまだ未確認。実画像で入力サイズエラーがないか、位置推定が成功するかを確認する。
 
+最初に、実験フォルダで実行時の設定も424×240へ揃える。エンジン生成用の設定はVGLへ自動では渡らない。
+
+```bash
+source /workspaces/ros2_ws/install/setup.bash
+VGL_SHARE="$(ros2 pkg prefix --share jetpilot_system_launch)"
+mkdir -p artifacts/424x240/runtime_config
+cp -a "$VGL_SHARE/config/localization/vgl_config/." artifacts/424x240/runtime_config/
+python3 /workspaces/scripts/configure_vgl_extractor.py \
+  "$VGL_SHARE/config/localization/vgl_config/keypoint_creation_config.pb.txt" \
+  artifacts/424x240/runtime_config/keypoint_creation_config.pb.txt \
+  --width 424 --height 240
+```
+
 ターミナル1でワークスペースをsourceしてコンテナを起動：
 
 ```bash
@@ -133,10 +146,13 @@ ros2 launch jetpilot_system_launch vgl.launch.py \
   container_name:=vgl_test_container \
   vgl_enabled_stereo_cameras:=realsense \
   vgl_map_dir:=/workspaces/map/E522-0907-v1/2026-09-07_01-28-58_20260907_011815_joy_start/cuvgl_map \
-  vgl_model_dir:="$(pwd)/artifacts/424x240/runtime_models"
+  vgl_model_dir:="$(pwd)/artifacts/424x240/runtime_models" \
+  vgl_config_dir:="$(pwd)/artifacts/424x240/runtime_config"
 ```
 
 これはVGLの初期化までの試験。自己位置推定の検証にはカメラ画像・CameraInfo・TFと推定トリガーを別途供給する。各比較の前にコンテナも停止・再起動して旧ノードの残留を避ける。
+
+全体起動でも`vgl_model_dir`と`vgl_config_dir`の両方を`bringup.sh`へ渡す。更新したlaunchファイルをJetsonへ反映し、`jetpilot_system_launch`をビルドしてから使用する。既定の設定ではALIKEDの`opt`が1920×1200のため、小さいエンジンだけ指定すると入力形状不一致で停止する可能性がある。
 
 ## 軽量テスト
 

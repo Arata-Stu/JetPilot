@@ -148,6 +148,7 @@ def add_nodes(args: lu.ArgumentContainer):
                         'vgl_base_frame': base_frame,
                         'topic_config_file': topic_config_file,
                         'vgl_model_dir': args.vgl_model_dir,
+                        'vgl_config_dir': args.vgl_config_dir,
                         'vgl_image_qos_profile': args.vgl_image_qos_profile,
                         'vgl_trigger_service': args.vgl_trigger_service,
                         'vgl_pose_topic': args.vgl_pose_topic,
@@ -426,6 +427,10 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg(
         'vgl_model_dir',
         '/workspaces/ros2_ws/isaac_ros_assets/models/visual_global_localization',
+        cli=True)
+    args.add_arg(
+        'vgl_config_dir',
+        lu.get_path('jetpilot_system_launch', 'config/localization/vgl_config'),
         cli=True)
     args.add_arg('vgl_image_qos_profile', 'SENSOR_DATA', cli=True)
 
