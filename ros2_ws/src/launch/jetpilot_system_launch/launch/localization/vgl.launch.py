@@ -107,6 +107,8 @@ def add_visual_global_localization(args: lu.ArgumentContainer) -> list[lut.Actio
         'debug_map_raw_dir': args.vgl_debug_map_raw_dir,
         'base_frame': args.vgl_base_frame,
         'image_qos_profile': args.vgl_image_qos_profile,
+        'enable_rectify_images': lut.ParameterValue(
+            args.vgl_do_rectify_images, value_type=bool),
         'use_sim_time': lut.ParameterValue(args.use_sim_time, value_type=bool),
     }
     

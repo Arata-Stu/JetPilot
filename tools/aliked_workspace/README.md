@@ -123,12 +123,14 @@ python3 lab.py inspect --name 424x240
 source /workspaces/ros2_ws/install/setup.bash
 VGL_SHARE="$(ros2 pkg prefix --share jetpilot_system_launch)"
 mkdir -p artifacts/424x240/runtime_config
-cp -a "$VGL_SHARE/config/localization/vgl_config/." artifacts/424x240/runtime_config/
+cp -RL "$VGL_SHARE/config/localization/vgl_config/." artifacts/424x240/runtime_config/
 python3 /workspaces/scripts/configure_vgl_extractor.py \
   "$VGL_SHARE/config/localization/vgl_config/keypoint_creation_config.pb.txt" \
   artifacts/424x240/runtime_config/keypoint_creation_config.pb.txt \
   --width 424 --height 240
 ```
+
+`--symlink-install`の設定はリンクの場合があるため、`cp -RL`で実体をコピーする。以前`cp -a`で作ったディレクトリには上書きせず、新しい名前で設定ディレクトリを作成し、起動時の`vgl_config_dir`もその名前に揃える。変換ツールが`source and destination must be different`を返した場合は、元設定とコピー先が同じ実体を指している。
 
 ターミナル1でワークスペースをsourceしてコンテナを起動：
 
