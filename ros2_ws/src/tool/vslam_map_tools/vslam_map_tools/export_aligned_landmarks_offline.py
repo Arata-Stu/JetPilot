@@ -399,7 +399,7 @@ def read_landmark_points(landmarks_data: dict, min_z: Optional[float], max_z: Op
         x = struct.unpack_from('<f', data_bytes, base + x_offset)[0]
         y = struct.unpack_from('<f', data_bytes, base + y_offset)[0]
         z = struct.unpack_from('<f', data_bytes, base + z_offset)[0]
-        if not (math.isnan(x) or math.isnan(y) or math.isnan(z)):
+        if all(math.isfinite(value) for value in (x, y, z)):
             points.append([x, y, z])
             
     pts = np.array(points, dtype=np.float64)
@@ -576,6 +576,11 @@ def main() -> None:
     else:
         landmark_points = np.empty((0, 3), dtype=np.float64)
 
+    # Preserve XYZ before the raster's height filters, XY sampling and cropping.
+    editor_points = read_landmark_points(landmarks_data, None, None) if landmarks_data else np.empty((0, 3))
+    editor_points = transform_landmarks_to_map_frame(editor_points, landmarks_data, snapshot)
+    editor_points = transform_points(editor_points, rot, trans)
+
     # Process Path
     full_path_data = snapshot.get("full_vslam_path")
     if full_path_data:
@@ -642,6 +647,28 @@ def main() -> None:
     output_image = Path(args.output_image).expanduser().resolve()
     output_image.parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(output_image), canvas)
+    # Bound browser payload without collapsing distinct heights onto one XY cell.
+    editor_points = editor_points.reshape((-1, 3))
+    finite_points = editor_points[np.isfinite(editor_points).all(axis=1)]
+    total = len(finite_points)
+    if total > 250000:
+        finite_points = finite_points[np.linspace(0, total - 1, 250000, dtype=int)]
+    source_frame = landmark_frame_id(landmarks_data)
+    localization = snapshot.get("localization") or {}
+    map_frame = normalized_frame(localization.get("map_frame") or "map")
+    missing_tf = source_frame and source_frame != map_frame and not isinstance(
+        (localization.get("map_from_frame") or {}).get(source_frame), dict)
+    sidecar = output_image.with_suffix(".points.json")
+    temporary = sidecar.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps({
+        "version": 1, "total_points": total,
+        "issue": "点群から地図への座標変換がありません。TFを含めてスナップショットを再取得してください。" if missing_tf else "",
+        "points": finite_points.tolist(),
+        "raster": {"width": geometry.width, "height": geometry.height,
+                   "resolution_m_per_px": geometry.resolution,
+                   "origin_xy_yaw": [geometry.origin_x, geometry.origin_y, geometry.origin_yaw]},
+    }, separators=(",", ":"), allow_nan=False), encoding="utf-8")
+    temporary.replace(sidecar)
     
     if args.output_yaml:
         output_yaml = Path(args.output_yaml).expanduser().resolve()

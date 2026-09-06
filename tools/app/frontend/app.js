@@ -6317,6 +6317,7 @@ function renderMapWorkspace() {
           ></canvas>
         </div>
         <aside class="map-side-panel">
+          ${renderPointCloudControls(detail)}
           ${renderMapCameraView(detail)}
           ${renderMapModePanel(detail)}
         </aside>
@@ -12408,13 +12409,14 @@ function drawMapPreview() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.fillStyle = "#0b0d10";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
-      if (image && state.mapLayers.landmark) {
+      if (image && state.mapLayers.landmark && !pointCloudActive(detail)) {
         ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
         ctx.fillStyle = "rgba(8, 10, 12, 0.08)";
         ctx.fillRect(0, 0, canvas.width, canvas.height);
       } else {
         drawGrid(ctx, canvas.width, canvas.height);
       }
+      drawPointCloud(ctx, detail, canvas.width, canvas.height);
       drawMapLayers(ctx, detail, canvas.width, canvas.height);
     } catch (error) {
       console.warn("Map preview draw failed", error);

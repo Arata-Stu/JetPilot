@@ -3848,6 +3848,12 @@ def build_map_detail(config: ConsoleConfig, map_dir_value: str) -> dict[str, Any
     return {
         "map": _map_record(map_dir, config.map_root, competition_routes),
         "raster": raster,
+        "point_cloud_url": (
+            _file_url(Path(raster["image_path"]).with_suffix(".points.json"))
+            + "&v=" + str(Path(raster["image_path"]).with_suffix(".points.json").stat().st_mtime_ns)
+            if raster and raster.get("image_path")
+            and Path(raster["image_path"]).with_suffix(".points.json").is_file() else ""
+        ),
         "preview_image_url": preview_image,
         "hd_map": hd_map,
         "runtime_routes": runtime_routes,
