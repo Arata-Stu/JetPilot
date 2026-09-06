@@ -131,3 +131,73 @@ test('removing gates in the draft allows geometry edits before defining replacem
   assert.equal(vm.runInContext('mapEditorDirectionReverseIssue(state.selectedMapDetail)', c), '');
   assert.match(vm.runInContext('sectionDefinitionIssue(state.selectedMapDetail)', c), /Section未定義/);
 });
+
+test('save feedback distinguishes generated centerline from missing sections', () => {
+  const c = sectionEditorContext();
+  assert.match(vm.runInContext('mapEditorSaveState(state.selectedMapDetail).centerline', c), /3点.*未保存/);
+  assert.match(vm.runInContext('mapEditorSaveState(state.selectedMapDetail).issue', c), /Section未定義/);
+  assert.equal(vm.runInContext('mapEditorSaveState(state.selectedMapDetail).canDefine', c), true);
+  vm.runInContext('defineWholeCourseSection(); state.mapEditor.enabled = false;', c);
+  assert.equal(vm.runInContext('mapEditorSaveState(state.selectedMapDetail).canSave', c), true);
+  assert.match(vm.runInContext('renderHdMapEditor(state.selectedMapDetail)', c), /id="map-editor-save" class="primary/);
+});
+
+test('live save chrome reacts to sections, drawing completion and an in-flight save', () => {
+  const c = sectionEditorContext();
+  vm.runInContext(`
+    globalThis.elements = Object.fromEntries(['map-editor-save', 'map-editor-save-reason', 'map-editor-status', 'map-editor-centerline-state', 'map-editor-define-section'].map(id => [id, {classList:{toggle(name, on){this[name] = on;}}}]));
+    document.getElementById = id => elements[id] || null;
+  `, c);
+  // Restore the real incremental DOM updater (the shared fixture stubs it).
+  const source = fs.readFileSync(path.join(__dirname, '../app.js'), 'utf8');
+  vm.runInContext(source.slice(source.indexOf('function updateMapEditorChrome()'), source.indexOf('\nfunction mapCanvasFitScale')), c);
+  vm.runInContext('updateMapEditorChrome()', c);
+  assert.equal(c.elements['map-editor-save'].disabled, true);
+  assert.match(c.elements['map-editor-save-reason'].textContent, /Section未定義/);
+  vm.runInContext('defineWholeCourseSection()', c);
+  assert.equal(c.elements['map-editor-save'].disabled, false);
+  assert.equal(c.elements['map-editor-save'].classList.primary, true);
+  vm.runInContext('state.mapEditor.drawingLane = true; updateMapEditorChrome()', c);
+  assert.equal(c.elements['map-editor-save'].disabled, true);
+  assert.match(c.elements['map-editor-save-reason'].textContent, /描画完了/);
+  vm.runInContext('finishPairedLane()', c);
+  assert.equal(c.elements['map-editor-save'].disabled, false);
+  vm.runInContext('state.ui.pendingActions["hd-map:save"] = {}; markMapEditorDirty()', c);
+  assert.equal(c.elements['map-editor-save'].disabled, true);
+});
+
+test('inspector tabs retain draft geometry and allow direct access to layers', () => {
+  const c = sectionEditorContext();
+  vm.runInContext('setMapInspectorTab("layers")', c);
+  const html = vm.runInContext('renderMapInspectorTabs(state.selectedMapDetail)', c);
+  assert.match(html, /Fine tune layers/);
+  assert.doesNotMatch(html, /HD Map Edit/);
+  assert.equal(vm.runInContext('state.mapEditor.dirty && state.mapEditor.enabled', c), true);
+  vm.runInContext('setMapInspectorTab("edit")', c);
+  assert.match(vm.runInContext('renderMapInspectorTabs(state.selectedMapDetail)', c), /HD Map Edit/);
+  assert.equal(vm.runInContext('activeEditorLane().centerline.length', c), 3);
+});
+
+test('combined save sends generated centerline and sections, then clears the saved draft', async () => {
+  const c = sectionEditorContext();
+  vm.runInContext(`
+    defineWholeCourseSection();
+    state.selectedMapPath = state.selectedMapDetail.map.path;
+    confirmAction = () => true;
+    beginAction = () => true;
+    endAction = () => {};
+    invalidateMapPreflights = () => {};
+    commitSelectedMapDetail = (context, saved) => { state.selectedMapDetail = saved; return true; };
+    api = async (url, options) => {
+      globalThis.savedPayload = JSON.parse(options.body);
+      return {...state.selectedMapDetail,
+        map:{...state.selectedMapDetail.map,artifacts:{centerline_csv:{exists:true}}},
+        hd_map:{exists:true, lanes:savedPayload.lanes.map(l => ({...l,primary:l.id===savedPayload.primary_lane_id})), section_gates:savedPayload.section_gates}};
+    };
+  `, c);
+  await vm.runInContext('saveHdMapFromEditor()', c);
+  assert.equal(c.savedPayload.lanes[0].centerline.length, 3);
+  assert.equal(c.savedPayload.section_gates.length, 2);
+  assert.equal(vm.runInContext('state.mapEditor.dirty || state.sectionEditor.dirty', c), false);
+  assert.equal(vm.runInContext('state.selectedMapDetail.map.artifacts.centerline_csv.exists', c), true);
+});

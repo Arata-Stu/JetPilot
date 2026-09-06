@@ -118,6 +118,7 @@ const state = {
   selectedMapPath: null,
   selectedMapDetail: null,
   mapWorkspaceMode: "geometry",
+  mapInspectorTab: "edit",
   mapTopologyTool: "junctions",
   mapLayerSelectionsByMode: {},
   mapLayers: {
@@ -6317,14 +6318,32 @@ function renderMapWorkspace() {
           ></canvas>
         </div>
         <aside class="map-side-panel">
-          ${renderPointCloudControls(detail)}
-          ${renderMapCameraView(detail)}
-          ${renderMapModePanel(detail)}
+          ${renderMapInspectorTabs(detail)}
         </aside>
       </div>
       ${renderSimulationDisclosure(detail)}
     </div>
   `;
+}
+
+function setMapInspectorTab(tab) {
+  if (!["edit", "layers", "view"].includes(tab)) return;
+  state.mapInspectorTab = tab;
+  render();
+}
+
+function renderMapInspectorTabs(detail) {
+  const tab = state.mapInspectorTab || "edit";
+  return `
+    <nav class="map-inspector-tabs" aria-label="Map controls">
+      ${[["edit", "編集"], ["layers", "レイヤー"], ["view", "表示・カメラ"]].map(([key, label]) => `
+        <button class="${tab === key ? "active" : ""}" aria-pressed="${tab === key}" onclick="setMapInspectorTab(${js(key)})">${label}</button>`).join("")}
+    </nav>
+    <div class="map-inspector-content" data-scroll-key="${esc(`map-inspector:${detail.map.path}:${state.mapWorkspaceMode}:${tab}`)}">
+      ${tab === "layers" ? renderLayerToggles() : tab === "view"
+        ? `${renderPointCloudControls(detail)}${renderMapCameraView(detail)}${renderHdRasterOptions(detail)}`
+        : renderMapModePanel(detail)}
+    </div>`;
 }
 
 function mapModeDefinition(mode) {
@@ -6373,13 +6392,13 @@ function renderMapModePanel(detail) {
   const mode = state.mapWorkspaceMode;
   let content;
   if (mode === "geometry") {
-    content = `${renderHdMapEditor(detail)}${renderHdRasterOptions(detail)}${renderLayerToggles()}`;
+    content = `${renderHdMapEditor(detail)}`;
   } else if (mode === "topology") {
-    content = `${renderTopologyToolSwitcher()}${state.mapTopologyTool === "sections" ? renderSectionGateEditor(detail) : renderJunctionEditor(detail)}${renderLayerToggles()}`;
+    content = `${renderTopologyToolSwitcher()}${state.mapTopologyTool === "sections" ? renderSectionGateEditor(detail) : renderJunctionEditor(detail)}`;
   } else if (mode === "routes") {
-    content = `${renderCustomLineEditor(detail)}${renderRacelineClearance(detail)}${renderLayerToggles()}`;
+    content = `${renderCustomLineEditor(detail)}${renderRacelineClearance(detail)}`;
   } else {
-    content = `${renderMapInspector(detail)}${renderHdMapVersions(detail)}${renderLayerToggles()}`;
+    content = `${renderMapInspector(detail)}${renderHdMapVersions(detail)}`;
   }
   if (!mapEditorInteractionLocked()) return content;
   return `<div class="inline-status warn" role="status">Activating the HD map version… editing is temporarily locked.</div><div inert aria-busy="true">${content}</div>`;
@@ -6399,6 +6418,7 @@ function setMapWorkspaceMode(mode) {
   if (!["geometry", "topology", "routes", "review"].includes(mode)) return;
   state.mapLayerSelectionsByMode[state.mapWorkspaceMode] = { ...state.mapLayers };
   state.mapWorkspaceMode = mode;
+  state.mapInspectorTab = "edit";
   state.mapEditor.enabled = false;
   state.mapEditor.dragging = null;
   state.customLineEditor.enabled = false;
@@ -6932,7 +6952,7 @@ function renderLayerToggles() {
     ["Driving Lines", [["centerline", "Centerline"], ["raceline", "Raceline"], ["custom_line", "Custom lines"]]],
   ];
   return `
-    <details class="inspector-block layer-panel">
+    <details class="inspector-block layer-panel" open>
       <summary><strong>Fine tune layers</strong><span>Advanced</span></summary>
       ${groups.map(([group, layers]) => `
         <div class="layer-group">
@@ -6949,29 +6969,54 @@ function renderLayerToggles() {
   `;
 }
 
+function mapEditorSaveState(detail) {
+  const editor = state.mapEditor;
+  const lane = sectionEditorLane(detail);
+  const geometryIssue = mapEditorCollectionIssue(editor);
+  const sectionIssue = sectionDefinitionIssue(detail);
+  const dirty = editor.dirty || (state.sectionEditor.mapPath === detail?.map?.path && state.sectionEditor.dirty);
+  const issue = !mapEditorRasterReady(detail) ? "Rasterを生成してください"
+    : editor.drawingLane ? "描画完了を押してレーンを確定してください"
+    : geometryIssue || sectionIssue;
+  const gates = state.sectionEditor.mapPath === detail?.map?.path
+    ? state.sectionEditor.gates : (detail?.hd_map?.section_gates || []);
+  const centerReady = lane && !editorLaneIssue(lane);
+  const canDefine = !editor.drawingLane && !geometryIssue && lane && !gates.some(g => g.lane_id === lane.id);
+  return {
+    issue, dirty, canDefine,
+    canSave: !issue && !actionBusy("hd-map:save") && !mapEditorInteractionLocked(),
+    status: issue ? "保存前に確認" : dirty ? "未保存" : "保存可能",
+    centerline: centerReady ? `Centerline：${lane.centerline.length}点・${editor.dirty ? "未保存（SaveでCSV出力）" : "読込済み"}` : "Centerline：未作成",
+  };
+}
+
 function renderHdMapEditor(detail) {
   const editor = ensureMapEditor(detail);
   const lane = activeEditorLane();
-  const rasterReady = mapEditorRasterReady(detail);
-  const issue = mapEditorCollectionIssue(editor);
   const selected = Boolean(editor.selected);
   const assist = normalizedMapEditorAssistSettings();
   const canSmooth = canSmoothSelectedEditorRange();
   const reverseIssue = mapEditorDirectionReverseIssue(detail, lane);
-  const status = !rasterReady ? "Raster required" : issue || (editor.dirty ? "Unsaved" : "Ready");
-  const sectionIssue = sectionDefinitionIssue(detail);
-  const canSave = editor.enabled && rasterReady && !issue && !sectionIssue;
+  const saveState = mapEditorSaveState(detail);
+  const canSave = saveState.canSave;
   return `
     <div class="inspector-block map-editor-block">
+      <div class="map-editor-save-area">
       <div class="inspector-title-row">
         <h4>HD Map Edit</h4>
-        <span id="map-editor-status" class="${issue || !rasterReady ? "warn" : editor.dirty ? "dirty" : "ok"}">${esc(status)}</span>
+        <span id="map-editor-status" class="${saveState.issue ? "warn" : saveState.dirty ? "dirty" : "ok"}">${esc(saveState.status)}</span>
       </div>
       <div class="editor-actions">
         <button class="${editor.enabled ? "primary" : ""}" onclick="toggleHdMapEditor()">${editor.enabled ? "Editing" : "Edit"}</button>
         <button id="map-editor-undo" onclick="undoMapEditor()" ${editor.enabled && editor.undoStack.length ? "" : "disabled"}>Undo</button>
         <button id="map-editor-redo" onclick="redoMapEditor()" ${editor.enabled && editor.redoStack.length ? "" : "disabled"}>Redo</button>
-        <button id="map-editor-save" class="${actionBusy("hd-map:save") ? "is-busy" : ""}" onclick="saveHdMapFromEditor()" ${canSave ? "" : "disabled"} ${actionButtonAttrs("hd-map:save", "HD map is saving...")}>${esc(actionButtonLabel("hd-map:save", "Save", "Saving..."))}</button>
+        <button id="map-editor-save" class="${canSave && saveState.dirty ? "primary" : ""} ${actionBusy("hd-map:save") ? "is-busy" : ""}" onclick="saveHdMapFromEditor()" ${canSave ? "" : "disabled"} ${actionButtonAttrs("hd-map:save", "HD map is saving...")}>${esc(actionButtonLabel("hd-map:save", "Save", "Saving..."))}</button>
+      </div>
+      <div id="map-editor-save-reason" class="field-hint" role="status">${esc(saveState.issue || "境界・Centerline・Sectionをまとめて保存します")}</div>
+      <div id="map-editor-centerline-state" class="field-hint">${esc(saveState.centerline)}</div>
+      <button id="map-editor-define-section" onclick="defineWholeCourseSection()" ${saveState.canDefine ? "" : "hidden"}>全コースを1 Sectionにする</button>
+      </div>
+      <div class="editor-actions">
         <button id="map-editor-auto-center" onclick="regenerateEditorCenterlineFromBounds()" ${editor.enabled ? "" : "disabled"}>Auto Center</button>
         <button id="map-editor-reverse-direction" onclick="reverseActiveMapEditorLaneDirection()" ${editor.enabled && !reverseIssue ? "" : "disabled"} title="${esc(reverseIssue || "Reverse centerline order and swap left/right boundaries")}">Reverse Direction</button>
         <button id="map-editor-delete" class="danger" onclick="deleteSelectedEditorPoint()" ${editor.enabled && selected ? "" : "disabled"}>Delete Pt</button>
@@ -7042,8 +7087,6 @@ function renderHdMapEditor(detail) {
           <span>Center line</span>
         </label>
       </div>
-      <button onclick="defineWholeCourseSection()" ${editor.enabled ? "" : "disabled"}>全コースを1 Sectionにする</button>
-      <div id="map-editor-section-issue" class="field-hint">${esc(sectionIssue || "Section定義済み：境界・centerlineと一緒に保存します")}</div>
       <div id="map-editor-counts" class="editor-counts">${renderEditorCounts(lane)}</div>
     </div>
   `;
@@ -9262,8 +9305,10 @@ function startPairedLane() {
 function finishPairedLane() {
   if (!state.mapEditor.drawingLane) return;
   if (activeEditorLane().left_bound.length < 2) return toast("2点以上をクリックしてください。Undoで作成を戻せます。", "error");
+  rememberMapEditorState();
   state.mapEditor.drawingLane = false;
   state.mapEditor.activeField = "left_bound";
+  markMapEditorDirty();
   render();
 }
 
@@ -10223,6 +10268,7 @@ function ensureSectionEditor(detail, options = {}) {
 function markSectionEditorDirty() {
   state.sectionEditor.dirty = true;
   state.sectionEditor.revision = Number(state.sectionEditor.revision || 0) + 1;
+  updateMapEditorChrome();
 }
 
 function sectionDefinitionIssue(detail, lane = sectionEditorLane(detail)) {
@@ -11119,19 +11165,24 @@ function updateMapEditorChrome() {
   const detail = state.selectedMapDetail;
   if (!detail || state.mapEditor.mapPath !== detail.map?.path) return;
   const lane = activeEditorLane();
-  const rasterReady = mapEditorRasterReady(detail);
-  const issue = mapEditorCollectionIssue();
   const selected = Boolean(state.mapEditor.selected);
+  const saveState = mapEditorSaveState(detail);
   const status = $("map-editor-status");
   if (status) {
-    status.textContent = !rasterReady ? "Raster required" : issue || (state.mapEditor.dirty ? "Unsaved" : "Ready");
-    status.className = issue || !rasterReady ? "warn" : state.mapEditor.dirty ? "dirty" : "ok";
+    status.textContent = saveState.status;
+    status.className = saveState.issue ? "warn" : saveState.dirty ? "dirty" : "ok";
   }
   const save = $("map-editor-save");
-  const sectionIssue = sectionDefinitionIssue(detail);
-  if (save) save.disabled = !(state.mapEditor.enabled && rasterReady && !issue && !sectionIssue);
-  const sectionHint = $("map-editor-section-issue");
-  if (sectionHint) sectionHint.textContent = sectionIssue || "Section定義済み：境界・centerlineと一緒に保存します";
+  if (save) {
+    save.disabled = !saveState.canSave;
+    save.classList.toggle("primary", saveState.canSave && saveState.dirty);
+  }
+  const reason = $("map-editor-save-reason");
+  if (reason) reason.textContent = saveState.issue || "境界・Centerline・Sectionをまとめて保存します";
+  const centerline = $("map-editor-centerline-state");
+  if (centerline) centerline.textContent = saveState.centerline;
+  const define = $("map-editor-define-section");
+  if (define) define.hidden = !saveState.canDefine;
   const del = $("map-editor-delete");
   if (del) del.disabled = !(state.mapEditor.enabled && selected);
   const undo = $("map-editor-undo");
@@ -12139,7 +12190,7 @@ async function saveHdMapFromEditor() {
   ensureMapEditor(detail);
   const mapPath = detail.map.path;
   ensureSectionEditor(detail);
-  const issue = mapEditorCollectionIssue() || sectionDefinitionIssue(detail);
+  const issue = mapEditorSaveState(detail).issue;
   if (issue) {
     toast(issue, "error");
     return;

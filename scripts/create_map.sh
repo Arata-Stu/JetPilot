@@ -477,7 +477,7 @@ run_vgl_tensorrt_export() {
 
   ROS2_WS="$ROS2_WS" \
     OUTPUT_MODEL_DIR="$OUTPUT_MODEL_DIR" \
-    "$VGL_TENSORRT_EXPORT_SCRIPT" --yes
+    "$VGL_TENSORRT_EXPORT_SCRIPT" --yes --native-profile
 }
 
 prepare_hd_map_raster() {

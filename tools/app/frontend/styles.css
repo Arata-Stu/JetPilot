@@ -1773,6 +1773,63 @@ tr:last-child td {
   min-width: 0;
 }
 
+.map-inspector-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 5px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #0e1317;
+}
+
+.map-inspector-tabs button {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 6px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.map-inspector-tabs button.active {
+  border-color: var(--cyan);
+  background: #172838;
+}
+
+.map-inspector-content {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  max-height: 64vh;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+.map-editor-save-area {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  display: grid;
+  gap: 8px;
+  margin: -12px -12px 0;
+  padding: 12px;
+  border-bottom: 1px solid var(--line);
+  background: #12181b;
+}
+
+.map-editor-save-area [hidden] {
+  display: none;
+}
+
+.map-editor-save-area .editor-actions {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.map-editor-save-area .editor-actions button {
+  min-width: 0;
+  padding: 8px 4px;
+  font-size: 12px;
+}
+
 .map-side-panel > .topology-tool-switcher {
   grid-column: 1 / -1;
 }
@@ -3961,13 +4018,13 @@ tr:last-child td {
   }
 }
 
-@media (max-width: 1500px) {
+@media (max-width: 900px) {
   .map-preview-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 
   .map-side-panel {
-    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .map-preview-shell {
