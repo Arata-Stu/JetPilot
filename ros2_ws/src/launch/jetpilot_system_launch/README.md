@@ -1,5 +1,12 @@
 # jetpilot_system_launch
 
+SilkyEvCam の保存済み `.bias` は bringup 引数
+`sensor_kit_silky_evcam_bias_file:=/absolute/path/to/camera.bias` で適用できます。
+`sensor_kit.launch.py` および SilkyEvCam を含む個別センサー launch を直接使う場合は
+`silky_evcam_bias_file` を指定します。空文字の場合は従来のカメラ設定を使用します。
+調整・保存手順は [SilkyEvCam Bias Tuner](../../../../../tools/silkyevcam_bias_tuner/README.md)
+を参照してください。
+
 ## Purpose
 
 JetPilot 全体の bringup をまとめる launch package です。tool、operation、planning、control、E2E inference、sensor、localization、vehicle interface を個別に有効化し、topic 名と安全条件を1箇所で揃えます。

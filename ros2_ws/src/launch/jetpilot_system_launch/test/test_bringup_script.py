@@ -2139,3 +2139,122 @@ def test_exec_uses_an_argument_array_for_paths_with_spaces(tmp_path: Path) -> No
 
     arguments = capture_path.read_bytes().split(b"\0")
     assert f"map_dir:={map_dir}".encode() in arguments
+
+
+def run_bias_tui(
+    tmp_path: Path,
+    sensor: str = "realsense-silky",
+    choice: str = "E522.bias",
+    overrides: tuple[str, ...] = (),
+    manual_input: str = "",
+) -> tuple[subprocess.CompletedProcess[str], Path]:
+    """Run the complete launcher in a PTY with deterministic fzf selections."""
+    project = tmp_path / "project with spaces"
+    bias_dir = project / "ros2_ws/src/launch/jetpilot_system_launch/config/sensing/silkyevcam"
+    bias_dir.mkdir(parents=True)
+    bias_file = bias_dir / "E522.bias"
+    bias_file.write_text("178 % bias_diff_off\n460 % bias_diff_on\n")
+    (bias_dir / "camera_settings.json").write_text("{}")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fzf = bin_dir / "fzf"
+    fzf.write_text(
+        "#!/usr/bin/python3\n"
+        "import os, sys\n"
+        "options = sys.stdin.read().splitlines()\n"
+        "prompt = next(a for a in sys.argv if a.startswith('--prompt='))\n"
+        "if 'JetPilot bringup preset' in prompt:\n"
+        "    print(next(o for o in options if o.split()[0] == 'sensor'))\n"
+        "elif 'Sensor kit launch' in prompt:\n"
+        "    print(next(o for o in options if o.split()[0] == os.environ['TEST_SENSOR']))\n"
+        "elif 'SilkyEvCam bias file' in prompt:\n"
+        "    print('BIAS_MENU_SHOWN', file=sys.stderr)\n"
+        "    assert not any(o.endswith('.json') for o in options)\n"
+        "    choice = os.environ['TEST_BIAS_CHOICE']\n"
+        "    if choice == 'cancel': sys.exit(130)\n"
+        "    if choice == 'none': print(next(o for o in options if o.startswith('読み込まない')))\n"
+        "    elif choice == 'manual': print('パスを手入力...')\n"
+        "    else: print(next(o for o in options if o.endswith('/' + choice)))\n"
+        "else: print(options[0])\n"
+    )
+    fzf.chmod(0o755)
+    env = dict(os.environ)
+    env.update(
+        PATH=f"{bin_dir}:{env['PATH']}",
+        JETPILOT_PROJECT_ROOT=str(project),
+        BRINGUP_PROFILE_ROOT=str(PROFILE_ROOT),
+        TEST_SENSOR=sensor,
+        TEST_BIAS_CHOICE=choice,
+    )
+    command = shlex.join([
+        "bash", str(LAUNCHER), "--dry-run", "--no-bag-manager", *overrides
+    ])
+    result = subprocess.run(
+        ["script", "-q", "-e", "-c", command, "/dev/null"],
+        input=manual_input, capture_output=True, text=True, env=env, timeout=15,
+    )
+    return result, bias_file
+
+
+def test_bias_tui_selects_file_for_both_silky_sensor_kits(tmp_path: Path) -> None:
+    for sensor in ("realsense-silky", "realsense-silky-flir"):
+        result, bias_file = run_bias_tui(tmp_path / sensor, sensor=sensor)
+        assert result.returncode == 0, result.stdout + result.stderr
+        command = shlex.split(result.stdout.split("Command:", 1)[1].split("Dry-run:", 1)[0])
+        assert f"sensor_kit_silky_evcam_bias_file:={bias_file}" in command
+        assert f"Silky bias   : {bias_file}" in result.stdout
+
+
+def test_bias_tui_skips_other_sensors(tmp_path: Path) -> None:
+    for sensor in ("realsense", "flir"):
+        result, _ = run_bias_tui(tmp_path / sensor, sensor=sensor)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "BIAS_MENU_SHOWN" not in result.stdout
+        assert "sensor_kit_silky_evcam_bias_file:=" not in result.stdout
+
+
+def test_bias_tui_allows_no_file_and_cancellation(tmp_path: Path) -> None:
+    result, _ = run_bias_tui(tmp_path / "none", choice="none")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "BIAS_MENU_SHOWN" in result.stdout
+    assert "sensor_kit_silky_evcam_bias_file:=" not in result.stdout
+    result, _ = run_bias_tui(tmp_path / "cancel", choice="cancel")
+    assert result.returncode == 130, result.stdout + result.stderr
+    assert "Command:" not in result.stdout
+
+
+def test_bias_tui_preserves_explicit_cli_override(tmp_path: Path) -> None:
+    for index, path in enumerate(("/tmp/explicit bias.bias", "")):
+        result, _ = run_bias_tui(
+            tmp_path / str(index),
+            overrides=(f"sensor_kit_silky_evcam_bias_file:={path}",),
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "BIAS_MENU_SHOWN" not in result.stdout
+        if path:
+            command = shlex.split(result.stdout.split("Command:", 1)[1].split("Dry-run:", 1)[0])
+            assert f"sensor_kit_silky_evcam_bias_file:={path}" in command
+
+
+def test_bias_tui_accepts_manual_path(tmp_path: Path) -> None:
+    manual = tmp_path / "manual bias.bias"
+    manual.write_text("178 % bias_diff_off\n")
+    result, _ = run_bias_tui(tmp_path / "tui", choice="manual", manual_input=f"{manual}\n")
+    assert result.returncode == 0, result.stdout + result.stderr
+    command = shlex.split(result.stdout.split("Command:", 1)[1].split("Dry-run:", 1)[0])
+    assert f"sensor_kit_silky_evcam_bias_file:={manual}" in command
+
+
+def test_bias_tui_reprompts_for_missing_file_and_json(tmp_path: Path) -> None:
+    wrong_format = tmp_path / "settings.json"
+    wrong_format.write_text("{}")
+    valid = tmp_path / "valid.bias"
+    valid.write_text("178 % bias_diff_off\n")
+    result, _ = run_bias_tui(
+        tmp_path / "tui", choice="manual",
+        manual_input=f"{tmp_path / 'missing.bias'}\n{wrong_format}\n{valid}\n",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.count("読み取り可能な .bias ファイルを指定してください") == 2
+    command = shlex.split(result.stdout.split("Command:", 1)[1].split("Dry-run:", 1)[0])
+    assert f"sensor_kit_silky_evcam_bias_file:={valid}" in command

@@ -48,6 +48,7 @@ def launch_sensor_kit(args: lu.ArgumentContainer) -> list[lut.Action]:
                 launch_arguments={
                     'namespace': args.silky_evcam_namespace,
                     'serial': args.silky_evcam_serial,
+                    'bias_file': args.silky_evcam_bias_file,
                     'device_format': args.silky_evcam_device_format,
                     'frame_id': args.silky_evcam_frame_id,
                     'raw_recording_enabled': str(
@@ -120,6 +121,7 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('silky_evcam_launch', 'launch/pipeline.launch.py')
     args.add_arg('silky_evcam_namespace', 'event_camera')
     args.add_arg('silky_evcam_serial', '')
+    args.add_arg('silky_evcam_bias_file', '', cli=True)
     args.add_arg('silky_evcam_device_format', '')
     args.add_arg('silky_evcam_frame_id', 'event_camera')
     args.add_arg('silky_evcam_raw_recording_enabled', True)

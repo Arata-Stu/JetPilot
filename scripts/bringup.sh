@@ -1544,6 +1544,58 @@ configure_sensor_kit_interactively() {
   configure_rtp_interactively
 }
 
+configure_silky_evcam_bias_interactively() {
+  is_true "$(get_arg enable_sensor_kit)" || return 0
+  [[ "$(get_arg sensor_kit_interface_pkg 2>/dev/null || true)" == 'jetpilot_system_launch' ]] \
+    || return 0
+  case "$(get_arg sensor_kit_interface_launch 2>/dev/null || true)" in
+    launch/sensors/realsense_silky_evcam.launch.py|launch/sensors/realsense_silky_flir.launch.py) ;;
+    *) return 0 ;;
+  esac
+
+  local override
+  # An explicit CLI value, including an empty value, takes precedence over the TUI.
+  for override in "${EXTRA_LAUNCH_ARGS[@]}"; do
+    [[ "$override" == sensor_kit_silky_evcam_bias_file:=* ]] && return 0
+  done
+
+  local bias_dir="${PROJECT_ROOT}/ros2_ws/src/launch/jetpilot_system_launch/config/sensing/silkyevcam"
+  local selected
+  local path
+  local current
+  local options=()
+  current="$(get_arg sensor_kit_silky_evcam_bias_file 2>/dev/null || true)"
+  if [[ -n "$current" ]]; then
+    append_unique_option "$current"
+  fi
+  options+=('読み込まない（カメラの現在設定を使用）')
+  if [[ -d "$bias_dir" ]]; then
+    while IFS= read -r -d '' path; do
+      append_unique_option "$path"
+    done < <(find "$bias_dir" -maxdepth 1 -type f -name '*.bias' -print0 | sort -z)
+  fi
+  options+=('パスを手入力...')
+
+  while true; do
+    selected="$(choose_one 'SilkyEvCam bias file' "${options[@]}")" || exit $?
+    case "$selected" in
+      '読み込まない（カメラの現在設定を使用）')
+        set_arg sensor_kit_silky_evcam_bias_file ''
+        return
+        ;;
+      'パスを手入力...')
+        selected="$(prompt_path 'SilkyEvCam .bias file' "$current")"
+        ;;
+    esac
+    if [[ "$selected" == *.bias && -f "$selected" && -r "$selected" ]]; then
+      selected="$(realpath -- "$selected")" || exit $?
+      set_arg sensor_kit_silky_evcam_bias_file "$selected"
+      return
+    fi
+    printf '読み取り可能な .bias ファイルを指定してください: %s\n' "$selected" >&2
+  done
+}
+
 configure_vehicle_interactively() {
   local selection
   local profile_id
@@ -1833,6 +1885,9 @@ print_summary() {
     printf '  sensor launch: %s/%s\n' \
       "$(get_arg sensor_kit_interface_pkg 2>/dev/null || printf 'jetpilot_system_launch')" \
       "$(get_arg sensor_kit_interface_launch 2>/dev/null || printf 'launch/sensors/realsense.launch.py')"
+    if [[ -n "$(get_arg sensor_kit_silky_evcam_bias_file 2>/dev/null || true)" ]]; then
+      printf '  Silky bias   : %s\n' "$(get_arg sensor_kit_silky_evcam_bias_file)"
+    fi
     if is_true "$(get_arg sensor_kit_enable_rtp_stream 2>/dev/null || true)"; then
       printf '  RTP topic    : %s\n' \
         "$(get_arg sensor_kit_rtp_image_topic 2>/dev/null || printf '/realsense/color/image_raw')"
@@ -2129,6 +2184,9 @@ if ((${#EXTRA_LAUNCH_ARGS[@]} > 0)); then
 fi
 normalize_localization_init_mode
 normalize_vslam_mode
+if [[ "$INTERACTIVE" == 'true' ]]; then
+  configure_silky_evcam_bias_interactively
+fi
 validate_configuration
 print_summary
 

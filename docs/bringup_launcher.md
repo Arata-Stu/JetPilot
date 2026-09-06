@@ -10,6 +10,18 @@ Inside the JetPilot Docker workspace:
 /workspaces/scripts/bringup.sh
 ```
 
+TUI で `realsense-silky` または `realsense-silky-flir` を選ぶと、起動確認の前に
+`SilkyEvCam bias file` の選択画面を表示します。
+`ros2_ws/src/launch/jetpilot_system_launch/config/sensing/silkyevcam/` 内の
+`.bias` ファイル（`E522.bias` など）を自動で一覧に表示します。
+「読み込まない」はカメラの現在設定を使用し、「パスを手入力...」では別の場所にある
+読み取り可能な `.bias` を指定できます。JSON はこの一覧には含めません。
+選択したファイルは確認画面の `Silky bias` に表示され、ドライバーが撮影開始前に読み込みます。
+Docker 内ではコンテナから見えるパスを指定してください。
+
+CLI の `sensor_kit_silky_evcam_bias_file:=...` による明示指定は TUI より優先され、
+バイアス選択画面を省略します。空文字の明示指定も同様です。
+
 Common presets:
 
 ```bash

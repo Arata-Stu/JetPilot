@@ -1,0 +1,69 @@
+{
+ "cam_sync_state": {
+  "sync_mode": "STANDALONE"
+ },
+ "event_rate_noise_filter_state": {
+  "enabled": false,
+  "event_rate_threshold": 1638300000
+ },
+ "ll_biases_state": {
+  "bias": [
+   {
+    "name": "bias_diff",
+    "value": 299
+   },
+   {
+    "name": "bias_diff_off",
+    "value": 221
+   },
+   {
+    "name": "bias_diff_on",
+    "value": 384
+   },
+   {
+    "name": "bias_fo",
+    "value": 1477
+   },
+   {
+    "name": "bias_hpf",
+    "value": 1448
+   },
+   {
+    "name": "bias_pr",
+    "value": 1250
+   },
+   {
+    "name": "bias_refr",
+    "value": 1500
+   }
+  ]
+ },
+ "roi_state": {
+  "window": [],
+  "columns": [],
+  "rows": [],
+  "enabled": false,
+  "mode": "ROI"
+ },
+ "trigger_in_state": {
+  "channel_status": [
+   {
+    "channel": "MAIN",
+    "enabled": false
+   },
+   {
+    "channel": "LOOPBACK",
+    "enabled": false
+   }
+  ]
+ },
+ "trigger_out_state": {
+  "enabled": false,
+  "period": 100,
+  "duty_cycle": 0.5
+ },
+ "event_rate_activity_filter_state": {
+  "enabled": false,
+  "lower_start_rate_threshold": 1638300000
+ }
+}

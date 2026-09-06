@@ -470,6 +470,7 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('sensor_kit_flir_image_height', '512', cli=True)
     args.add_arg('sensor_kit_flir_framerate', '60.0', cli=True)
     args.add_arg('sensor_kit_flir_io_method', 'mmap', cli=True)
+    args.add_arg('sensor_kit_silky_evcam_bias_file', '', cli=True)
     args.add_arg('sensor_kit_silky_evcam_raw_recording_enabled', True, cli=True)
     args.add_arg(
         'sensor_kit_silky_evcam_raw_recording_request_topic',
@@ -859,6 +860,7 @@ def generate_launch_description() -> lut.LaunchDescription:
                 'flir_image_height': args.sensor_kit_flir_image_height,
                 'flir_framerate': args.sensor_kit_flir_framerate,
                 'flir_io_method': args.sensor_kit_flir_io_method,
+                'silky_evcam_bias_file': args.sensor_kit_silky_evcam_bias_file,
                 'silky_evcam_raw_recording_enabled':
                     args.sensor_kit_silky_evcam_raw_recording_enabled,
                 'silky_evcam_raw_recording_request_topic':
