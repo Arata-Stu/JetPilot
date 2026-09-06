@@ -12,6 +12,12 @@ class MappingTest(unittest.TestCase):
             mapping.require_options('--model_dir MODEL', ['--model_dir', '--config_folder_path'])
 
     def test_feature_extraction_gets_model_and_copied_config(self):
+        self.exercise_build(resume=False)
+
+    def test_resume_runs_only_feature_extraction(self):
+        self.exercise_build(resume=True)
+
+    def exercise_build(self, resume):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             base = root / 'maps'
@@ -41,6 +47,7 @@ class MappingTest(unittest.TestCase):
                     frames = generated / 'map_frames/rectified'
                     frames.mkdir(parents=True)
                     (frames / 'frames_meta.json').write_text('{}')
+                    (base / 'latest').symlink_to(generated)
                 else:
                     self.assertIn(f'--model_dir={model.resolve()}', command)
                     self.assertIn('--extract_feature', command)
@@ -57,19 +64,24 @@ class MappingTest(unittest.TestCase):
             args = SimpleNamespace(steps_to_run=['edex', 'compute_poses', 'cuvgl'],
                                    width=424, height=240, base_output_folder=base,
                                    model_dir=model, sensor_data_bag=root / 'bag',
-                                   camera_topic_config=root / 'camera.yaml', fs_model_res='low_res')
+                                   camera_topic_config=root / 'camera.yaml', fs_model_res='low_res',
+                                   resume_map=generated if resume else None)
+            if resume:
+                frames = generated / 'map_frames/rectified'
+                frames.mkdir(parents=True)
+                (frames / 'frames_meta.json').write_text('{}')
             with patch.object(mapping, 'check_engine', return_value={'input_shape': [1,3,240,424]}), \
                  patch.object(mapping.subprocess, 'check_output', side_effect=output), \
                  patch.object(mapping.subprocess, 'run', side_effect=run):
                 mapping.build(args)
-            self.assertEqual(len(commands), 2)
+            self.assertEqual(len(commands), 1 if resume else 2)
             self.assertEqual(source.read_text(), original)
             self.assertIn('"status": "complete"', (generated / 'vgl_profile.json').read_text())
 
     def test_engine_shape_mismatch_stops_before_map_creation(self):
         with tempfile.TemporaryDirectory() as tmp:
             args = SimpleNamespace(steps_to_run=['edex', 'compute_poses', 'cuvgl'],
-                width=424, height=240, base_output_folder=Path(tmp) / 'out', model_dir=Path(tmp))
+                width=424, height=240, base_output_folder=Path(tmp) / 'out', model_dir=Path(tmp), sensor_data_bag=Path(tmp), camera_topic_config=Path(tmp))
             with patch.object(mapping, 'require_options'), \
                  patch.object(mapping.subprocess, 'check_output', return_value=''), \
                  patch.object(mapping, 'check_engine', side_effect=ValueError('input mismatch')), \
@@ -78,6 +90,27 @@ class MappingTest(unittest.TestCase):
                     mapping.build(args)
                 run.assert_not_called()
                 self.assertFalse(args.base_output_folder.exists())
+
+    def test_two_real_maps_are_not_silently_selected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            for name in ('one', 'two'):
+                frames = base / name / 'map_frames/rectified'
+                frames.mkdir(parents=True)
+                (frames / 'frames_meta.json').write_text('{}')
+            with self.assertRaisesRegex(ValueError, 'found 2'):
+                mapping.select_new_map(base, set())
+
+    def test_new_alias_of_old_map_is_not_new_output(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            frames = base / 'old' / 'map_frames/rectified'
+            frames.mkdir(parents=True)
+            (frames / 'frames_meta.json').write_text('{}')
+            before = mapping.map_outputs(base)
+            (base / 'latest').symlink_to(base / 'old')
+            with self.assertRaisesRegex(ValueError, 'found 0'):
+                mapping.select_new_map(base, before)
 
 if __name__ == '__main__':
     unittest.main()

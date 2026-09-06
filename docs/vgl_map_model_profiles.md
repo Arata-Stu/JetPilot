@@ -53,3 +53,17 @@ mapには以下も保存します。
 
 Macでは標準ライブラリの制御テストとJavaScriptテストのみを実施しています。
 軽量モデルでの実際のmap生成・位置推定精度は、CUDA実行環境で確認が必要です。
+
+## 姿勢生成後に止まった場合の再開
+
+生成先の`latest`等のリンクは実体パスへ解決し、同じmapを重複して数えません。
+画像と姿勢が生成済みで、VGL生成前に停止した場合は、次のようにVGL工程だけを実行できます。
+
+```bash
+python3 /workspaces/scripts/create_map_with_vgl.py \
+  --resume-map /workspaces/map/出力名/生成された日時付きディレクトリ \
+  --model-dir /workspaces/tools/aliked_workspace/artifacts/424x240/runtime_models \
+  --width 424 --height 240
+```
+
+`map_frames/rectified/frames_meta.json`が必要です。既存の`cuvgl_map`やVGL設定・生成記録がある場合は上書きせず停止します。この再開はVGL生成までで、HD map等の後処理は実行しません。

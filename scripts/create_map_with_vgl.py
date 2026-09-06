@@ -57,13 +57,37 @@ def create_vgl_command(map_dir, frames, config_dir, model_dir, binary_dir):
             '--extract_feature', '--build_bow_index']
 
 
+def map_outputs(base):
+    return {p.resolve() for p in base.iterdir()
+            if (p / 'map_frames/rectified/frames_meta.json').is_file()}
+
+
+def select_new_map(base, before):
+    candidates = sorted(map_outputs(base) - before)
+    if len(candidates) != 1:
+        raise ValueError(f'Expected one new map with rectified frames; found {len(candidates)}: '
+                         + ', '.join(str(p) for p in candidates))
+    return candidates[0]
+
+
 def build(args):
-    steps = args.steps_to_run
+    resume = getattr(args, 'resume_map', None)
+    steps = ['cuvgl'] if resume else args.steps_to_run
     if len(set(steps)) != len(steps):
         raise ValueError('Duplicate mapping steps')
     if args.width * args.height < 2048:
         raise ValueError('ALIKED input must contain at least 2048 pixels')
-    base = args.base_output_folder.resolve()
+    if resume:
+        generated = resume.resolve()
+        if not (generated / 'map_frames/rectified/frames_meta.json').is_file():
+            raise ValueError('Resume map must contain map_frames/rectified/frames_meta.json')
+        for name in ('cuvgl_map', 'vgl_mapping_config', 'vgl_runtime_config', 'vgl_profile.json'):
+            if (generated / name).exists() or (generated / name).is_symlink():
+                raise ValueError(f'Refusing to overwrite existing resume artifact: {generated / name}')
+    elif not all(getattr(args, name, None) for name in
+                 ('base_output_folder', 'sensor_data_bag', 'camera_topic_config')):
+        raise ValueError('New map requires --base_output_folder, --sensor_data_bag and --camera_topic_config')
+    base = generated.parent if resume else args.base_output_folder.resolve()
     model = args.model_dir.resolve()
     # Check before running expensive pose generation. Never silently use a default model.
     if 'cuvgl' in steps:
@@ -84,24 +108,21 @@ def build(args):
         config_source = share / 'configs/isaac'
         # Validate the textproto layout before any map processing.
         configure((config_source / 'keypoint_creation_config.pb.txt').read_text(), args.width, args.height)
-    pose_steps = [s for s in steps if s != 'cuvgl']
-    if not pose_steps:
-        raise ValueError('For a new map, include edex and compute_poses before cuvgl')
-    base.mkdir(parents=True, exist_ok=True)
-    before = set(base.iterdir())
-    command = ['ros2', 'run', 'isaac_mapping_ros', 'create_map_offline.py',
-               f'--sensor_data_bag={args.sensor_data_bag}', f'--base_output_folder={base}',
-               f'--camera_topic_config={args.camera_topic_config}', f'--fs_model_res={args.fs_model_res}',
-               '--steps_to_run', *pose_steps]
-    print('[stage] create poses: ' + ' '.join(command), flush=True)
-    subprocess.run(command, check=True)
-    if 'cuvgl' not in steps:
-        return
-    candidates = [p for p in set(base.iterdir()) - before
-                  if (p / 'map_frames/rectified/frames_meta.json').is_file()]
-    if len(candidates) != 1:
-        raise ValueError(f'Expected one new map with rectified frames; found {len(candidates)}')
-    generated = candidates[0]
+    if not resume:
+        pose_steps = [s for s in steps if s != 'cuvgl']
+        if not pose_steps:
+            raise ValueError('For a new map, include edex and compute_poses before cuvgl')
+        base.mkdir(parents=True, exist_ok=True)
+        before = map_outputs(base)
+        command = ['ros2', 'run', 'isaac_mapping_ros', 'create_map_offline.py',
+                   f'--sensor_data_bag={args.sensor_data_bag}', f'--base_output_folder={base}',
+                   f'--camera_topic_config={args.camera_topic_config}', f'--fs_model_res={args.fs_model_res}',
+                   '--steps_to_run', *pose_steps]
+        print('[stage] create poses: ' + ' '.join(command), flush=True)
+        subprocess.run(command, check=True)
+        if 'cuvgl' not in steps:
+            return
+        generated = select_new_map(base, before)
     vgl_map = generated / 'cuvgl_map'
     if vgl_map.exists():
         raise ValueError(f'Refusing to reuse existing VGL features/index: {vgl_map}')
@@ -132,9 +153,10 @@ def build(args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--sensor_data_bag', type=Path, required=True)
-    parser.add_argument('--base_output_folder', type=Path, required=True)
-    parser.add_argument('--camera_topic_config', type=Path, required=True)
+    parser.add_argument('--resume-map', type=Path, help='Run only VGL creation using existing rectified images and poses')
+    parser.add_argument('--sensor_data_bag', type=Path)
+    parser.add_argument('--base_output_folder', type=Path)
+    parser.add_argument('--camera_topic_config', type=Path)
     parser.add_argument('--fs_model_res', choices=['low_res', 'high_res'], default='low_res')
     parser.add_argument('--steps_to_run', nargs='+', default=['edex', 'compute_poses', 'cuvgl'],
                         choices=['edex', 'compute_poses', 'depth', 'occupancy', 'transform_map', 'cuvgl'])
