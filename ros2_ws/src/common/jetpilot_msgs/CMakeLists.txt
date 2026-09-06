@@ -19,6 +19,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   msg/OperationModeState.msg
   msg/PlanningManagerStatus.msg
   msg/RecoveryStatus.msg
+  msg/ReidMatch.msg
+  msg/ReidMatchArray.msg
   msg/TrajectoryPoint.msg
   msg/Trajectory.msg
   DEPENDENCIES geometry_msgs std_msgs

@@ -111,3 +111,31 @@ SHA-256、閾値、入力サイズ、推論FPS、再生速度を保存します�
 ros2 launch jetpilot_object_detection yolov8_tensor_rt.launch.py \
   model_root:=/workspaces/ros2_ws/models/yolov8/latest
 ```
+
+## 短期追跡ID
+
+標準設定ではNMS後にByteTrack風の2段階Trackerを実行し、確定した追跡IDを
+`Detection2D.id`へ付けます。新しいモデルの学習・engine生成は不要です。
+既存のbox・class・confidenceの出力閾値は保ち、低信頼度boxは内部の追跡維持だけに使います。
+Bag AnalysisはIDを保存し、検出overlayに追跡番号を表示します。
+
+`enable_tracking: false`で無効化できます。初期値は2観測で確定、消失保持0.5秒です。
+IDは短期追跡の識別子であり、周回をまたぐ相手車両の恒久的な個体IDではありません。
+詳細な設定・ReIDの実装検討はrepoの `docs/object_tracking_reid.md` を参照してください。
+
+## Map上の追跡可視化
+
+`opponent_projection.launch.py`でID付き検出を路面へ投影し、Foxglove用のMarkerArrayと
+ID別表示スロットのPathを配信できます。bringupでは `enable_opponent_projection:=true` で
+有効になります。詳細な起動・表示手順はrepoの `docs/opponent_visualization.md` を参照してください。
+
+## 外観ReID（C++ composable node）
+
+`ReidNode` は元画像の短期バッファ、動的ROIのRGB正規化、TensorRT推論、外観ID照合を
+専用ワーカーで実行します。`reid.launch.py` またはbringupの `enable_reid:=true` で有効化します。
+学習済みReIDエンジンの指定が必須です。モデルと前処理を合わせて `config/reid.param.yaml` を設定してください。
+出力は `/perception/opponents/reid/matches` の `jetpilot_msgs/ReidMatchArray` です。
+
+推論は `EmbeddingBackend` に分離しており、将来NITROS/TensorRTNodeアダプタへ置換できます。
+現時点の実装はTensorRT直接実行のみです。モデル契約・起動・寿命・検証範囲は
+[ReID実行ガイド](../../../../docs/reid_runtime.md)を参照してください。

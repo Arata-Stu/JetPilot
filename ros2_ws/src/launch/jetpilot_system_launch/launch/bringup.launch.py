@@ -14,12 +14,13 @@ from launch_ros.actions import ComposableNodeContainer
 
 _TRUE_VALUES = {'1', 'true', 'yes', 'on'}
 _DEFAULT_FOXGLOVE_TOPIC_WHITELIST = (
-    "['^/tf$', '^/tf_static$', '^/clock$', '^/(.*/)?diagnostics$', "
+    "['^/tf$', '^/tf_static$', '^/clock$', '^/operation_mode/state$', "
+    "'^/planning/(manager|recovery)/status$', '^/(.*/)?diagnostics$', "
     "'^/localization/(pose_hint_required|pose_hint_state|current_section|"
     "current_section_marker)$', "
     "'^/visual_slam/tracking/odometry$', '^/visual_localization/pose$', "
     "'^/hd_map/(lane_markers|section_markers|primary_centerline_path)$', "
-    "'^/controller/(tracking_markers|lookahead_point)$']"
+    "'^/controller/(tracking_markers|lookahead_point)$', '^/perception/opponents/.*$']"
 )
 _DEFAULT_FOXGLOVE_CLIENT_TOPIC_WHITELIST = "['^/initialpose$']"
 _ABSOLUTE_TOPIC_PATTERN = re.compile(
@@ -221,10 +222,11 @@ def _create_processing_component_container(context):
     sensor_enabled = _launch_bool(context, 'enable_sensor_kit')
     e2e_enabled = _launch_bool(context, 'enable_e2e_inference')
     object_detection_enabled = _launch_bool(context, 'enable_object_detection')
+    reid_enabled = _launch_bool(context, 'enable_reid')
     localization_enabled = _launch_bool(context, 'enable_localization')
 
     sensor_processing_enabled = (
-        sensor_enabled or e2e_enabled or object_detection_enabled)
+        sensor_enabled or e2e_enabled or object_detection_enabled or reid_enabled)
     if not sensor_processing_enabled and not localization_enabled:
         return []
 
@@ -494,6 +496,13 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('e2e_network_image_height', '120', cli=True)
 
     args.add_arg('enable_object_detection', False, cli=True)
+    args.add_arg('enable_reid', False, cli=True)
+    args.add_arg('reid_engine_path', '', cli=True)
+    args.add_arg('reid_image_topic', '/perception/object_detection/image', cli=True)
+    args.add_arg('reid_param_file',
+                 lu.get_path('jetpilot_object_detection', 'config/reid.param.yaml'), cli=True)
+    args.add_arg('enable_opponent_projection', False, cli=True)
+    args.add_arg('opponent_projection_image_geometry', 'raw', cli=True)
     args.add_arg('object_detection_image_topic', '/realsense/color/image_raw', cli=True)
     args.add_arg(
         'object_detection_camera_info_topic',
@@ -900,6 +909,31 @@ def generate_launch_description() -> lut.LaunchDescription:
             },
             condition=IfCondition(args.enable_e2e_inference),
         ))
+
+    actions.append(lu.include(
+        'jetpilot_object_detection', 'launch/reid.launch.py',
+        launch_arguments={
+            'container_name': args.sensor_kit_container_name,
+            'run_standalone': False,
+            'engine_path': args.reid_engine_path,
+            'param_file': args.reid_param_file,
+            'image_topic': args.reid_image_topic,
+            'detections_topic': args.object_detection_detections_topic,
+            'source_width': args.object_detection_source_width,
+            'source_height': args.object_detection_source_height,
+            'use_sim_time': args.use_sim_time,
+        }, condition=IfCondition(args.enable_reid)))
+
+    actions.append(lu.include(
+        'jetpilot_object_detection', 'launch/opponent_projection.launch.py',
+        launch_arguments={
+            'detections_topic': args.object_detection_detections_topic,
+            'camera_info_topic': args.object_detection_camera_info_topic,
+            'source_width': args.object_detection_source_width,
+            'source_height': args.object_detection_source_height,
+            'image_geometry': args.opponent_projection_image_geometry,
+            'use_sim_time': args.use_sim_time,
+        }, condition=IfCondition(args.enable_opponent_projection)))
 
     actions.append(
         lu.include(

@@ -12,3 +12,4 @@ yolov8_decoder:
     max_detections: 20
     tensor_layout: channel_major
     resize_mode: letterbox
+    enable_tracking: false

@@ -1,0 +1,32 @@
+/**:
+  ros__parameters:
+    backend: tensorrt
+    # Required: a ReID embedding engine built on the target Jetson.
+    engine_path: ""
+    input_name: images
+    output_name: embeddings
+    input_width: 128
+    input_height: 128
+    embedding_size: 256
+    device: 0
+    # Example ImageNet normalization; MUST match the chosen model's training/export.
+    mean: [0.485, 0.456, 0.406]
+    stddev: [0.229, 0.224, 0.225]
+    source_width: 424
+    source_height: 240
+    class_name: vehicle
+    image_ttl_seconds: 0.5
+    buffer_frames: 16
+    buffer_megabytes: 32
+    pending_frames: 2
+    reid_interval_seconds: 0.2
+    max_rois_per_frame: 3
+    min_box_pixels: 16.0
+    min_detection_score: 0.5
+    # Initial cosine thresholds, not calibrated probabilities.
+    match_threshold: 0.8
+    new_identity_threshold: 0.5
+    match_margin: 0.08
+    confirmation_hits: 2
+    gallery_capacity: 16
+    gallery_ttl_seconds: 300.0

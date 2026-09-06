@@ -51,6 +51,18 @@ bag_manager_node:
       - /planning/diagnostics
       - /controller/diagnostics
       - /e2e/diagnostics
+      - /perception/opponents/markers
+      - /perception/opponents/status
+      - /perception/opponents/reid/matches
+      - /perception/opponents/reid/diagnostics
+      - /perception/opponents/track_0/path
+      - /perception/opponents/track_1/path
+      - /perception/opponents/track_2/path
+      - /perception/opponents/track_3/path
+      - /perception/opponents/track_4/path
+      - /perception/opponents/track_5/path
+      - /perception/opponents/track_6/path
+      - /perception/opponents/track_7/path
       - /perception/detections
       - /perception/object_detection/diagnostics
       - /jetson/diagnostics

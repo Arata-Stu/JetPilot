@@ -4,8 +4,11 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstring>
 #include <functional>
+#include <random>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -70,6 +73,29 @@ YoloV8DecoderNode::YoloV8DecoderNode(const rclcpp::NodeOptions & options)
     std::vector<float>((4U + config_.num_classes), 0.0F).data(),
     4U + config_.num_classes, config_));
 
+  if (declare_parameter<bool>("enable_tracking", true)) {
+    TrackerConfig tracking;
+    tracking.low_score = static_cast<float>(declare_parameter<double>("tracking_low_score", 0.1));
+    tracking.high_score = config_.confidence_threshold;
+    const auto new_score = declare_parameter<double>("tracking_new_score", 0.5);
+    if (!std::isfinite(new_score) || new_score < 0 || new_score > 1) {
+      throw std::invalid_argument("tracking_new_score must be in [0, 1]");
+    }
+    tracking.new_score = std::max(tracking.high_score, static_cast<float>(new_score));
+    tracking.match_iou = static_cast<float>(declare_parameter<double>("tracking_match_iou", 0.3));
+    tracking.lost_seconds = declare_parameter<double>("tracking_lost_seconds", 0.5);
+    const auto hits = declare_parameter<int>("tracking_min_hits", 2);
+    if (hits <= 0) throw std::invalid_argument("tracking_min_hits must be positive");
+    tracking.min_hits = static_cast<unsigned>(hits);
+    tracking_low_score_ = tracking.low_score;
+    tracker_ = std::make_unique<ByteTracker>(tracking);
+    std::random_device random;
+    std::ostringstream session;
+    session << std::hex << random() << random() <<
+      std::chrono::system_clock::now().time_since_epoch().count();
+    tracking_session_ = session.str();
+  }
+
   detections_pub_ = create_publisher<vision_msgs::msg::Detection2DArray>(
     "detections_output", rclcpp::QoS(rclcpp::KeepLast(1)).best_effort());
   diagnostics_pub_ = create_publisher<diagnostic_msgs::msg::DiagnosticArray>(
@@ -133,12 +159,24 @@ void YoloV8DecoderNode::on_tensor(TensorList::ConstSharedPtr message)
               std::string("failed to copy tensor from CUDA: ") + cudaGetErrorString(cuda_status));
     }
 
-    const auto decoded = decode_yolov8(values.data(), values.size(), config_);
+    auto decode_config = config_;
+    if (tracker_) decode_config.confidence_threshold = tracking_low_score_;
+    const auto decoded = decode_yolov8(values.data(), values.size(), decode_config);
+    std::vector<std::string> track_ids(decoded.size());
+    if (tracker_) {
+      const double timestamp = static_cast<double>(header.stamp.sec) + header.stamp.nanosec * 1e-9;
+      for (const auto & match : tracker_->update(decoded, timestamp, header.frame_id)) {
+        track_ids[match.detection_index] = tracking_session_ + ":" + std::to_string(match.id);
+      }
+    }
     vision_msgs::msg::Detection2DArray output;
     output.header = header;
     output.detections.reserve(decoded.size());
-    for (const auto & item : decoded) {
+    for (std::size_t index = 0; index < decoded.size(); ++index) {
+      const auto & item = decoded[index];
+      if (item.score < config_.confidence_threshold) continue;
       vision_msgs::msg::Detection2D detection;
+      detection.id = track_ids[index];
       detection.header = header;
       detection.bbox.center.position.x = (item.x_min + item.x_max) * 0.5F;
       detection.bbox.center.position.y = (item.y_min + item.y_max) * 0.5F;
@@ -159,7 +197,7 @@ void YoloV8DecoderNode::on_tensor(TensorList::ConstSharedPtr message)
     const double capture_latency_ms = header.stamp.sec == 0 && header.stamp.nanosec == 0 ?
       0.0 : std::max(0.0, (now - capture).seconds() * 1000.0);
     publish_diagnostics(
-      header, candidate_count, decoded.size(), callback_ms, capture_latency_ms);
+      header, candidate_count, output.detections.size(), callback_ms, capture_latency_ms);
   } catch (const std::exception & error) {
     RCLCPP_WARN_THROTTLE(
       get_logger(), *get_clock(), 2000, "YOLOv8 decode failed: %s", error.what());
@@ -185,6 +223,8 @@ void YoloV8DecoderNode::publish_diagnostics(
   status.level = error.empty() ?
     diagnostic_msgs::msg::DiagnosticStatus::OK : diagnostic_msgs::msg::DiagnosticStatus::ERROR;
   status.message = error.empty() ? "YOLOv8 decoder is running" : error;
+  status.values.push_back(key_value("tracking_enabled", tracker_ ? "true" : "false"));
+  status.values.push_back(key_value("retained_tracks", std::to_string(tracker_ ? tracker_->size() : 0)));
   status.values.push_back(key_value("candidate_count", std::to_string(candidate_count)));
   status.values.push_back(key_value("detection_count", std::to_string(detection_count)));
   status.values.push_back(key_value("callback_ms", std::to_string(callback_ms)));

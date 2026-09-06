@@ -51,6 +51,7 @@ class SnapshotTrajectoryTests(unittest.TestCase):
             _object_detection_payload(message),
             [
                 {
+                    "track_id": "",
                     "class_id": "vehicle",
                     "score": 0.91,
                     "x_min": 90.0,
@@ -60,6 +61,13 @@ class SnapshotTrajectoryTests(unittest.TestCase):
                 }
             ],
         )
+
+    def test_preserves_tracking_session_id_for_history(self) -> None:
+        detection = SimpleNamespace(
+            id="run-a:42", bbox=SimpleNamespace(center=SimpleNamespace(x=10., y=10.), size_x=5., size_y=5.),
+            results=[SimpleNamespace(hypothesis=SimpleNamespace(class_id="vehicle", score=0.8))])
+        payload = _object_detection_payload(SimpleNamespace(detections=[detection]))
+        self.assertEqual(payload[0]["track_id"], "run-a:42")
 
     def test_extracts_plot_friendly_jetson_metrics(self) -> None:
         message = SimpleNamespace(

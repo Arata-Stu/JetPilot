@@ -13,3 +13,10 @@ yolov8_decoder:
     tensor_layout: channel_major
     # Keep this consistent with DnnImageEncoderNode enable_padding.
     resize_mode: letterbox
+    # ByteTrack-inspired short-term IDs; low scores recover tracks internally.
+    enable_tracking: true
+    tracking_low_score: 0.10
+    tracking_new_score: 0.50
+    tracking_match_iou: 0.30
+    tracking_lost_seconds: 0.5
+    tracking_min_hits: 2

@@ -1,0 +1,1 @@
+"""Ground-projected opponent visualization."""

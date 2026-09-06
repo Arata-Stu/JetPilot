@@ -261,6 +261,7 @@ def _object_detection_payload(message: Any) -> list[dict[str, object]]:
             continue
         payload.append(
             {
+                "track_id": str(getattr(detection, "id", "") or ""),
                 "class_id": str(
                     _nested(best, "hypothesis.class_id", default="unknown") or "unknown"
                 ),
@@ -867,6 +868,8 @@ def _render_detection_overlays(
             color = palette[item_index % len(palette)]
             cv2.rectangle(image, (x_min, y_min), (x_max, y_max), color, 2)
             label = f"{detection.get('class_id', 'unknown')} {_finite(detection.get('score')):.2f}"
+            if detection.get("track_id"):
+                label += " #" + str(detection["track_id"]).rsplit(":", 1)[-1]
             text_y = max(14, y_min - 5)
             cv2.putText(
                 image,

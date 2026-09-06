@@ -8,6 +8,7 @@
 #include "diagnostic_msgs/msg/diagnostic_array.hpp"
 #include "isaac_ros_nitros_tensor_list_type/nitros_tensor_list.hpp"
 #include "jetpilot_object_detection/yolov8_decoder.hpp"
+#include "jetpilot_object_detection/byte_tracker.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "std_msgs/msg/header.hpp"
 #include "vision_msgs/msg/detection2_d_array.hpp"
@@ -35,6 +36,9 @@ private:
   std::string output_tensor_name_;
   std::vector<std::string> class_names_;
   DecoderConfig config_;
+  std::unique_ptr<ByteTracker> tracker_;
+  float tracking_low_score_{0.1F};
+  std::string tracking_session_;
   rclcpp::Publisher<vision_msgs::msg::Detection2DArray>::SharedPtr detections_pub_;
   rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr diagnostics_pub_;
   rclcpp::Subscription<TensorList>::SharedPtr tensor_sub_;
