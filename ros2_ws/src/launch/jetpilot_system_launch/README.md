@@ -101,9 +101,9 @@ scripts/bringup.sh localization --map /workspaces/map/course_a --vslam-mode vio
 launchを直接起動する場合は`vslam_mode:=vo|vio`を指定します。RealSense D455はaccelとgyroを
 線形補間で統合して`/realsense/imu`へpublishし、VIOはこのtopicを購読します。
 
-D455の車両取付TFは`base_link -> realsense_camera_link`で、RGB光学中心を車両中心軸へ
-合わせる公称横オフセットとして`y=+0.0115 m`を使用します。実機の取付方向が逆の場合は
-`vehicle_description_camera_y:=-0.0115`へ反転してください。
+車両取付TFの既定はTT-02のCAD配置です。`base_link -> tt02_plate_link ->
+camera_mount_link -> d455_link -> realsense_camera_link`で接続します。
+初期値と実車測定の反映方法は下記「TT-02の取付TF」を参照してください。
 
 診断topicは発行元ごとに分離されます。主な名前は`/realsense/diagnostics`、`/localization/vslam/diagnostics`、
 `/localization/vgl/diagnostics`です。Localization Managerは
@@ -355,3 +355,80 @@ ros2 launch jetpilot_system_launch bringup.launch.py \
 ## Map directory convention
 
 `map_dir` を指定すると、HD map は既定で `<map_dir>/<map_dir_name>_hd_map.yaml`、raceline は `raceline_root` と `raceline_csv` の組み合わせで読みます。名前付きcustom lineは`--custom-line`、開路は`--custom-line-open`で指定します。`custom` presetで`custom-line` componentを選び、Map内にConsoleで有効化した`<map_name>_custom_line.csv`とmetadataがあれば、そのlineを自動選択します。明示pathは常に優先されます。racelineとcustom lineは同時には選択できません。選択はlaunch時に読み込まれ、走行中のhot-swapは行いません。
+
+
+## TT-02の取付TF
+
+`vehicle_description_layout:=tt02_cad` が既定です。
+`config/vehicle/tt02_cad.json` にCAD初期値をまとめ、車体基準とセンサー取付座標を分離しています。
+xyzはm、rpyはrad、取付フレームの軸は前方X・左Y・上Zです。
+測定値は同JSONをコピーして編集し、`vehicle_description_tf_config` に指定してください。
+
+```text
+map → odom → base_link                         （既存の自己位置推定）
+               └→ tt02_plate_link              （実測前は同一原点）
+                    └→ camera_mount_link
+                         ├→ d455_mount_datum    （背面M4穴中点、参照用）
+                         ├→ d455_link
+                         │    └→ realsense_camera_link
+                         │         └→ RealSenseドライバの内部TF
+                         └→ silky_mount_link
+                              ├→ evs_link       （取付座標の互換名）
+                              └→ silky_optical_frame
+                                   └→ event_camera （画像・イベントの既存frame_id）
+```
+
+D455はプレートから `[0.07194, 0.04750, 0.06450] m`、Silkyのネジ中心は
+`[0.010, 0, 0.090] m` です。Silkyの光学中心はプレートから
+`[0.02950, 0, 0.10538] m` の暫定値です。取付部間は回転なしとし、
+Silky opticalへのRPYのみ `[-π/2, 0, -π/2]` を適用します。
+
+D455の原点は左赤外線センサーです。[RealSense公式のTF定義](https://github.com/realsenseai/realsense-ros/blob/ros2-master/README.md#tf-from-coordinate-a-to-coordinate-b)
+に合わせ、筐体中心やRGB中心への横位置補正は加えません。
+`realsense_camera_link` は現在のドライバ名との接続用の同一座標フレームです。
+深度・RGB・IR・IMU内部のTFはRealSenseドライバだけが配信します。
+カメラ名を変更した場合は `vehicle_description_camera_frame` もドライバのroot frameに合わせます。
+
+Silkyを含むsensor kitプロフィールは `publish_vehicle_evs_description:=true` を設定します。
+launchを直接使う場合は同引数を有効にしてください。
+`vehicle_description_evs_optical_frame` はTF末端とSilkyの画像・イベントframe_idの両方へ渡します。
+FLIRのCAD値は今回の資料に含まれないため、既存のthremo TF設定を引き続き使用します。
+
+### 車体原点の実測
+
+初期JSONの `base_to_plate.xyz/rpy` はゼロで、`measured: false` です。
+後輪車軸中央からプレートCAD原点への位置・回転を測って入力し、`measured: true` にしてください。
+これにより取付座標を保ったまま車体原点を後輪車軸中央へ移せます。
+
+`base_footprint` を使う場合は `base_height_m` に路面から後輪車軸中央までの高さを入力し、
+`localization_base_frame:=base_footprint` を指定します。
+自己位置推定が `odom → base_footprint`、取付launchが `base_footprint → base_link` を配信します。
+既定の `localization_base_frame:=base_link` では後者の静的TFを配信しません。
+二重親を避けるため、両方の構成を同時には配信しません。
+高さがnull・非正数のままfootprint構成を選ぶと起動時に拒否します。
+`vehicle.launch.py` を単独で使う場合の対応引数は `vehicle_description_localization_frame` です。
+
+設定をコピーして測定値を入力した後の起動引数例:
+
+```sh
+scripts/bringup.sh localization --vehicle vesc --sensor-kit realsense-silky \
+  --map /workspaces/map/course_a \
+  --set vehicle_description_tf_config:=/workspaces/config/tt02_measured.json \
+  --set localization_base_frame:=base_footprint
+```
+
+Silky光学中心は外部キャリブレーション後に `silky_to_optical` を更新してください。
+キャリブレーションがRGB光学フレーム基準の結果を返す場合、TFを合成してSilky取付座標基準に
+変換してから入力します。同じ `silky_optical_frame` に別の親から重複配信しないでください。
+
+旧配置を使う実車には `vehicle_description_layout:=legacy` を指定できます。
+既存の `vehicle_description_camera_x/y/z/roll/pitch/yaw` とEVSの同種引数はlegacy専用で、
+CADモードはJSONを使います。記録済みbagのTFは書き換えません。
+車体原点を変更すると自己位置・走行軌跡の基準も変わるため、既存Mapとの整合を確認してください。
+CAD値は初期値であり、映像上の最終的な重なりは実車の内部・外部校正で確認します。
+
+標準ライブラリだけの検証:
+
+```sh
+python3 -S -m unittest discover -s ros2_ws/src/launch/jetpilot_system_launch/test -p test_tt02_tf.py
+```

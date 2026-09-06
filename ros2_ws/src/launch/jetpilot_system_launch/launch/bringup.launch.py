@@ -581,10 +581,14 @@ def generate_launch_description() -> lut.LaunchDescription:
         cli=True)
     args.add_arg('vehicle_control_topic', '/vehicle/control_cmd', cli=True)
     args.add_arg('publish_vehicle_description', True, cli=True)
+    args.add_arg('vehicle_description_layout', 'tt02_cad', cli=True)
+    args.add_arg('vehicle_description_tf_config',
+                 lu.get_path('jetpilot_system_launch', 'config/vehicle/tt02_cad.json'), cli=True)
+    args.add_arg('vehicle_description_evs_optical_frame', 'event_camera', cli=True)
     args.add_arg('vehicle_description_base_frame', 'base_link', cli=True)
     args.add_arg('vehicle_description_camera_frame', 'realsense_camera_link', cli=True)
     args.add_arg('vehicle_description_camera_x', '0.2075', cli=True)
-    # D455 mount offset: keep the RGB optical center on the vehicle centerline.
+    # Legacy direct-mount values; tt02_cad reads its mounting transforms from JSON.
     args.add_arg('vehicle_description_camera_y', '0.0115', cli=True)
     args.add_arg('vehicle_description_camera_z', '0.065', cli=True)
     args.add_arg('vehicle_description_camera_roll', '0.0', cli=True)
@@ -833,6 +837,7 @@ def generate_launch_description() -> lut.LaunchDescription:
                 'sensor_interface_pkg': args.sensor_kit_interface_pkg,
                 'sensor_interface_launch': args.sensor_kit_interface_launch,
                 'camera_name': args.sensor_kit_camera_name,
+                'silky_evcam_frame_id': args.vehicle_description_evs_optical_frame,
                 'container_name': args.sensor_kit_container_name,
                 'run_standalone': False,
                 'enable_depth': args.sensor_kit_enable_depth,
@@ -981,6 +986,10 @@ def generate_launch_description() -> lut.LaunchDescription:
                 'vehicle_control_topic': args.vehicle_control_topic,
                 'vehicle_driver_param': args.vehicle_driver_param,
                 'publish_vehicle_description': args.publish_vehicle_description,
+                'vehicle_description_layout': args.vehicle_description_layout,
+                'vehicle_description_tf_config': args.vehicle_description_tf_config,
+                'vehicle_description_localization_frame': args.localization_base_frame,
+                'vehicle_description_evs_optical_frame': args.vehicle_description_evs_optical_frame,
                 'vehicle_description_base_frame': args.vehicle_description_base_frame,
                 'vehicle_description_camera_frame':
                     args.vehicle_description_camera_frame,

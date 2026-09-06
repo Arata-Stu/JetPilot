@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "description": "TT-02 CAD initial values, metres/radians; base_to_plate and Silky optical centre require measurement/calibration.",
+  "base_height_m": null,
+  "base_to_plate": {"xyz": [0, 0, 0], "rpy": [0, 0, 0], "measured": false},
+  "plate_to_mount": {"xyz": [0.045, 0, 0.005], "rpy": [0, 0, 0]},
+  "mount_to_d455_datum": {"xyz": [0.005, 0, 0.060], "rpy": [0, 0, 0]},
+  "mount_to_d455": {"xyz": [0.02694, 0.04750, 0.05950], "rpy": [0, 0, 0]},
+  "mount_to_silky": {"xyz": [-0.035, 0, 0.085], "rpy": [0, 0, 0]},
+  "silky_to_optical": {"xyz": [0.01950, 0, 0.01538], "rpy": [-1.5707963267948966, 0, -1.5707963267948966], "measured": false}
+}

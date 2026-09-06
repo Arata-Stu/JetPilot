@@ -18,7 +18,27 @@ def add_vehicle(args: lu.ArgumentContainer):
     actions = []
     publish_description = lu.is_true(args.publish_vehicle_description)
 
-    if publish_description:
+    layout = str(args.vehicle_description_layout)
+    if layout not in ('tt02_cad', 'legacy'):
+        raise ValueError('vehicle_description_layout must be tt02_cad or legacy')
+    if (publish_description and layout == 'legacy'
+            and str(args.vehicle_description_localization_frame) != str(args.vehicle_description_base_frame)):
+        raise ValueError('legacy layout requires localization and vehicle base frames to match')
+    if publish_description and layout == 'tt02_cad':
+        actions.append(lu.include(
+            'jetpilot_system_launch', 'launch/vehicle_tt02.launch.py',
+            launch_arguments={
+                'config_file': args.vehicle_description_tf_config,
+                'base_frame': args.vehicle_description_base_frame,
+                'localization_frame': args.vehicle_description_localization_frame,
+                'camera_frame': args.vehicle_description_camera_frame,
+                'evs_frame': args.vehicle_description_evs_frame,
+                'evs_optical_frame': args.vehicle_description_evs_optical_frame,
+                'publish_evs': args.publish_vehicle_evs_description,
+                'use_sim_time': args.use_sim_time,
+            }))
+
+    if publish_description and layout == 'legacy':
         actions.extend([
             lu.Node(
                 name='vehicle_camera_static_transform_publisher',
@@ -46,6 +66,7 @@ def add_vehicle(args: lu.ArgumentContainer):
 
     if (
         publish_description
+        and layout == 'legacy'
         and lu.is_true(args.publish_vehicle_evs_description)
     ):
         actions.extend([
@@ -150,10 +171,15 @@ def generate_launch_description() -> lut.LaunchDescription:
             'config/pca9685_rc_driver_node.param.yaml'),
         cli=True)
     args.add_arg('publish_vehicle_description', True, cli=True)
+    args.add_arg('vehicle_description_layout', 'tt02_cad', cli=True)
+    args.add_arg('vehicle_description_tf_config',
+                 lu.get_path('jetpilot_system_launch', 'config/vehicle/tt02_cad.json'), cli=True)
+    args.add_arg('vehicle_description_evs_optical_frame', 'event_camera', cli=True)
+    args.add_arg('vehicle_description_localization_frame', 'base_link', cli=True)
     args.add_arg('vehicle_description_base_frame', 'base_link', cli=True)
     args.add_arg('vehicle_description_camera_frame', 'realsense_camera_link', cli=True)
     args.add_arg('vehicle_description_camera_x', '0.2075', cli=True)
-    # D455 mount offset: keep the RGB optical center on the vehicle centerline.
+    # Legacy direct-mount values; tt02_cad reads its mounting transforms from JSON.
     args.add_arg('vehicle_description_camera_y', '0.0115', cli=True)
     args.add_arg('vehicle_description_camera_z', '0.065', cli=True)
     args.add_arg('vehicle_description_camera_roll', '0.0', cli=True)

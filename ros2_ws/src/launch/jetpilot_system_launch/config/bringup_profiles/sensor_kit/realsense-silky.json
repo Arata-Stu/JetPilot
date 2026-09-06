@@ -15,7 +15,8 @@
   "arguments": {
     "sensor_kit_camera_name": "realsense",
     "sensor_kit_rtp_image_topic": "/realsense/color/image_raw",
-    "sensor_kit_enable_flir": false
+    "sensor_kit_enable_flir": false,
+    "publish_vehicle_evs_description": true
   },
   "rtp_topics": [
     "/realsense/color/image_raw",
