@@ -29,6 +29,7 @@ from jetpilot_hdmap_publisher.hd_map_publisher_node import (
     section_points,
     to_geometry_point,
 )
+from jetpilot_hdmap_publisher.section_geometry import contains_station
 
 
 Point3 = Tuple[float, float, float]
@@ -74,16 +75,10 @@ def project_point_to_lane_s(point: Point3, lane: Lane) -> Tuple[float, float]:
 
 def section_contains_s(section: Section, lane: Lane, s_value: float) -> bool:
     _s_values, total_length = cumulative_s(lane.centerline, lane.closed_loop)
-    if total_length <= 1.0e-9:
-        return False
-    if lane.closed_loop:
-        s = s_value % total_length
-        start = section.start_s_m % total_length
-        end = section.end_s_m % total_length
-        if start > end:
-            return s >= start or s < end
-        return start <= s < end
-    return section.start_s_m <= s_value < section.end_s_m
+    return contains_station(
+        section.start_s_m, section.end_s_m, s_value, total_length, lane.closed_loop,
+        same_gate=bool(section.start_gate_id) and section.start_gate_id == section.end_gate_id,
+    )
 
 
 class HdMapSectionLocalizerNode(Node):

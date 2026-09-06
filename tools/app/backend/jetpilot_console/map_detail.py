@@ -509,6 +509,7 @@ def _write_hd_map_yaml(
     centerline_csv_path: Path,
     previous_data: dict[str, Any],
 ) -> None:
+    _require_primary_sections(previous_data, lanes, primary_lane_id)
     output_mode = output_path.stat().st_mode & 0o777 if output_path.exists() else 0o644
     origin = raster.get("origin_xy_yaw") or [0.0, 0.0, 0.0]
     lines = [
@@ -539,6 +540,9 @@ def _write_hd_map_yaml(
                 f"    closed_loop: {'true' if lane.get('closed_loop', True) else 'false'}",
             ]
         )
+        metadata = _lane_editor_metadata(lane)
+        lines.append(f"    boundary_mode: {metadata['boundary_mode']}")
+        lines.append(f"    centerline_mode: {metadata['centerline_mode']}")
         _append_world_points(lines, "left_bound", lane["left_bound"])
         _append_world_points(lines, "right_bound", lane["right_bound"])
         _append_world_points(lines, "centerline", lane["centerline"])
@@ -592,6 +596,18 @@ def _write_centerline_csv(path: Path, lane: dict[str, Any]) -> None:
             )
 
 
+def _lane_editor_metadata(lane: dict[str, Any]) -> dict[str, str]:
+    boundary_mode = lane.get("boundary_mode", "independent")
+    centerline_mode = lane.get("centerline_mode", "auto")
+    if boundary_mode not in ("independent", "paired"):
+        raise ValueError("boundary_mode must be independent or paired")
+    if centerline_mode not in ("auto", "manual"):
+        raise ValueError("centerline_mode must be auto or manual")
+    if boundary_mode == "paired" and len(lane.get("left_bound") or []) != len(lane.get("right_bound") or []):
+        raise ValueError("paired boundaries must have the same number of points")
+    return {"boundary_mode": boundary_mode, "centerline_mode": centerline_mode}
+
+
 def _lanes_from_hd_data(data: dict[str, Any]) -> list[dict[str, Any]]:
     lanes: list[dict[str, Any]] = []
     raw_lanes = data.get("lanes")
@@ -604,6 +620,7 @@ def _lanes_from_hd_data(data: dict[str, Any]) -> list[dict[str, Any]]:
         lanes.append(
             {
                 "id": lane_id,
+                **_lane_editor_metadata(raw_lane),
                 "closed_loop": bool(raw_lane.get("closed_loop", True)),
                 "left_bound": _as_points(raw_lane.get("left_bound", [])),
                 "right_bound": _as_points(raw_lane.get("right_bound", [])),
@@ -881,6 +898,24 @@ def _validated_hd_topology(
     return validated
 
 
+def _require_primary_sections(data: dict[str, Any], lanes: list[dict[str, Any]], primary_lane_id: str) -> None:
+    sections = [section for section in data.get("sections", []) or []
+                if isinstance(section, dict) and str(section.get("lane_id") or "") == primary_lane_id]
+    if not sections:
+        raise ValueError(
+            "Section is required on the primary lane before saving HD map YAML. "
+            "Define Section Gates in Topology, or choose 全コースを1 Sectionにする."
+        )
+    lane = next(lane for lane in lanes if lane["id"] == primary_lane_id)
+    length = _polyline_length(lane["centerline"], bool(lane.get("closed_loop", True)))
+    for section in sections:
+        start, end = _as_float(section.get("start_s_m")), _as_float(section.get("end_s_m"))
+        same_gate = bool(section.get("start_gate_id")) and section.get("start_gate_id") == section.get("end_gate_id")
+        usable = (end != start or same_gate) if lane.get("closed_loop", True) else end > start
+        if length <= 1e-9 or not usable or not all(math.isfinite(v) for v in (start, end)):
+            raise ValueError("Section must cover a non-empty interval on the primary lane")
+
+
 def _section_preserve_key(section: dict[str, Any]) -> tuple[str, str, str]:
     return (
         str(section.get("lane_id") or ""),
@@ -910,11 +945,23 @@ def _build_sections_for_gates(
     section_index = 1
     for lane_id, lane_gates in sorted(gates_by_lane.items()):
         lane = lane_by_id.get(lane_id)
-        if lane is None or len(lane_gates) < 2:
+        if lane is None:
             continue
+        if len(lane_gates) < (1 if lane.get("closed_loop", True) else 2):
+            raise ValueError(f"Lane {lane_id}: an open lane needs at least two Section Gates")
         sorted_gates = sorted(lane_gates, key=lambda gate: float(gate["s_m"]))
         closed_loop = bool(lane.get("closed_loop", True))
         lane_length = _polyline_length(lane.get("centerline", []), closed_loop)
+        if lane_length <= 1e-9:
+            raise ValueError(f"Lane {lane_id}: Section requires a non-empty centerline")
+        stations = [float(gate["s_m"]) for gate in sorted_gates]
+        if any(not math.isfinite(value) or value < 0 or value > lane_length + 1e-6 for value in stations):
+            raise ValueError(f"Lane {lane_id}: Section Gate is outside the centerline station range")
+        normalized = sorted(value % lane_length if closed_loop else value for value in stations)
+        if any(b - a <= 1e-6 for a, b in zip(normalized, normalized[1:])) or (
+            closed_loop and len(normalized) > 1 and normalized[0] + lane_length - normalized[-1] <= 1e-6
+        ):
+            raise ValueError(f"Lane {lane_id}: Section Gates must have distinct stations")
         pair_count = len(sorted_gates) if closed_loop else len(sorted_gates) - 1
         for index in range(pair_count):
             start_gate = sorted_gates[index]
@@ -939,7 +986,9 @@ def _build_sections_for_gates(
                 "end_s_m": float(end_gate["s_m"]),
             }
             if closed_loop:
-                section["wrap"] = float(start_gate["s_m"]) > float(end_gate["s_m"])
+                if len(sorted_gates) == 1:
+                    section["end_s_m"] = section["start_s_m"] + lane_length
+                section["wrap"] = len(sorted_gates) == 1 or float(start_gate["s_m"]) > float(end_gate["s_m"])
                 section["lane_length_m"] = lane_length
             for key_name in (
                 "speed_override_mps",
@@ -1040,6 +1089,7 @@ def _read_hd_map(path: Path) -> tuple[dict[str, Any], dict[str, Any] | None]:
             {
                 "id": lane_id,
                 "primary": lane_id == primary_lane_id,
+                **_lane_editor_metadata(lane),
                 "closed_loop": closed_loop,
                 "left_bound": _as_points(lane.get("left_bound", [])),
                 "right_bound": _as_points(lane.get("right_bound", [])),
@@ -1811,7 +1861,8 @@ def _custom_line_hd_layout(map_dir: Path) -> dict[str, Any]:
         section_ids.add(section_id)
         start_gate_id = str(raw_section.get("start_gate_id") or "")
         end_gate_id = str(raw_section.get("end_gate_id") or "")
-        if start_gate_id == end_gate_id or start_gate_id not in gate_by_id or end_gate_id not in gate_by_id:
+        full_lap = closed_loop and len(gate_by_id) == 1 and start_gate_id == end_gate_id
+        if (start_gate_id == end_gate_id and not full_lap) or start_gate_id not in gate_by_id or end_gate_id not in gate_by_id:
             raise ValueError(f"section {section_id} references missing or identical gates")
         section_pair = (start_gate_id, end_gate_id)
         if section_pair in section_pairs:
@@ -2038,7 +2089,7 @@ def _custom_line_speed_context(
 ) -> dict[str, Any]:
     if layout["sections"] and bool(layout["closed_loop"]) != closed_loop:
         raise ValueError("custom line closed_loop must match the primary lane topology")
-    if layout["sections"] and closed_loop and len(layout["gates"]) == 2:
+    if layout["sections"] and closed_loop and len(layout["gates"]) in (1, 2):
         _validate_two_gate_closed_direction(points, layout)
     if not layout["sections"]:
         stations, segment_lengths, total_length = _custom_polyline_stations(points, closed_loop)
@@ -2060,6 +2111,8 @@ def _custom_line_speed_context(
         end_station = gate_stations[str(section["end_gate_id"])]
         if not closed_loop and end_station <= start_station + CUSTOM_LINE_POINT_EPSILON_M:
             raise ValueError(f"section {section['id']} has reversed or empty custom-line bounds")
+        if closed_loop and section["start_gate_id"] == section["end_gate_id"] and len(layout["sections"]) == 1:
+            end_station = start_station + total_length
         if closed_loop and abs(end_station - start_station) <= CUSTOM_LINE_POINT_EPSILON_M:
             raise ValueError(f"section {section['id']} has empty custom-line bounds")
         sections.append({**section, "custom_start_s_m": start_station, "custom_end_s_m": end_station})
@@ -2079,7 +2132,9 @@ def _section_for_custom_station(station: float, context: dict[str, Any], closed_
     for section in context["sections"]:
         start = float(section["custom_start_s_m"])
         end = float(section["custom_end_s_m"])
-        if closed_loop and end < start:
+        if closed_loop and end - start >= total_length - CUSTOM_LINE_POINT_EPSILON_M:
+            inside = True
+        elif closed_loop and end < start:
             inside = station >= start or station < end
         else:
             inside = start <= station < end
@@ -3746,6 +3801,8 @@ def build_map_detail(config: ConsoleConfig, map_dir_value: str) -> dict[str, Any
     if not map_dir.exists() or not map_dir.is_dir():
         raise FileNotFoundError(f"map folder not found: {map_dir}")
 
+    from .camera_projection import localization_fingerprint
+
     name = map_dir.name
     hd_map_path = map_dir / f"{name}_hd_map.yaml"
     landmark_yaml_path = map_dir / "vslam_landmarks.yaml"
@@ -3795,6 +3852,7 @@ def build_map_detail(config: ConsoleConfig, map_dir_value: str) -> dict[str, Any
         "hd_map": hd_map,
         "runtime_routes": runtime_routes,
         "hd_map_versions": _read_hd_map_versions(map_dir),
+        "localization_fingerprint": localization_fingerprint(map_dir),
         "custom_lines": custom_line_catalog["items"],
         "custom_line_catalog": custom_line_catalog,
         "active_custom_line_id": custom_line_catalog["active_id"],
@@ -3861,6 +3919,7 @@ def save_hd_map(config: ConsoleConfig, payload: dict[str, Any]) -> dict[str, Any
         lanes.append(
             {
                 "id": lane_id,
+                **_lane_editor_metadata(raw_lane),
                 "closed_loop": bool(raw_lane.get("closed_loop", True)),
                 "left_bound": _payload_points(raw_lane.get("left_bound")),
                 "right_bound": _payload_points(raw_lane.get("right_bound")),
@@ -3881,6 +3940,11 @@ def save_hd_map(config: ConsoleConfig, payload: dict[str, Any]) -> dict[str, Any
     if output_issue is not None:
         raise ValueError(f"Lane {primary_lane_id} cannot be saved for raceline export: {output_issue}.")
 
+    if "section_gates" in payload:
+        previous_data = dict(previous_data)
+        previous_data["section_gates"] = _payload_section_gates(payload["section_gates"], set(lane_by_id))
+        previous_data["sections"] = _build_sections_for_gates(
+            previous_data.get("sections"), previous_data["section_gates"], lanes)
     validated_previous_data = _validated_hd_topology(map_dir, previous_data, lanes)
     hd_map_path.parent.mkdir(parents=True, exist_ok=True)
     _write_hd_map_yaml(

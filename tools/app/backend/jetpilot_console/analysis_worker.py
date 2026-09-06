@@ -144,13 +144,14 @@ def _quaternion_yaw(orientation: Any) -> float:
     return math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
 
 
-def _pose_payload(pose: Any) -> dict[str, float]:
+def _pose_payload(pose: Any) -> dict[str, object]:
     position = getattr(pose, "position", pose)
     orientation = getattr(pose, "orientation", None)
     return {
         "x": _finite(getattr(position, "x", 0.0)),
         "y": _finite(getattr(position, "y", 0.0)),
         "z": _finite(getattr(position, "z", 0.0)),
+        "orientation": [_finite(getattr(orientation, axis, 0.0)) for axis in ("x", "y", "z", "w")] if orientation is not None else None,
         "yaw": _quaternion_yaw(orientation) if orientation is not None else 0.0,
     }
 
@@ -955,6 +956,7 @@ def _snapshot_samples(path: Path) -> list[dict[str, object]]:
                 "x": _finite(position.get("x")),
                 "y": _finite(position.get("y")),
                 "z": _finite(position.get("z")),
+                "orientation": [_finite(orientation.get(axis, 0.0)) for axis in ("x", "y", "z", "w")],
                 "yaw": _quaternion_yaw_dict(orientation),
                 "speed_mps": speed,
                 "frame_id": frame_id,
@@ -1001,6 +1003,7 @@ def _snapshot_samples(path: Path) -> list[dict[str, object]]:
                 "x": _finite(position.get("x")),
                 "y": _finite(position.get("y")),
                 "z": _finite(position.get("z")),
+                "orientation": [_finite(orientation.get(axis, 0.0)) for axis in ("x", "y", "z", "w")],
                 "yaw": _quaternion_yaw_dict(orientation),
                 "speed_mps": speed,
                 "frame_id": frame_id,
@@ -1364,7 +1367,11 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
     if missing_image_topics:
         raise RuntimeError("Image topics were not found in bag: " + ", ".join(missing_image_topics))
 
-    requested = set(image_topics)
+    from .camera_projection import ProjectionCollector
+    projection_collector = ProjectionCollector(offline=offline_snapshot_samples is not None)
+    camera_info_topics = {topic for topic, msg_type in topic_types.items() if msg_type.endswith("/CameraInfo")}
+    transform_topics = {topic for topic in ("/tf", "/tf_static") if topic in topic_types}
+    requested = set(image_topics) | camera_info_topics | transform_topics
     for topic in (
         options.control_topic,
         options.comparison_control_topic,
@@ -1443,8 +1450,15 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
         selected_count += 1
         timestamp_ns = int(bag_timestamp_ns)
         message = deserialize_message(serialized, message_classes[topic])
+        if topic in camera_info_topics:
+            projection_collector.add_info(topic, message, timestamp_ns)
+            continue
+        if topic in transform_topics:
+            projection_collector.add_tf(message, timestamp_ns, static=topic == "/tf_static")
         if recorded_tf_topic and topic == recorded_tf_topic:
             recorded_map_transforms.extend(_map_transform_samples(message, timestamp_ns))
+            continue
+        if topic in transform_topics:
             continue
         timestamps.append(int(bag_timestamp_ns))
         header_timestamp_ns = _stamp_ns(message)
@@ -1463,6 +1477,7 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
                     "image": image,
                     "timestamp_ns": timestamp_ns,
                     "header_timestamp_ns": header_timestamp_ns,
+                    "frame_id": str(_nested(message, "header.frame_id", default="") or ""),
                 }
             except Exception as exc:  # noqa: BLE001
                 image_decode_errors += 1
@@ -1505,6 +1520,8 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
                         "width": w,
                         "height": h,
                         "delta_ms": delta_ms,
+                        "header_timestamp_ns": str(latest["header_timestamp_ns"] or ""),
+                        "frame_id": latest["frame_id"],
                     }
                     if img_topic == primary_image_topic:
                         primary_path = rel_path
@@ -1556,6 +1573,8 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
         if options.pose_topic and topic == options.pose_topic:
             for sample in _pose_samples(message, timestamp_ns):
                 trajectory.append(sample)
+                if offline_snapshot_samples is None:
+                    projection_collector.add_pose(sample)
         if topic in jetson_diagnostic_topics:
             jetson_samples.extend(_jetson_metric_samples(message, timestamp_ns))
 
@@ -1606,6 +1625,16 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
         options.jpeg_quality,
     )
 
+    if offline_snapshot_samples is not None:
+        for sample in offline_snapshot_samples:
+            projection_collector.add_pose(sample)
+    camera_projection = projection_collector.compile(frames, primary_image_topic, options.map_dir)
+    for frame in frames:
+        channels = frame.get("channels", {})
+        if OBJECT_DETECTION_OVERLAY_TOPIC in channels and primary_image_topic in channels:
+            # Detection overlays use the primary image without changing its geometry.
+            channels[OBJECT_DETECTION_OVERLAY_TOPIC]["projection"] = channels[primary_image_topic]["projection"]
+
     recorded_transformed_count = 0
     recorded_dropped_count = 0
     if trajectory and recorded_map_transforms:
@@ -1621,6 +1650,10 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
         trajectory_source = "recorded" if trajectory else "none"
 
     trajectory = _deduplicate_trajectory(trajectory)
+    # Full 3D poses are consumed by the projection collector above. The legacy
+    # trajectory view may apply a planar map alignment and only exposes yaw.
+    for sample in trajectory:
+        sample.pop("orientation", None)
     _fill_trajectory_speeds(trajectory)
     if not speeds and trajectory:
         speeds = [
@@ -1811,6 +1844,7 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
             "series": jetson_series,
         },
         "map": map_payload,
+        "camera_projection": camera_projection,
     }
     _atomic_json(analysis_dir / "timeline.json", timeline)
     manifest_path = analysis_dir / "manifest.json"
@@ -1887,6 +1921,17 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
         "complete", 1.0, "分析用artifactの生成が完了しました。", status="completed"
     )
     return manifest
+
+
+def _solid_png(width: int, height: int, rgb: tuple[int, int, int]) -> bytes:
+    """Generate demo frames without the ROS/OpenCV runtime."""
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
+
+    pixels = (b"\x00" + bytes(rgb) * width) * height
+    return (b"\x89PNG\r\n\x1a\n"
+            + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(pixels)) + chunk(b"IEND", b""))
 
 
 def write_demo_analysis(analysis_dir: Path) -> dict[str, object]:

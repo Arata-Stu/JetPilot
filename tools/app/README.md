@@ -619,7 +619,7 @@ restartable stages:
 2. Build VGL map and compute VSLAM map/snapshot
 3. Prepare landmark raster for editing
 4. Edit HD map in browser
-5. Save HD map YAML and centerline CSV
+5. Define Sections, then save HD map YAML and centerline CSV
 6. Generate raceline and/or create named Custom Lines
 7. Select the driving-line default and generate a preview image
 8. Transfer the complete bundle to Jetson
@@ -705,3 +705,101 @@ Then add:
 
 This order makes the terminal/task foundation solid before adding the richer map
 editing surface.
+
+## ペアレーンと手動ラインの編集
+
+**Maps → 対象Map → Geometry → Edit** で編集します。
+
+1. **レーン幅 (m)** を指定して **新規レーンを描く** を押します。
+   進行方向に中心をクリックすると左右の境界を同時に作成します。
+   2点以上を置いて **描画完了**（または右クリック）を押します。
+   周回コースはその後 **Closed loop** を選択します。
+2. **Left boundary / Right boundary** を選び、点をドラッグして幅や形を
+   調整します。クリックで点追加、右クリックまたは **Delete Pt** で削除。
+   ペアレーンでは反対側にも対応する点の追加・削除が反映され、横線で
+   対応関係を確認できます。centerlineは各ペアの中点です。
+3. 分割する境界点を選んで **選択点で分割**。結合は現在レーンの終点と
+   結合先の始点を左右とも25cm以内に合わせ、結合先を選んで
+   **終点→始点を結合**。閉じたレーンの分割・再結合も可能です。
+   これらは自動centerlineを使うペアレーン向けです。既存の独立した境界は
+   従来の自動マッチングを維持します。Section / Junctionの参照がある場合は
+   分割・結合を止め、参照を解消してから編集するよう案内します。
+4. 新規レーンを走行出力にする場合は **このレーンを走行出力に使用** を押します。
+   **Save** でHD Mapに保存します。Undo / Redoで保存前の操作を戻せます。
+   走行用centerline CSVはprimaryレーンだけを出力する既存仕様です。
+   コースを分割して調整した場合は、結合してから保存・Raceline生成します。
+
+**Centerline** を選択すれば直接点を編集できます。編集すると自動的に
+**Centerlineの手修正を保持** が有効になり、境界編集による上書きを防ぎます。
+この設定は保存後も維持されます。**Auto Center** または保持チェックの解除で
+境界からの自動生成に戻ります。ペア境界の部分平滑化は対応関係を崩すため
+無効です。境界点のドラッグ、または手動centerlineの平滑化で調整してください。
+
+走行用の別ラインは **Driving Lines → Custom Lines** で作成できます。
+名前と **Centerline / Raceline** のコピー元を指定して **Clone as Custom**、
+続いて **Edit shape** を押します。クリックで追加、ドラッグで移動、右クリックで
+削除し、**Save** で保存します。**Use for drive** で次の走行・転送用に選択します。
+元のCenterline / Racelineは変更されません。既存のコース内判定と速度検証は
+引き続き適用されます。
+
+Dependency-free editor checks:
+
+```sh
+node --test tools/app/frontend/tests/lane_geometry.test.js
+PYTHONPATH=tools/app/backend python3 -S -m unittest discover -s tools/app/backend/tests -p 'test_map_detail.py'
+```
+
+
+## Section未定義の保存防止と1 Sectionコース
+
+HD Map YAMLを保存するには、走行出力（primary）レーンのSection定義が必要です。
+GeometryまたはTopologyの **全コースを1 Sectionにする** を押すと、周回コースには
+Gateを1つ、開いたコースには始点・終点のGateを2つ作成します。勝手には定義しません。
+複数に分ける場合は **Topology → Section Gates → Edit** でcenterline上をクリックします。
+新規Mapでも、保存前のcenterline上にGateを配置して、形状とSectionをまとめて保存できます。
+
+未定義、開いたコースのGateが1つだけ、Gate位置の重複は保存できません。
+画面のSaveを無効にし、保存API側でも書き込み前に検証します。
+既存YAMLを更新する際のエラーでは、以前のYAMLを保持します。
+
+周回コースの1 Gateは、同じGateから次の周の同じGateまでを1 Sectionとします。
+YAMLには `end_s_m = start_s_m + lane_length_m` と `wrap: true` を出力します。
+以前のUIで1 Gateだけを保存して `sections` が空になったMapは、修正版で対象Mapを開き、
+**Topology → Section Gates → Edit → Save** で再保存してください。
+実機で使う際は、修正版のHD map publisher/localizerと再保存したMapを反映してください。
+
+## カメラ画像へのHD Map投影
+
+Bag Analysisの動画に左境界（緑）、右境界（桃）、centerline（黄）、
+生成済みRaceline（水色）を重ねて表示します。**HD Mapを画像に投影** で切り替えます。
+複数カメラ表示でも、各カメラの撮影時刻に対応した位置・姿勢で投影します。
+
+MapsでMapを開くと、**カメラ画像で配置を確認** パネルから同じMapで解析した動画を
+選択できます。カメラ選択、再生・一時停止、コマ送り、シークが可能です。
+動画を止めて境界やcenterlineを編集すると、保存前の形状をその場で画像に反映します。
+Custom Lineの編集中の形状は橙で表示します。Racelineは最後に生成したものを表示するため、
+境界編集後は必要に応じて再生成してください。
+
+投影には、bag内の画像・対応する `sensor_msgs/CameraInfo`・`/tf`・`/tf_static` と、
+撮影時刻のMap座標での自己位置が必要です。オフラインVSLAM解析では解析結果の3D姿勢を使い、
+記録済みのmap変換は混在させません。カメラの外部校正はoptical frameまでのTFから取得します。
+現在の設定ファイルの校正値で過去のbagを補完することはありません。
+以前に生成した解析結果には投影情報がないため、bagを再解析してください。
+
+Raw画像はCameraInfoのK/D、`/image_rect` を含むトピックはR/Pを使います。
+対応する歪みモデルはplumb_bob、rational_polynomial、equidistantです。
+独自名の補正済み画像トピックは、この命名に合わせてから解析してください。
+校正・撮影時刻・TFが不足する場合、動的TFが150msより古い場合、または自己位置推定Mapが
+解析時から変更されている場合は、投影を止めて理由を表示します。
+HD Mapの線だけを編集しても、自己位置推定Mapとの対応は失われません。
+
+2Dの線は初期値 `Map Z = 0 m` の平面に置きます。地面の高さが異なる場合は
+**投影高さ（Map Z / m）** を調整してください。配置ずれを見つけるための表示であり、
+壁との衝突や遮蔽は判定しません。精度は内部・外部校正、時刻同期、自己位置精度に依存します。
+
+投影計算・抽出処理の依存追加なしの確認:
+
+```sh
+node --test tools/app/frontend/tests/camera_projection.test.js
+PYTHONPATH=tools/app/backend python3 -S -m unittest discover -s tools/app/backend/tests -p 'test_camera_projection.py'
+```

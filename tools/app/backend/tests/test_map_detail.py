@@ -536,6 +536,36 @@ lanes:
         )
         return SimpleNamespace(map_root=root), map_dir
 
+    def test_editor_modes_round_trip_through_geometry_and_gate_save(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            config, map_dir = self._make_section_map(Path(temporary_directory))
+            detail = build_map_detail(config, str(map_dir))
+            lanes = detail["hd_map"]["lanes"]
+            lanes[0]["boundary_mode"] = "paired"
+            lanes[0]["centerline_mode"] = "manual"
+            original_center = lanes[0]["centerline"]
+            saved = save_hd_map(config, {"map_dir": str(map_dir), "lanes": lanes,
+                                         "primary_lane_id": lanes[0]["id"]})
+            saved = save_section_gates(config, {"map_dir": str(map_dir),
+                                                "section_gates": saved["hd_map"]["section_gates"]})
+            lane = saved["hd_map"]["lanes"][0]
+            self.assertEqual(lane["boundary_mode"], "paired")
+            self.assertEqual(lane["centerline_mode"], "manual")
+            self.assertEqual(lane["centerline"], original_center)
+
+    def test_invalid_paired_geometry_does_not_overwrite_map(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            config, map_dir = self._make_section_map(Path(temporary_directory))
+            detail = build_map_detail(config, str(map_dir))
+            lanes = detail["hd_map"]["lanes"]
+            lanes[0]["boundary_mode"] = "paired"
+            lanes[0]["right_bound"].pop()
+            map_path = map_dir / f"{map_dir.name}_hd_map.yaml"
+            original = map_path.read_bytes()
+            with self.assertRaisesRegex(ValueError, "same number"):
+                save_hd_map(config, {"map_dir": str(map_dir), "lanes": lanes})
+            self.assertEqual(map_path.read_bytes(), original)
+
     def _make_section_map(self, root: Path) -> tuple[SimpleNamespace, Path]:
         map_dir = root / "section_course"
         map_dir.mkdir()
@@ -671,6 +701,58 @@ sections:
             encoding="utf-8",
         )
         return SimpleNamespace(map_root=root), map_dir
+
+    def test_single_gate_generates_full_lap_and_custom_speed_profile(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            config, map_dir = self._make_closed_two_gate_map(Path(temporary_directory))
+            hd_path = map_dir / "closed_course_hd_map.yaml"
+            hd_path.write_text(hd_path.read_text() + "\nsource_raster:\n  resolution_m_per_px: 0.05\n  origin_xy_yaw: [0, 0, 0]\n  image_size_px: [200, 200]\n")
+            gates = build_map_detail(config, str(map_dir))["hd_map"]["section_gates"][:1]
+            saved = save_section_gates(config, {"map_dir": str(map_dir), "section_gates": gates})
+            sections = saved["hd_map"]["sections"]
+            self.assertEqual(len(sections), 1)
+            self.assertEqual(sections[0]["start_gate_id"], sections[0]["end_gate_id"])
+            self.assertEqual(sections[0]["end_s_m"] - sections[0]["start_s_m"], 40)
+            self.assertTrue(sections[0]["wrap"])
+            saved = create_custom_line(config, {"map_dir": str(map_dir), "name": "One section", "base": "centerline",
+                                                "default_speed_mps": 1.5, "section_speeds_mps": {sections[0]["id"]: 0.7}})
+            line = saved["custom_lines"][0]
+            self.assertTrue(line["validation"]["valid"])
+            self.assertEqual(len(line["speed_sections"]), 1)
+            self.assertTrue(all(point["speed_mps"] <= 0.700001 for point in line["points"]))
+
+    def test_missing_or_duplicate_gates_cannot_overwrite_yaml(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            config, map_dir = self._make_section_map(Path(temporary_directory))
+            detail = build_map_detail(config, str(map_dir))
+            gates = detail["hd_map"]["section_gates"]
+            hd_path = map_dir / "section_course_hd_map.yaml"
+            original = hd_path.read_bytes()
+            for invalid in ([], gates[:1], [gates[0], {**gates[1], "s_m": gates[0]["s_m"]}]):
+                with self.assertRaises(ValueError):
+                    save_section_gates(config, {"map_dir": str(map_dir), "section_gates": invalid})
+                self.assertEqual(hd_path.read_bytes(), original)
+            with self.assertRaisesRegex(ValueError, "Section is required"):
+                save_hd_map(config, {"map_dir": str(map_dir), "lanes": detail["hd_map"]["lanes"], "section_gates": []})
+            self.assertEqual(hd_path.read_bytes(), original)
+
+    def test_first_geometry_and_section_save_is_combined_and_guarded(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            config, map_dir = self._make_section_map(Path(temporary_directory))
+            detail = build_map_detail(config, str(map_dir))
+            hd_path = map_dir / "section_course_hd_map.yaml"
+            hd_path.unlink()
+            # Minimal raster header is enough for the standard-library metadata reader.
+            import struct
+            (map_dir / "vslam_landmarks.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"\0" * 8 + struct.pack(">II", 200, 40))
+            (map_dir / "vslam_landmarks.yaml").write_text("image: vslam_landmarks.png\nresolution: 0.05\norigin: [0, 0, 0]\n")
+            payload = {"map_dir": str(map_dir), "lanes": detail["hd_map"]["lanes"], "primary_lane_id": "lane_001"}
+            with self.assertRaisesRegex(ValueError, "Section is required"):
+                save_hd_map(config, payload)
+            self.assertFalse(hd_path.exists())
+            saved = save_hd_map(config, {**payload, "section_gates": detail["hd_map"]["section_gates"][:2]})
+            self.assertEqual(len(saved["hd_map"]["sections"]), 1)
+            self.assertTrue(hd_path.exists())
 
     def test_closed_two_gate_profile_rejects_reverse_direction(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

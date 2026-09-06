@@ -297,7 +297,7 @@ def _build_sections(data: Dict[str, Any], gates: Sequence[SectionGate], lanes: S
     section_index = 1
     for lane_id, lane_gates in sorted(gates_by_lane.items()):
         lane = lane_by_id.get(lane_id)
-        if lane is None or len(lane_gates) < 2:
+        if lane is None or len(lane_gates) < (1 if lane.closed_loop else 2):
             continue
         sorted_gates = sorted(lane_gates, key=lambda gate: gate.s_m)
         _s_values, lane_length = _polyline_s(lane.centerline, geometry, lane.closed_loop)
@@ -318,7 +318,9 @@ def _build_sections(data: Dict[str, Any], gates: Sequence[SectionGate], lanes: S
                 "end_s_m": _fmt_float(end_gate.s_m),
             }
             if lane.closed_loop:
-                section["wrap"] = bool(start_gate.s_m > end_gate.s_m)
+                if len(sorted_gates) == 1:
+                    section["end_s_m"] = _fmt_float(start_gate.s_m + lane_length)
+                section["wrap"] = len(sorted_gates) == 1 or bool(start_gate.s_m > end_gate.s_m)
                 section["lane_length_m"] = _fmt_float(lane_length)
             for key_name in (
                 "speed_override_mps",

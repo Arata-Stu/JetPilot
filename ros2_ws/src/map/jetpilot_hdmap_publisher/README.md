@@ -138,3 +138,18 @@ junctions:
       straight: lane_straight_01
       right: lane_right_01
 ```
+
+
+## Sectionが1つのコース
+
+周回コースでは、始点・終点に同じGate IDを持つ1周分のSectionを利用できます。
+`start_s_m` から `start_s_m + lane_length_m` の区間を全周として判定し、
+従来の同じGate・同じ始終station表現にも対応します。開いたコースでは、
+最終Sectionにcenterline終点を含め、終点だけ `unknown` になることを防ぎます。
+Sectionなし、TF取得失敗、laneからの距離超過は引き続き `unknown` です。
+
+ROSを起動せず、標準ライブラリのみで回帰テストを実行できます。
+
+```sh
+python3 -S -m unittest discover -s ros2_ws/src/map/jetpilot_hdmap_publisher/test -p 'test_section_geometry.py'
+```

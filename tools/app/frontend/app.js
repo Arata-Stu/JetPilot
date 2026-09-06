@@ -4034,9 +4034,12 @@ function renderAnalysisViewer() {
       <div class="analysis-media-grid">
         <div class="analysis-image-panel">
           ${renderAnalysisCameraSelector()}
+          <div class="camera-overlay-controls"><label><input type="checkbox" ${analysis.cameraOverlay!==false?'checked':''} onchange="setAnalysisCameraOverlay(this.checked)" />HD Mapを画像に投影</label><label>投影高さ（Map Z / m）<input type="number" min="-10" max="10" step="0.01" value="${analysis.projectionHeightM || 0}" onchange="setCameraProjectionHeight(this.value, 'analysis')" /></label></div>
+          <div id="analysis-projection-status" class="field-hint" role="status"></div>
           <div class="analysis-image-stage">
             <img id="analysis-frame-image-a" alt="Selected rosbag image frame A" decoding="async" />
             <img id="analysis-frame-image-b" alt="Selected rosbag image frame B" decoding="async" />
+            <canvas class="analysis-camera-overlay" aria-label="HD Map投影"></canvas>
             <div id="analysis-multi-image-grid" class="analysis-multi-image-grid"></div>
             <div id="analysis-frame-empty" class="analysis-frame-empty visible">${frames.length ? "Loading frame..." : "No image frames were extracted."}</div>
             <span id="analysis-frame-time" class="analysis-frame-time">${formatAnalysisClock(analysis.currentTime)}</span>
@@ -5085,6 +5088,7 @@ function renderAnalysisMultiTiles(grid, channels, selectedChannel, primaryTopic,
       <div class="analysis-channel-images">
         <img data-buffer="a" alt="${esc(channel)} frame A" decoding="async" />
         <img data-buffer="b" alt="${esc(channel)} frame B" decoding="async" />
+        <canvas class="analysis-camera-overlay" aria-label="HD Map投影"></canvas>
         <div class="analysis-channel-empty visible">Waiting for frame...</div>
       </div>
       <div class="analysis-channel-caption">
@@ -5167,12 +5171,15 @@ function updateAnalysisMultiFrame(frames, index, time, channels, selectedChannel
       const latest = state.analysis.channelRender[channel];
       if (!latest || latest.serial !== requestSerial || latest.pendingKey !== key) return;
       targetImg.src = url;
+      targetImg.dataset.projectionFrameIndex=String(payload.frameIndex);
+      targetImg.dataset.projectionChannel=channel;
       targetImg.classList.add("visible");
       if (activeImg && activeImg !== targetImg) activeImg.classList.remove("visible");
       if (emptyTile) emptyTile.classList.remove("visible");
       latest.key = key;
       latest.pendingKey = "";
       latest.active = targetImg.dataset.buffer || "a";
+      drawAnalysisCameraOverlays();
     };
     loader.onerror = () => {
       const latest = state.analysis.channelRender[channel];
@@ -5285,6 +5292,8 @@ function updateAnalysisFrame(time, force = false) {
         targetImg.onload = null;
         targetImg.onerror = null;
         targetImg.src = url;
+        targetImg.dataset.projectionFrameIndex=String(index);
+        targetImg.dataset.projectionChannel=selectedChannel || "";
         targetImg.classList.add("visible");
         if (activeImg && activeImg !== targetImg) {
           activeImg.classList.remove("visible");
@@ -5300,6 +5309,7 @@ function updateAnalysisFrame(time, force = false) {
         if (stage) {
           stage.dataset.frameSize = `${loader.naturalWidth}×${loader.naturalHeight}`;
         }
+        drawAnalysisCameraOverlays();
       };
       loader.onerror = () => {
         if (requestSerial !== state.analysis.frameRequestSerial) return;
@@ -5409,6 +5419,7 @@ function updateAnalysisPlaybackDom(force = false) {
     drawAnalysisVisual("timeline", drawAnalysisTimeline);
     drawAnalysisVisual("Jetson chart", drawJetsonStatsChart);
     drawAnalysisVisual("map", drawAnalysisMap);
+    drawAnalysisVisual("camera overlay", drawAnalysisCameraOverlays);
     drawAnalysisVisual("E2E trajectory", drawE2ETrajectory);
     state.analysis.lastVisualUpdateMs = now;
   }
@@ -6304,6 +6315,7 @@ function renderMapWorkspace() {
           ></canvas>
         </div>
         <aside class="map-side-panel">
+          ${renderMapCameraView(detail)}
           ${renderMapModePanel(detail)}
         </aside>
       </div>
@@ -6944,7 +6956,8 @@ function renderHdMapEditor(detail) {
   const canSmooth = canSmoothSelectedEditorRange();
   const reverseIssue = mapEditorDirectionReverseIssue(detail, lane);
   const status = !rasterReady ? "Raster required" : issue || (editor.dirty ? "Unsaved" : "Ready");
-  const canSave = editor.enabled && rasterReady && !issue;
+  const sectionIssue = sectionDefinitionIssue(detail);
+  const canSave = editor.enabled && rasterReady && !issue && !sectionIssue;
   return `
     <div class="inspector-block map-editor-block">
       <div class="inspector-title-row">
@@ -6969,6 +6982,18 @@ function renderHdMapEditor(detail) {
           }).join("")}
         </select>
       </label>
+      <div class="editor-actions">
+        <label>レーン幅 (m) <input id="lane-draw-width" type="number" min="0.1" max="20" step="0.1" value="${editor.laneWidth || 1}" ${editor.drawingLane ? "disabled" : ""} /></label>
+        <button onclick="startPairedLane()" ${editor.enabled && !editor.drawingLane ? "" : "disabled"}>新規レーンを描く</button>
+        <button onclick="useEditorLaneAsPrimary()" ${editor.enabled && lane.id !== editor.primaryLaneId ? "" : "disabled"}>このレーンを走行出力に使用</button>
+        <button onclick="finishPairedLane()" ${editor.drawingLane ? "" : "disabled"}>描画完了</button>
+        <button onclick="splitEditorLane()" ${editor.enabled ? "" : "disabled"}>選択点で分割</button>
+        <select id="lane-join-target" aria-label="結合先レーン">${editor.lanes.filter(l => l.id !== lane.id).map(l => `<option value="${esc(l.id)}">${esc(l.id)}</option>`).join("")}</select>
+        <button onclick="joinEditorLane()" ${editor.enabled && editor.lanes.length > 1 ? "" : "disabled"}>終点→始点を結合</button>
+      </div>
+      <div class="field-hint">${editor.drawingLane ? "進行方向に中心をクリックすると、指定幅で左右を同時に描きます。2点以上で描画完了。" : "ペアレーンは左右の同じ番号の点からcenterlineを生成します。境界の点追加・削除は反対側にも反映されます。分割はLeft / Rightを選び、端点以外をクリック。"}</div>
+      <label class="layer-toggle"><input id="lane-manual-center" type="checkbox" ${lane.centerline_mode === "manual" ? "checked" : ""} onchange="setManualCenterline(this.checked)" ${editor.enabled ? "" : "disabled"} />Centerlineの手修正を保持</label>
+      <div class="field-hint">Centerlineを選び、クリックで追加・ドラッグで移動・右クリックで削除。手修正後は境界を動かしても保持されます。Auto Centerで自動生成に戻ります。</div>
       <div class="editor-field-row">
         ${editorFieldButton("left_bound", "Left boundary")}
         ${editorFieldButton("right_bound", "Right boundary")}
@@ -7014,6 +7039,8 @@ function renderHdMapEditor(detail) {
           <span>Center line</span>
         </label>
       </div>
+      <button onclick="defineWholeCourseSection()" ${editor.enabled ? "" : "disabled"}>全コースを1 Sectionにする</button>
+      <div id="map-editor-section-issue" class="field-hint">${esc(sectionIssue || "Section定義済み：境界・centerlineと一緒に保存します")}</div>
       <div id="map-editor-counts" class="editor-counts">${renderEditorCounts(lane)}</div>
     </div>
   `;
@@ -7025,6 +7052,7 @@ function editorFieldButton(field, label) {
 }
 
 function setActiveMapEditorLane(laneId) {
+  state.mapEditor.drawingLane = false;
   if (!state.mapEditor.lanes.some((lane) => lane.id === laneId)) return;
   state.mapEditor.activeLaneId = laneId;
   state.mapEditor.selected = null;
@@ -7084,7 +7112,7 @@ function renderCustomLineEditor(detail) {
         </label>
         <button class="primary full ${actionBusy("custom-line:create") ? "is-busy" : ""}" onclick="createCustomLine()" ${sourceReady ? "" : "disabled"} ${actionButtonAttrs("custom-line:create", "Custom line is being created...")}>${esc(actionButtonLabel("custom-line:create", "Clone as Custom", "Creating..."))}</button>
       </div>
-      <div class="field-hint">Clone a Centerline or Raceline, then keep each manual variation under its own name.</div>
+      <div class="field-hint">手動ラインの作成：名前とコピー元を指定 → Clone as Custom → Edit shape。クリックで点を追加、ドラッグで移動、右クリックで削除。Saveで保存し、Use for driveで走行用に選択します。元のCenterline／Racelineは変更されません。</div>
       <div class="custom-line-list">
         ${lines.length
           ? lines.map((item) => renderCustomLineRow(item, activeId, editor.selectedId)).join("")
@@ -7324,20 +7352,23 @@ function renderEditorCounts(lane) {
 function renderSectionGateEditor(detail) {
   const editor = ensureSectionEditor(detail);
   const lane = sectionEditorLane(detail);
-  const ready = Boolean(detail.hd_map?.exists && lane?.centerline?.length >= 2);
+  const ready = Boolean(lane?.centerline?.length >= (lane?.closed_loop ? 3 : 2));
   const selected = Boolean(editor.selectedGateId);
-  const status = !detail.hd_map?.exists ? "Need HD map" : !ready ? "Need centerline" : editor.dirty ? "Unsaved" : "Ready";
+  const definitionIssue = sectionDefinitionIssue(detail);
+  const status = definitionIssue || (editor.dirty ? "Unsaved" : "Ready");
   return `
     <div class="inspector-block section-editor-block">
       <div class="inspector-title-row">
         <h4>Section Gates</h4>
-        <span id="section-editor-status" class="${ready ? (editor.dirty ? "dirty" : "ok") : "warn"}">${esc(status)}</span>
+        <span id="section-editor-status" class="${ready && !definitionIssue ? (editor.dirty ? "dirty" : "ok") : "warn"}">${esc(status)}</span>
       </div>
       <div class="editor-actions">
         <button class="${editor.enabled ? "primary" : ""}" onclick="toggleSectionEditor()" ${ready ? "" : "disabled"}>${editor.enabled ? "Editing" : "Edit"}</button>
-        <button id="section-editor-save" class="${actionBusy("section-gates:save") ? "is-busy" : ""}" onclick="saveSectionGatesFromEditor()" ${editor.enabled && ready ? "" : "disabled"} ${actionButtonAttrs("section-gates:save", "Section gates are saving...")}>${esc(actionButtonLabel("section-gates:save", "Save", "Saving..."))}</button>
+        <button id="section-editor-save" class="${actionBusy("section-gates:save") ? "is-busy" : ""}" onclick="saveSectionGatesFromEditor()" ${editor.enabled && ready && !definitionIssue ? "" : "disabled"} ${actionButtonAttrs("section-gates:save", "Section gates are saving...")}>${esc(actionButtonLabel("section-gates:save", "Save", "Saving..."))}</button>
         <button id="section-editor-delete" class="danger" onclick="deleteSelectedSectionGate()" ${editor.enabled && selected ? "" : "disabled"}>Delete Gate</button>
       </div>
+      <button onclick="defineWholeCourseSection()" ${ready ? "" : "disabled"}>全コースを1 Sectionにする</button>
+      <div class="field-hint">周回コースはGate 1つで1周全体が1 Sectionになります。開いたコースは始点と終点の2つが必要です。centerlineをクリックしてGateを追加できます。Section未定義のYAMLは保存できません。</div>
       <div id="section-editor-counts" class="editor-counts">${renderSectionEditorCounts(detail)}</div>
     </div>
   `;
@@ -9176,11 +9207,109 @@ function cloneMapPolyline(points = []) {
     .filter((point) => Number.isFinite(point[0]) && Number.isFinite(point[1]));
 }
 
+function useEditorLaneAsPrimary() {
+  if (!state.mapEditor.enabled || state.mapEditor.drawingLane) return;
+  const lane = activeEditorLane();
+  const issue = editorLaneIssue(lane);
+  if (issue) return toast(issue, "error");
+  rememberMapEditorState();
+  state.mapEditor.primaryLaneId = lane.id;
+  state.mapEditor.lanes.forEach(item => { item.primary = item.id === lane.id; });
+  markMapEditorDirty();
+  render();
+}
+
+function nextEditorLaneId() {
+  let index = 1;
+  while (state.mapEditor.lanes.some(l => l.id === `lane_${String(index).padStart(3, "0")}`)) index++;
+  return `lane_${String(index).padStart(3, "0")}`;
+}
+
+function setManualCenterline(manual) {
+  if (!state.mapEditor.enabled) return;
+  rememberMapEditorState();
+  const lane = activeEditorLane();
+  lane.centerline_mode = manual ? "manual" : "auto";
+  regenerateEditorCenterline(lane);
+  markMapEditorDirty();
+  render();
+}
+
+function startPairedLane() {
+  if (!state.mapEditor.enabled || state.mapEditor.drawingLane) return;
+  const width = Number($("lane-draw-width")?.value);
+  if (!Number.isFinite(width) || width < 0.1 || width > 20) return toast("レーン幅は0.1〜20mで指定してください。", "error");
+  rememberMapEditorState();
+  const empty = activeEditorLane();
+  const lane = { ...defaultEditorLane(), id: nextEditorLaneId(), closed_loop: false, primary: false, boundary_mode: "paired", centerline_mode: "auto" };
+  if (MAP_EDITOR_FIELDS.every(f => !empty[f].length)) {
+    lane.id = empty.id;
+    state.mapEditor.lanes[state.mapEditor.lanes.indexOf(empty)] = lane;
+  } else state.mapEditor.lanes.push(lane);
+  lane.primary = lane.id === state.mapEditor.primaryLaneId;
+  state.mapEditor.activeLaneId = lane.id;
+  state.mapEditor.laneWidth = width;
+  state.mapEditor.drawingLane = true;
+  state.mapEditor.selected = null;
+  state.mapEditor.dragging = null;
+  markMapEditorDirty();
+  render();
+}
+
+function finishPairedLane() {
+  if (!state.mapEditor.drawingLane) return;
+  if (activeEditorLane().left_bound.length < 2) return toast("2点以上をクリックしてください。Undoで作成を戻せます。", "error");
+  state.mapEditor.drawingLane = false;
+  state.mapEditor.activeField = "left_bound";
+  render();
+}
+
+function laneTopologyEditIssue(lane) {
+  return mapEditorDirectionReverseIssue(state.selectedMapDetail, lane);
+}
+
+function splitEditorLane() {
+  if (!state.mapEditor.enabled || state.mapEditor.drawingLane) return;
+  const lane = activeEditorLane(), selected = state.mapEditor.selected;
+  try {
+    const issue = laneTopologyEditIssue(lane);
+    if (issue) throw new Error(issue);
+    if (!selected || selected.field === "centerline") throw new Error("Left / Rightを選び、分割する境界点をクリックしてください。");
+    const parts = LaneGeometry.split(lane, selected.index, nextEditorLaneId());
+    rememberMapEditorState();
+    state.mapEditor.lanes.splice(state.mapEditor.lanes.indexOf(lane), 1, ...parts);
+    state.mapEditor.selected = null;
+    markMapEditorDirty();
+    render();
+  } catch (error) { toast(error.message, "error"); }
+}
+
+function joinEditorLane() {
+  if (!state.mapEditor.enabled || state.mapEditor.drawingLane) return;
+  const lane = activeEditorLane();
+  const target = state.mapEditor.lanes.find(l => l.id === $("lane-join-target")?.value);
+  if (!target) return;
+  try {
+    const issue = laneTopologyEditIssue(lane) || laneTopologyEditIssue(target);
+    if (issue) throw new Error(issue);
+    const joined = LaneGeometry.join(lane, target);
+    rememberMapEditorState();
+    state.mapEditor.lanes = state.mapEditor.lanes.filter(l => l.id !== target.id).map(l => l.id === lane.id ? joined : l);
+    if (state.mapEditor.primaryLaneId === target.id) state.mapEditor.primaryLaneId = lane.id;
+    state.mapEditor.lanes.forEach(item => { item.primary = item.id === state.mapEditor.primaryLaneId; });
+    state.mapEditor.selected = null;
+    markMapEditorDirty();
+    render();
+  } catch (error) { toast(error.message, "error"); }
+}
+
 function cloneEditorLane(lane = defaultEditorLane()) {
   return {
     id: lane.id || "lane_001",
     primary: lane.primary !== false,
     closed_loop: lane.closed_loop !== false,
+    boundary_mode: lane.boundary_mode === "paired" ? "paired" : "independent",
+    centerline_mode: lane.centerline_mode === "manual" ? "manual" : "auto",
     left_bound: cloneMapPolyline(lane.left_bound || []),
     right_bound: cloneMapPolyline(lane.right_bound || []),
     centerline: cloneMapPolyline(lane.centerline || []),
@@ -9230,6 +9359,7 @@ function ensureMapEditor(detail, options = {}) {
       undoStack: [],
       redoStack: [],
       dragSnapshot: null,
+      drawingLane: false,
     };
   }
   return state.mapEditor;
@@ -9250,6 +9380,7 @@ function captureMapEditorSnapshot() {
     activeField: state.mapEditor.activeField,
     selected: state.mapEditor.selected ? { ...state.mapEditor.selected } : null,
     dirty: state.mapEditor.dirty,
+    drawingLane: Boolean(state.mapEditor.drawingLane),
   };
 }
 
@@ -9266,6 +9397,7 @@ function restoreMapEditorSnapshot(snapshot) {
   state.mapEditor.dragging = null;
   state.mapEditor.dragSnapshot = null;
   state.mapEditor.dirty = Boolean(snapshot.dirty);
+  state.mapEditor.drawingLane = Boolean(snapshot.drawingLane);
   state.mapEditor.revision = Number(state.mapEditor.revision || 0) + 1;
 }
 
@@ -9279,7 +9411,7 @@ function undoMapEditor() {
   if (!state.mapEditor.enabled || !state.mapEditor.undoStack.length) return;
   state.mapEditor.redoStack.push(captureMapEditorSnapshot());
   restoreMapEditorSnapshot(state.mapEditor.undoStack.pop());
-  updateMapEditorChrome();
+  render();
   drawMapPreview();
 }
 
@@ -9287,7 +9419,7 @@ function redoMapEditor() {
   if (!state.mapEditor.enabled || !state.mapEditor.redoStack.length) return;
   state.mapEditor.undoStack.push(captureMapEditorSnapshot());
   restoreMapEditorSnapshot(state.mapEditor.redoStack.pop());
-  updateMapEditorChrome();
+  render();
   drawMapPreview();
 }
 
@@ -10090,13 +10222,51 @@ function markSectionEditorDirty() {
   state.sectionEditor.revision = Number(state.sectionEditor.revision || 0) + 1;
 }
 
+function sectionDefinitionIssue(detail, lane = sectionEditorLane(detail)) {
+  if (!lane || (lane.centerline || []).length < (lane.closed_loop ? 3 : 2)) return "Section用のcenterlineが必要です";
+  const gates = state.sectionEditor.mapPath === detail?.map?.path
+    ? state.sectionEditor.gates : (detail?.hd_map?.section_gates || []);
+  const laneGates = gates.filter(gate => gate.lane_id === lane.id);
+  const minimum = lane.closed_loop ? 1 : 2;
+  if (laneGates.length < minimum) return `Section未定義：${lane.closed_loop ? "周回コースはGateを1つ以上" : "開いたコースはGateを2つ以上"}定義してください`;
+  const length = polylineWorldLength(lane.centerline, lane.closed_loop);
+  if (length <= 1e-9) return "Section用のcenterlineに長さが必要です";
+  const stations = laneGates.map(gate => Number(gate.s_m));
+  if (stations.some(s => !Number.isFinite(s) || s < 0 || s > length + 1e-6)) return "Section Gateがcenterlineの範囲外です。再配置してください";
+  const sorted = stations.map(s => lane.closed_loop ? s % length : s).sort((a,b) => a-b);
+  if (sorted.some((s,i) => i > 0 && s - sorted[i-1] <= 1e-6)
+      || (lane.closed_loop && sorted.length > 1 && sorted[0] + length - sorted.at(-1) <= 1e-6)) return "Section Gateが重複しています";
+  return "";
+}
+
+function defineWholeCourseSection() {
+  const detail = state.selectedMapDetail;
+  if (!detail) return;
+  ensureMapEditor(detail);
+  ensureSectionEditor(detail);
+  const lane = sectionEditorLane(detail);
+  if (!lane || editorLaneIssue(lane)) return toast("先に走行出力レーンの境界とcenterlineを作成してください。", "error");
+  if (state.sectionEditor.gates.some(gate => gate.lane_id === lane.id)) return toast("このレーンにはGateがあります。Topologyで編集してください。", "error");
+  const points = lane.closed_loop ? [lane.centerline[0]] : [lane.centerline[0], lane.centerline.at(-1)];
+  for (const point of points) {
+    const projection = projectPointToLane(point, lane);
+    if (!projection) return;
+    state.sectionEditor.gates.push({id:nextSectionGateId(), lane_id:lane.id, s_m:projection.s_m, line:gateLineForLaneProjection(lane, projection)});
+  }
+  markSectionEditorDirty();
+  render();
+}
+
 function sectionEditorLane(detail) {
+  if (state.mapEditor.mapPath === detail?.map?.path && state.mapEditor.lanes.length) {
+    return state.mapEditor.lanes.find(lane => lane.id === state.mapEditor.primaryLaneId) || null;
+  }
   const lanes = detail?.hd_map?.lanes || [];
   return lanes.find((lane) => lane.primary) || lanes[0] || null;
 }
 
 function sectionGatesForDetail(detail) {
-  if (!state.sectionEditor.enabled || state.sectionEditor.mapPath !== detail?.map?.path) return null;
+  if ((!state.sectionEditor.enabled && !state.sectionEditor.dirty) || state.sectionEditor.mapPath !== detail?.map?.path) return null;
   return state.sectionEditor.gates;
 }
 
@@ -10104,14 +10274,14 @@ function updateSectionEditorChrome() {
   const detail = state.selectedMapDetail;
   if (!detail || state.sectionEditor.mapPath !== detail.map?.path) return;
   const lane = sectionEditorLane(detail);
-  const ready = Boolean(detail.hd_map?.exists && lane?.centerline?.length >= 2);
+  const ready = Boolean(lane?.centerline?.length >= (lane?.closed_loop ? 3 : 2));
   const status = $("section-editor-status");
   if (status) {
-    status.textContent = !detail.hd_map?.exists ? "Need HD map" : !ready ? "Need centerline" : state.sectionEditor.dirty ? "Unsaved" : "Ready";
-    status.className = ready ? (state.sectionEditor.dirty ? "dirty" : "ok") : "warn";
+    status.textContent = sectionDefinitionIssue(detail) || (state.sectionEditor.dirty ? "Unsaved" : "Ready");
+    status.className = ready && !sectionDefinitionIssue(detail) ? (state.sectionEditor.dirty ? "dirty" : "ok") : "warn";
   }
   const save = $("section-editor-save");
-  if (save) save.disabled = !(state.sectionEditor.enabled && ready);
+  if (save) save.disabled = !(state.sectionEditor.enabled && ready && !sectionDefinitionIssue(detail));
   const del = $("section-editor-delete");
   if (del) del.disabled = !(state.sectionEditor.enabled && state.sectionEditor.selectedGateId);
   const counts = $("section-editor-counts");
@@ -10336,6 +10506,9 @@ async function saveSectionGatesFromEditor() {
   const detail = state.selectedMapDetail;
   if (!detail) return;
   ensureSectionEditor(detail);
+  const issue = sectionDefinitionIssue(detail);
+  if (issue) return toast(issue, "error");
+  if (state.mapEditor.dirty || !detail.hd_map?.exists) return saveHdMapFromEditor();
   const mapPath = detail.map.path;
   if (!confirmAction({
     title: "Save section gates?",
@@ -10723,7 +10896,7 @@ async function saveJunctionsFromEditor() {
 }
 
 function editorLanesForDetail(detail) {
-  if (!state.mapEditor.enabled || state.mapEditor.mapPath !== detail?.map?.path) return null;
+  if ((!state.mapEditor.enabled && !state.mapEditor.dirty) || state.mapEditor.mapPath !== detail?.map?.path) return null;
   return state.mapEditor.lanes;
 }
 
@@ -10803,6 +10976,7 @@ function canSmoothSelectedEditorRange() {
   const selected = state.mapEditor.selected;
   if (!detail || !state.mapEditor.enabled || state.mapEditor.mapPath !== detail.map?.path || !selected) return false;
   if (!MAP_EDITOR_FIELDS.includes(selected.field)) return false;
+  if (LaneGeometry.paired(activeEditorLane()) && selected.field !== "centerline") return false;
   const lane = activeEditorLane();
   const points = lane[selected.field] || [];
   if (!points[selected.index]) return false;
@@ -10829,13 +11003,16 @@ function updateMapEditorAssistNumber(field, input) {
 function setMapEditorField(field) {
   if (!MAP_EDITOR_FIELDS.includes(field)) return;
   state.mapEditor.activeField = field;
-  updateMapEditorChrome();
+  state.mapEditor.selected = null;
+  state.mapEditor.drawingLane = false;
+  render();
 }
 
 function toggleHdMapEditor() {
   if (!state.selectedMapDetail) return;
   ensureMapEditor(state.selectedMapDetail);
   state.mapEditor.enabled = !state.mapEditor.enabled;
+  state.mapEditor.drawingLane = false;
   if (state.mapEditor.enabled) {
     state.mapWorkspaceMode = "geometry";
     state.sectionEditor.enabled = false;
@@ -10887,7 +11064,11 @@ function mapEditorDirectionReverseIssue(detail, lane = activeEditorLane()) {
     return "Remove this lane's Section Gates before reversing direction";
   }
   const sections = detail?.hd_map?.sections || [];
-  if (sections.some((section) => String(section.lane_id || "") === String(lane.id || ""))) {
+  const editingGates = state.sectionEditor.mapPath === mapPath && state.sectionEditor.dirty;
+  const gateIds = new Set(gates.map(gate => String(gate.id || "")));
+  if (sections.some((section) => String(section.lane_id || "") === String(lane.id || "")
+      && (!editingGates || !section.start_gate_id || !section.end_gate_id
+        || gateIds.has(String(section.start_gate_id)) || gateIds.has(String(section.end_gate_id))))) {
     return "Remove this lane's Sections before reversing direction";
   }
   const junctions = state.junctionEditor.mapPath === mapPath
@@ -10944,7 +11125,10 @@ function updateMapEditorChrome() {
     status.className = issue || !rasterReady ? "warn" : state.mapEditor.dirty ? "dirty" : "ok";
   }
   const save = $("map-editor-save");
-  if (save) save.disabled = !(state.mapEditor.enabled && rasterReady && !issue);
+  const sectionIssue = sectionDefinitionIssue(detail);
+  if (save) save.disabled = !(state.mapEditor.enabled && rasterReady && !issue && !sectionIssue);
+  const sectionHint = $("map-editor-section-issue");
+  if (sectionHint) sectionHint.textContent = sectionIssue || "Section定義済み：境界・centerlineと一緒に保存します";
   const del = $("map-editor-delete");
   if (del) del.disabled = !(state.mapEditor.enabled && selected);
   const undo = $("map-editor-undo");
@@ -10988,6 +11172,8 @@ function updateMapEditorChrome() {
   }
   const showCenterline = $("map-editor-show-centerline");
   if (showCenterline) showCenterline.checked = Boolean(state.mapEditor.showCenterline);
+  const manualCenter = $("lane-manual-center");
+  if (manualCenter) manualCenter.checked = lane.centerline_mode === "manual";
   const counts = $("map-editor-counts");
   if (counts) counts.textContent = renderEditorCounts(lane);
   const zoom = $("map-editor-zoom-value");
@@ -11394,6 +11580,11 @@ function centerlineFromDtwBounds(lane, targetCount) {
 }
 
 function regenerateEditorCenterline(lane) {
+  if (lane.centerline_mode === "manual") return;
+  if (LaneGeometry.paired(lane)) {
+    lane.centerline = LaneGeometry.centers(lane);
+    return;
+  }
   lane.left_bound = cloneMapPolyline(lane.left_bound);
   lane.right_bound = cloneMapPolyline(lane.right_bound);
   const minimum = lane.closed_loop ? 3 : 2;
@@ -11448,7 +11639,7 @@ function nearestEditorPoint(detail, pixel, hitRadius) {
   if (!canvas) return null;
   const toPixel = mapPointProjector(detail, canvas.width, canvas.height);
   let best = null;
-  for (const field of MAP_EDITOR_FIELDS) {
+  for (const field of [state.mapEditor.activeField]) {
     for (let index = 0; index < lane[field].length; index += 1) {
       const candidate = toPixel(lane[field][index]);
       const distance = pointDistance(candidate, pixel);
@@ -11490,6 +11681,11 @@ function insertEditorPoint(lane, field, world, detail, pixel) {
   if (!lane[field]) lane[field] = [];
   const points = lane[field];
   if (points.length < 2) {
+    if (LaneGeometry.paired(lane) && field !== "centerline") {
+      const other = field === "left_bound" ? "right_bound" : "left_bound";
+      const offset = points.length ? [lane[other][0][0] - points[0][0], lane[other][0][1] - points[0][1]] : [0, field === "left_bound" ? -1 : 1];
+      lane[other].push([world[0] + offset[0], world[1] + offset[1]]);
+    }
     points.push(world);
     return points.length - 1;
   }
@@ -11497,6 +11693,15 @@ function insertEditorPoint(lane, field, world, detail, pixel) {
   const insertIndex = segment
     ? (lane.closed_loop && segment.index === points.length - 1 ? points.length : segment.index + 1)
     : points.length;
+  if (LaneGeometry.paired(lane) && field !== "centerline") {
+    const other = field === "left_bound" ? "right_bound" : "left_bound";
+    const prev = Math.max(0, insertIndex - 1), next = insertIndex % points.length;
+    const a = points[prev], b = points[next];
+    const dx = b[0] - a[0], dy = b[1] - a[1];
+    const t = Math.max(0, Math.min(1, ((world[0]-a[0])*dx + (world[1]-a[1])*dy) / (dx*dx+dy*dy || 1)));
+    const x = lane[other][prev], y = lane[other][next];
+    lane[other].splice(insertIndex, 0, [x[0]+t*(y[0]-x[0]), x[1]+t*(y[1]-x[1])]);
+  }
   points.splice(insertIndex, 0, world);
   return insertIndex;
 }
@@ -11684,6 +11889,17 @@ function handleMapEditorPointerDown(event) {
   ensureMapEditor(detail);
   const { canvas, point, hitRadius } = canvasEventInfo(event);
   const lane = activeEditorLane();
+  if (state.mapEditor.drawingLane) {
+    const world = mapPixelToWorld(detail, canvas.width, canvas.height, point);
+    if (!world) return;
+    const spine = LaneGeometry.centers(lane);
+    if (spine.length && pointDistance(spine.at(-1), world) < 0.02) return;
+    rememberMapEditorState();
+    Object.assign(lane, LaneGeometry.fromSpine([...spine, world], state.mapEditor.laneWidth || 1));
+    markMapEditorDirty();
+    drawMapPreview();
+    return;
+  }
   const nearest = nearestEditorPoint(detail, point, hitRadius);
   if (nearest) {
     state.mapEditor.dragSnapshot = captureMapEditorSnapshot();
@@ -11695,6 +11911,7 @@ function handleMapEditorPointerDown(event) {
     if (!world) return;
     rememberMapEditorState();
     const field = state.mapEditor.activeField;
+    if (field === "centerline") lane.centerline_mode = "manual";
     const index = insertEditorPoint(lane, field, world, detail, point);
     state.mapEditor.selected = { field, index };
     state.mapEditor.dragging = { ...state.mapEditor.selected };
@@ -11732,6 +11949,7 @@ function handleMapEditorPointerMove(event) {
     state.mapEditor.redoStack = [];
     state.mapEditor.dragSnapshot = null;
   }
+  if (drag.field === "centerline") lane.centerline_mode = "manual";
   lane[drag.field][drag.index] = world;
   if (drag.field !== "centerline") regenerateEditorCenterline(lane);
   markMapEditorDirty();
@@ -11768,6 +11986,11 @@ function deleteEditorPoint(target) {
   const lane = activeEditorLane();
   if (!lane[target.field] || !lane[target.field][target.index]) return false;
   rememberMapEditorState();
+  if (target.field === "centerline") lane.centerline_mode = "manual";
+  if (LaneGeometry.paired(lane) && target.field !== "centerline") {
+    const other = target.field === "left_bound" ? "right_bound" : "left_bound";
+    lane[other].splice(target.index, 1);
+  }
   lane[target.field].splice(target.index, 1);
   state.mapEditor.selected = null;
   state.mapEditor.dragging = null;
@@ -11811,6 +12034,12 @@ function smoothSelectedEditorRange() {
   }
 
   rememberMapEditorState();
+  if (selected.field === "centerline") lane.centerline_mode = "manual";
+  // Independent smoothing changes point correspondence; require explicit conversion first.
+  if (LaneGeometry.paired(lane) && selected.field !== "centerline") {
+    toast("ペア境界の平滑化は未対応です。点をドラッグして調整してください。", "error");
+    return;
+  }
   lane[selected.field] = replaceEditorRange(points, range, smoothed, lane.closed_loop);
   state.mapEditor.selected = {
     field: selected.field,
@@ -11836,6 +12065,7 @@ function regenerateEditorCenterlineFromBounds() {
     return;
   }
   rememberMapEditorState();
+  lane.centerline_mode = "auto";
   regenerateEditorCenterline(lane);
   state.mapEditor.selected = null;
   state.mapEditor.dragging = null;
@@ -11857,6 +12087,7 @@ function deleteNearestEditorPoint(event) {
 }
 
 function handleMapEditorDoubleClick(event) {
+  if (state.mapEditor.drawingLane) { event.preventDefault(); return; }
   if (mapEditorInteractionLocked()) return;
   if (state.customLineEditor.enabled) {
     event.preventDefault();
@@ -11878,6 +12109,7 @@ function handleMapEditorDoubleClick(event) {
 }
 
 function handleMapEditorContextMenu(event) {
+  if (state.mapEditor.drawingLane) { event.preventDefault(); finishPairedLane(); return; }
   if (mapEditorInteractionLocked()) return;
   if (state.customLineEditor.enabled) {
     event.preventDefault();
@@ -11903,7 +12135,8 @@ async function saveHdMapFromEditor() {
   if (!detail) return;
   ensureMapEditor(detail);
   const mapPath = detail.map.path;
-  const issue = mapEditorCollectionIssue();
+  ensureSectionEditor(detail);
+  const issue = mapEditorCollectionIssue() || sectionDefinitionIssue(detail);
   if (issue) {
     toast(issue, "error");
     return;
@@ -11918,6 +12151,8 @@ async function saveHdMapFromEditor() {
   const wasEnabled = state.mapEditor.enabled;
   const requestContext = captureSelectedMapContext(mapPath);
   const editorRevision = Number(state.mapEditor.revision || 0);
+  const sectionRevision = Number(state.sectionEditor.revision || 0);
+  const sectionWasEnabled = state.sectionEditor.enabled;
   try {
     const saved = await api("/api/maps/save-hd-map", {
       method: "POST",
@@ -11925,6 +12160,7 @@ async function saveHdMapFromEditor() {
         map_dir: mapPath,
         primary_lane_id: state.mapEditor.primaryLaneId,
         lanes: state.mapEditor.lanes,
+        section_gates: state.sectionEditor.gates,
       }),
     });
     if (!commitSelectedMapDetail(requestContext, saved)) {
@@ -11943,11 +12179,16 @@ async function saveHdMapFromEditor() {
     } else {
       state.mapEditor.dirty = true;
     }
-    if (!state.sectionEditor.dirty) ensureSectionEditor(saved, { force: true });
+    const newerSections = state.sectionEditor.mapPath === mapPath
+      && Number(state.sectionEditor.revision || 0) !== sectionRevision;
+    if (!newerSections) {
+      ensureSectionEditor(saved, { force: true });
+      state.sectionEditor.enabled = sectionWasEnabled;
+    }
     if (!state.junctionEditor.dirty) ensureJunctionEditor(saved, { force: true });
     if (!state.customLineEditor.dirty) ensureCustomLineEditor(saved, { force: true });
     invalidateMapPreflights(saved.map.path);
-    toast(hasNewerEdits ? "HD map snapshot saved; newer edits remain unsaved." : "HD map saved");
+    toast(hasNewerEdits || newerSections ? "HD map snapshot saved; newer edits remain unsaved." : "HD map saved");
     render();
   } catch (error) {
     toast(`HD map save failed: ${error.message}`, "error");
@@ -12148,6 +12389,7 @@ function toggleMapLayer(layer, checked) {
 }
 
 function drawMapPreview() {
+  updateMapCameraView();
   const canvas = $("map-preview-canvas");
   if (!canvas || !state.selectedMapDetail) return;
   const detail = state.selectedMapDetail;
@@ -12574,6 +12816,11 @@ function drawEditorPointHandles(ctx, detail, toPixel, uiScale = 1) {
     ["centerline", "#e7c84b"],
   ];
   ctx.save();
+  if (LaneGeometry.paired(lane)) {
+    lane.left_bound.forEach((point, index) => {
+      drawPolyline(ctx, [toPixel(point), toPixel(lane.right_bound[index])], "rgba(120,180,200,0.4)", 1, false, uiScale);
+    });
+  }
   for (const [field, color] of fields) {
     const points = lane[field] || [];
     for (let index = 0; index < points.length; index += 1) {

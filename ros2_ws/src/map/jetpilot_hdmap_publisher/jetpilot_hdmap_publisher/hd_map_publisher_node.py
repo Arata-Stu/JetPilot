@@ -369,7 +369,7 @@ def section_points(points: Sequence[Point3], closed_loop: bool, start_s: float, 
 
     start = start_s % total_length if closed_loop else max(0.0, min(start_s, total_length))
     end = end_s % total_length if closed_loop else max(0.0, min(end_s, total_length))
-    if closed_loop and start > end:
+    if closed_loop and (start > end or math.isclose(start, end, rel_tol=0.0, abs_tol=1e-9)):
         return collect_range(start, total_length) + collect_range(0.0, end)[1:]
     return collect_range(start, end)
 

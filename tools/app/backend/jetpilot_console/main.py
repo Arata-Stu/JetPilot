@@ -113,7 +113,7 @@ TASK_STREAM_CHUNK_BYTES = 256 * 1024
 
 def _frontend_asset_version(frontend_root: Path) -> str:
     mtimes = []
-    for name in ("index.html", "app.js", "styles.css"):
+    for name in ("index.html", "app.js", "lane_geometry.js", "camera_projection.js", "camera_overlay_ui.js", "styles.css"):
         path = frontend_root / name
         if path.exists():
             mtimes.append(path.stat().st_mtime_ns)
@@ -983,6 +983,9 @@ class Handler(BaseHTTPRequestHandler):
             version = _frontend_asset_version(config.frontend_root)
             text = payload.decode("utf-8", errors="replace")
             text = text.replace('href="/styles.css"', f'href="/styles.css?v={version}"')
+            text = text.replace('src="/lane_geometry.js"', f'src="/lane_geometry.js?v={version}"')
+            text = text.replace('src="/camera_projection.js"', f'src="/camera_projection.js?v={version}"')
+            text = text.replace('src="/camera_overlay_ui.js"', f'src="/camera_overlay_ui.js?v={version}"')
             text = text.replace('src="/app.js"', f'src="/app.js?v={version}"')
             payload = text.encode("utf-8")
         content_type = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
