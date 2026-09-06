@@ -140,6 +140,14 @@ ros2 launch jetpilot_system_launch vgl.launch.py \
 
 ## 軽量テスト
 
+### PyTorch 2.11でのexportエラー
+
+`KeyError: <JitScalarType.FLOAT: 6>`は、PyTorchの型APIの移動に公開版exporterが対応していないことが原因。`lab.py`は登録前に新しい場所の`JitScalarType`を補い、vendorソースと重みは変更しない。使用したAPIは`manifest.json`に記録する。
+
+このエラー後は更新した`lab.py`で、`--name baseline-v2`など新しい名前を指定して再実行する。既存の`baseline`ディレクトリは上書きしない。`prepare`やパッケージの再インストールは不要。実際のONNX出力と数値比較はDockerのCUDA環境で確認する。
+
+### 実行方法
+
 ```bash
 python3 -m unittest discover -s tools/aliked_workspace -p test_lab.py
 ```

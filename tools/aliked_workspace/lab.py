@@ -135,6 +135,22 @@ def load_image(path, width, height):
         return np.asarray(image, dtype=np.float32).transpose(2, 0, 1)[None].copy() / 255.0
 
 
+def configure_exporter_types(exporter):
+    """Bridge the PyTorch 2.11 move without changing pinned vendor sources."""
+    if getattr(exporter, 'JitScalarType', None) is not None:
+        return 'vendor'
+    module_name = 'torch.onnx._internal.torchscript_exporter._type_utils'
+    try:
+        scalar_type = importlib.import_module(module_name).JitScalarType
+    except (ImportError, AttributeError) as error:
+        raise ValueError('Cannot find JitScalarType for the ALIKED ONNX exporter') from error
+    for method in ('from_value', 'from_dtype', 'onnx_type', 'dtype'):
+        if not callable(getattr(scalar_type, method, None)):
+            raise ValueError(f'Unsupported JitScalarType API: missing {method}')
+    exporter.JitScalarType = scalar_type
+    return module_name
+
+
 def export(args):
     # Validate the destination before allocating any GPU memory.
     directory = run_dir(args.name or f'{args.width}x{args.height}')
@@ -150,6 +166,8 @@ def export(args):
     sys.path.insert(0, str(SOURCE))
     from nets.aliked import ALIKED
     import deform_conv2d_onnx_exporter
+    exporter_types = configure_exporter_types(deform_conv2d_onnx_exporter)
+    print('Exporter scalar types:', exporter_types, flush=True)
     deform_conv2d_onnx_exporter.register_deform_conv2d_onnx_op()
     torch.manual_seed(0)
     model = ALIKED(model_name='aliked-n16', device='cuda', top_k=2048).eval()
@@ -175,6 +193,7 @@ def export(args):
         'source_commit': COMMIT, 'weight_sha256': WEIGHT_SHA,
         'model': 'aliked-n16', 'top_k': 2048, 'width': args.width, 'height': args.height,
         'opset': 17, 'torch_version': torch.__version__, 'onnx_version': onnx.__version__,
+        'exporter_scalar_types': exporter_types,
         'input_image': str(args.image.resolve()), 'image_sha256': digest(args.image),
         'onnx_sha256': digest(output), 'input_shape': shape,
         'onnx_outputs': outputs, 'preprocessing': 'Pillow RGB bilinear resize, float32 /255, NCHW',

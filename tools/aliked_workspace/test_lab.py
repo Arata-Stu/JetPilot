@@ -11,6 +11,36 @@ import lab
 
 
 class LabTest(unittest.TestCase):
+    def test_exporter_uses_relocated_scalar_api(self):
+        class ScalarType:
+            from_value = staticmethod(lambda value: value)
+            from_dtype = staticmethod(lambda dtype: dtype)
+            onnx_type = lambda self: None
+            dtype = lambda self: None
+        exporter = types.SimpleNamespace(JitScalarType=None)
+        module = types.SimpleNamespace(JitScalarType=ScalarType)
+        with patch.object(lab.importlib, 'import_module', return_value=module) as imported:
+            result = lab.configure_exporter_types(exporter)
+        imported.assert_called_once_with('torch.onnx._internal.torchscript_exporter._type_utils')
+        self.assertIs(exporter.JitScalarType, ScalarType)
+        self.assertEqual(result, imported.call_args.args[0])
+
+    def test_exporter_preserves_existing_scalar_api(self):
+        original = object()
+        exporter = types.SimpleNamespace(JitScalarType=original)
+        with patch.object(lab.importlib, 'import_module') as imported:
+            self.assertEqual(lab.configure_exporter_types(exporter), 'vendor')
+        imported.assert_not_called()
+        self.assertIs(exporter.JitScalarType, original)
+
+    def test_exporter_rejects_incomplete_scalar_api(self):
+        exporter = types.SimpleNamespace(JitScalarType=None)
+        with patch.object(lab.importlib, 'import_module',
+                          return_value=types.SimpleNamespace(JitScalarType=object)):
+            with self.assertRaisesRegex(ValueError, 'missing from_value'):
+                lab.configure_exporter_types(exporter)
+        self.assertIsNone(exporter.JitScalarType)
+
     def test_paths_and_invalid_sizes(self):
         for name in ('../production', '/opt/ros', '.', 'a/b', ''):
             with self.assertRaises(ValueError):
