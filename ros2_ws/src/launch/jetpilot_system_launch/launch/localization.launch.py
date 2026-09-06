@@ -154,9 +154,6 @@ def add_nodes(args: lu.ArgumentContainer):
                         'vgl_pose_topic': args.vgl_pose_topic,
                         'vgl_diagnostics_topic': args.vgl_diagnostics_topic,
                         'use_sim_time': use_sim_time,
-                        'vgl_config_dir': lu.get_path(
-                            'jetpilot_system_launch',
-                            'config/localization/vgl_config')
                     },
                 ))
         else:
