@@ -59,3 +59,23 @@ test('draft lane overlay uses current unsaved points rather than saved geometry'
   assert.equal(vm.runInContext('cameraOverlayLines(detail,true)[0].points[0][0]',c),1);
   assert.equal(vm.runInContext('cameraOverlayLines(detail,false)[0].points[0][0]',c),9);
 });
+test('ground TF initializes height including negative Z, while old zero metadata stays unconfirmed',()=>{
+  const c=uiContext();c.state.analysis={};
+  c.timeline={camera_projection:{ground_z_m:-0.12,ground_z_source:'base_footprint_tf'}};
+  vm.runInContext("initializeAnalysisGroundHeight(timeline,'one')",c);
+  assert.equal(c.state.analysis.projectionHeightM,-0.12);
+  c.state.analysis.projectionHeightM=-0.2;
+  vm.runInContext("initializeAnalysisGroundHeight(timeline,'one')",c);
+  assert.equal(c.state.analysis.projectionHeightM,-0.2);
+  c.timeline={camera_projection:{ground_z_m:0}};
+  assert.equal(vm.runInContext('cameraGroundHeightDefault(timeline)',c),null);
+  vm.runInContext("initializeAnalysisGroundHeight(timeline,'two')",c);
+  assert.equal(c.state.analysis.projectionHeightM,0);
+  assert.match(vm.runInContext('cameraGroundHeightHint(timeline)',c),/仮/);
+});
+test('estimated ground initializes Z with an explicit provisional label',()=>{
+  const c=uiContext();
+  c.timeline={camera_projection:{ground_z_m:-0.08,ground_z_source:'tt02_ground_estimate_tf'}};
+  assert.equal(vm.runInContext('cameraGroundHeightDefault(timeline)',c),-0.08);
+  assert.match(vm.runInContext('cameraGroundHeightHint(timeline)',c),/推定/);
+});

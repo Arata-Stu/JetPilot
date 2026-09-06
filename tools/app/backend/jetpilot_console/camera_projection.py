@@ -6,6 +6,7 @@ from collections import deque
 import hashlib
 import json
 import math
+import statistics
 from pathlib import Path
 
 MAX_TF_AGE_NS = 150_000_000
@@ -199,7 +200,23 @@ class ProjectionCollector:
         models = {}
         ready = 0
         issues = {}
+        ground_frame = 'tt02_ground_estimate'
         for frame in frames:
+            timestamp = int(frame.get('channels', {}).get(primary_topic, {}).get('header_timestamp_ns') or 0)
+            if timestamp and self.transforms.resolve('map', 'base_footprint', timestamp) is not None:
+                ground_frame = 'base_footprint'
+                break
+        ground_heights = []
+        ground_tilted = False
+        for frame in frames:
+            primary = frame.get('channels', {}).get(primary_topic, {})
+            timestamp = int(primary.get('header_timestamp_ns') or 0)
+            ground = self.transforms.resolve('map', ground_frame, timestamp) if timestamp else None
+            # A single UI Z represents a horizontal ground plane, not a ramp.
+            if ground is not None and ground[10] >= math.cos(math.radians(2)):
+                ground_heights.append(ground[11])
+            elif ground is not None:
+                ground_tilted = True
             for topic, channel in frame.get('channels',{}).items():
                 timestamp = int(channel.get('header_timestamp_ns') or 0)
                 optical = frame_name(channel.get('frame_id'))
@@ -233,6 +250,18 @@ class ProjectionCollector:
                     'timestamp_ns':str(timestamp),
                 }
                 ready += 1
+        ground_z = None
+        ground_issue = '路面基準のbase_footprint TFがありません。投影高さを確認してください。'
+        if ground_tilted:
+            ground_issue = '路面がMapのXY平面から傾いています。単一の投影高さを自動設定できません。'
+        elif ground_heights:
+            if max(ground_heights) - min(ground_heights) <= 0.05:
+                ground_z = round(statistics.median(ground_heights), 6)
+                ground_issue = ''
+            else:
+                ground_issue = '路面高さの変動が5cmを超えます。単一の投影高さを自動設定できません。'
         return {'schema_version':1, 'models':models, 'ready_frames':ready, 'issues':issues,
-                'primary_topic':primary_topic, 'map_frame':'map', 'ground_z_m':0., 'max_tf_age_ms':MAX_TF_AGE_NS/1e6,
+                'primary_topic':primary_topic, 'map_frame':'map', 'ground_z_m':ground_z,
+                'ground_z_source':ground_frame + '_tf' if ground_z is not None else None,
+                'ground_z_issue':ground_issue, 'max_tf_age_ms':MAX_TF_AGE_NS/1e6,
                 'localization_fingerprint':localization_fingerprint(map_dir) if map_dir else ''}

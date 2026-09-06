@@ -2,10 +2,85 @@
   "schema_version": 1,
   "description": "TT-02 CAD initial values, metres/radians; base_to_plate and Silky optical centre require measurement/calibration.",
   "base_height_m": null,
-  "base_to_plate": {"xyz": [0, 0, 0], "rpy": [0, 0, 0], "measured": false},
-  "plate_to_mount": {"xyz": [0.045, 0, 0.005], "rpy": [0, 0, 0]},
-  "mount_to_d455_datum": {"xyz": [0.005, 0, 0.060], "rpy": [0, 0, 0]},
-  "mount_to_d455": {"xyz": [0.02694, 0.04750, 0.05950], "rpy": [0, 0, 0]},
-  "mount_to_silky": {"xyz": [-0.035, 0, 0.085], "rpy": [0, 0, 0]},
-  "silky_to_optical": {"xyz": [0.01950, 0, 0.01538], "rpy": [-1.5707963267948966, 0, -1.5707963267948966], "measured": false}
+  "base_to_plate": {
+    "xyz": [
+      0,
+      0,
+      0
+    ],
+    "rpy": [
+      0,
+      0,
+      0
+    ],
+    "measured": false
+  },
+  "plate_to_mount": {
+    "xyz": [
+      0.045,
+      0,
+      0.005
+    ],
+    "rpy": [
+      0,
+      0,
+      0
+    ]
+  },
+  "mount_to_d455_datum": {
+    "xyz": [
+      0.005,
+      0,
+      0.06
+    ],
+    "rpy": [
+      0,
+      0,
+      0
+    ]
+  },
+  "mount_to_d455": {
+    "xyz": [
+      0.02694,
+      0.0475,
+      0.0595
+    ],
+    "rpy": [
+      0,
+      0,
+      0
+    ]
+  },
+  "mount_to_silky": {
+    "xyz": [
+      -0.035,
+      0,
+      0.085
+    ],
+    "rpy": [
+      0,
+      0,
+      0
+    ]
+  },
+  "silky_to_optical": {
+    "xyz": [
+      0.0195,
+      0,
+      0.01538
+    ],
+    "rpy": [
+      -1.5707963267948966,
+      0,
+      -1.5707963267948966
+    ],
+    "measured": false
+  },
+  "ground_estimate": {
+    "enabled": true,
+    "support_length_m": 0.055,
+    "lower_deck_mount_height_m": 0.025,
+    "plate_origin_above_underside_m": 0.0,
+    "description": "Support length confirmed. Deck ground clearance 25 mm and CAD origin at plate underside are provisional assumptions."
+  }
 }

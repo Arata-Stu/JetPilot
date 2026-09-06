@@ -31,6 +31,17 @@ def build_transforms(config, base_frame='base_link', localization_frame='base_li
             raise ValueError('Measure base_height_m before using base_footprint')
         add(localization_frame, base_frame, {'xyz': [0, 0, height], 'rpy': [0, 0, 0]})
     add(base_frame, 'tt02_plate_link', config['base_to_plate'])
+    estimate = config.get('ground_estimate', {})
+    if estimate.get('enabled', False):
+        values = [estimate[key] for key in ('support_length_m', 'lower_deck_mount_height_m',
+                                           'plate_origin_above_underside_m')]
+        if not all(isinstance(v, (int, float)) and not isinstance(v, bool) and
+                   math.isfinite(v) for v in values) or sum(values) <= 0:
+            raise ValueError('Invalid TT-02 estimated plate height')
+        # Keep this explicitly provisional frame separate from base_footprint.
+        add('tt02_plate_link', 'tt02_ground_estimate',
+            {'xyz': [0, 0, -sum(values)], 'rpy': [0, 0, 0]})
+
     add('tt02_plate_link', 'camera_mount_link', config['plate_to_mount'])
     add('camera_mount_link', 'd455_mount_datum', config['mount_to_d455_datum'])
     add('camera_mount_link', 'd455_link', config['mount_to_d455'])

@@ -78,10 +78,18 @@ class TT02TFTests(unittest.TestCase):
     def test_frame_aliases_do_not_create_duplicate_publishers(self):
         records=self.records(camera_frame='d455_link', evs_frame='silky_mount_link',
                              evs_optical_frame='silky_optical_frame',publish_evs=True)
-        self.assertEqual(len(records),6)
+        self.assertEqual(len(records),7)
         with self.assertRaises(ValueError): self.records(camera_frame='base_link')
         with self.assertRaises(ValueError): self.records(evs_frame='camera_mount_link',publish_evs=True)
         with self.assertRaises(ValueError): self.records(camera_frame='/bad')
+
+    def test_estimated_ground_keeps_confirmed_support_and_assumed_clearance_separate(self):
+        records=self.records()
+        self.assertEqual(records['tt02_ground_estimate'],('tt02_plate_link',[0,0,-0.08],[0,0,0]))
+        self.config['ground_estimate']['lower_deck_mount_height_m']=0.03
+        self.assertAlmostEqual(self.records()['tt02_ground_estimate'][1][2],-0.085)
+        self.config['ground_estimate']['enabled']=False
+        self.assertNotIn('tt02_ground_estimate',self.records())
 
     def test_invalid_numbers_rejected(self):
         for value in ([0,0], [0,float('nan'),0], [0,'0',0]):

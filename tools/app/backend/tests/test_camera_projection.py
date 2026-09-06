@@ -96,6 +96,41 @@ class CameraProjectionTest(unittest.TestCase):
             (root/'cuvslam_map'/'map.mdb').write_bytes(b'changed map')
             self.assertNotEqual(original,localization_fingerprint(root))
 
+    def test_ground_height_uses_map_footprint_not_camera_mount_height(self):
+        collector=ProjectionCollector()
+        collector.transforms.add('map','base_footprint',10**9,[0,0,-0.12],[0,0,0,1])
+        collector.transforms.add('base_footprint','base_link',0,[0,0,0.033],[0,0,0,1],True)
+        frames=[{'channels':{'/camera/image_raw':{'header_timestamp_ns':str(10**9)}}}]
+        meta=collector.compile(frames,'/camera/image_raw')
+        self.assertEqual(meta['ground_z_m'],-0.12)
+        self.assertEqual(meta['ground_z_source'],'base_footprint_tf')
+        missing=ProjectionCollector().compile(frames,'/camera/image_raw')
+        self.assertIsNone(missing['ground_z_m'])
+        self.assertTrue(missing['ground_z_issue'])
+
+    def test_estimated_ground_uses_recorded_plate_pose_and_actual_ground_has_priority(self):
+        collector=ProjectionCollector()
+        collector.transforms.add('map','tt02_plate_link',10**9,[0,0,0.2],[0,0,0,1])
+        collector.transforms.add('tt02_plate_link','tt02_ground_estimate',0,[0,0,-0.08],[0,0,0,1],True)
+        frames=[{'channels':{'/camera/image_raw':{'header_timestamp_ns':str(10**9)}}}]
+        meta=collector.compile(frames,'/camera/image_raw')
+        self.assertAlmostEqual(meta['ground_z_m'],0.12)
+        self.assertEqual(meta['ground_z_source'],'tt02_ground_estimate_tf')
+        collector.transforms.add('map','base_footprint',10**9,[0,0,0.11],[0,0,0,1])
+        meta=collector.compile(frames,'/camera/image_raw')
+        self.assertEqual(meta['ground_z_m'],0.11)
+        self.assertEqual(meta['ground_z_source'],'base_footprint_tf')
+
+    def test_nonplanar_ground_is_not_given_a_single_auto_height(self):
+        frames=[{'channels':{'/camera/image_raw':{'header_timestamp_ns':str(ns)}}} for ns in (10**9,1100_000_000)]
+        collector=ProjectionCollector()
+        collector.transforms.add('map','base_footprint',10**9,[0,0,0],[0,0,0,1])
+        collector.transforms.add('map','base_footprint',1100_000_000,[0,0,0.1],[0,0,0,1])
+        self.assertIsNone(collector.compile(frames,'/camera/image_raw')['ground_z_m'])
+        tilted=ProjectionCollector()
+        tilted.transforms.add('map','base_footprint',10**9,[0,0,0],[0,math.sin(0.1),0,math.cos(0.1)])
+        self.assertIn('傾',tilted.compile(frames,'/camera/image_raw')['ground_z_issue'])
+
     def test_worker_discovers_calibration_and_tf_and_packages_frame_projection(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory); bag=root/'bag';bag.mkdir()

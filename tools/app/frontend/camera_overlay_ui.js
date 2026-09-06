@@ -1,6 +1,23 @@
 /* Shared Bag Analysis overlays and the live HD-map editor camera pane. */
 const mapCameraView = {mapPath:'', id:'', timeline:null, channels:[], channel:'', time:0, playing:false, playbackSerial:0, serial:0, imageSerial:0, image:null, frame:null, key:'', pending:'', error:'', z:0};
 
+
+function cameraGroundHeightDefault(timeline) {
+  const meta=timeline?.camera_projection;
+  return ['base_footprint_tf','tt02_ground_estimate_tf'].includes(meta?.ground_z_source) && Number.isFinite(meta.ground_z_m) && Math.abs(meta.ground_z_m)<=10 ? meta.ground_z_m : null;
+}
+function cameraGroundHeightHint(timeline) {
+  const z=cameraGroundHeightDefault(timeline);
+  const origin=timeline?.camera_projection?.ground_z_source==='tt02_ground_estimate_tf' ? '推定路面TF（支柱・デッキ高さの仮定）' : '路面TF';
+  return z!==null ? `${origin}からの初期値: ${z} m（手動調整可）` :
+    timeline?.camera_projection?.ground_z_issue || '路面高さは未確定です。0 mは仮の初期値です。';
+}
+function initializeAnalysisGroundHeight(timeline, id) {
+  if(state.analysis.projectionHeightAnalysisId===id) return;
+  state.analysis.projectionHeightAnalysisId=id;
+  state.analysis.projectionHeightM=cameraGroundHeightDefault(timeline) ?? 0;
+}
+
 function cameraProjectionMapIssue(timeline, detail) {
   if (!timeline?.camera_projection) return '投影情報がありません。CameraInfoとTFを含むbagを再解析してください。';
   if (!detail || timeline.map?.path !== detail.map?.path) return '解析に使用したMapと表示中のMapが一致しません。';
@@ -111,6 +128,7 @@ function renderMapCameraView(detail) {
     <input id="map-camera-seek" type="range" min="0" max="${view.timeline?.duration_s || 0}" step="0.01" value="${view.time}" oninput="seekMapCameraTime(this.value)" aria-label="投影動画の再生位置" ${view.timeline?'':'disabled'} />
     <div id="map-camera-clock" class="field-hint"></div>
     <label>投影高さ（Map Z / m）<input type="number" min="-10" max="10" step="0.01" value="${view.z}" onchange="setCameraProjectionHeight(this.value, 'map')" /></label>
+    <div class="field-hint">${esc(cameraGroundHeightHint(view.timeline))}</div>
     <div id="map-camera-status" class="field-hint" role="status">${esc(view.error || '解析動画を選択してください。')}</div>
     <div class="field-hint">未保存の境界・centerline・Custom Lineも画像に反映します。平面上の配置確認用で、壁との接触や遮蔽は判定しません。</div>
   </section>`;
@@ -129,6 +147,7 @@ async function loadMapCameraAnalysis(id) {
     const timeline=normalizeAnalysisTimeline(response.timeline || response);
     if(timeline.map?.path !== path) throw new Error('別のMapを使用した解析結果です。');
     view.timeline=timeline;
+    view.z=cameraGroundHeightDefault(timeline) ?? 0;
     view.channels=[...new Set(timeline.frames.flatMap(frame=>Object.keys(frame.channels || {})))];
     // Older results can still show their video with an explicit reanalysis message.
     if(!view.channels.length) view.channels=[timeline.camera_projection?.primary_topic || 'primary'];

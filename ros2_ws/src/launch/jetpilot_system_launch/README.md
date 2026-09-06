@@ -432,3 +432,17 @@ CAD値は初期値であり、映像上の最終的な重なりは実車の内�
 ```sh
 python3 -S -m unittest discover -s ros2_ws/src/launch/jetpilot_system_launch/test -p test_tt02_tf.py
 ```
+
+### 55 mm支柱からの暫定路面推定
+
+`ground_estimate` は、確認済みの支柱長55 mmに、仮定のロウワデッキ取付面地上高25 mmを
+加え、プレート下面を路面から80 mmとして扱います。CAD原点とプレート下面の差も暫定で0です。
+`plate_origin_above_underside_m` にCAD原点の下面からの高さを設定して補正できます。
+この推定は `tt02_plate_link → tt02_ground_estimate` の別フレームで記録し、実測の
+`base_footprint`として扱いません。車体の自己位置基準は変更しません。
+
+Bag Analysisはbase_footprintを優先し、ない場合だけ記録された推定路面TFをMap座標に変換して
+UIのZ初期値に使います。Map内のプレートZが0なら路面Zは−0.080 mです。
+UIには推定であることを表示します。使用にはこのTFを含むbagの記録・再解析が必要です。
+旧bagに現在の推定TFを後付けすることはありません。
+`lower_deck_mount_height_m`の調整、または`enabled: false`で推定を修正・無効化できます。

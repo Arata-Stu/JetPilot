@@ -4035,6 +4035,7 @@ function renderAnalysisViewer() {
         <div class="analysis-image-panel">
           ${renderAnalysisCameraSelector()}
           <div class="camera-overlay-controls"><label><input type="checkbox" ${analysis.cameraOverlay!==false?'checked':''} onchange="setAnalysisCameraOverlay(this.checked)" />HD Mapを画像に投影</label><label>投影高さ（Map Z / m）<input type="number" min="-10" max="10" step="0.01" value="${analysis.projectionHeightM || 0}" onchange="setCameraProjectionHeight(this.value, 'analysis')" /></label></div>
+          <div class="field-hint">${esc(cameraGroundHeightHint(analysis.timeline))}</div>
           <div id="analysis-projection-status" class="field-hint" role="status"></div>
           <div class="analysis-image-stage">
             <img id="analysis-frame-image-a" alt="Selected rosbag image frame A" decoding="async" />
@@ -4491,6 +4492,7 @@ async function openAnalysisResult(id) {
     if (state.analysis.selectedId !== selectedId) return;
     state.analysis.detail = normalizeAnalysisRecord(detail.analysis || detail);
     state.analysis.timeline = normalizeAnalysisTimeline(timeline.timeline || timeline);
+    initializeAnalysisGroundHeight(state.analysis.timeline, selectedId);
     const mapPath = analysisResultMapPath();
     if (mapPath) {
       if (!state.analysis.selectedMapPath) state.analysis.selectedMapPath = mapPath;
