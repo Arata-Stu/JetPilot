@@ -97,7 +97,15 @@ sensor kit:
 JSONの値は設定値としてのみ扱われる。shell command、command substitution、任意の
 Pythonコードは記述できない。vehicle profileの`arguments`には`vehicle_control_topic`、
 `vehicle_description_*`、`publish_vehicle_*`だけを指定できる。sensor kit profileでは
-`sensor_kit_*`だけを指定でき、interface packageとlaunch自体は`launch`項目で指定する。
+`sensor_kit_*`と、次の統合用引数を指定できる。interface packageとlaunch自体は
+`launch`項目で指定する。
+
+- `localization_camera_name`
+- `vgl_topic_config_file`
+- `vslam_mode`
+- `vslam_imu_topic`
+- `vehicle_description_camera_frame`
+- `publish_vehicle_evs_description`（event camera用のdescriptionを有効化）
 
 ## Vehicle interfaceの追加
 
