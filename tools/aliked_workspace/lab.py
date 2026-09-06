@@ -57,6 +57,27 @@ def manifest(name):
     return directory, data
 
 
+def stage_reference(args):
+    """Stage the exact NVIDIA ONNX for the same build path as a source export."""
+    directory = run_dir(args.name)
+    if directory.exists():
+        raise ValueError(f'Run already exists; choose a new --name: {directory}')
+    checked_hash(args.reference, REFERENCE_SHA)
+    directory.mkdir(parents=True)
+    output = directory / 'aliked.onnx'
+    shutil.copyfile(args.reference, output)
+    checked_hash(output, REFERENCE_SHA)
+    save(directory / 'manifest.json', {
+        'origin': 'NVIDIA distributed ONNX, copied without re-export',
+        'reference_path': str(args.reference.resolve()),
+        'width': 1920, 'height': 1200,
+        'input_shape': [1, 3, 1200, 1920],
+        'onnx_sha256': REFERENCE_SHA,
+    })
+    print('Verified NVIDIA reference staged:', output)
+    print(f'Next: python3 lab.py build --name {args.name}')
+
+
 def prepare(args):
     SOURCE.mkdir(parents=True, exist_ok=True)
     lock = SOURCE / 'source-lock.json'
@@ -348,6 +369,10 @@ def build(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='command', required=True)
+    p = sub.add_parser('stage-reference', help='copy exact NVIDIA ONNX into an isolated build run')
+    p.add_argument('--name', default='official-1920x1200')
+    p.add_argument('--reference', type=Path, default=REFERENCE)
+    p.set_defaults(func=stage_reference)
     p = sub.add_parser('prepare', help='download pinned source and copy verified NVIDIA reference')
     p.add_argument('--source-only', action='store_true')
     p.add_argument('--reference', type=Path, default=Path('/opt/ros/jazzy/share/isaac_ros_visual_mapping/models/aliked_lightglue/aliked.onnx'))

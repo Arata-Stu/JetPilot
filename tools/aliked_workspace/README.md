@@ -158,6 +158,12 @@ ros2 launch jetpilot_system_launch vgl.launch.py \
 
 ## 軽量テスト
 
+### 公式版と再出力版の1920×1200比較
+
+`python3 lab.py stage-reference --name official-1920x1200`で、SHA-256確認済みの`reference/aliked.onnx`を再出力せず別の実験ディレクトリへコピーできる。続いて同じx86_64環境で`python3 lab.py build --name official-1920x1200`を実行する。`baseline-v2`と同じビルド経路・設定・LightGlueを使う。
+
+比較は同じbag・map・VGL設定・再生速度で、`vgl_model_dir`だけを`artifacts/official-1920x1200/runtime_models`と`artifacts/baseline-v2/runtime_models`に切り替える。各試験の間にlaunchとコンテナを停止し、bagを先頭から最後まで再生する。両方のログを保存し、成功の有無・失敗理由・成功したbag時刻を比較する。単一画像のONNX数値一致だけでTensorRT実行時の位置推定互換性を断定しない。
+
 ### PyTorch 2.11でのexportエラー
 
 `KeyError: <JitScalarType.FLOAT: 6>`は、PyTorchの型APIの移動に公開版exporterが対応していないことが原因。`lab.py`は登録前に新しい場所の`JitScalarType`を補い、vendorソースと重みは変更しない。使用したAPIは`manifest.json`に記録する。

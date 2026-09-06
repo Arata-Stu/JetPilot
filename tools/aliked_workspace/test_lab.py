@@ -11,6 +11,27 @@ import lab
 
 
 class LabTest(unittest.TestCase):
+    def test_stage_reference_preserves_bytes_and_records_build_manifest(self):
+        with tempfile.TemporaryDirectory() as temporary, patch.object(lab, 'ROOT', Path(temporary)):
+            reference = Path(temporary) / 'reference.onnx'
+            reference.write_bytes(b'verified reference')
+            with patch.object(lab, 'REFERENCE_SHA', lab.digest(reference)):
+                args = types.SimpleNamespace(name='official', reference=reference)
+                lab.stage_reference(args)
+                directory, data = lab.manifest('official')
+                self.assertEqual((directory / 'aliked.onnx').read_bytes(), reference.read_bytes())
+                self.assertEqual((data['width'], data['height']), (1920, 1200))
+                with self.assertRaisesRegex(ValueError, 'already exists'):
+                    lab.stage_reference(args)
+
+    def test_stage_reference_rejects_unknown_model_before_creating_run(self):
+        with tempfile.TemporaryDirectory() as temporary, patch.object(lab, 'ROOT', Path(temporary)):
+            reference = Path(temporary) / 'reference.onnx'
+            reference.write_bytes(b'wrong model')
+            with self.assertRaisesRegex(ValueError, 'SHA-256 mismatch'):
+                lab.stage_reference(types.SimpleNamespace(name='official', reference=reference))
+            self.assertFalse(lab.run_dir('official').exists())
+
     def test_exporter_uses_relocated_scalar_api(self):
         class ScalarType:
             from_value = staticmethod(lambda value: value)
@@ -117,7 +138,7 @@ class LabTest(unittest.TestCase):
                 network.assert_not_called()
 
     def test_help_is_available_without_runtime_imports(self):
-        for stage in ('export', 'compare', 'build', 'inspect', 'prepare', 'doctor'):
+        for stage in ('export', 'compare', 'build', 'inspect', 'prepare', 'doctor', 'stage-reference'):
             result = subprocess.run([sys.executable, str(Path(lab.__file__)), stage, '--help'],
                                     capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
