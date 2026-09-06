@@ -171,7 +171,12 @@ def build_vgl_vslam_script(
     output_model_dir: str,
     enable_rviz: bool,
     enable_warmup_step: bool = True,
+    vgl_image_width: int = 1920,
+    vgl_image_height: int = 1200,
 ) -> str:
+    from .vgl_models import input_size
+    input_size(dict(vgl_image_width=vgl_image_width, vgl_image_height=vgl_image_height))
+    mapping_helper = Path(getattr(config, "repo_root", config.ros2_ws.parent)) / "scripts/create_map_with_vgl.py"
     topic_config_path = topic_config or str(default_topic_config(config))
     create_steps = " ".join(shlex.quote(step) for step in steps.split())
     rviz_value = "true" if enable_rviz else "false"
@@ -215,7 +220,9 @@ offline_log_topic_counts() {{
 trap 'offline_stop_launch TERM 5 || kill -KILL "-$offline_launch_pid" 2>/dev/null || kill -KILL "$offline_launch_pid" 2>/dev/null || true' EXIT
 export FOUNDATIONSTEREO_MODEL_RES={_q(fs_model_res)}
 echo "[stage] create cuVGL map"
-ros2 run isaac_mapping_ros create_map_offline.py \\
+python3 {_q(mapping_helper)} \\
+  --model-dir={_q(output_model_dir)} \\
+  --width={vgl_image_width} --height={vgl_image_height} \\
   --sensor_data_bag={_q(rosbag)} \\
   --base_output_folder="$requested_map_dir" \\
   --camera_topic_config={_q(topic_config_path)} \\

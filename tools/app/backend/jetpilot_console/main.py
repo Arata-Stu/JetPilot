@@ -24,6 +24,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from .bag_analysis import AnalysisRepository, build_analysis_script, rosbag_detail
 from .config import ConsoleConfig
+from .vgl_models import input_size, resolve_model
 from .e2e_analysis import scan_e2e_models
 from .e2e_pipeline import (
     PipelineTaskSpec,
@@ -1935,17 +1936,8 @@ find {shlex.quote(record_root)} -name metadata.yaml -printf '%TY-%Tm-%Td %TH:%TM
             )
             if not topic_config.is_file():
                 raise ValueError("camera topic config must be a file")
-            model_root = config.ros2_ws / "isaac_ros_assets" / "models"
-            output_model_dir = resolve_under_root(
-                str(
-                    body.get("output_model_dir")
-                    or model_root / "visual_global_localization"
-                ),
-                model_root,
-                label="VGL model directory",
-                require_exists=True,
-                require_directory=True,
-            )
+            output_model_dir = resolve_model(config, body.get("output_model_dir"))
+            vgl_width, vgl_height = input_size(body)
         except ValueError as exc:
             self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
             return
@@ -1971,6 +1963,8 @@ find {shlex.quote(record_root)} -name metadata.yaml -printf '%TY-%Tm-%Td %TH:%TM
             steps=" ".join(steps),
             fs_model_res=fs_model_res,
             output_model_dir=str(output_model_dir),
+            vgl_image_width=vgl_width,
+            vgl_image_height=vgl_height,
             enable_rviz=bool(body.get("enable_rviz", False)),
         )
         try:

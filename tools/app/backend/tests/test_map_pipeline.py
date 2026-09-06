@@ -60,6 +60,16 @@ class BuildVglVslamScriptTest(unittest.TestCase):
             launch_package="jetpilot_system_launch",
         )
 
+    def test_lightweight_profile_reaches_map_creation(self):
+        script = build_vgl_vslam_script(
+            self.config, "/record/bag", "/maps/new", None,
+            "edex compute_poses cuvgl", "low_res", "/models/small model",
+            enable_rviz=False, vgl_image_width=424, vgl_image_height=240)
+        self.assertIn("create_map_with_vgl.py", script)
+        self.assertIn("--model-dir='/models/small model'", script)
+        self.assertIn("--width=424 --height=240", script)
+        self.assertNotIn("ros2 run isaac_mapping_ros create_map_offline.py", script)
+
     def test_offline_eval_uses_controlled_replay_shutdown(self) -> None:
         script = build_vgl_vslam_script(
             self.config,

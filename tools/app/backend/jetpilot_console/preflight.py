@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .config import ConsoleConfig
+from .vgl_models import input_size, resolve_model
 from .map_detail import load_yaml
 from .map_pipeline import (
     DEFAULT_RACELINE_DIRECTION,
@@ -188,6 +189,11 @@ def _map_build_preflight(
         _check_mapping_topics(bag_info, camera_topics, report)
     _inspect_map_output(config, payload.get("map_dir"), report)
     _inspect_mapping_parameters(payload, report)
+    try:
+        width, height = input_size(payload)
+        report.resolved.update(vgl_image_width=width, vgl_image_height=height)
+    except ValueError as exc:
+        report.add("mapping.vgl_size", "VGL input size", BLOCKED, str(exc))
     _inspect_vgl_model(config, payload.get("output_model_dir"), report)
 
 
@@ -1784,13 +1790,7 @@ def _inspect_vgl_model(
     model_root = Path(config.ros2_ws) / "isaac_ros_assets" / "models"
     selected = raw_value or model_root / "visual_global_localization"
     try:
-        model_dir = resolve_under_root(
-            selected,
-            model_root,
-            label="VGL model directory",
-            require_exists=True,
-            require_directory=True,
-        )
+        model_dir = resolve_model(config, selected)
     except ValueError as exc:
         report.add(
             "mapping.vgl_model",

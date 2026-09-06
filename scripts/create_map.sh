@@ -11,6 +11,8 @@ MAP_ROOT="${MAP_ROOT:-/workspaces/map}"
 FOUNDATIONSTEREO_MODEL_RES="${FOUNDATIONSTEREO_MODEL_RES:-low_res}"
 OUTPUT_MODEL_DIR="${OUTPUT_MODEL_DIR:-/workspaces/ros2_ws/isaac_ros_assets/models/visual_global_localization}"
 CREATE_MAP_OFFLINE_STEPS="${CREATE_MAP_OFFLINE_STEPS:-edex compute_poses cuvgl}"
+VGL_IMAGE_WIDTH="${VGL_IMAGE_WIDTH:-1920}"
+VGL_IMAGE_HEIGHT="${VGL_IMAGE_HEIGHT:-1200}"
 ALLOW_OCCUPANCY_MAP_STEP="${ALLOW_OCCUPANCY_MAP_STEP:-false}"
 ROSBAG_START_DELAY_S="${ROSBAG_START_DELAY_S:-5.0}"
 ROSBAG_PLAY_ADDITIONAL_ARGS="${ROSBAG_PLAY_ADDITIONAL_ARGS:---clock}"
@@ -228,7 +230,7 @@ transfer_map_to_jetson() {
   if [[ ! -e "$raceline_csv" && "$custom_line_ready" != 'true' ]]; then
     die "Jetson runtime map needs a raceline or an active custom line CSV + metadata"
   fi
-  for optional_path in "$custom_line_dir"; do
+  for optional_path in "$custom_line_dir" "${map_dir}/vgl_profile.json" "${map_dir}/vgl_runtime_config"; do
     [[ -e "$optional_path" ]] && sources+=("$optional_path")
   done
 
@@ -336,6 +338,9 @@ Usage:
   $(basename "$0") --help                  Show this help
 
 Environment:
+  OUTPUT_MODEL_DIR            Prepared VGL engines for the mapping GPU
+  VGL_IMAGE_WIDTH             ALIKED input width. Default: 1920 (lightweight: 424)
+  VGL_IMAGE_HEIGHT            ALIKED input height. Default: 1200 (lightweight: 240)
   CREATE_MAP_OFFLINE_STEPS     Default: edex compute_poses cuvgl
   ALLOW_OCCUPANCY_MAP_STEP     Default: false
   CAMERA_TOPIC_CONFIG_FILE     Optional camera topic yaml override
@@ -879,6 +884,7 @@ main() {
   echo "Output folder   : $base_output_dir"
   echo "FS model res    : $FOUNDATIONSTEREO_MODEL_RES"
   echo "VGL model dir   : $OUTPUT_MODEL_DIR"
+  echo "VGL input size  : ${VGL_IMAGE_WIDTH}x${VGL_IMAGE_HEIGHT}"
   echo "Mapping steps   : $CREATE_MAP_OFFLINE_STEPS"
   echo "ROS bag args    : $ROSBAG_PLAY_ADDITIONAL_ARGS"
   echo "HD postprocess  : $ENABLE_HD_MAP_WORKFLOW"
@@ -896,7 +902,9 @@ main() {
   validate_create_map_offline_steps
   read -r -a create_map_steps <<< "$CREATE_MAP_OFFLINE_STEPS"
 
-  ros2 run isaac_mapping_ros create_map_offline.py \
+  python3 "${SCRIPT_DIR}/create_map_with_vgl.py" \
+    --model-dir="$OUTPUT_MODEL_DIR" \
+    --width="$VGL_IMAGE_WIDTH" --height="$VGL_IMAGE_HEIGHT" \
     --sensor_data_bag="$bag_dir" \
     --base_output_folder="$base_output_dir" \
     --camera_topic_config="$topic_config_file" \
@@ -908,11 +916,7 @@ main() {
   echo "Generated map   : $output_dir"
 
   echo
-  if prompt_yes_no "Export VGL TensorRT engines? (normally needed once per environment)"; then
-    run_vgl_tensorrt_export
-  else
-    echo "Skipped VGL TensorRT engine export."
-  fi
+  echo "VGL engines were checked before map generation; no re-export is needed."
 
   echo
   echo "Running offline evaluation to create the VSLAM snapshot and HD map artifacts."

@@ -2048,6 +2048,9 @@ function mapBuildPreflightPayload() {
     map_dir: outputMapDir(),
     topic_config: selectedCameraTopicConfig(),
     steps: $("build-steps")?.value || "edex compute_poses cuvgl",
+    output_model_dir: $("build-vgl-model")?.value.trim() || "",
+    vgl_image_width: Number($("build-vgl-width")?.value || 1920),
+    vgl_image_height: Number($("build-vgl-height")?.value || 1200),
     enable_rviz: false,
   };
 }
@@ -2491,6 +2494,20 @@ function renderMapBuildForm() {
       <div class="actions full">
         <button onclick="applyCameraTopicConfig()" ${recommendedPath ? "" : "disabled"}>Use Predicted Path</button>
         <button onclick="copySelectedCameraTopicConfig()">Copy Topic Config</button>
+      </div>
+      <div class="field full">
+        <label>VGLモデルのフォルダ</label>
+        <input id="build-vgl-model" placeholder="空欄：従来の公式モデル" oninput="scheduleMapBuildPreflight()" />
+        <div class="field-hint">軽量版は生成済みの runtime_models を指定してください。map作成と位置推定で同じモデル・入力サイズを使います。</div>
+      </div>
+      <div class="field">
+        <label>VGL入力の幅</label>
+        <input id="build-vgl-width" type="number" min="1" max="8192" value="1920" oninput="scheduleMapBuildPreflight()" />
+      </div>
+      <div class="field">
+        <label>VGL入力の高さ</label>
+        <input id="build-vgl-height" type="number" min="1" max="8192" value="1200" oninput="scheduleMapBuildPreflight()" />
+        <div class="field-hint">今回の軽量モデルは幅424・高さ240です。サイズを変えるだけではモデルは変換されません。</div>
       </div>
       <div id="map-build-preflight" class="full" data-map-build-preflight>
         ${renderReadinessPanel("map-build", initialPreflightPayload, { title: "VGL / VSLAM build readiness" })}
