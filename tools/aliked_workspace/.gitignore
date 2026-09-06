@@ -1,0 +1,5 @@
+/vendor/
+/reference/
+/artifacts/
+/inputs/
+/.venv/

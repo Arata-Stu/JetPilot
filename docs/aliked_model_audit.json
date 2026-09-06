@@ -1,0 +1,287 @@
+{
+  "sha256": "bd4bd09d2f2dda23fd0bbe98abf47c71fbf93e3a4b5d5e7a99a4930592120193",
+  "bytes": 11452422,
+  "producer": "pytorch",
+  "producer_version": "2.5.0",
+  "opsets": [
+    {
+      "domain": "",
+      "version": 17
+    }
+  ],
+  "inputs": [
+    {
+      "name": "image",
+      "dtype": 1,
+      "shape": [
+        1,
+        3,
+        1200,
+        1920
+      ]
+    }
+  ],
+  "outputs": [
+    {
+      "name": "keypoints",
+      "dtype": 1,
+      "shape": [
+        "Subkeypoints_dim_0",
+        2
+      ]
+    },
+    {
+      "name": "descriptors",
+      "dtype": 1,
+      "shape": [
+        "Divdescriptors_dim_0",
+        "Divdescriptors_dim_1"
+      ]
+    },
+    {
+      "name": "scores",
+      "dtype": 1,
+      "shape": [
+        "Gatherscores_dim_0"
+      ]
+    }
+  ],
+  "nodes": 1284,
+  "initializers": 56,
+  "comparisons": {
+    "n16": {
+      "checkpoint_tensors": 76,
+      "named_exact_matches": [
+        "block2.downsample.weight",
+        "block2.downsample.bias",
+        "block3.conv1.offset_conv.weight",
+        "block3.conv1.offset_conv.bias",
+        "block3.conv1.regular_conv.weight",
+        "block3.bn1.weight",
+        "block3.bn1.bias",
+        "block3.bn1.running_mean",
+        "block3.bn1.running_var",
+        "block3.conv2.offset_conv.weight",
+        "block3.conv2.offset_conv.bias",
+        "block3.conv2.regular_conv.weight",
+        "block3.bn2.weight",
+        "block3.bn2.bias",
+        "block3.bn2.running_mean",
+        "block3.bn2.running_var",
+        "block3.downsample.weight",
+        "block3.downsample.bias",
+        "block4.conv1.offset_conv.weight",
+        "block4.conv1.offset_conv.bias",
+        "block4.conv1.regular_conv.weight",
+        "block4.bn1.weight",
+        "block4.bn1.bias",
+        "block4.bn1.running_mean",
+        "block4.bn1.running_var",
+        "block4.conv2.offset_conv.weight",
+        "block4.conv2.offset_conv.bias",
+        "block4.conv2.regular_conv.weight",
+        "block4.bn2.weight",
+        "block4.bn2.bias",
+        "block4.bn2.running_mean",
+        "block4.bn2.running_var",
+        "block4.downsample.weight",
+        "block4.downsample.bias",
+        "conv1.weight",
+        "conv2.weight",
+        "conv3.weight",
+        "conv4.weight",
+        "score_head.0.weight",
+        "score_head.2.weight",
+        "score_head.4.weight",
+        "score_head.6.weight",
+        "desc_head.agg_weights",
+        "desc_head.offset_conv.0.weight",
+        "desc_head.offset_conv.0.bias",
+        "desc_head.offset_conv.2.weight",
+        "desc_head.offset_conv.2.bias",
+        "desc_head.sf_conv.weight"
+      ],
+      "named_different": [],
+      "not_named_in_onnx": [
+        "block1.conv1.weight",
+        "block1.bn1.weight",
+        "block1.bn1.bias",
+        "block1.bn1.running_mean",
+        "block1.bn1.running_var",
+        "block1.bn1.num_batches_tracked",
+        "block1.conv2.weight",
+        "block1.bn2.weight",
+        "block1.bn2.bias",
+        "block1.bn2.running_mean",
+        "block1.bn2.running_var",
+        "block1.bn2.num_batches_tracked",
+        "block2.conv1.weight",
+        "block2.bn1.weight",
+        "block2.bn1.bias",
+        "block2.bn1.running_mean",
+        "block2.bn1.running_var",
+        "block2.bn1.num_batches_tracked",
+        "block2.conv2.weight",
+        "block2.bn2.weight",
+        "block2.bn2.bias",
+        "block2.bn2.running_mean",
+        "block2.bn2.running_var",
+        "block2.bn2.num_batches_tracked",
+        "block3.bn1.num_batches_tracked",
+        "block3.bn2.num_batches_tracked",
+        "block4.bn1.num_batches_tracked",
+        "block4.bn2.num_batches_tracked"
+      ]
+    },
+    "n16rot": {
+      "checkpoint_tensors": 76,
+      "named_exact_matches": [],
+      "named_different": [
+        "block2.downsample.weight",
+        "block2.downsample.bias",
+        "block3.conv1.offset_conv.weight",
+        "block3.conv1.offset_conv.bias",
+        "block3.conv1.regular_conv.weight",
+        "block3.bn1.weight",
+        "block3.bn1.bias",
+        "block3.bn1.running_mean",
+        "block3.bn1.running_var",
+        "block3.conv2.offset_conv.weight",
+        "block3.conv2.offset_conv.bias",
+        "block3.conv2.regular_conv.weight",
+        "block3.bn2.weight",
+        "block3.bn2.bias",
+        "block3.bn2.running_mean",
+        "block3.bn2.running_var",
+        "block3.downsample.weight",
+        "block3.downsample.bias",
+        "block4.conv1.offset_conv.weight",
+        "block4.conv1.offset_conv.bias",
+        "block4.conv1.regular_conv.weight",
+        "block4.bn1.weight",
+        "block4.bn1.bias",
+        "block4.bn1.running_mean",
+        "block4.bn1.running_var",
+        "block4.conv2.offset_conv.weight",
+        "block4.conv2.offset_conv.bias",
+        "block4.conv2.regular_conv.weight",
+        "block4.bn2.weight",
+        "block4.bn2.bias",
+        "block4.bn2.running_mean",
+        "block4.bn2.running_var",
+        "block4.downsample.weight",
+        "block4.downsample.bias",
+        "conv1.weight",
+        "conv2.weight",
+        "conv3.weight",
+        "conv4.weight",
+        "score_head.0.weight",
+        "score_head.2.weight",
+        "score_head.4.weight",
+        "score_head.6.weight",
+        "desc_head.agg_weights",
+        "desc_head.offset_conv.0.weight",
+        "desc_head.offset_conv.0.bias",
+        "desc_head.offset_conv.2.weight",
+        "desc_head.offset_conv.2.bias",
+        "desc_head.sf_conv.weight"
+      ],
+      "not_named_in_onnx": [
+        "block1.conv1.weight",
+        "block1.bn1.weight",
+        "block1.bn1.bias",
+        "block1.bn1.running_mean",
+        "block1.bn1.running_var",
+        "block1.bn1.num_batches_tracked",
+        "block1.conv2.weight",
+        "block1.bn2.weight",
+        "block1.bn2.bias",
+        "block1.bn2.running_mean",
+        "block1.bn2.running_var",
+        "block1.bn2.num_batches_tracked",
+        "block2.conv1.weight",
+        "block2.bn1.weight",
+        "block2.bn1.bias",
+        "block2.bn1.running_mean",
+        "block2.bn1.running_var",
+        "block2.bn1.num_batches_tracked",
+        "block2.conv2.weight",
+        "block2.bn2.weight",
+        "block2.bn2.bias",
+        "block2.bn2.running_mean",
+        "block2.bn2.running_var",
+        "block2.bn2.num_batches_tracked",
+        "block3.bn1.num_batches_tracked",
+        "block3.bn2.num_batches_tracked",
+        "block4.bn1.num_batches_tracked",
+        "block4.bn2.num_batches_tracked"
+      ]
+    }
+  },
+  "fused_batchnorm_comparisons": {
+    "n16": [
+      {
+        "layer": "block1.conv1",
+        "max_weight_error": 5.432390590698333e-07,
+        "max_bias_error": 6.531184726377148e-08
+      },
+      {
+        "layer": "block1.conv2",
+        "max_weight_error": 1.8211898544784333e-08,
+        "max_bias_error": 5.848763917626343e-08
+      },
+      {
+        "layer": "block2.conv1",
+        "max_weight_error": 6.88693316819311e-08,
+        "max_bias_error": 8.776931670340105e-08
+      },
+      {
+        "layer": "block2.conv2",
+        "max_weight_error": 1.5682140863670924e-08,
+        "max_bias_error": 2.6984006495922586e-07
+      }
+    ],
+    "n16rot": [
+      {
+        "layer": "block1.conv1",
+        "max_weight_error": 1.5087339178368353,
+        "max_bias_error": 0.38728105190440415
+      },
+      {
+        "layer": "block1.conv2",
+        "max_weight_error": 0.10009118937734635,
+        "max_bias_error": 0.4755497183173487
+      },
+      {
+        "layer": "block2.conv1",
+        "max_weight_error": 0.30892557333185744,
+        "max_bias_error": 0.8490324624257073
+      },
+      {
+        "layer": "block2.conv2",
+        "max_weight_error": 0.10961123240603224,
+        "max_bias_error": 0.9777489662640371
+      }
+    ]
+  },
+  "scope": "NVIDIA public pyCuSFM artifact; the user confirmed the Jetson-installed ONNX has the identical SHA-256.",
+  "nvidia_commit": "0c97a6700ee1ee6e7913ec68acc774a3ec47ccbd",
+  "public_aliked_commit": "96f1f9e7a9932a5da4f0d1aa62017c0fd48141ce",
+  "method": "Static protobuf and restricted checkpoint decoding using Python standard library only; no model inference or export.",
+  "graph_findings": {
+    "top_k": 2048,
+    "keypoint_normalization_divisor": [
+      1919.0,
+      1199.0
+    ],
+    "keypoint_formula": "2 * subpixel_xy / [W - 1, H - 1] - 1",
+    "descriptor_dimension": 128,
+    "descriptor_normalization": "L2 along dimension 1, floor 1e-12",
+    "input_padding_mode": "edge"
+  },
+  "checkpoint_sha256": {
+    "n16": "5be8704840ed662d9d8c561bf7279c222092674e7eb05fd0feab94899e9d82f2",
+    "n16rot": "ddf3abbf38e86f6a74540d214e1a9712c54b2d8551abc864542199f2347d7332"
+  },
+  "jetson_identity_confirmed_by_user": true
+}
