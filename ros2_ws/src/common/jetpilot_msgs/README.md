@@ -1,6 +1,31 @@
 # jetpilot_msgs
 
+## Purpose
+
 JetPilot 内で共有する message 定義です。operation、teleop、controller、bag manager、vehicle interface が同じ型を使うことで、実機向け driver を差し替えても上位の topic 契約を保てるようにしています。
+
+## Nodes
+
+なし。このpackageはmessage定義だけを提供します。
+
+## Inputs / Outputs
+
+### Input topics
+
+なし。
+
+### Output topics
+
+なし。
+
+## Parameters
+
+なし。
+
+## Assumptions / Known limits
+
+message定義はtopic名やQoSを固定しません。実際の接続契約は各publisher/subscriber packageの
+READMEに記載します。
 
 ## Messages
 

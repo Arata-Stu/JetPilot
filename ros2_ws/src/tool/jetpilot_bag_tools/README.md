@@ -1,5 +1,41 @@
 # jetpilot_bag_tools
 
+## Purpose
+
+JetPilot用のrosbag操作packageです。joystickやUIからrecordingを開始・停止し、OpenEB RAW recordingと
+同じsession境界へ同期できます。offlineのthrottle-speed calibration toolも提供します。
+
+## Nodes
+
+| Node | Executable | Description |
+| --- | --- | --- |
+| `bag_manager_node` | `bag_manager_node.py` | rosbag processとOpenEB RAW recordingのsessionを管理する |
+
+## Inputs / Outputs
+
+### Input topics
+
+| Node | Name | Type | QoS | Description |
+| --- | --- | --- | --- | --- |
+| `bag_manager_node` | `/bag/request` | `jetpilot_msgs/msg/BagRequest` | Reliable / Volatile | START/STOP/MARK command |
+
+### Output topics
+
+| Node | Name | Type | QoS | Description |
+| --- | --- | --- | --- | --- |
+| `bag_manager_node` | `/bag/status` | `jetpilot_msgs/msg/BagStatus` | Reliable / Volatile | recording状態、出力URI、最後のevent |
+| `bag_manager_node` | `/event_camera/raw_recording/request` | `jetpilot_msgs/msg/BagRequest` | Reliable / Volatile | OpenEB RAWのsession同期要求 |
+
+## Parameters
+
+記録topic、storage、compression、split、出力先などの標準値は
+[`config/bag_manager.param.yaml`](config/bag_manager.param.yaml)を参照してください。
+
+## Assumptions / Known limits
+
+- `BagRequest.SPLIT`はMCAPとRAWの境界ずれを防ぐため現在無効です。
+- recorder processの起動には`ros2 bag` executableと書込み可能な出力先が必要です。
+
 ## Throttle-speed calibration
 
 Record straight runs at several fixed forward throttle commands. Keep steering close to zero and
@@ -36,22 +72,6 @@ Pass the generated controller YAML to bringup as
 The controller linearly interpolates target speed to throttle feedforward, then applies PID only
 to the remaining error.
 
-JetPilot 用の rosbag 操作 package です。joystick や UI から `/bag/request` を publish するだけで、走行中の記録開始・停止と状態監視を行えます。
-
-## Node
-
-| Node | 役割 |
-| --- | --- |
-| `bag_manager_node.py` | `ros2 bag record` process を起動・停止し、recording 状態を publish する |
-
-## Topic契約
-
-| 方向 | Topic | 型 | 用途 |
-| --- | --- | --- | --- |
-| input | `/bag/request` | `jetpilot_msgs/msg/BagRequest` | START/STOP/SPLIT/MARK command |
-| output | `/bag/status` | `jetpilot_msgs/msg/BagStatus` | recording 中か、出力 URI、最後の event |
-| output | `/event_camera/raw_recording/request` | `jetpilot_msgs/msg/BagRequest` | OpenEB RAWを同じsessionで開始・停止する |
-
 `BagRequest.START` の `label` は bag directory 名の一部になります。英数字、`-`、`_` 以外は `_` に置換します。`STOP` は process group に SIGINT を送り、10秒以内に終わらない場合は SIGTERM へ進みます。
 
 ## Recording algorithm
@@ -70,7 +90,7 @@ JetPilot 用の rosbag 操作 package です。joystick や UI から `/bag/requ
 
 duration分割は`recording_split_duration_s`だけで設定します。この1つの値がrosbagの`--max-bag-duration`とOpenEBへの周期SPLITの両方に使われます。`max_bag_duration`や`extra_args`からの個別上書きはエラーになります。`0`は両方のduration分割を無効化します。手動の`BagRequest.SPLIT`は境界の不一致を防ぐため無視されます。
 
-## 起動
+## How to launch
 
 ```bash
 ros2 launch jetpilot_bag_tools jetpilot_bag_tools.launch.xml

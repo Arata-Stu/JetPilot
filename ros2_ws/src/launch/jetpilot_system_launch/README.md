@@ -1,6 +1,33 @@
 # jetpilot_system_launch
 
+## Purpose
+
 JetPilot 全体の bringup をまとめる launch package です。tool、operation、planning、control、E2E inference、sensor、localization、vehicle interface を個別に有効化し、topic 名と安全条件を1箇所で揃えます。
+
+## Nodes
+
+なし。このpackage自身はruntime nodeを提供せず、各機能packageと外部driver/componentを構成します。
+
+## Inputs / Outputs
+
+### Input topics
+
+なし。起動されるnodeのinterfaceは、それぞれのpackage READMEに記載します。
+
+### Output topics
+
+なし。
+
+## Parameters
+
+launch argumentはcomponentの有効化、profile、parameter file、remap、hardware pathの選択を担当します。
+システム固有の上書きは[`config`](config)に配置し、各機能packageの標準configより後段で適用します。
+
+## Assumptions / Known limits
+
+- このpackageは構成を統括しますが、node固有parameterの定義元ではありません。
+- `bringup.launch.py`は危険なrosbag replayと実車interfaceの同時起動、および競合publisherを拒否します。
+- 全体の静的接続図は[`docs/topic_graph.md`](../../../../docs/topic_graph.md)を参照してください。
 
 ## Competition rule-based bringup
 

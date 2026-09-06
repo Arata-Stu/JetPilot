@@ -1,5 +1,7 @@
 # jetpilot_teleop_tools
 
+## Purpose
+
 Joystick 入力を JetPilot の mode request、bag request、正規化 control command に変換する package です。`custom_joy_node` または ROS 標準の joy node が publish する `/joy` を入力にします。
 
 ## Nodes
@@ -10,16 +12,38 @@ Joystick 入力を JetPilot の mode request、bag request、正規化 control c
 | `teleop_button_manager_node` | mode 切替、bag 操作、steer offset、localization trigger を publish する |
 | `joy_calibrator.py` | joystick profile 作成補助 |
 
-## Topic契約
+## Inputs / Outputs
 
-| 方向 | Topic | 型 | 用途 |
-| --- | --- | --- | --- |
-| input | `/joy` | `sensor_msgs/msg/Joy` | joystick の axes/buttons |
-| output | `/teleop/control_cmd` | `jetpilot_msgs/msg/ControlCommand` | manual mode で mux が採用する正規化指令 |
-| output | `/operation_mode/request` | `jetpilot_msgs/msg/OperationModeRequest` | AUTO/MANUAL/STOP の切替 |
-| output | `/bag/request` | `jetpilot_msgs/msg/BagRequest` | recording START/STOP |
-| output | `/steer_offset_inc`, `/steer_offset_dec` | `std_msgs/msg/Bool` | vehicle driver 側の steering offset 調整 |
-| output | `/localization/trigger` | `std_msgs/msg/Bool` | localization 再試行 trigger |
+### Input topics
+
+| Node | Name | Type | QoS | Description |
+| --- | --- | --- | --- | --- |
+| `teleop_cmd_node` | `/joy` | `sensor_msgs/msg/Joy` | Reliable / Volatile | joystick axes/buttons |
+| `teleop_cmd_node` | `/speed_offset_inc` | `std_msgs/msg/Bool` | Reliable / Volatile | throttle scale増加edge |
+| `teleop_cmd_node` | `/speed_offset_dec` | `std_msgs/msg/Bool` | Reliable / Volatile | throttle scale減少edge |
+| `teleop_button_manager_node` | `/joy` | `sensor_msgs/msg/Joy` | Reliable / Volatile | button mapping入力 |
+
+### Output topics
+
+| Node | Name | Type | QoS | Description |
+| --- | --- | --- | --- | --- |
+| `teleop_cmd_node` | `/teleop/control_cmd` | `jetpilot_msgs/msg/ControlCommand` | Best Effort / Volatile | manual mode用正規化指令 |
+| `teleop_button_manager_node` | `/operation_mode/request` | `jetpilot_msgs/msg/OperationModeRequest` | Reliable / Volatile | AUTO/MANUAL/STOP切替 |
+| `teleop_button_manager_node` | `/bag/request` | `jetpilot_msgs/msg/BagRequest` | Reliable / Volatile | recording START/STOP |
+| `teleop_button_manager_node` | `/steer_offset_inc` | `std_msgs/msg/Bool` | Reliable / Volatile | vehicle steering offset増加 |
+| `teleop_button_manager_node` | `/steer_offset_dec` | `std_msgs/msg/Bool` | Reliable / Volatile | vehicle steering offset減少 |
+| `teleop_button_manager_node` | `/speed_offset_inc` | `std_msgs/msg/Bool` | Reliable / Volatile | teleop throttle scale増加 |
+| `teleop_button_manager_node` | `/localization/trigger` | `std_msgs/msg/Bool` | Reliable / Volatile | localization再試行trigger |
+
+## Parameters
+
+axis、deadman、scaleは[`config/teleop_cmd.param.yaml`](config/teleop_cmd.param.yaml)、button mappingは
+[`config/joy_button_mapping.param.yaml`](config/joy_button_mapping.param.yaml)を参照してください。
+
+## Assumptions / Known limits
+
+- joystick profileごとにaxis/button番号と符号を校正する必要があります。
+- deadman解除時にもzero commandをpublishし、最終timeoutはcommand muxとvehicle側で独立して監視します。
 
 ## Control algorithm
 
@@ -45,7 +69,7 @@ steering は `steering_axis` に deadzone と scale をかけ、`[-1.0, 1.0]` �
 
 `teleop_button_manager_node` は誤操作を減らすため、AUTO/MANUAL を `hold_time_s` 以上長押ししている間だけ有効にします。対応するbuttonを離すとSTOPへ戻り、AUTO/MANUALの同時押しもSTOPになります。STOPも`hold_time_s`以上の長押しで優先されます。bag start/stop と offset 調整は押下 edge で1回だけ発火します。steer offsetはbuttonに加えて、`steer_offset_inc_axis`／`steer_offset_dec_axis`と方向値を指定することでHat axis型の十字キーにも対応します。axis入力は`steer_offset_axis_threshold`を超えたときに押下と判定します。localization trigger は他の割当と button が衝突した場合、自動的に無効化します。
 
-## 起動
+## How to launch
 
 ```bash
 ros2 launch jetpilot_teleop_tools jetpilot_teleop_tools.launch.xml

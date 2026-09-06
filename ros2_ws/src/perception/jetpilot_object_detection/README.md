@@ -1,10 +1,57 @@
-# JetPilot YOLOv8 object detection
+# jetpilot_object_detection
+
+## Purpose
 
 Jetson Orin Nano上でcuVSLAMと共存させるための、小さいYOLOv8 TensorRT runtimeです。
 実機ではIsaac ROSの画像前処理とTensorRT、このpackageのC++ decoderだけを動かします。
 学習時だけ必要なUltralyticsはROS workspaceへ含めません。depth画像は使用しません。
 検出入力だけを既定15 Hzへ間引くframe gateを同じcomponent container内に置き、VSLAMが使う
 camera streamのrateは変更しません。`max_inference_fps`は実機計測に応じて調整できます。
+
+## Nodes
+
+| Node | Provider | Description |
+| --- | --- | --- |
+| `object_detection_image_gate` | `jetpilot_object_detection` | camera入力を推論rateへ間引く |
+| `object_detection_image_encoder` | `isaac_ros_dnn_image_encoder` | gated imageをYOLO入力tensorへ変換する |
+| `object_detection_tensor_rt` | `isaac_ros_tensor_rt` | YOLOv8 TensorRT engineを実行する |
+| `yolov8_decoder` | `jetpilot_object_detection` | raw tensorをNMS処理してDetection2DArrayへ変換する |
+
+## Inputs / Outputs
+
+### Input topics
+
+| Node | Name | Type | QoS | Description |
+| --- | --- | --- | --- | --- |
+| `object_detection_image_gate` | `/realsense/color/image_raw` | `sensor_msgs/msg/Image` | Best Effort / Volatile | 標準RGB camera入力 |
+| `object_detection_image_gate` | `/realsense/color/camera_info` | `sensor_msgs/msg/CameraInfo` | Best Effort / Volatile | camera calibration |
+| `object_detection_image_encoder` | `/perception/object_detection/image` | `sensor_msgs/msg/Image` | Best Effort / Volatile | rate制限済みRGB image |
+| `object_detection_image_encoder` | `/perception/object_detection/camera_info` | `sensor_msgs/msg/CameraInfo` | Best Effort / Volatile | rate制限済みcamera info |
+| `object_detection_tensor_rt` | `/perception/object_detection/tensor_input` | `isaac_ros_tensor_list_interfaces/msg/TensorList` | Best Effort / Volatile | 前処理済みtensor |
+| `yolov8_decoder` | `/perception/object_detection/tensor_output` | `isaac_ros_tensor_list_interfaces/msg/TensorList` | Best Effort / Volatile | YOLOv8 raw output |
+
+### Output topics
+
+| Node | Name | Type | QoS | Description |
+| --- | --- | --- | --- | --- |
+| `object_detection_image_gate` | `/perception/object_detection/image` | `sensor_msgs/msg/Image` | Best Effort / Volatile | rate制限済みRGB image |
+| `object_detection_image_gate` | `/perception/object_detection/camera_info` | `sensor_msgs/msg/CameraInfo` | Best Effort / Volatile | 対応するcamera info |
+| `object_detection_image_encoder` | `/perception/object_detection/tensor_input` | `isaac_ros_tensor_list_interfaces/msg/TensorList` | Best Effort / Volatile | YOLO入力tensor |
+| `object_detection_tensor_rt` | `/perception/object_detection/tensor_output` | `isaac_ros_tensor_list_interfaces/msg/TensorList` | Best Effort / Volatile | YOLOv8 raw output |
+| `yolov8_decoder` | `/perception/detections` | `vision_msgs/msg/Detection2DArray` | Best Effort / Volatile | 検出box、class、confidence |
+| `yolov8_decoder` | `/perception/object_detection/diagnostics` | `diagnostic_msgs/msg/DiagnosticArray` | Reliable / Volatile | decoder状態 |
+
+## Parameters
+
+class名、画像寸法、confidence、NMSなどの標準値は
+[`config/yolov8.param.yaml`](config/yolov8.param.yaml)にあります。信号用class構成は
+[`config/yolov8_signal.param.yaml`](config/yolov8_signal.param.yaml)で上書きします。
+
+## Assumptions / Known limits
+
+- NVIDIA GPU、Isaac ROS DNN image encoder、TensorRTを必要とします。
+- ONNX出力はNMS前のchannel-major float32 tensorを前提とします。
+- 標準topic名は一般物体用です。信号検出ではdetections topicを`/perception/signal/detections`へ変更します。
 
 ## モデル契約
 
@@ -57,3 +104,10 @@ bag解析は`Detection2DArray`を自動検出し、primary RGB画像へboxとラ
 SHA-256、閾値、入力サイズ、推論FPS、再生速度を保存します。同じbagを異なるモデルで解析する場合も、
 解析jobごとに独立したsidecarが生成されます。TensorRTを使うため、このoffline推論はJetsonまたは
 対応するNVIDIA GPUを割り当てたIsaac ROS環境で実行してください。
+
+## How to launch
+
+```bash
+ros2 launch jetpilot_object_detection yolov8_tensor_rt.launch.py \
+  model_root:=/workspaces/ros2_ws/models/yolov8/latest
+```

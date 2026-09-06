@@ -1,18 +1,37 @@
 # jetpilot_rtp_tools
 
+## Purpose
+
 ROS image topic を低遅延 RTP stream として UDP 送信する package です。Jetson では NVIDIA encoder、x86 では software encoder を自動選択し、remote monitor や実験用 receiver に映像を送れます。
 
-## Component
+## Nodes
 
-| Component | 役割 |
-| --- | --- |
-| `image_rtp_sender` | `sensor_msgs/msg/Image` を GStreamer pipeline に流し、RTP/UDP で送信する |
+| Node | Executable / Plugin | Description |
+| --- | --- | --- |
+| `image_rtp_sender` | `image_rtp_sender_node` / `jetpilot_rtp_tools::ImageRtpSenderComponent` | ImageをGStreamer RTP/UDP streamへ変換する |
 
-## Topic契約
+## Inputs / Outputs
 
-| 方向 | Topic | 型 | 用途 |
-| --- | --- | --- | --- |
-| input | `image_topic` parameter の値。既定 `/realsense/color/image_raw` | `sensor_msgs/msg/Image` | RTP 化する生画像 |
+### Input topics
+
+| Node | Name | Type | QoS | Description |
+| --- | --- | --- | --- | --- |
+| `image_rtp_sender` | `/realsense/color/image_raw` | `sensor_msgs/msg/Image` | Best Effort / Volatile | RTP化する標準image。`image_topic`で変更可能 |
+
+### Output topics
+
+なし。映像はROS topicではなくUDP/RTPで送信します。
+
+## Parameters
+
+送信先、port、codec、encoder、bitrate、GOP、MTUなどはlaunch引数または
+`jetpilot_system_launch/config/sensing/image_rtp_sender.param.yaml`で設定します。
+
+## Assumptions / Known limits
+
+- UDPの到達保証、再送、暗号化は行いません。
+- 対応入力encodingは`RGB8`、`BGR8`、`RGBA8`、`BGRA8`、`MONO8`です。
+- 実際に利用できるcodec/encoderは実行環境のGStreamer pluginに依存します。
 
 入力 QoS は `SensorDataQoS` + `KeepLast(1)` です。古い frame を溜めず、最新 frame を低遅延で送ることを優先します。
 
@@ -27,7 +46,7 @@ ROS image topic を低遅延 RTP stream として UDP 送信する package で�
 
 `codec` は `h264`、`h265`、`mjpeg`、`raw` を選べます。`encoder=auto` では H.264 は `nvv4l2h264enc`、`x264enc` の順、H.265 は `nvv4l2h265enc`、`x265enc` の順で存在確認します。queue は downstream leaky で、詰まったときに遅延を増やすより drop を選びます。
 
-## 起動
+## How to launch
 
 ```bash
 ros2 launch jetpilot_rtp_tools image_rtp_sender.launch.xml \

@@ -1,7 +1,52 @@
 # jetpilot_localization_manager
 
+## Purpose
+
 `jetpilot_localization_manager` coordinates saved-map localization between Isaac ROS Visual
 Global Localization (VGL), Isaac ROS Visual SLAM (VSLAM), RViz, joystick input, and the web UI.
+
+## Nodes
+
+| Node | Executable | Description |
+| --- | --- | --- |
+| `jetpilot_localization_manager_node` | `jetpilot_localization_manager_node` | VGL/VSLAM/manual pose hintの再測位状態を統括する |
+
+## Inputs / Outputs
+
+### Input topics
+
+| Node | Name | Type | QoS | Description |
+| --- | --- | --- | --- | --- |
+| `jetpilot_localization_manager_node` | `/visual_slam/trigger_hint` | `geometry_msgs/msg/PoseWithCovarianceStamped` | Reliable / Volatile | VSLAMからの再試行要求 |
+| `jetpilot_localization_manager_node` | `/initialpose` | `geometry_msgs/msg/PoseWithCovarianceStamped` | Reliable / Volatile | RViz/UIからのmanual pose |
+| `jetpilot_localization_manager_node` | `/visual_localization/pose` | `geometry_msgs/msg/PoseWithCovarianceStamped` | Reliable / Volatile | VGL推定pose |
+| `jetpilot_localization_manager_node` | `/localization/trigger` | `std_msgs/msg/Bool` | Reliable / Volatile | joystickからの再測位trigger |
+| `jetpilot_localization_manager_node` | `/localization/vslam/diagnostics` | `diagnostic_msgs/msg/DiagnosticArray` | Reliable / Volatile | VSLAMのlocalization状態 |
+
+### Output topics
+
+| Node | Name | Type | QoS | Description |
+| --- | --- | --- | --- | --- |
+| `jetpilot_localization_manager_node` | `/localization/pose_hint` | `geometry_msgs/msg/PoseWithCovarianceStamped` | Reliable / Volatile | 検証済みVSLAM pose hint |
+| `jetpilot_localization_manager_node` | `/localization/pose_hint_required` | `std_msgs/msg/Bool` | Reliable / Transient Local | manual hintが必要かを示すUI状態 |
+| `jetpilot_localization_manager_node` | `/localization/pose_hint_state` | `std_msgs/msg/String` | Reliable / Transient Local | 再測位state machineのJSON状態 |
+
+### Services
+
+| Node | Name | Type | Direction | Description |
+| --- | --- | --- | --- | --- |
+| `jetpilot_localization_manager_node` | `/visual_localization/trigger_localization` | `std_srvs/srv/Trigger` | Client | VGL推定を要求する |
+| `jetpilot_localization_manager_node` | `/localization/relocalize` | `std_srvs/srv/Trigger` | Server | UI/CLIから再測位を開始する |
+
+## Parameters
+
+pose検証、試行回数、timeout、backoff、topic/service名を設定します。標準値は
+[`config/localization_manager.param.yaml`](config/localization_manager.param.yaml)を参照してください。
+
+## Assumptions / Known limits
+
+- saved-map localizationにはVSLAM diagnosticsと、選択したmodeに応じてVGL mapまたはmanual poseが必要です。
+- Isaac ROSには進行中のorigin localizationをcancelする明確なAPIがないため、timeout後にstack再起動が必要な状態があります。
 
 ## Flow
 
@@ -36,27 +81,6 @@ map, autostart instead enters the manual `/initialpose` fallback immediately.
 
 Timeout and backoff deadlines use a steady clock, so they do not stall while simulated time is
 waiting for `/clock`.
-
-## External API
-
-| Type | Name | Message/service | Purpose |
-|---|---|---|---|
-| Subscribe | `/localization/trigger` | `std_msgs/msg/Bool` | A `true` value starts/restarts localization (joystick). |
-| Service | `/localization/relocalize` | `std_srvs/srv/Trigger` | Starts/restarts localization (web UI/CLI). |
-| Subscribe | `/initialpose` | `geometry_msgs/msg/PoseWithCovarianceStamped` | Manual fallback. |
-| Subscribe | `/localization/vslam/diagnostics` | `diagnostic_msgs/msg/DiagnosticArray` | VSLAM localization state. |
-| Publish | `/localization/pose_hint` | `geometry_msgs/msg/PoseWithCovarianceStamped` | Validated hint for VSLAM. |
-| Publish | `/localization/pose_hint_required` | `std_msgs/msg/Bool` | Latched UI indicator. |
-| Publish | `/localization/pose_hint_state` | `std_msgs/msg/String` | Latched JSON state for UI/diagnostics. |
-
-All names are parameters. Diagnostics use a VSLAM-specific topic to avoid collisions
-with other diagnostic publishers.
-
-Example request:
-
-```bash
-ros2 service call /localization/relocalize std_srvs/srv/Trigger '{}'
-```
 
 ## Status semantics
 
@@ -95,3 +119,13 @@ The unit tests cover frame, finite-number, quaternion, covariance, and timestamp
 `/localization/pose_hint_required` と `/localization/pose_hint_state` は reliable transient-local QoS です。UI、controller、後から起動した diagnostic node が最新状態をすぐ読めるようにしています。
 
 `/localization/trigger` は joystick 由来の edge trigger、`/localization/relocalize` は UI/CLI 由来の service trigger として扱います。どちらも同じ state machine に入り、進行中の request がある場合は新しい request として再開します。
+
+## How to launch
+
+通常は`jetpilot_system_launch`の`localization.launch.py`または`bringup.launch.py`から起動します。
+
+再測位をCLIから要求する場合:
+
+```bash
+ros2 service call /localization/relocalize std_srvs/srv/Trigger '{}'
+```

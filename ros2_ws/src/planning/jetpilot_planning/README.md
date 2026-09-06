@@ -1,23 +1,66 @@
 # jetpilot_planning
 
+## Purpose
+
 JetPilotの経路選択を担当する、C++ / `ament_cmake_auto` の最小planning基盤です。HD Map publisherが出すprimary centerlineをそのままcontrollerへ渡せる一方、将来のraceline、shortcut、信号条件、障害物回避経路を同じ契約で追加できます。
 
-## Topic契約
+## Nodes
 
-| 方向 | Topic | 型 | 用途 |
-| --- | --- | --- | --- |
-| input | `/hd_map/primary_centerline_path` | `nav_msgs/msg/Path` | デフォルト経路 |
-| input | `/planning/requested_lane` | `std_msgs/msg/String` | 条件判定moduleからのlane要求。空文字で解除 |
-| input | `/localization/current_section` | `std_msgs/msg/String` | sectionに基づくlaneルール |
-| candidate | `/planning/raceline_path` | `nav_msgs/msg/Path` | CSVから読み込んだraceline候補 |
-| candidate | `/planning/raceline_trajectory` | `jetpilot_msgs/msg/Trajectory` | racelineのgeometry + `vx/ax` |
-| candidate | `/planning/custom_trajectory` | `jetpilot_msgs/msg/Trajectory` | 名前付きcustom line + custom speed |
-| output | `/planning/trajectory` | `nav_msgs/msg/Path` | controllerが追従する選択済み経路 |
-| output | `/planning/trajectory_profile` | `jetpilot_msgs/msg/Trajectory` | 選択済みtyped trajectory。legacy Path選択時は空 |
-| output | `/planning/target_speed` | `std_msgs/msg/Float32` | 選択laneの目標速度（m/s） |
-| output | `/planning/selected_lane` | `std_msgs/msg/String` | 選択中lane ID。未ready時は空文字 |
-| output | `/planning/ready` | `std_msgs/msg/Bool` | controllerの実行可否 |
-| output | `/planning/diagnostics` | `diagnostic_msgs/msg/DiagnosticArray` | 選択理由・不足path |
+| Node | Executable | Description |
+| --- | --- | --- |
+| `route_lane_selector_node` | `route_lane_selector_node` | 候補経路から要求・section規則に一致する経路を選択する |
+| `competition_route_lane_selector_node` | `route_lane_selector_node` | 競技構成で`/planning/route/*`へ候補bundleを出力する |
+| `raceline_path_publisher` | `raceline_path_publisher_node` | 検証済みCSVからPathとtyped trajectoryをpublishする |
+| `custom_line_path_publisher` | `raceline_path_publisher_node` | custom line CSVを同じloaderでpublishする |
+
+## Inputs / Outputs
+
+### Input topics
+
+| Node | Name | Type | QoS | Description |
+| --- | --- | --- | --- | --- |
+| `route_lane_selector_node` | `/hd_map/primary_centerline_path` | `nav_msgs/msg/Path` | Reliable / Transient Local | 標準primary経路候補 |
+| `route_lane_selector_node` | `/planning/raceline_trajectory` | `jetpilot_msgs/msg/Trajectory` | Reliable / Transient Local | raceline候補。profile構成時に使用 |
+| `route_lane_selector_node` | `/planning/custom_trajectory` | `jetpilot_msgs/msg/Trajectory` | Reliable / Transient Local | custom line候補。custom構成時に使用 |
+| `route_lane_selector_node` | `/planning/requested_lane` | `std_msgs/msg/String` | Reliable / Volatile | lane要求lease |
+| `route_lane_selector_node` | `/localization/current_section` | `std_msgs/msg/String` | Reliable / Volatile | section lane規則の入力 |
+| `competition_route_lane_selector_node` | `/hd_map/primary_centerline_path` | `nav_msgs/msg/Path` | Reliable / Transient Local | 競技routeの標準候補。追加候補はMap設定で指定 |
+| `competition_route_lane_selector_node` | `/planning/requested_lane` | `std_msgs/msg/String` | Reliable / Volatile | planning managerからのlane要求 |
+| `competition_route_lane_selector_node` | `/localization/current_section` | `std_msgs/msg/String` | Reliable / Volatile | section lane規則の入力 |
+
+### Output topics
+
+| Node | Name | Type | QoS | Description |
+| --- | --- | --- | --- | --- |
+| `route_lane_selector_node` | `/planning/trajectory` | `nav_msgs/msg/Path` | Reliable / Transient Local | 選択済みlegacy Path |
+| `route_lane_selector_node` | `/planning/trajectory_profile` | `jetpilot_msgs/msg/Trajectory` | Reliable / Transient Local | 選択済みtyped trajectory |
+| `route_lane_selector_node` | `/planning/target_speed` | `std_msgs/msg/Float32` | Reliable / Transient Local | 選択laneの速度上限 [m/s] |
+| `route_lane_selector_node` | `/planning/selected_lane` | `std_msgs/msg/String` | Reliable / Transient Local | 選択中lane ID |
+| `route_lane_selector_node` | `/planning/ready` | `std_msgs/msg/Bool` | Reliable / Transient Local | 経路bundleの有効状態 |
+| `route_lane_selector_node` | `/planning/diagnostics` | `diagnostic_msgs/msg/DiagnosticArray` | Reliable / Volatile | 選択理由と不正入力 |
+| `competition_route_lane_selector_node` | `/planning/route/trajectory` | `nav_msgs/msg/Path` | Reliable / Transient Local | manager向け候補Path |
+| `competition_route_lane_selector_node` | `/planning/route/trajectory_profile` | `jetpilot_msgs/msg/Trajectory` | Reliable / Transient Local | manager向けtyped候補 |
+| `competition_route_lane_selector_node` | `/planning/route/target_speed` | `std_msgs/msg/Float32` | Reliable / Transient Local | manager向け速度上限 |
+| `competition_route_lane_selector_node` | `/planning/route/selected_lane` | `std_msgs/msg/String` | Reliable / Transient Local | manager向け選択lane ID |
+| `competition_route_lane_selector_node` | `/planning/route/ready` | `std_msgs/msg/Bool` | Reliable / Transient Local | manager向けroute ready |
+| `competition_route_lane_selector_node` | `/planning/route/diagnostics` | `diagnostic_msgs/msg/DiagnosticArray` | Reliable / Volatile | managerが世代照合するdiagnostics |
+| `raceline_path_publisher` | `/planning/raceline_path` | `nav_msgs/msg/Path` | Reliable / Transient Local | CSV由来legacy Path |
+| `raceline_path_publisher` | `/planning/raceline_trajectory` | `jetpilot_msgs/msg/Trajectory` | Reliable / Transient Local | CSV由来geometryと速度profile |
+| `custom_line_path_publisher` | `/planning/custom_path` | `nav_msgs/msg/Path` | Reliable / Transient Local | custom lineのlegacy Path |
+| `custom_line_path_publisher` | `/planning/custom_trajectory` | `jetpilot_msgs/msg/Trajectory` | Reliable / Transient Local | custom lineのgeometryと速度profile |
+
+## Parameters
+
+selectorの候補topic、lane ID、速度上限、watchdogと出力topicは
+[`config/route_lane_selector.param.yaml`](config/route_lane_selector.param.yaml)で定義します。
+raceline publisherのファイル検証と出力設定は
+[`config/raceline_path_publisher.param.yaml`](config/raceline_path_publisher.param.yaml)を参照してください。
+
+## Assumptions / Known limits
+
+- 候補配列`lane_ids`、`lane_path_topics`、`lane_trajectory_topics`、`lane_target_speeds_mps`の長さは一致させます。
+- 認識や経路生成は担当せず、受信済み候補の検証と選択だけを行います。
+- 通常selectorと競技planning managerは同じ最終`/planning/*`を出すため同時に使用しません。
 
 入力pathと出力trajectoryはreliable + transient-localです。出力は入力pathのframe（通常`map`）を維持し、各Poseのframeとstampを揃えます。選択可能なpathが無い場合は、古いlatched trajectoryを無効化するため空の`Path`、`target_speed=0`、`ready=false`をpublishします。controllerはこの状態で停止する必要があります。
 
@@ -37,7 +80,7 @@ refreshされなければ停止します。障害物・信号selector自体を�
 `section_lane_rules`を設定した場合、`/localization/current_section`も自動的にwatchdog対象となり、
 timeoutまたは`unknown`では停止します。
 
-## 起動
+## How to launch
 
 ```bash
 ros2 launch jetpilot_planning jetpilot_planning.launch.xml

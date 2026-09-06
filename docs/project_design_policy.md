@@ -418,7 +418,8 @@ sensor kit packageへ置く。
 
 ## Documentation方針
 
-新規packageにはREADMEを置き、少なくとも次を記載する。
+新規packageにはREADMEを置き、[ROS package README guideline](ros_package_readme_guideline.md)の
+共通見出しとtable形式を使用する。少なくとも次を記載する。
 
 - packageの責務と責務外
 - node、input/output topic、message型、QoS
@@ -430,7 +431,16 @@ sensor kit packageへ置く。
 - build方法とtest方法
 
 共通契約を変更した場合は、実装packageのREADMEだけでなく、対応する`docs/`の設計文書も
-同時に更新する。
+同時に更新する。topic契約を変更した場合は、README更新後に次を実行して静的なシステム図を更新する。
+
+```bash
+python3 scripts/generate_topic_graph.py
+python3 scripts/generate_topic_graph.py --check
+```
+
+生成される[`topic_graph.md`](topic_graph.md)は、実行中のROS graphではなく全`jetpilot_*` packageの
+READMEを入力とする。したがって、launch前のreviewでもpublisher、subscriber、型の接続と未接続topicを
+確認できる。実行時remapやconditionを含む最終確認を置き換えるものではない。
 
 ## 新規ROS 2 packageのチェックリスト
 
@@ -449,6 +459,7 @@ sensor kit packageへ置く。
 - unit testまたはlaunch testを追加した
 - system bringupへ追加する場合も安全側を既定値にした
 - READMEと関連する設計文書を更新した
+- READMEのtopic tableから`docs/topic_graph.md`を再生成し、`--check`が成功した
 
 ## 関連設計文書
 
@@ -459,5 +470,7 @@ sensor kit packageへ置く。
 - [Isaac ROS Launch Guidelines](isaac_ros_launch_guidelines.md)
 - [Control QoS Notes](control_qos.md)
 - [rosbag Replay Safety](rosbag_replay_safety.md)
+- [ROS package README guideline](ros_package_readme_guideline.md)
+- [JetPilot topic graph](topic_graph.md)
 - [`jetpilot_system_launch` README](../ros2_ws/src/launch/jetpilot_system_launch/README.md)
 - [`jetpilot_msgs` README](../ros2_ws/src/common/jetpilot_msgs/README.md)

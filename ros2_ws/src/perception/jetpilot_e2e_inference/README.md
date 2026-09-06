@@ -1,10 +1,61 @@
 # jetpilot_e2e_inference
 
+## Purpose
+
 JetPilotの画像ベースE2E制御・trajectory推論用ROS 2パイプラインです。
 
 TensorRT経路に加えて、`sensor_msgs/Image`を直接受信するPyTorch経路を
 提供します。PyTorch経路はIsaac ROS、NITROS、TensorRTを使用せず、CPUを
 既定deviceとして起動します。
+
+## Nodes
+
+| Node | Provider | Description |
+| --- | --- | --- |
+| `e2e_pytorch_inference` | `jetpilot_e2e_inference` | ROS ImageからPyTorchで制御指令を推論する |
+| `e2e_image_encoder` | `isaac_ros_dnn_image_encoder` | ImageをTensorRT入力tensorへ変換する |
+| `e2e_tensor_rt` | `isaac_ros_tensor_rt` | ONNX/TensorRT engineを実行する |
+| `e2e_control_decoder` | `jetpilot_e2e_inference` | tensorを正規化制御指令へ変換する |
+| `e2e_trajectory_decoder` | `jetpilot_e2e_inference` | tensorをtrajectory、速度、readyへ変換する |
+
+## Inputs / Outputs
+
+### Input topics
+
+| Node | Name | Type | QoS | Description |
+| --- | --- | --- | --- | --- |
+| `e2e_pytorch_inference` | `/realsense/color/image_raw` | `sensor_msgs/msg/Image` | Best Effort / Volatile | PyTorch経路の標準camera入力 |
+| `e2e_image_encoder` | `/realsense/color/image_raw` | `sensor_msgs/msg/Image` | Best Effort / Volatile | TensorRT経路のcamera入力 |
+| `e2e_image_encoder` | `/realsense/color/camera_info` | `sensor_msgs/msg/CameraInfo` | Best Effort / Volatile | camera calibration |
+| `e2e_tensor_rt` | `/e2e/tensor_input` | `isaac_ros_tensor_list_interfaces/msg/TensorList` | Best Effort / Volatile | encoder出力tensor |
+| `e2e_control_decoder` | `/e2e/tensor_output` | `isaac_ros_tensor_list_interfaces/msg/TensorList` | Reliable / Volatile | control model出力tensor |
+| `e2e_trajectory_decoder` | `/e2e/tensor_output` | `isaac_ros_tensor_list_interfaces/msg/TensorList` | Reliable / Volatile | trajectory model出力tensor |
+
+### Output topics
+
+| Node | Name | Type | QoS | Description |
+| --- | --- | --- | --- | --- |
+| `e2e_pytorch_inference` | `/auto/control_cmd` | `jetpilot_msgs/msg/ControlCommand` | Reliable / Volatile | PyTorch direct control出力 |
+| `e2e_image_encoder` | `/e2e/tensor_input` | `isaac_ros_tensor_list_interfaces/msg/TensorList` | Best Effort / Volatile | 前処理済み入力tensor |
+| `e2e_tensor_rt` | `/e2e/tensor_output` | `isaac_ros_tensor_list_interfaces/msg/TensorList` | Reliable / Volatile | TensorRT推論出力 |
+| `e2e_control_decoder` | `/auto/control_cmd` | `jetpilot_msgs/msg/ControlCommand` | Reliable / Volatile | TensorRT direct control出力 |
+| `e2e_control_decoder` | `/e2e/diagnostics` | `diagnostic_msgs/msg/DiagnosticArray` | Reliable / Volatile | 推論deadlineとdecoder状態 |
+| `e2e_trajectory_decoder` | `/planning/trajectory` | `nav_msgs/msg/Path` | Reliable / Transient Local | `base_link`上の予測trajectory |
+| `e2e_trajectory_decoder` | `/planning/target_speed` | `std_msgs/msg/Float32` | Reliable / Transient Local | trajectory modeの目標速度 |
+| `e2e_trajectory_decoder` | `/planning/ready` | `std_msgs/msg/Bool` | Reliable / Transient Local | trajectory出力の有効状態 |
+
+## Parameters
+
+TensorRT control decoder、trajectory decoder、PyTorch経路の標準値は、それぞれ
+[`config/e2e_inference.param.yaml`](config/e2e_inference.param.yaml)、
+[`config/e2e_trajectory.param.yaml`](config/e2e_trajectory.param.yaml)、
+[`config/e2e_pytorch.param.yaml`](config/e2e_pytorch.param.yaml)を参照してください。
+
+## Assumptions / Known limits
+
+- online TensorRT trajectory経路は単一画像・IMUなしのmodelを前提とします。
+- control decoderとtrajectory decoderは同じrunではどちらか一方だけを起動します。
+- direct control modeは`jetpilot_controller`と同時に有効化できません。
 
 ## 実行構成
 
@@ -72,7 +123,7 @@ cp /path/to/checkpoints/best.pt \
 追加で`torchvision`が必要です。TorchScriptファイルも`model_format:=auto`または
 `model_format:=torchscript`で読み込めます。
 
-## 起動
+## How to launch
 
 Jetson上でTensorRT engineを生成:
 

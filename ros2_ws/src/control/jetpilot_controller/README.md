@@ -1,28 +1,63 @@
 # jetpilot_controller
 
+## Purpose
+
 JetPilotの経路追従controllerです。初期アルゴリズムとしてPure Pursuitを実装し、既存の
 operation command muxを通してPCA9685/VESCのどちらにも同じ正規化指令を送ります。
 
-## Interface
+## Nodes
 
-| Direction | Topic | Type | Meaning |
-| --- | --- | --- | --- |
-| input | `/planning/trajectory` | `nav_msgs/msg/Path` | `map`等で表現された追従経路 |
-| input | `/planning/trajectory_profile` | `jetpilot_msgs/msg/Trajectory` | 任意。名前付きlineのgeometry、`vx/ax`、ID/hash |
-| input | `/planning/target_speed` | `std_msgs/msg/Float32` | plannerが選択した前進速度 [m/s] |
-| input | `/planning/ready` | `std_msgs/msg/Bool` | plannerの経路選択が有効か |
-| input | `/localization/pose_hint_state` | `std_msgs/msg/String` | managerのconfirmed `localized`状態 |
-| input | `/visual_slam/tracking/odometry` | `nav_msgs/msg/Odometry` | 速度と自己位置系の生存確認 |
-| input | `/perception/opponent/odometry` | `nav_msgs/msg/Odometry` | 任意。trailing有効時の相手車両pose/速度 |
-| output | `/auto/control_cmd` | `jetpilot_msgs/msg/ControlCommand` | 正規化steer/throttle/brake |
-| output | `/controller/ready` | `std_msgs/msg/Bool` | 走行指令を生成できているか |
-| output | `/controller/lookahead_point` | `geometry_msgs/msg/PoseStamped` | `base_link`上の追従点 |
-| output | `/controller/tracking_markers` | `visualization_msgs/msg/MarkerArray` | 現在追従中の局所経路・最近傍点・追従点 |
-| output | `/controller/diagnostics` | `diagnostic_msgs/msg/DiagnosticArray` | 停止理由と制御値 |
+| Node | Executable | Description |
+| --- | --- | --- |
+| `path_tracking_controller_node` | `path_tracking_controller_node` | 経路・自己位置・速度制約から正規化車両指令を生成する |
+
+## Inputs / Outputs
+
+### Input topics
+
+| Node | Name | Type | QoS | Description |
+| --- | --- | --- | --- | --- |
+| `path_tracking_controller_node` | `/planning/trajectory` | `nav_msgs/msg/Path` | Reliable / Transient Local | `map`等で表現された追従経路 |
+| `path_tracking_controller_node` | `/planning/trajectory_profile` | `jetpilot_msgs/msg/Trajectory` | Reliable / Transient Local | 任意の名前付きlineと速度profile |
+| `path_tracking_controller_node` | `/planning/target_speed` | `std_msgs/msg/Float32` | Reliable / Transient Local | plannerが選択した速度 [m/s] |
+| `path_tracking_controller_node` | `/planning/ready` | `std_msgs/msg/Bool` | Reliable / Transient Local | plannerの経路選択が有効か |
+| `path_tracking_controller_node` | `/planning/manager/status` | `jetpilot_msgs/msg/PlanningManagerStatus` | Reliable / Transient Local | 競技planningで選択中のline ID |
+| `path_tracking_controller_node` | `/localization/pose_hint_state` | `std_msgs/msg/String` | Reliable / Transient Local | localization managerの確定状態 |
+| `path_tracking_controller_node` | `/visual_slam/tracking/odometry` | `nav_msgs/msg/Odometry` | Best Effort / Volatile | 速度と自己位置系の生存確認 |
+| `path_tracking_controller_node` | `/perception/opponent/odometry` | `nav_msgs/msg/Odometry` | Best Effort / Volatile | trailing有効時の相手車両pose/速度 |
+
+### Output topics
+
+| Node | Name | Type | QoS | Description |
+| --- | --- | --- | --- | --- |
+| `path_tracking_controller_node` | `/auto/control_cmd` | `jetpilot_msgs/msg/ControlCommand` | Best Effort / Volatile | 正規化steering/throttle/brake/reverse |
+| `path_tracking_controller_node` | `/controller/ready` | `std_msgs/msg/Bool` | Reliable / Transient Local | 走行指令を生成できているか |
+| `path_tracking_controller_node` | `/controller/lookahead_point` | `geometry_msgs/msg/PoseStamped` | Best Effort / Volatile | `base_link`上の追従点 |
+| `path_tracking_controller_node` | `/controller/tracking_markers` | `visualization_msgs/msg/MarkerArray` | Best Effort / Volatile | 局所経路・最近傍点・追従点 |
+| `path_tracking_controller_node` | `/controller/diagnostics` | `diagnostic_msgs/msg/DiagnosticArray` | Reliable / Volatile | 停止理由と制御値 |
+
+### TF
+
+| Node | Parent | Child | Mode | Description |
+| --- | --- | --- | --- | --- |
+| `path_tracking_controller_node` | trajectory frame | `base_link` | Lookup | trajectoryを制御座標へ変換する |
 
 plannerのPath frameから`base_link`へのTFが必要です。通常はlocalizationが`map -> odom`、
 VSLAMが`odom -> base_link`を供給します。
 plannerの標準publish周期は10 Hzで、controllerの0.5秒watchdogへheartbeatも兼ねます。
+
+## Parameters
+
+主要parameterは`algorithm`、各入力timeout、`wheelbase_m`、lookahead、操舵上限、速度PID、
+feed-forward、trailing設定です。完全な標準値と説明は
+[`config/controller.param.yaml`](config/controller.param.yaml)を参照してください。車両固有の
+feed-forwardは追加parameter fileで後段から上書きします。
+
+## Assumptions / Known limits
+
+- trajectoryのframeから`base_link`への最新TFが必要です。
+- E2E direct controlと同時に有効化できません。どちらも`/auto/control_cmd`をpublishします。
+- `kinematic_mpc`は操舵だけを最適化するkinematic bicycle modelです。
 
 ## Foxglove tracking visualization
 
@@ -47,7 +82,7 @@ topicだけを通信許可しており、camera/image topicは追加しません
 currentやPCA9685 ESCの逆転制動を実車で確認した後にだけ増やしてください。command muxと車両
 driver側にも独立したcommand timeoutがあります。
 
-## Run
+## How to launch
 
 ```bash
 ros2 launch jetpilot_controller jetpilot_controller.launch.xml
@@ -109,6 +144,6 @@ Pure Pursuitがtrajectoryを追従し、trailingは縦方向の速度上限だ�
 相手車両が自車より前方にいない、`trailing_max_gap_m`より遠い、またはodometryがtimeoutした場合は
 trailingを解除し、planningのtarget speedへ戻ります。閉路ではtrajectory長でgapをwrapします。
 相手odometryのframeは`base_frame`またはTFで`base_frame`へ変換できるframeにしてください。
-# 後退軌道
+## Reverse trajectories
 
 `jetpilot_msgs/Trajectory.motion_direction=MOTION_REVERSE` の場合、軌道形状を後退運動座標へ変換してステアを計算し、縦制御出力を `throttle` ではなく `reverse` に出力する。速度プロファイル値そのものは前進時と同様に正の m/s で記述する。

@@ -1,5 +1,7 @@
 # jetpilot_hdmap_publisher
 
+## Purpose
+
 Editable local HD map YAML から runtime 用の lane 表示と primary centerline path を publish します。
 landmarks raster は HD map 作成時の下絵であり、この node は通常走行時に VSLAM
 landmarks topic を必要としません。現在の VSLAM/HD map 実験フローでは VSLAM も
@@ -8,18 +10,45 @@ HD map も `map` frame を使います。
 ROS package と Python module の名前は `jetpilot_hdmap_publisher` です。
 既存 launch 設定との互換性のため、launch file、executable、node 名は従来名を維持しています。
 
-## Topics
+## Nodes
 
-- `/hd_map/lane_markers` (`visualization_msgs/msg/MarkerArray`)
-  - lane ごとの `left_bound` / `right_bound` / `centerline`
-- `/hd_map/section_markers` (`visualization_msgs/msg/MarkerArray`)
-  - section gate、section span、速度 override label
-- `/hd_map/primary_centerline_path` (`nav_msgs/msg/Path`)
-  - `primary_lane_id` の centerline
-- `/localization/current_section` (`std_msgs/msg/String`)
-  - `run_section_localizer:=true` のとき、`map -> base_link` TF から現在 section を publish
-- `/localization/current_section_marker` (`visualization_msgs/msg/Marker`)
-  - 現在 section の highlight
+| Node | Executable | Description |
+| --- | --- | --- |
+| `hd_map_publisher_node` | `hd_map_publisher_node.py` | HD map YAMLを可視化marker、経路、Junctionへ変換する |
+| `hd_map_section_localizer_node` | `hd_map_section_localizer_node.py` | TF上の車両位置から現在sectionを推定する |
+
+## Inputs / Outputs
+
+### Input topics
+
+なし。section localizerはtopicではなくTFを参照します。
+
+### Output topics
+
+| Node | Name | Type | QoS | Description |
+| --- | --- | --- | --- | --- |
+| `hd_map_publisher_node` | `/hd_map/lane_markers` | `visualization_msgs/msg/MarkerArray` | Reliable / Transient Local | laneのboundaryとcenterline |
+| `hd_map_publisher_node` | `/hd_map/section_markers` | `visualization_msgs/msg/MarkerArray` | Reliable / Transient Local | section gate、span、速度label |
+| `hd_map_publisher_node` | `/hd_map/primary_centerline_path` | `nav_msgs/msg/Path` | Reliable / Transient Local | primary laneのcenterline |
+| `hd_map_publisher_node` | `/hd_map/junctions` | `jetpilot_msgs/msg/JunctionArray` | Reliable / Transient Local | signal区間と方向別laneの対応 |
+| `hd_map_section_localizer_node` | `/localization/current_section` | `std_msgs/msg/String` | Reliable / Transient Local | 現在section ID。推定不能時は`unknown` |
+| `hd_map_section_localizer_node` | `/localization/current_section_marker` | `visualization_msgs/msg/Marker` | Reliable / Transient Local | 現在sectionのhighlight |
+
+### TF
+
+| Node | Parent | Child | Mode | Description |
+| --- | --- | --- | --- | --- |
+| `hd_map_section_localizer_node` | `map` | `base_link` | Lookup | 現在sectionの推定に使用する |
+
+## Parameters
+
+map path、frame override、publish項目、更新周期などの標準値は
+[`config/hd_map_publisher.param.yaml`](config/hd_map_publisher.param.yaml)を参照してください。
+
+## Assumptions / Known limits
+
+HD mapとlocalizationは同じworld frame（標準は`map`）を使用する必要があります。このpackageは
+経路選択、障害物回避、制御を担当しません。
 
 marker と path は YAML の `frame_id` を使います。必要なら
 `frame_id_override` parameter で上書きできます。
@@ -38,7 +67,7 @@ steady clockで HD map YAML の更新を確認します。Web Console などが�
 DELETEALLして新map・Junction・primary pathを即時再配信し、localizerは旧Sectionを`unknown`へ即時
 無効化します。保存途中や不正な YAML は採用せず、直前に正常読込みできた map を使い続けます。
 
-## Run
+## How to launch
 
 ```bash
 ros2 launch jetpilot_hdmap_publisher hd_map_publisher.launch.xml \

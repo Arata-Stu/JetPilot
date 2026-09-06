@@ -1,5 +1,7 @@
 # jetpilot_operation
 
+## Purpose
+
 JetPilot の operation mode と command mux を担当する package です。自律、手動、プロポ直結の各指令を直接 vehicle driver に流さず、mode と timeout を見て1本の `/vehicle/control_cmd` に絞ります。
 
 ## Nodes
@@ -9,16 +11,36 @@ JetPilot の operation mode と command mux を担当する package です。自
 | `operation_mode_manager_node` | `/operation_mode/request` を受け、現在 mode を `/operation_mode/state` として reliable + transient-local で配信する |
 | `command_mux_node` | mode に応じて `/auto/control_cmd`、`/teleop/control_cmd`、`/propo/control_cmd` から1つを選び `/vehicle/control_cmd` へ publish する |
 
-## Topic契約
+## Inputs / Outputs
 
-| 方向 | Topic | 型 | 用途 |
-| --- | --- | --- | --- |
-| input | `/operation_mode/request` | `jetpilot_msgs/msg/OperationModeRequest` | AUTO/MANUAL/STOP/PROPO の切替要求 |
-| output | `/operation_mode/state` | `jetpilot_msgs/msg/OperationModeState` | 現在 mode。遅れて起動した node も受け取れる latched state |
-| input | `/auto/control_cmd` | `jetpilot_msgs/msg/ControlCommand` | controller 由来の自律指令 |
-| input | `/teleop/control_cmd` | `jetpilot_msgs/msg/ControlCommand` | joystick 由来の手動指令 |
-| input | `/propo/control_cmd` | `jetpilot_msgs/msg/ControlCommand` | RC receiver 由来のプロポ指令 |
-| output | `/vehicle/control_cmd` | `jetpilot_msgs/msg/ControlCommand` | vehicle interface へ渡す選択済み指令 |
+### Input topics
+
+| Node | Name | Type | QoS | Description |
+| --- | --- | --- | --- | --- |
+| `operation_mode_manager_node` | `/operation_mode/request` | `jetpilot_msgs/msg/OperationModeRequest` | Reliable / Volatile | AUTO/MANUAL/STOP/PROPOの切替要求 |
+| `command_mux_node` | `/operation_mode/state` | `jetpilot_msgs/msg/OperationModeState` | Reliable / Transient Local | 現在mode |
+| `command_mux_node` | `/auto/control_cmd` | `jetpilot_msgs/msg/ControlCommand` | Best Effort / Volatile | controllerまたはE2Eの自律指令 |
+| `command_mux_node` | `/teleop/control_cmd` | `jetpilot_msgs/msg/ControlCommand` | Best Effort / Volatile | joystick手動指令 |
+| `command_mux_node` | `/propo/control_cmd` | `jetpilot_msgs/msg/ControlCommand` | Best Effort / Volatile | RC receiver由来の指令 |
+
+### Output topics
+
+| Node | Name | Type | QoS | Description |
+| --- | --- | --- | --- | --- |
+| `operation_mode_manager_node` | `/operation_mode/state` | `jetpilot_msgs/msg/OperationModeState` | Reliable / Transient Local | 現在modeと変更元 |
+| `command_mux_node` | `/vehicle/control_cmd` | `jetpilot_msgs/msg/ControlCommand` | Best Effort / Volatile | vehicle interfaceへ渡す選択済み指令 |
+
+## Parameters
+
+| Node | Main parameters | Configuration |
+| --- | --- | --- |
+| `operation_mode_manager_node` | `initial_mode` | [`config/operation.param.yaml`](config/operation.param.yaml) |
+| `command_mux_node` | `publish_rate_hz`, `command_timeout_s`, `control_authority` | [`config/operation.param.yaml`](config/operation.param.yaml) |
+
+## Assumptions / Known limits
+
+- command muxは1つだけ起動します。複数起動すると`/vehicle/control_cmd`が競合します。
+- `hardware_mux`構成のPROPOではJetson側から指令を出さず、hardware safety層へ制御権を残します。
 
 control command 系 topic は `KeepLast(1)` の best-effort QoS です。最新値だけを使い、古い指令を queue しません。operation state は reliable + transient-local で、起動順に依存しないようにしています。
 
@@ -33,7 +55,7 @@ control command 系 topic は `KeepLast(1)` の best-effort QoS です。最新�
 
 標準設定では `control_authority=hardware_mux` です。この場合 `PROPO` は Jetson の mux では出力せず、実車側の hardware mux に権限を残す想定です。`command_timeout_s` は通信途絶時の最終防衛線であり、vehicle driver 側にも独立した timeout を置きます。
 
-## 起動
+## How to launch
 
 ```bash
 ros2 launch jetpilot_operation jetpilot_operation.launch.xml
