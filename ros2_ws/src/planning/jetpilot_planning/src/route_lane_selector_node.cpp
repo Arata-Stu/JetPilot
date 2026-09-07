@@ -2,6 +2,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <iterator>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -175,8 +176,21 @@ RouteLaneSelectorNode::RouteLaneSelectorNode() : Node("route_lane_selector")
     declare_parameter<std::vector<std::string>>("lane_ids", std::vector<std::string>{"primary"});
   const auto lane_path_topics = declare_parameter<std::vector<std::string>>(
     "lane_path_topics", std::vector<std::string>{"/hd_map/primary_centerline_path"});
-  const auto lane_trajectory_topics = declare_parameter<std::vector<std::string>>(
+  auto lane_trajectory_topics = declare_parameter<std::vector<std::string>>(
     "lane_trajectory_topics", std::vector<std::string>(lane_ids.size(), ""));
+  const auto primary_trajectory_topic =
+    declare_parameter<std::string>("primary_trajectory_topic", "");
+  if (!primary_trajectory_topic.empty())
+  {
+    const auto primary = std::find(lane_ids.begin(), lane_ids.end(), "primary");
+    if (primary == lane_ids.end() || lane_trajectory_topics.size() != lane_ids.size())
+    {
+      throw std::invalid_argument("primary trajectory override requires a primary lane and matching topic arrays");
+    }
+    // Retain lane IDs, section rules and manager routing while substituting
+    // the primary driving geometry and its typed speed profile atomically.
+    lane_trajectory_topics[std::distance(lane_ids.begin(), primary)] = primary_trajectory_topic;
+  }
   const auto lane_target_speeds_mps =
     declare_parameter<std::vector<double>>("lane_target_speeds_mps", std::vector<double>{1.0});
   const auto default_lane_id = declare_parameter<std::string>("default_lane_id", "primary");

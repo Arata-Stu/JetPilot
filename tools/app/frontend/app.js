@@ -138,6 +138,7 @@ const state = {
     enabled: false,
     mapPath: "",
     activeField: "left_bound",
+    pointMode: "move",
     dirty: false,
     revision: 0,
     selected: null,
@@ -7098,12 +7099,17 @@ function renderHdMapEditor(detail) {
       </div>
       <div class="field-hint">${editor.drawingLane ? "進行方向に中心をクリックすると、指定幅で左右を同時に描きます。2点以上で描画完了。" : "ペアレーンは左右の同じ番号の点からcenterlineを生成します。境界の点追加・削除は反対側にも反映されます。分割はLeft / Rightを選び、端点以外をクリック。"}</div>
       <label class="layer-toggle"><input id="lane-manual-center" type="checkbox" ${lane.centerline_mode === "manual" ? "checked" : ""} onchange="setManualCenterline(this.checked)" ${editor.enabled ? "" : "disabled"} />Centerlineの手修正を保持</label>
-      <div class="field-hint">Centerlineを選び、クリックで追加・ドラッグで移動・右クリックで削除。手修正後は境界を動かしても保持されます。Auto Centerで自動生成に戻ります。</div>
+      <div class="field-hint">Centerlineも下のモードで追加・移動できます。手修正後は境界を動かしても保持されます。Auto Centerで自動生成に戻ります。</div>
       <div class="editor-field-row">
         ${editorFieldButton("left_bound", "Left boundary")}
         ${editorFieldButton("right_bound", "Right boundary")}
         ${editorFieldButton("centerline", "Centerline")}
       </div>
+      <div class="editor-field-row" role="group" aria-label="点の編集モード">
+        <button class="${editor.pointMode !== "add" ? "active" : ""}" aria-pressed="${editor.pointMode !== "add"}" onclick="setMapEditorPointMode('move')" ${editor.enabled && !editor.drawingLane ? "" : "disabled"}>点を移動</button>
+        <button class="${editor.pointMode === "add" ? "active" : ""}" aria-pressed="${editor.pointMode === "add"}" onclick="setMapEditorPointMode('add')" ${editor.enabled && !editor.drawingLane ? "" : "disabled"}>点を追加</button>
+      </div>
+      <div class="field-hint">${editor.drawingLane ? "描画完了後は「点を移動」に切り替わります。" : editor.pointMode === "add" ? "選択した線をクリックして点を追加します。既存の点は動きません。ペア境界では反対側にも対応点を補間します。" : "Left / Rightを選び、既存の点をドラッグして片側だけ調整します。空白をクリックしても点は増えません。"} 点の削除は選択後にDelete Ptを押してください。</div>
       <div class="editor-assist-grid">
         <div class="field">
           <label for="map-editor-assist-range">Assist range (pts)</label>
@@ -9364,6 +9370,7 @@ function finishPairedLane() {
   if (activeEditorLane().left_bound.length < 2) return toast("2点以上をクリックしてください。Undoで作成を戻せます。", "error");
   rememberMapEditorState();
   state.mapEditor.drawingLane = false;
+  state.mapEditor.pointMode = "move";
   state.mapEditor.activeField = "left_bound";
   markMapEditorDirty();
   render();
@@ -9465,6 +9472,7 @@ function ensureMapEditor(detail, options = {}) {
       redoStack: [],
       dragSnapshot: null,
       drawingLane: false,
+      pointMode: "move",
     };
   }
   return state.mapEditor;
@@ -11110,7 +11118,17 @@ function setMapEditorField(field) {
   if (!MAP_EDITOR_FIELDS.includes(field)) return;
   state.mapEditor.activeField = field;
   state.mapEditor.selected = null;
+  state.mapEditor.dragging = null;
+  state.mapEditor.dragSnapshot = null;
   state.mapEditor.drawingLane = false;
+  render();
+}
+
+function setMapEditorPointMode(mode) {
+  if (!state.mapEditor.enabled || state.mapEditor.drawingLane || !["add", "move"].includes(mode)) return;
+  state.mapEditor.pointMode = mode;
+  state.mapEditor.dragging = null;
+  state.mapEditor.dragSnapshot = null;
   render();
 }
 
@@ -12012,12 +12030,16 @@ function handleMapEditorPointerDown(event) {
     return;
   }
   const nearest = nearestEditorPoint(detail, point, hitRadius);
+  state.mapEditor.dragging = null;
+  state.mapEditor.dragSnapshot = null;
   if (nearest) {
-    state.mapEditor.dragSnapshot = captureMapEditorSnapshot();
+    if (state.mapEditor.pointMode !== "add") {
+      state.mapEditor.dragSnapshot = captureMapEditorSnapshot();
+      state.mapEditor.dragging = nearest;
+    }
     state.mapEditor.activeField = nearest.field;
     state.mapEditor.selected = nearest;
-    state.mapEditor.dragging = nearest;
-  } else {
+  } else if (state.mapEditor.pointMode === "add") {
     const world = mapPixelToWorld(detail, canvas.width, canvas.height, point);
     if (!world) return;
     rememberMapEditorState();
@@ -12025,12 +12047,12 @@ function handleMapEditorPointerDown(event) {
     if (field === "centerline") lane.centerline_mode = "manual";
     const index = insertEditorPoint(lane, field, world, detail, point);
     state.mapEditor.selected = { field, index };
-    state.mapEditor.dragging = { ...state.mapEditor.selected };
-    state.mapEditor.dragSnapshot = null;
     if (field !== "centerline") regenerateEditorCenterline(lane);
     markMapEditorDirty();
+  } else {
+    state.mapEditor.selected = null;
   }
-  if (canvas.setPointerCapture && event.pointerId != null) canvas.setPointerCapture(event.pointerId);
+  if (state.mapEditor.dragging && canvas.setPointerCapture && event.pointerId != null) canvas.setPointerCapture(event.pointerId);
   updateMapEditorChrome();
   drawMapPreview();
 }
@@ -12048,12 +12070,14 @@ function handleMapEditorPointerMove(event) {
   const detail = state.selectedMapDetail;
   const drag = state.mapEditor.dragging;
   if (!detail || !drag || !state.mapEditor.enabled || state.mapEditor.mapPath !== detail.map?.path) return;
+  if (state.mapEditor.pointMode === "add") return;
   event.preventDefault();
   const { canvas, point } = canvasEventInfo(event);
   const world = mapPixelToWorld(detail, canvas.width, canvas.height, point);
   if (!world) return;
   const lane = activeEditorLane();
   if (!lane[drag.field]?.[drag.index]) return;
+  if (pointDistance(lane[drag.field][drag.index], world) < 1e-9) return;
   if (state.mapEditor.dragSnapshot) {
     state.mapEditor.undoStack.push(state.mapEditor.dragSnapshot);
     if (state.mapEditor.undoStack.length > 200) state.mapEditor.undoStack.shift();
@@ -12216,7 +12240,7 @@ function handleMapEditorDoubleClick(event) {
   }
   if (!state.mapEditor.enabled) return;
   event.preventDefault();
-  deleteNearestEditorPoint(event);
+  // Point deletion is explicit via Delete Pt, never an accidental double-click.
 }
 
 function handleMapEditorContextMenu(event) {
@@ -12238,7 +12262,7 @@ function handleMapEditorContextMenu(event) {
   }
   if (!state.mapEditor.enabled) return;
   event.preventDefault();
-  deleteNearestEditorPoint(event);
+  // Keep canvas gestures limited to the selected add/move mode.
 }
 
 async function saveHdMapFromEditor() {

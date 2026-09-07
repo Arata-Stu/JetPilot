@@ -390,6 +390,7 @@ def generate_launch_description() -> lut.LaunchDescription:
         lu.get_path('jetpilot_planning', 'config/route_lane_selector.param.yaml'),
         cli=True)
     args.add_arg('enable_raceline_publisher', False, cli=True)
+    args.add_arg('competition_primary_trajectory_topic', '', cli=True)
     args.add_arg(
         'raceline_config_file',
         lu.get_path('jetpilot_planning', 'config/raceline_path_publisher.param.yaml'),
@@ -758,6 +759,26 @@ def generate_launch_description() -> lut.LaunchDescription:
             'launch/competition_planning.launch.xml',
             launch_arguments={
                 'route_config_file': args.competition_route_config_file,
+                'primary_trajectory_topic': args.competition_primary_trajectory_topic,
+                'enable_raceline_publisher': args.enable_raceline_publisher,
+                'raceline_config_file': args.raceline_config_file,
+                'raceline_root': args.raceline_root,
+                'raceline_csv': args.raceline_csv,
+                'raceline_path_topic': args.raceline_path_topic,
+                'raceline_trajectory_topic': args.raceline_trajectory_topic,
+                'raceline_line_id': args.raceline_line_id,
+                'raceline_line_name': args.raceline_line_name,
+                'raceline_source_hash': args.raceline_source_hash,
+                'raceline_closed': args.raceline_closed,
+                'enable_custom_trajectory_publisher': args.enable_custom_trajectory_publisher,
+                'custom_root': args.custom_root,
+                'custom_csv': args.custom_csv,
+                'custom_path_topic': args.custom_path_topic,
+                'custom_trajectory_topic': args.custom_trajectory_topic,
+                'custom_line_id': args.custom_line_id,
+                'custom_line_name': args.custom_line_name,
+                'custom_source_hash': args.custom_source_hash,
+                'custom_closed': args.custom_closed,
                 'manager_config_file': args.competition_manager_config_file,
                 'signal_config_file': args.competition_signal_config_file,
                 'recovery_config_file': args.competition_recovery_config_file,

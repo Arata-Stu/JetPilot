@@ -716,6 +716,11 @@ class HdMapPublisherNode(Node):
             pose.pose.orientation.z = math.sin(yaw / 2.0)
             pose.pose.orientation.w = math.cos(yaw / 2.0)
             path.poses.append(pose)
+        # nav_msgs/Path has no closed flag. Explicitly close the geometry so
+        # downstream legacy consumers retain the HD map's loop semantics,
+        # even when the last authored station is far from the first station.
+        if lane.closed_loop and len(path.poses) >= 3 and lane.centerline[-1] != lane.centerline[0]:
+            path.poses.append(path.poses[0])
         return path
 
 

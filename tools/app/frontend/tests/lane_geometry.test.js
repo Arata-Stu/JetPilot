@@ -81,6 +81,92 @@ function sectionEditorContext(closed = false) {
   if (closed) vm.runInContext(`Object.assign(activeEditorLane(), {closed_loop:true, ...LaneGeometry.fromSpine([[0,0],[4,0],[4,4],[0,4]], 1)});`, c);
   return c;
 }
+
+function pointerEditorContext() {
+  const c = sectionEditorContext();
+  vm.runInContext(`
+    state.sectionEditor.enabled = false;
+    mapEditorInteractionLocked = () => false;
+    mapEditorRasterReady = () => true;
+    canvasEventInfo = event => ({canvas:{width:200, height:200}, point:event.point, hitRadius:0.1});
+    mapPixelToWorld = (detail, width, height, point) => point;
+    nearestEditorPoint = (detail, point) => {
+      const field = state.mapEditor.activeField;
+      const index = activeEditorLane()[field].findIndex(p => pointDistance(p, point) < 0.1);
+      return index < 0 ? null : {field, index};
+    };
+    nearestEditorSegment = () => ({index:0});
+    globalThis.down = point => handleMapEditorPointerDown({point, button:0, preventDefault(){}});
+    globalThis.move = point => handleMapEditorPointerMove({point, preventDefault(){}});
+    globalThis.up = () => handleMapEditorPointerUp({});
+  `, c);
+  return c;
+}
+
+test('move mode ignores blank clicks and drags each boundary independently with undo', () => {
+  for (const field of ['left_bound', 'right_bound']) {
+    const c = pointerEditorContext();
+    vm.runInContext(`
+      setMapEditorField('${field}');
+      globalThis.before = JSON.stringify(cloneEditorLane(activeEditorLane()));
+      down([1,3]); move([1,4]); up();
+    `, c);
+    assert.equal(vm.runInContext('JSON.stringify(cloneEditorLane(activeEditorLane())) === before', c), true);
+    assert.equal(vm.runInContext('state.mapEditor.undoStack.length', c), 0);
+    const y = field === 'left_bound' ? 1 : -1;
+    vm.runInContext(`down([2,${y}]); move([2,${y * 2}]); up();`, c);
+    assert.equal(vm.runInContext(`activeEditorLane().${field}[1][1]`, c), y * 2);
+    const other = field === 'left_bound' ? 'right_bound' : 'left_bound';
+    assert.equal(vm.runInContext(`activeEditorLane().${other}[1][1]`, c), -y);
+    assert.equal(vm.runInContext('activeEditorLane().centerline[1][1]', c), y / 2);
+    vm.runInContext('undoMapEditor()', c);
+    assert.equal(vm.runInContext('JSON.stringify(activeEditorLane()) === before', c), true);
+    vm.runInContext('redoMapEditor()', c);
+    assert.equal(vm.runInContext(`activeEditorLane().${field}[1][1]`, c), y * 2);
+  }
+});
+
+test('add mode inserts a paired station but never drags existing or new points', () => {
+  const c = pointerEditorContext();
+  vm.runInContext(`setMapEditorPointMode('add'); down([2,1]); move([2,3]); up();`, c);
+  assert.equal(vm.runInContext('activeEditorLane().left_bound[1][1]', c), 1);
+  assert.equal(vm.runInContext('state.mapEditor.undoStack.length', c), 0);
+  vm.runInContext('down([1,1.5]); move([1,4]); up();', c);
+  assert.equal(vm.runInContext('activeEditorLane().left_bound.length', c), 4);
+  assert.equal(vm.runInContext('activeEditorLane().right_bound.length', c), 4);
+  assert.equal(vm.runInContext('activeEditorLane().left_bound[1][1]', c), 1.5);
+  vm.runInContext('undoMapEditor()', c);
+  assert.equal(vm.runInContext('activeEditorLane().left_bound.length', c), 3);
+});
+
+test('canvas double-click and right-click do not delete lane points in either mode', () => {
+  for (const mode of ['move', 'add']) {
+    const c = pointerEditorContext();
+    vm.runInContext(`
+      setMapEditorPointMode('${mode}');
+      down([2,1]); up(); down([2,1]); up();
+      handleMapEditorDoubleClick({point:[2,1], preventDefault(){}});
+      handleMapEditorContextMenu({point:[2,1], preventDefault(){}});
+    `, c);
+    assert.equal(vm.runInContext('activeEditorLane().left_bound.length', c), 3);
+    vm.runInContext('deleteSelectedEditorPoint()', c);
+    assert.equal(vm.runInContext('activeEditorLane().left_bound.length', c), 2);
+  }
+});
+
+test('finishing paired drawing switches to move and changing mode cancels a drag', () => {
+  const c = pointerEditorContext();
+  vm.runInContext(`state.mapEditor.drawingLane = true; state.mapEditor.pointMode = 'add'; finishPairedLane();`, c);
+  assert.equal(vm.runInContext('state.mapEditor.pointMode', c), 'move');
+  vm.runInContext(`down([2,1]); setMapEditorPointMode('add'); move([2,3]); up();`, c);
+  assert.equal(vm.runInContext('activeEditorLane().left_bound[1][1]', c), 1);
+});
+
+test('manual centerline is preserved when a boundary moves', () => {
+  const c = pointerEditorContext();
+  vm.runInContext(`setManualCenterline(true); down([2,1]); move([2,2]); up();`, c);
+  assert.equal(vm.runInContext('activeEditorLane().centerline[1][1]', c), 0);
+});
 test('new unsaved map can explicitly define one section before its first YAML save', () => {
   for (const closed of [false, true]) {
     const c = sectionEditorContext(closed);

@@ -27,6 +27,27 @@ Inside the JetPilot Docker workspace:
 この設定は走行・bag再生用の起動設定です。`create_map.sh`のオフライン地図生成には
 引き継がれません。
 
+保存地図で自己位置推定する構成では、TUIの「初期位置の決め方」で次を選択できます。
+
+- **VGL**：画像から初期位置を推定します。
+- **Foxglove**：VGLを無効にして、Foxgloveから`/initialpose`へ送る初期位置を使用します。
+- **地図原点**：保存地図の原点から開始します。
+
+`--localization-init`や関連する`--set`の明示指定がある場合は選択を省略します。
+地図なしの計測・キャリブレーションではこの選択は表示しません。
+
+「走行ライン」では **現在の構成を維持 / Centerline / Raceline / Custom Line** を
+選択できます。RacelineとCustom Lineは選択したmap内のCSV候補、または手入力で指定します。
+既存の`--raceline`・`--custom-line`・走行ライン用の設定指定は優先します。
+ラインの選択によって制御や車両インターフェースを自動で有効にはしません。
+`competition`ではRaceline / Custom Lineを`primary`レーンの入力として差し替え、
+分岐のレーンID・Sectionルール・信号停止・復帰処理を維持します。
+Custom Lineの開閉設定は保存したメタデータ（または明示CLI設定）に従います。
+
+周回コースではHD Mapの`closed_loop: true`を使います。HD map publisherは周回の
+Centerline Pathの末尾に始点を補い、点間隔が30cmを超えても制御側が開いた経路と
+誤判定しないようにします。`stop_at_path_end`は無効化せず、開いた経路の終端停止は維持します。
+
 TUI で `realsense-silky` または `realsense-silky-flir` を選ぶと、起動確認の前に
 `SilkyEvCam bias file` の選択画面を表示します。
 `ros2_ws/src/launch/jetpilot_system_launch/config/sensing/silkyevcam/` 内の

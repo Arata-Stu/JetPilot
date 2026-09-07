@@ -516,9 +516,15 @@ configure_raceline() {
     [[ ! -L "$RACELINE_CSV" ]] || die "raceline CSV must not be a symbolic link: $RACELINE_CSV"
   fi
 
-  set_arg enable_planning true
+  if ! is_true "$(get_arg enable_competition_planning)"; then
+    set_arg enable_planning true
+  fi
   set_arg enable_raceline_publisher true
-  set_arg planning_param "$(raceline_selector_param)"
+  if is_true "$(get_arg enable_competition_planning)"; then
+    set_arg competition_primary_trajectory_topic /planning/raceline_trajectory
+  else
+    set_arg planning_param "$(raceline_selector_param)"
+  fi
   set_arg raceline_root "$(dirname -- "$RACELINE_CSV")"
   set_arg raceline_csv "$(basename -- "$RACELINE_CSV")"
 }
@@ -594,9 +600,15 @@ configure_custom_line() {
   [[ ! "$CUSTOM_LINE_NAME" =~ [[:cntrl:]] ]] \
     || die '--custom-line-name must not contain control characters'
 
-  set_arg enable_planning true
+  if ! is_true "$(get_arg enable_competition_planning)"; then
+    set_arg enable_planning true
+  fi
   set_arg enable_custom_trajectory_publisher true
-  set_arg planning_param "$(custom_line_selector_param)"
+  if is_true "$(get_arg enable_competition_planning)"; then
+    set_arg competition_primary_trajectory_topic /planning/custom_trajectory
+  else
+    set_arg planning_param "$(custom_line_selector_param)"
+  fi
   set_arg custom_root "$(dirname -- "$CUSTOM_LINE_CSV")"
   set_arg custom_csv "$(basename -- "$CUSTOM_LINE_CSV")"
   set_arg custom_line_id "$CUSTOM_LINE_ID"
@@ -796,6 +808,71 @@ configure_vslam_interactively() {
     'vo   ステレオ画像のみ' \
     'vio  ステレオ画像 + IMU（再生時はIMU収録済みbagが必要）')" || exit $?
   set_vslam_mode "${selection%%[[:space:]]*}"
+}
+
+configure_localization_init_interactively() {
+  [[ -z "$CLI_LOCALIZATION_INIT" ]] || return 0
+  is_true "$(get_arg enable_localization)" || return 0
+  is_true "$(get_arg enable_vslam)" || return 0
+  is_true "$(get_arg vslam_enable_slam)" || return 0
+  is_true "$(get_arg enable_localization_manager)" || return 0
+  [[ -z "$(get_arg vslam_save_map_folder_path 2>/dev/null || true)" ]] || return 0
+  local override selection
+  local options=('pose-hint  VGLで初期位置を推定' 'foxglove  FoxgloveからInitial Poseを送信' 'map-origin  保存した地図の原点から開始')
+  if ((${#EXTRA_LAUNCH_ARGS[@]} > 0)); then
+    for override in "${EXTRA_LAUNCH_ARGS[@]}"; do
+      case "$override" in
+        enable_vgl:=*|enable_foxglove:=*|vslam_localize_on_startup:=*) return 0 ;;
+      esac
+    done
+  fi
+  if [[ "$LOCALIZATION_INIT_MODE" == 'foxglove' ]]; then
+    options=('foxglove  FoxgloveからInitial Poseを送信' 'pose-hint  VGLで初期位置を推定' 'map-origin  保存した地図の原点から開始')
+  fi
+  selection="$(choose_one '初期位置の決め方' "${options[@]}")" || exit $?
+  set_localization_init_mode "${selection%%[[:space:]]*}"
+  if [[ "$LOCALIZATION_INIT_MODE" == 'pose-hint' ]]; then
+    set_arg enable_vgl true
+  fi
+}
+
+configure_driving_line_interactively() {
+  [[ -z "$RACELINE_CSV" && -z "$CUSTOM_LINE_CSV" ]] || return 0
+  [[ "$REQUIRES_RACELINE" != 'true' && "$REQUIRES_CUSTOM_LINE" != 'true' ]] || return 0
+  is_true "$(get_arg enable_e2e_inference)" && return 0
+  # Offer line selection for navigation presets and planning-only custom setups.
+  if ! is_true "$(get_arg enable_planning)" && ! is_true "$(get_arg enable_competition_planning)"; then
+    is_true "$(get_arg enable_localization)" || return 0
+    is_true "$(get_arg enable_localization_manager)" || return 0
+  fi
+  local override selection
+  if ((${#EXTRA_LAUNCH_ARGS[@]} > 0)); then
+    for override in "${EXTRA_LAUNCH_ARGS[@]}"; do
+      case "$override" in
+        planning_param:=*|competition_route_config_file:=*|competition_primary_trajectory_topic:=*|enable_planning:=*|enable_competition_planning:=*|enable_raceline_publisher:=*|enable_custom_trajectory_publisher:=*|raceline_*:=*|custom_*:=*) return 0 ;;
+      esac
+    done
+  fi
+  selection="$(choose_one '走行ライン' \
+    'current     現在の構成を維持' \
+    'centerline  HD MapのCenterline' \
+    'raceline    Raceline CSVを選択' \
+    'custom      Custom Lineを選択')" || exit $?
+  case "${selection%%[[:space:]]*}" in
+    current) return 0 ;;
+    centerline|raceline|custom)
+      set_arg enable_hd_map_publisher true
+      REQUIRES_MAP=true
+      if [[ -z "$MAP_DIR" ]]; then discover_map; fi
+      if ! is_true "$(get_arg enable_competition_planning)"; then
+        set_arg enable_planning true
+      fi
+      case "${selection%%[[:space:]]*}" in
+        raceline) REQUIRES_RACELINE=true ;;
+        custom) REQUIRES_CUSTOM_LINE=true; discover_custom_line ;;
+      esac
+      ;;
+  esac
 }
 
 enable_offline_replay_stack() {
@@ -1188,12 +1265,16 @@ apply_custom_component_token() {
       REQUIRES_MAP=true
       ;;
     raceline)
-      set_arg enable_planning true
+      if ! is_true "$(get_arg enable_competition_planning)"; then
+        set_arg enable_planning true
+      fi
       set_arg enable_raceline_publisher true
       REQUIRES_RACELINE=true
       ;;
     custom-line|custom-trajectory)
-      set_arg enable_planning true
+      if ! is_true "$(get_arg enable_competition_planning)"; then
+        set_arg enable_planning true
+      fi
       set_arg enable_custom_trajectory_publisher true
       REQUIRES_CUSTOM_LINE=true
       REQUIRES_MAP=true
@@ -1949,6 +2030,17 @@ print_summary() {
   printf '  operation    : %s\n' "$(get_arg enable_operation)"
   printf '  planning     : %s\n' "$(get_arg enable_planning)"
   printf '  competition  : %s\n' "$(get_arg enable_competition_planning)"
+  if is_true "$(get_arg enable_raceline_publisher)"; then
+    printf '  走行ライン   : Raceline\n'
+  elif is_true "$(get_arg enable_custom_trajectory_publisher)"; then
+    printf '  走行ライン   : Custom Line\n'
+  elif is_true "$(get_arg enable_competition_planning)"; then
+    printf '  走行ライン   : 競技ルート設定\n'
+  elif is_true "$(get_arg enable_planning)"; then
+    printf '  走行ライン   : Centerline / planning設定\n'
+  else
+    printf '  走行ライン   : 未使用\n'
+  fi
   printf '  raceline     : %s\n' "${RACELINE_CSV:-none}"
   printf '  custom line  : %s\n' "${CUSTOM_LINE_CSV:-none}"
   printf '  control      : %s\n' "$(get_arg enable_control)"
@@ -2178,6 +2270,9 @@ fi
 if [[ "$REQUIRES_ROSBAG" == 'true' && -z "$ROSBAG" && "$INTERACTIVE" == 'true' ]]; then
   discover_rosbag
 fi
+if [[ "$INTERACTIVE" == 'true' ]]; then
+  configure_driving_line_interactively
+fi
 if [[ "$REQUIRES_RACELINE" == 'true' && -z "$RACELINE_CSV" && "$INTERACTIVE" == 'true' ]]; then
   discover_raceline
 fi
@@ -2206,10 +2301,11 @@ if ((${#EXTRA_LAUNCH_ARGS[@]} > 0)); then
     parse_override "$override"
   done
 fi
-normalize_localization_init_mode
 if [[ "$INTERACTIVE" == 'true' ]]; then
+  configure_localization_init_interactively
   configure_vslam_interactively
 fi
+normalize_localization_init_mode
 normalize_vslam_mode
 if [[ "$INTERACTIVE" == 'true' ]]; then
   configure_silky_evcam_bias_interactively

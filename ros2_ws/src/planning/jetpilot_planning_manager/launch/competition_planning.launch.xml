@@ -4,10 +4,50 @@
   <arg name="signal_config_file" default="$(find-pkg-share jetpilot_signal_detection)/config/signal_detection.param.yaml"/>
   <arg name="recovery_config_file" default="$(find-pkg-share jetpilot_recovery_planner)/config/recovery_planner.param.yaml"/>
   <arg name="route_diagnostics_topic" default="/planning/route/diagnostics"/>
+  <arg name="primary_trajectory_topic" default=""/>
+  <arg name="raceline_config_file" default="$(find-pkg-share jetpilot_planning)/config/raceline_path_publisher.param.yaml"/>
+  <arg name="enable_raceline_publisher" default="false"/>
+  <arg name="enable_custom_trajectory_publisher" default="false"/>
+  <arg name="raceline_root" default=""/>
+  <arg name="raceline_csv" default=""/>
+  <arg name="raceline_path_topic" default="/planning/raceline_path"/>
+  <arg name="raceline_trajectory_topic" default="/planning/raceline_trajectory"/>
+  <arg name="raceline_line_id" default="raceline"/>
+  <arg name="raceline_line_name" default="Raceline"/>
+  <arg name="raceline_source_hash" default=""/>
+  <arg name="raceline_closed" default="true"/>
+  <arg name="custom_root" default=""/>
+  <arg name="custom_csv" default=""/>
+  <arg name="custom_path_topic" default="/planning/custom_path"/>
+  <arg name="custom_trajectory_topic" default="/planning/custom_trajectory"/>
+  <arg name="custom_line_id" default="custom"/>
+  <arg name="custom_line_name" default="Custom"/>
+  <arg name="custom_source_hash" default=""/>
+  <arg name="custom_closed" default="true"/>
   <arg name="use_sim_time" default="false"/>
 
   <include file="$(find-pkg-share jetpilot_planning)/launch/jetpilot_planning.launch.xml">
     <arg name="config_file" value="$(var route_config_file)"/>
+    <arg name="primary_trajectory_topic" value="$(var primary_trajectory_topic)"/>
+    <arg name="raceline_config_file" value="$(var raceline_config_file)"/>
+    <arg name="enable_raceline_publisher" value="$(var enable_raceline_publisher)"/>
+    <arg name="enable_custom_trajectory_publisher" value="$(var enable_custom_trajectory_publisher)"/>
+    <arg name="raceline_root" value="$(var raceline_root)"/>
+    <arg name="raceline_csv" value="$(var raceline_csv)"/>
+    <arg name="raceline_path_topic" value="$(var raceline_path_topic)"/>
+    <arg name="raceline_trajectory_topic" value="$(var raceline_trajectory_topic)"/>
+    <arg name="raceline_line_id" value="$(var raceline_line_id)"/>
+    <arg name="raceline_line_name" value="$(var raceline_line_name)"/>
+    <arg name="raceline_source_hash" value="$(var raceline_source_hash)"/>
+    <arg name="raceline_closed" value="$(var raceline_closed)"/>
+    <arg name="custom_root" value="$(var custom_root)"/>
+    <arg name="custom_csv" value="$(var custom_csv)"/>
+    <arg name="custom_path_topic" value="$(var custom_path_topic)"/>
+    <arg name="custom_trajectory_topic" value="$(var custom_trajectory_topic)"/>
+    <arg name="custom_line_id" value="$(var custom_line_id)"/>
+    <arg name="custom_line_name" value="$(var custom_line_name)"/>
+    <arg name="custom_source_hash" value="$(var custom_source_hash)"/>
+    <arg name="custom_closed" value="$(var custom_closed)"/>
     <arg name="diagnostics_topic" value="$(var route_diagnostics_topic)"/>
     <arg name="use_sim_time" value="$(var use_sim_time)"/>
   </include>

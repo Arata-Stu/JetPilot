@@ -1,5 +1,10 @@
 # jetpilot_planning
 
+`primary_trajectory_topic`を指定すると、`primary`レーンの入力を指定したtyped
+Trajectoryに差し替えます。レーンIDとSectionルールは維持し、形状・速度・周回設定を
+同じTrajectoryから取得します。`primary`がない設定や不整合な候補配列では起動を拒否します。
+`bringup.sh`の競技モードでは、走行ライン選択からこの設定を使用します。
+
 ## Purpose
 
 JetPilotの経路選択を担当する、C++ / `ament_cmake_auto` の最小planning基盤です。HD Map publisherが出すprimary centerlineをそのままcontrollerへ渡せる一方、将来のraceline、shortcut、信号条件、障害物回避経路を同じ契約で追加できます。
