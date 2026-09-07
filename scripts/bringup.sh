@@ -41,6 +41,7 @@ CLI_BAG_MANAGER=''
 CLI_SENSOR_KIT=''
 CLI_LOCALIZATION_INIT=''
 CLI_VSLAM_MODE=''
+FOXGLOVE_VSLAM_TEST=false
 LOCALIZATION_INIT_MODE='pose-hint'
 REQUIRES_MAP=false
 REQUIRES_ROSBAG=false
@@ -157,6 +158,8 @@ Options:
       --localization-init MODE
                         VSLAM initialization: pose-hint (default), foxglove, or map-origin
       --vslam-mode MODE VSLAM tracking: vo (default) or vio
+      --foxglove-vslam-test
+                        Temporarily enable Foxglove landmarks_cloud and VSLAM visualization
       --pose-hint      Alias for --localization-init pose-hint
       --no-pose-hint  Alias for --localization-init map-origin
       --components LIST
@@ -2236,6 +2239,7 @@ while (($# > 0)); do
       shift 2
       ;;
     --vslam-mode=*) CLI_VSLAM_MODE="${1#*=}"; shift ;;
+    --foxglove-vslam-test) FOXGLOVE_VSLAM_TEST=true; shift ;;
     --pose-hint) CLI_LOCALIZATION_INIT='pose-hint'; shift ;;
     --no-pose-hint|--map-origin) CLI_LOCALIZATION_INIT='map-origin'; shift ;;
     --components)
@@ -2374,6 +2378,25 @@ if [[ "$INTERACTIVE" == 'true' ]]; then
 fi
 normalize_localization_init_mode
 normalize_vslam_mode
+if [[ "$FOXGLOVE_VSLAM_TEST" == 'true' ]]; then
+  is_true "$(get_arg enable_localization)" && is_true "$(get_arg enable_vslam)" \
+    || die '--foxglove-vslam-test requires localization and VSLAM to be enabled'
+  test_whitelist="$(python3 - "$(get_arg foxglove_topic_whitelist)" <<'PY'
+import ast
+import sys
+topics = ast.literal_eval(sys.argv[1])
+if not isinstance(topics, list) or not all(isinstance(topic, str) for topic in topics):
+    raise SystemExit('foxglove_topic_whitelist must be a list of strings')
+landmarks = '^/visual_slam/vis/landmarks_cloud$'
+if landmarks not in topics:
+    topics.append(landmarks)
+print(repr(topics))
+PY
+  )" || die 'could not add Foxglove VSLAM test topic'
+  set_arg foxglove_topic_whitelist "$test_whitelist"
+  set_arg enable_foxglove true
+  set_arg vslam_enable_visualization true
+fi
 if [[ "$INTERACTIVE" == 'true' ]]; then
   configure_silky_evcam_bias_interactively
 fi
