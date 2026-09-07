@@ -114,6 +114,7 @@ const state = {
     analyses: { query: "", sort: "newest", groupByDate: true, collapsedDays: {} },
   },
   cameraTopicConfigs: [],
+  vglModels: [],
   localIps: [],
   selectedMapPath: null,
   selectedMapDetail: null,
@@ -1265,13 +1266,14 @@ function sh(value) {
 
 async function refreshAll() {
   const previousFpvSession = state.fpv.browserStatus?.session_id || "";
-  const [config, tasks, rosbags, rosbagTrash, maps, cameraTopicConfigs, localIps, analyses, e2eModels, e2ePipeline, objectDetectionPipeline, fpvStatus] = await Promise.all([
+  const [config, tasks, rosbags, rosbagTrash, maps, cameraTopicConfigs, vglModels, localIps, analyses, e2eModels, e2ePipeline, objectDetectionPipeline, fpvStatus] = await Promise.all([
     api("/api/config"),
     api("/api/tasks"),
     api("/api/rosbags/local"),
     api("/api/rosbags/trash").catch(() => ({ rosbags: [] })),
     api("/api/maps/local"),
     api("/api/map-builder/camera-topic-configs"),
+    api("/api/map-builder/vgl-models").catch(() => ({ models: [] })),
     api("/api/network/local-ips").catch(() => ({ ips: [] })),
     api("/api/analyses").catch(() => ({ analyses: [] })),
     api("/api/e2e/models").catch(() => ({ models: [] })),
@@ -1285,6 +1287,7 @@ async function refreshAll() {
   state.rosbagTrash = rosbagTrash.rosbags || [];
   state.maps = maps.maps || [];
   state.cameraTopicConfigs = cameraTopicConfigs.configs || [];
+  state.vglModels = vglModels.models || [];
   state.localIps = localIps.ips || [];
   state.analysis.analyses = normalizeAnalysisList(analyses);
   state.e2eModels = e2eModels.models || [];
@@ -2042,6 +2045,40 @@ function artifactExists(map, key) {
   return Boolean(map?.artifacts?.[key]?.exists);
 }
 
+function vglModelOptions() {
+  return (state.vglModels || []).map((model) => {
+    const size = model.width && model.height ? `${model.width}×${model.height}（記録値）` : "サイズ未確認";
+    return `<option value="${esc(model.path)}" label="${esc(`${model.name} — ${size}${model.ready ? "" : " — エンジン構成を要確認"}`)}"></option>`;
+  }).join("");
+}
+
+function selectMapBuildVglModel() {
+  const path = $("build-vgl-model")?.value.trim() || "";
+  const selected = (state.vglModels || []).find((model) => model.path === path);
+  if (selected?.width && selected?.height) {
+    $("build-vgl-width").value = selected.width;
+    $("build-vgl-height").value = selected.height;
+  }
+  const hint = $("build-vgl-model-hint");
+  if (hint) hint.textContent = selected?.width && selected?.height
+    ? `${selected.name}: 記録された入力サイズを反映しました。実際のエンジン形状は生成開始時に検査します。`
+    : "入力サイズは未確認です。幅・高さを使用するモデルに合わせて指定してください。";
+  scheduleMapBuildPreflight();
+}
+
+async function refreshMapBuildVglModels() {
+  try {
+    const result = await api("/api/map-builder/vgl-models");
+    state.vglModels = result.models || [];
+    const options = $("build-vgl-model-options");
+    if (options) options.innerHTML = vglModelOptions();
+    selectMapBuildVglModel();
+    toast(`${state.vglModels.length}件のモデル候補を取得しました`);
+  } catch (error) {
+    toast(`モデル候補の取得に失敗しました: ${error.message}`, "error");
+  }
+}
+
 function mapBuildPreflightPayload() {
   return {
     rosbag: $("build-rosbag")?.value || "",
@@ -2497,7 +2534,10 @@ function renderMapBuildForm() {
       </div>
       <div class="field full">
         <label>VGLモデルのフォルダ</label>
-        <input id="build-vgl-model" placeholder="空欄：従来の公式モデル" oninput="scheduleMapBuildPreflight()" />
+        <input id="build-vgl-model" list="build-vgl-model-options" autocomplete="off" placeholder="候補から選択、またはパスを入力（空欄：公式モデル）" oninput="selectMapBuildVglModel()" />
+        <datalist id="build-vgl-model-options">${vglModelOptions()}</datalist>
+        <button type="button" onclick="refreshMapBuildVglModels()">モデル候補を再探索</button>
+        <div id="build-vgl-model-hint" class="field-hint">${state.vglModels.length}件の候補。パスの一部を入力すると絞り込めます。</div>
         <div class="field-hint">軽量版は生成済みの runtime_models を指定してください。map作成と位置推定で同じモデル・入力サイズを使います。</div>
       </div>
       <div class="field">

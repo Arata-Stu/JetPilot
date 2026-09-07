@@ -30,3 +30,24 @@ test('map form exposes model and image size fields', () => {
     assert.ok(form.includes(`id="${id}"`));
   }
 });
+test('choosing a discovered model applies recorded size and refreshes preflight', () => {
+  const fields = {
+    'build-vgl-model': {value: '/models/small'},
+    'build-vgl-width': {value: 1920}, 'build-vgl-height': {value: 1200},
+    'build-vgl-model-hint': {textContent: ''},
+  };
+  let checked = 0;
+  const context = {$: id => fields[id], state: {vglModels: [{path:'/models/small', name:'small', width:424, height:240}]},
+    scheduleMapBuildPreflight: () => checked++};
+  vm.createContext(context);
+  vm.runInContext(functionSource('selectMapBuildVglModel'), context);
+  context.selectMapBuildVglModel();
+  assert.equal(fields['build-vgl-width'].value, 424);
+  assert.equal(fields['build-vgl-height'].value, 240);
+  assert.equal(checked, 1);
+  fields['build-vgl-model'].value = '/manual/path';
+  fields['build-vgl-width'].value = 640;
+  context.selectMapBuildVglModel();
+  assert.equal(fields['build-vgl-width'].value, 640);
+  assert.match(fields['build-vgl-model-hint'].textContent, /未確認/);
+});

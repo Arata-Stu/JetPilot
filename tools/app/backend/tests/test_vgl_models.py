@@ -25,3 +25,49 @@ class VglModelsTest(unittest.TestCase):
             escape.symlink_to(outside)
             with self.assertRaises(ValueError):
                 resolve_model(config, escape)
+
+class ScanModelsTest(unittest.TestCase):
+    def test_scan_finds_assets_and_lab_without_guessing_size_from_name(self):
+        from jetpilot_console.vgl_models import scan_models
+        import json
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = SimpleNamespace(repo_root=root, ros2_ws=root / 'ros2_ws')
+            assets = config.ros2_ws / 'isaac_ros_assets/models/visual_global_localization_424x240'
+            run = root / 'tools/aliked_workspace/artifacts/small'
+            runtime = run / 'runtime_models'
+            for folder in (assets, runtime, run / 'source_models'):
+                engines = folder / 'aliked_lightglue'
+                engines.mkdir(parents=True)
+                (engines / 'aliked_test.engine').touch()
+                (engines / 'lightglue_aliked_test.engine').touch()
+            (run / 'manifest.json').write_text(json.dumps(dict(width=424, height=240)))
+            result = scan_models(config)
+            self.assertEqual(len(result), 2)
+            lab = next(v for v in result if v['name'] == 'small')
+            self.assertEqual((lab['width'], lab['height']), (424,240))
+            self.assertTrue(lab['ready'])
+            asset = next(v for v in result if v['name'].startswith('visual_'))
+            self.assertIsNone(asset['width'])
+
+    def test_scan_ignores_external_links_and_bad_metadata(self):
+        from jetpilot_console.vgl_models import scan_models
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = SimpleNamespace(repo_root=root, ros2_ws=root / 'ros2_ws')
+            models = config.ros2_ws / 'isaac_ros_assets/models'
+            models.mkdir(parents=True)
+            outside = root / 'outside'
+            engines = outside / 'aliked_lightglue'
+            engines.mkdir(parents=True)
+            (engines / 'aliked_test.engine').touch()
+            (models / 'escape').symlink_to(outside)
+            self.assertEqual(scan_models(config), [])
+            inside = models / 'broken'
+            (inside / 'aliked_lightglue').mkdir(parents=True)
+            (inside / 'aliked_lightglue/aliked_test.engine').touch()
+            (inside / 'manifest.json').write_text('{bad json')
+            found = scan_models(config)
+            self.assertEqual(len(found), 1)
+            self.assertFalse(found[0]['ready'])
+            self.assertIsNone(found[0]['width'])

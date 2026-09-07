@@ -24,7 +24,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from .bag_analysis import AnalysisRepository, build_analysis_script, rosbag_detail
 from .config import ConsoleConfig
-from .vgl_models import input_size, resolve_model
+from .vgl_models import input_size, resolve_model, scan_models
 from .e2e_analysis import scan_e2e_models
 from .e2e_pipeline import (
     PipelineTaskSpec,
@@ -353,6 +353,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/files":
             self._local_file(query)
+            return
+        if path == "/api/map-builder/vgl-models":
+            self._json({"models": scan_models(self.server.state.config)})
             return
         if path == "/api/map-builder/camera-topic-configs":
             self._json({"configs": scan_camera_topic_configs(self.server.state.config)})
