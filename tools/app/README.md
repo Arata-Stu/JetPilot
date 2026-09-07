@@ -761,8 +761,16 @@ Fine tune layersは **レイヤー** から直接開けます。点群・投影�
 
 Dependency-free editor checks:
 
+Mapの **高さ付き点群を表示** を有効にすると、既定で **密度で濃淡** を表示します。
+選択したZ範囲の点を地図上の5cm区画に集計し、疎い点は薄く、密集した輪郭は明るくします。
+**集計幅**（2〜20cm）と **コントラスト**（大きいほど疎い点を抑える）を調整でき、
+**従来の点表示** にも戻せます。ズームは密度計算を変えません。
+表示用の点群が間引かれている場合、濃淡もその点群に基づきます。
+これは編集背景の表示設定で、PNG・HD Mapの形状・座標・保存データは変更しません。
+
 ```sh
 node --test tools/app/frontend/tests/lane_geometry.test.js
+node --test tools/app/frontend/tests/point_cloud_ui.test.cjs
 PYTHONPATH=tools/app/backend python3 -S -m unittest discover -s tools/app/backend/tests -p 'test_map_detail.py'
 ```
 

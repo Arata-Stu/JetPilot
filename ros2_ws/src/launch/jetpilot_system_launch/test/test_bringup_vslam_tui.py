@@ -95,6 +95,15 @@ class VslamTuiTest(unittest.TestCase):
                 for target in ('odometry', 'slam'):
                     self.assertIn(f'vslam_enable_ground_constraint_in_{target}:=true', command)
 
+    def test_offline_map_uses_origin_without_initialization_menu(self):
+        code, output = self.launch(preset='offline-vslam-map', init='cancel',
+                                   overrides=('--bag', '/tmp/test-bag'))
+        self.assertEqual(code, 0, output)
+        self.assertNotIn('TEST_INIT_MENU_SHOWN', output)
+        self.assertIn('vslam_localize_on_startup:=true', output)
+        self.assertIn('enable_vgl:=false', output)
+        self.assertIn('enable_localization_manager:=false', output)
+
     def test_explicit_mode_skips_menu(self):
         for args in (('--vslam-mode', 'vio'), ('--set', 'vslam_mode:=vio')):
             with self.subTest(args=args):

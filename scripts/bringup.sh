@@ -102,8 +102,8 @@ localization-only    Localization + Foxglove pose fallback; camera is already ru
 localization         Sensor + localization + Foxglove pose fallback + RViz (map required)
 localize-live        Sensor + localization + Foxglove pose fallback + RViz (alias)
 replay-localization  Safe rosbag replay + localization + RViz (bag/map required)
-offline-vslam        Rosbag replay + VSLAM visualization + RViz (bag required)
-offline-vslam-map    Rosbag replay + VSLAM mapping debug + RViz (bag/map required)
+offline-vslam        Rosbag replay + fresh VSLAM mapping + RViz (bag required; no map)
+offline-vslam-map    Rosbag replay + saved-map localization using origin hint + RViz (bag/map required)
 offline-localization Rosbag replay + VGL/VSLAM localization + RViz (bag/map required)
 vehicle              Selected vehicle interface only
 teleop               Joy/teleop/operation + selected vehicle interface
@@ -751,6 +751,21 @@ set_localization_init_mode() {
 }
 
 normalize_localization_init_mode() {
+  # These debug presets have fixed initialization semantics, including in TUI.
+  if [[ "$PRESET" == 'offline-vslam-map' ]]; then
+    [[ -z "$CLI_LOCALIZATION_INIT" || "$CLI_LOCALIZATION_INIT" == 'map-origin' ]] \
+      || die 'offline-vslam-map uses map-origin initialization; use offline-localization for VGL or Foxglove'
+    set_localization_init_mode map-origin
+    set_arg enable_localization_manager false
+    set_arg enable_vgl false
+    return 0
+  elif [[ "$PRESET" == 'offline-vslam' ]]; then
+    [[ -z "$CLI_LOCALIZATION_INIT" ]] \
+      || die 'offline-vslam starts fresh; use offline-vslam-map to localize in a saved map'
+    set_arg vslam_localize_on_startup false
+    set_arg enable_localization_manager false
+    set_arg enable_vgl false
+  fi
   if [[ -n "$CLI_LOCALIZATION_INIT" ]]; then
     # A named mode is authoritative over contradictory generic --set overrides.
     set_localization_init_mode "$CLI_LOCALIZATION_INIT"
@@ -811,6 +826,7 @@ configure_vslam_interactively() {
 }
 
 configure_localization_init_interactively() {
+  case "$PRESET" in offline-vslam|offline-vslam-map) return 0 ;; esac
   [[ -z "$CLI_LOCALIZATION_INIT" ]] || return 0
   is_true "$(get_arg enable_localization)" || return 0
   is_true "$(get_arg enable_vslam)" || return 0
@@ -936,6 +952,7 @@ apply_preset() {
       set_arg enable_vslam true
       set_arg enable_vgl false
       set_arg enable_localization_manager false
+      set_arg vslam_localize_on_startup true
       set_arg vslam_enable_slam true
       set_arg vslam_enable_visualization true
       REQUIRES_MAP=true
@@ -1755,6 +1772,9 @@ validate_configuration() {
   if [[ -z "$MAP_DIR" ]] && configured_path="$(get_arg map_dir 2>/dev/null)"; then
     MAP_DIR="$configured_path"
   fi
+  if [[ "$PRESET" == 'offline-vslam' && -n "$MAP_DIR" ]]; then
+    die 'offline-vslam starts fresh and does not accept --map; use offline-vslam-map for a saved map'
+  fi
   if [[ -z "$ROSBAG" ]] && configured_path="$(get_arg rosbag 2>/dev/null)"; then
     ROSBAG="$configured_path"
   fi
@@ -1804,7 +1824,7 @@ validate_configuration() {
       || die "${LOCALIZATION_INIT_MODE} initialization requires enable_vslam=true"
     is_true "$(get_arg vslam_enable_slam)" \
       || die "${LOCALIZATION_INIT_MODE} initialization requires vslam_enable_slam=true"
-    is_true "$(get_arg enable_localization_manager)" \
+    { [[ "$PRESET" == 'offline-vslam-map' ]] || is_true "$(get_arg enable_localization_manager)"; } \
       || die "${LOCALIZATION_INIT_MODE} initialization requires the localization manager for safety status"
     [[ -n "$MAP_DIR" ]] || die "${LOCALIZATION_INIT_MODE} initialization requires --map PATH"
     [[ -z "$mapping_output" ]] \
@@ -2004,7 +2024,11 @@ print_summary() {
     printf '  地面制約     : odometry=%s / SLAM=%s\n' \
       "$(get_arg vslam_enable_ground_constraint_in_odometry)" \
       "$(get_arg vslam_enable_ground_constraint_in_slam)"
-    if ! is_true "$(get_arg enable_localization_manager)" && [[ -z "$MAP_DIR" ]]; then
+    if [[ "$PRESET" == 'offline-vslam' ]]; then
+      printf '  VSLAM init   : fresh mapping (no saved map loaded)\n'
+    elif [[ "$PRESET" == 'offline-vslam-map' ]]; then
+      printf '  VSLAM init   : saved map + origin hint (VGL/manual initialization off)\n'
+    elif ! is_true "$(get_arg enable_localization_manager)" && [[ -z "$MAP_DIR" ]]; then
       printf '  VSLAM init   : mapless odometry (no saved map load/save)\n'
     else
       case "$LOCALIZATION_INIT_MODE" in

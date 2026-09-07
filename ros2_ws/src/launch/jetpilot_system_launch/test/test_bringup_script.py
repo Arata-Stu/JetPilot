@@ -1947,7 +1947,7 @@ def test_rviz_config_can_be_selected_explicitly_for_rviz_presets(tmp_path: Path)
     assert "rviz config must be default, vslam-debug, or an absolute path" in invalid.stderr
 
 
-def test_offline_vslam_map_runs_mapping_debug_without_output_map(tmp_path: Path) -> None:
+def test_offline_vslam_map_localizes_with_origin_hint(tmp_path: Path) -> None:
     bag = tmp_path / "bag"
     map_dir = tmp_path / "map"
     bag.mkdir()
@@ -1967,6 +1967,9 @@ def test_offline_vslam_map_runs_mapping_debug_without_output_map(tmp_path: Path)
     assert "vslam_enable_slam:=true" in output
     assert "vslam_enable_visualization:=true" in output
     assert "enable_vslam_snapshot:=false" in output
+    assert "vslam_localize_on_startup:=true" in output
+    assert "enable_vgl:=false" in output
+    assert "enable_localization_manager:=false" in output
     assert "vslam_save_map_folder_path:=" not in output
     assert "vslam_snapshot_output:=" not in output
     assert f"map_dir:={map_dir}" in output
@@ -1980,6 +1983,27 @@ def test_offline_vslam_map_runs_mapping_debug_without_output_map(tmp_path: Path)
     )
     assert missing_map.returncode != 0
     assert "requires --map" in missing_map.stderr
+
+
+def test_offline_vslam_rejects_saved_map_and_external_initialization() -> None:
+    for extra in (("--map", "/tmp/saved-map"), ("--localization-init", "foxglove")):
+        result = run_launcher("offline-vslam", "--bag", "/tmp/bag", "--dry-run", *extra, check=False)
+        assert result.returncode != 0
+        assert "offline-vslam starts fresh" in result.stderr
+    result = run_launcher("offline-vslam-map", "--bag", "/tmp/bag", "--map", "/tmp/map",
+                          "--dry-run", "--localization-init", "pose-hint", check=False)
+    assert result.returncode != 0
+    assert "uses map-origin initialization" in result.stderr
+
+
+def test_offline_vslam_map_requires_database(tmp_path: Path) -> None:
+    bag = tmp_path / "bag"
+    bag.mkdir()
+    (bag / "metadata.yaml").write_text("rosbag2_bagfile_information: {}\n")
+    (tmp_path / "cuvslam_map").mkdir()
+    result = run_launcher("offline-vslam-map", "--bag", str(bag), "--map", str(tmp_path), check=False)
+    assert result.returncode != 0
+    assert "requires a cuVSLAM .mdb database" in result.stderr
 
 
 def test_offline_localization_uses_vgl_and_vslam_with_map(tmp_path: Path) -> None:
