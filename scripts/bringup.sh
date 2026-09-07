@@ -42,6 +42,7 @@ CLI_SENSOR_KIT=''
 CLI_LOCALIZATION_INIT=''
 CLI_VSLAM_MODE=''
 FOXGLOVE_VSLAM_TEST=false
+EXTERNAL_ORIGIN_TEST=false
 LOCALIZATION_INIT_MODE='pose-hint'
 REQUIRES_MAP=false
 REQUIRES_ROSBAG=false
@@ -160,6 +161,8 @@ Options:
       --vslam-mode MODE VSLAM tracking: vo (default) or vio
       --foxglove-vslam-test
                         Temporarily enable Foxglove landmarks_cloud and VSLAM visualization
+      --external-origin-test
+                        offline-vslam-map only: start bag paused, send origin hint externally
       --pose-hint      Alias for --localization-init pose-hint
       --no-pose-hint  Alias for --localization-init map-origin
       --components LIST
@@ -855,6 +858,15 @@ configure_localization_init_interactively() {
   if [[ "$LOCALIZATION_INIT_MODE" == 'pose-hint' ]]; then
     set_arg enable_vgl true
   fi
+}
+
+configure_offline_origin_test_interactively() {
+  [[ "$PRESET" == 'offline-vslam-map' && "$EXTERNAL_ORIGIN_TEST" == 'false' ]] || return 0
+  local selection
+  selection="$(choose_one '保存mapの原点localize' \
+    'startup  通常：起動時に原点localize' \
+    'external テスト：bagを停止して起動し、追跡開始後に外部から原点を送信')" || exit $?
+  [[ "${selection%%[[:space:]]*}" != 'external' ]] || EXTERNAL_ORIGIN_TEST=true
 }
 
 configure_driving_line_interactively() {
@@ -2072,7 +2084,11 @@ print_summary() {
     if [[ "$PRESET" == 'offline-vslam' ]]; then
       printf '  VSLAM init   : fresh mapping (no saved map loaded)\n'
     elif [[ "$PRESET" == 'offline-vslam-map' ]]; then
-      printf '  VSLAM init   : saved map + origin hint (VGL/manual initialization off)\n'
+      if [[ "$EXTERNAL_ORIGIN_TEST" == 'true' ]]; then
+        printf '  VSLAM init   : 外部原点テスト（自動localize OFF / bag一時停止）\n'
+      else
+        printf '  VSLAM init   : saved map + origin hint (VGL/manual initialization off)\n'
+      fi
     elif ! is_true "$(get_arg enable_localization_manager)" && [[ -z "$MAP_DIR" ]]; then
       printf '  VSLAM init   : mapless odometry (no saved map load/save)\n'
     else
@@ -2240,6 +2256,7 @@ while (($# > 0)); do
       ;;
     --vslam-mode=*) CLI_VSLAM_MODE="${1#*=}"; shift ;;
     --foxglove-vslam-test) FOXGLOVE_VSLAM_TEST=true; shift ;;
+    --external-origin-test) EXTERNAL_ORIGIN_TEST=true; shift ;;
     --pose-hint) CLI_LOCALIZATION_INIT='pose-hint'; shift ;;
     --no-pose-hint|--map-origin) CLI_LOCALIZATION_INIT='map-origin'; shift ;;
     --components)
@@ -2373,6 +2390,7 @@ if ((${#EXTRA_LAUNCH_ARGS[@]} > 0)); then
 fi
 if [[ "$INTERACTIVE" == 'true' ]]; then
   configure_realsense_fps_interactively
+  configure_offline_origin_test_interactively
   configure_localization_init_interactively
   configure_vslam_interactively
 fi
@@ -2401,6 +2419,17 @@ if [[ "$INTERACTIVE" == 'true' ]]; then
   configure_silky_evcam_bias_interactively
 fi
 validate_configuration
+if [[ "$EXTERNAL_ORIGIN_TEST" == 'true' ]]; then
+  [[ "$PRESET" == 'offline-vslam-map' ]] \
+    || die '--external-origin-test is only available for offline-vslam-map'
+  # Validate the saved-map/origin prerequisites above before changing only the trigger.
+  set_arg vslam_localize_on_startup false
+  replay_test_args="$(get_arg replay_additional_args 2>/dev/null || true)"
+  if [[ " $replay_test_args " != *' --start-paused '* ]]; then
+    replay_test_args="--start-paused $replay_test_args"
+  fi
+  set_arg replay_additional_args "$replay_test_args"
+fi
 print_summary
 
 if [[ "$DRY_RUN" == 'true' ]]; then
