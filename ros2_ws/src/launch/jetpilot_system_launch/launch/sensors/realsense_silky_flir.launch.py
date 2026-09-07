@@ -18,6 +18,8 @@ def launch_sensor_kit(args: lu.ArgumentContainer) -> list[lut.Action]:
                     'run_standalone': str(lu.is_true(args.run_standalone)).lower(),
                     'enable_depth': str(lu.is_true(args.enable_depth)).lower(),
                     'enable_color': str(lu.is_true(args.enable_color)).lower(),
+                    'rgb_fps': args.rgb_fps,
+                    'infra_fps': args.infra_fps,
                     'enable_rtp_stream': str(lu.is_true(args.enable_rtp_stream)).lower(),
                     'rtp_image_topic': args.rtp_image_topic,
                     'rtp_host': args.rtp_host,
@@ -119,6 +121,8 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('run_standalone', True)
     args.add_arg('enable_depth', False)
     args.add_arg('enable_color', True)
+    args.add_arg('rgb_fps', '30')
+    args.add_arg('infra_fps', '90')
     args.add_arg('enable_rtp_stream', False)
     args.add_arg('rtp_image_topic', '/realsense/color/image_raw')
     args.add_arg('rtp_host', '')

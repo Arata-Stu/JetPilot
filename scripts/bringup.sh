@@ -297,6 +297,8 @@ set_base_args() {
   set_arg enable_e2e_inference false
   set_arg enable_object_detection false
   set_arg enable_sensor_kit false
+  set_arg sensor_kit_rgb_fps 30
+  set_arg sensor_kit_infra_fps 90
   set_arg enable_localization false
   set_arg enable_vslam true
   set_arg vslam_enable_slam true
@@ -1645,6 +1647,33 @@ configure_rtp_interactively() {
   set_arg sensor_kit_rtp_image_topic "$topic"
 }
 
+configure_realsense_fps_interactively() {
+  is_true "$(get_arg enable_sensor_kit)" || return 0
+  case "$(get_arg sensor_kit_interface_launch 2>/dev/null || printf 'launch/sensors/realsense.launch.py')" in
+    */realsense.launch.py|*/realsense_silky_evcam.launch.py|*/realsense_silky_flir.launch.py) ;;
+    *) return 0 ;;
+  esac
+  local stream key current selection fps override explicit
+  local options=()
+  for stream in rgb infra; do
+    key="sensor_kit_${stream}_fps"
+    explicit=false
+    if ((${#EXTRA_LAUNCH_ARGS[@]} > 0)); then
+      for override in "${EXTRA_LAUNCH_ARGS[@]}"; do
+        [[ "$override" == "$key:="* ]] && explicit=true
+      done
+    fi
+    [[ "$explicit" == 'false' ]] || continue
+    current="$(get_arg "$key")"
+    options=("$current Hz（現在値）")
+    for fps in 30 60 90; do
+      [[ "$fps" == "$current" ]] || options+=("$fps Hz")
+    done
+    selection="$(choose_one "RealSense ${stream} Hz" "${options[@]}")" || exit $?
+    set_arg "$key" "${selection%%[[:space:]]*}"
+  done
+}
+
 configure_sensor_kit_interactively() {
   local selection
   local profile_id
@@ -1762,6 +1791,13 @@ normalize_rosbag_path() {
 }
 
 validate_configuration() {
+  local fps_key
+  for fps_key in sensor_kit_rgb_fps sensor_kit_infra_fps; do
+    case "$(get_arg "$fps_key")" in
+      30|60|90) ;;
+      *) die "$fps_key must be 30, 60, or 90" ;;
+    esac
+  done
   local configured_path
   local foxglove_startup=false
   local mapping_output
@@ -2004,6 +2040,12 @@ print_summary() {
   printf '  sensor       : %s\n' "$(get_arg enable_sensor_kit)"
   if is_true "$(get_arg enable_sensor_kit)"; then
     printf '  sensor kit   : %s\n' "${SENSOR_KIT_PROFILE:-default}"
+    case "$(get_arg sensor_kit_interface_launch 2>/dev/null || printf 'launch/sensors/realsense.launch.py')" in
+      */realsense.launch.py|*/realsense_silky_evcam.launch.py|*/realsense_silky_flir.launch.py)
+        printf '  camera Hz    : RGB=%s / Infra=%s (424x240)\n' \
+          "$(get_arg sensor_kit_rgb_fps)" "$(get_arg sensor_kit_infra_fps)"
+        ;;
+    esac
     printf '  sensor launch: %s/%s\n' \
       "$(get_arg sensor_kit_interface_pkg 2>/dev/null || printf 'jetpilot_system_launch')" \
       "$(get_arg sensor_kit_interface_launch 2>/dev/null || printf 'launch/sensors/realsense.launch.py')"
@@ -2326,6 +2368,7 @@ if ((${#EXTRA_LAUNCH_ARGS[@]} > 0)); then
   done
 fi
 if [[ "$INTERACTIVE" == 'true' ]]; then
+  configure_realsense_fps_interactively
   configure_localization_init_interactively
   configure_vslam_interactively
 fi

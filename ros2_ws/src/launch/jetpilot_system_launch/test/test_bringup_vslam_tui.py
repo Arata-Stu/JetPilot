@@ -20,7 +20,7 @@ ROOT = next(p for p in Path(__file__).resolve().parents if (p / 'scripts/bringup
 
 
 class VslamTuiTest(unittest.TestCase):
-    def launch(self, mode='vo', overrides=(), preset='localization-only', init='pose-hint', line='current', closed=True):
+    def launch(self, mode='vo', overrides=(), preset='localization-only', init='pose-hint', line='current', closed=True, rgb='30', infra='90'):
         with tempfile.TemporaryDirectory() as directory:
             custom = Path(directory) / 'test_custom_line.csv'
             custom.write_text('0;0;0;0;0;1;0\n1;1;0;0;0;1;0\n')
@@ -39,6 +39,11 @@ class VslamTuiTest(unittest.TestCase):
                 'prompt = next(a for a in sys.argv if a.startswith("--prompt="))\n'
                 'if "JetPilot bringup preset" in prompt:\n'
                 '    print(next(o for o in options if o.split()[0] == os.environ["TEST_PRESET"]))\n'
+                'elif "RealSense rgb Hz" in prompt or "RealSense infra Hz" in prompt:\n'
+                '    key = "TEST_RGB" if "rgb Hz" in prompt else "TEST_INFRA"\n'
+                '    print(key + "_MENU_SHOWN", file=sys.stderr)\n'
+                '    if os.environ[key] == "cancel": sys.exit(130)\n'
+                '    print(next(o for o in options if o.split()[0] == os.environ[key]))\n'
                 'elif "VSLAM 追跡モード" in prompt:\n'
                 '    print("VSLAM_MENU_SHOWN", file=sys.stderr)\n'
                 '    if os.environ["TEST_MODE"] == "cancel": sys.exit(130)\n'
@@ -52,7 +57,8 @@ class VslamTuiTest(unittest.TestCase):
             )
             fake_fzf.chmod(0o755)
             env = dict(os.environ, PATH=f'{directory}:{os.environ["PATH"]}',
-                       TEST_MODE=mode, TEST_PRESET=preset, TEST_INIT=init, TEST_LINE=line)
+                       TEST_MODE=mode, TEST_PRESET=preset, TEST_INIT=init, TEST_LINE=line,
+                       TEST_RGB=rgb, TEST_INFRA=infra)
             master, slave = pty.openpty()
             process = subprocess.Popen(
                 ['bash', str(ROOT / 'scripts/bringup.sh'), '--dry-run', '--no-bag-manager',
@@ -94,6 +100,33 @@ class VslamTuiTest(unittest.TestCase):
                 self.assertIn(f'vslam_mode:={mode}', command)
                 for target in ('odometry', 'slam'):
                     self.assertIn(f'vslam_enable_ground_constraint_in_{target}:=true', command)
+
+    def test_camera_rates_reach_launch(self):
+        for rgb, infra in (('30', '90'), ('60', '30'), ('90', '60')):
+            with self.subTest(rgb=rgb, infra=infra):
+                code, output = self.launch(preset='sensor', rgb=rgb, infra=infra)
+                self.assertEqual(code, 0, output)
+                self.assertIn('TEST_RGB_MENU_SHOWN', output)
+                self.assertIn('TEST_INFRA_MENU_SHOWN', output)
+                self.assertIn(f'sensor_kit_rgb_fps:={rgb}', output)
+                self.assertIn(f'sensor_kit_infra_fps:={infra}', output)
+
+    def test_camera_rate_override_skips_its_menu(self):
+        code, output = self.launch(preset='sensor', rgb='cancel',
+                                  overrides=('--set', 'sensor_kit_rgb_fps:=60'))
+        self.assertEqual(code, 0, output)
+        self.assertNotIn('TEST_RGB_MENU_SHOWN', output)
+        self.assertIn('TEST_INFRA_MENU_SHOWN', output)
+        self.assertIn('sensor_kit_rgb_fps:=60', output)
+
+    def test_camera_rates_skip_replay_and_cancel_cleanly(self):
+        code, output = self.launch(preset='offline-vslam-map', rgb='cancel', infra='cancel',
+                                  overrides=('--bag', '/tmp/test-bag'))
+        self.assertEqual(code, 0, output)
+        self.assertNotIn('TEST_RGB_MENU_SHOWN', output)
+        code, output = self.launch(preset='sensor', rgb='cancel')
+        self.assertNotEqual(code, 0)
+        self.assertNotIn('Command:', output)
 
     def test_offline_map_uses_origin_without_initialization_menu(self):
         code, output = self.launch(preset='offline-vslam-map', init='cancel',

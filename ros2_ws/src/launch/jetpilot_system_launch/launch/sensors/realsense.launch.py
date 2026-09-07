@@ -27,6 +27,10 @@ from launch_ros.actions import ComposableNodeContainer
 def launch_realsense(args: lu.ArgumentContainer) -> list[lut.Action]:
 
     actions = []
+    rgb_fps = int(args.rgb_fps)
+    infra_fps = int(args.infra_fps)
+    if rgb_fps not in (30, 60, 90) or infra_fps not in (30, 60, 90):
+        raise ValueError('RealSense RGB/Infra FPS must be 30, 60, or 90')
 
     # Prepare parameters
     parameters = []
@@ -45,11 +49,11 @@ def launch_realsense(args: lu.ArgumentContainer) -> list[lut.Action]:
         'enable_depth': lu.is_true(args.enable_depth),
         'enable_color': True,
         'enable_rgbd': False,
-        'enable_accel': True,
-        'enable_gyro': True,
-        # Publish the fused /realsense/imu stream required by VIO.
-        'unite_imu_method': 2,
-        'enable_sync': True,
+        # IMU streams are disabled by default in realsense.param.yaml.
+        'rgb_camera.color_profile': f'424x240x{rgb_fps}',
+        'depth_module.infra_profile': f'424x240x{infra_fps}',
+        # Do not synchronize streams running at different frame rates.
+        'enable_sync': rgb_fps == infra_fps,
         'align_depth.enable': False,
         'colorizer.enable': False,
         'decimation_filter.enable': False,
@@ -135,6 +139,8 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('camera_name', 'realsense')
     args.add_arg('enable_depth', False)
     args.add_arg('enable_color', True)
+    args.add_arg('rgb_fps', '30')
+    args.add_arg('infra_fps', '90')
     args.add_arg('enable_rtp_stream', False)
     args.add_arg('rtp_image_topic', '/realsense/color/image_raw')
     args.add_arg('rtp_host', '')
