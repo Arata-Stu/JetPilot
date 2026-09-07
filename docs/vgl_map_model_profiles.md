@@ -78,3 +78,23 @@ python3 /workspaces/scripts/create_map_with_vgl.py \
 以前生成した`vgl_profile.json`にONNXハッシュがない場合は、記録された同じモデルパスのみを候補にします。実験フォルダの`engine-inspection.json`で入力形状と現在のエンジンファイルのハッシュを確認してから使用します。この場合、ONNXの同一性は未記録であることをログへ表示します。エンジン検査記録がない場合は実行ホストで`python3 lab.py inspect --name 424x240`を実行してください。
 
 `vgl_profile.json`自体がない旧mapは、従来の公式モデル・既定設定を維持します。今回の設定は`jetpilot_system_launch`をビルドして反映してください。
+
+## snapshot作成時の原点localize
+
+`create_map.sh`のoffline評価では、保存地図を指定し、bagを一時停止・0.2倍速の設定で起動します。
+`localize_offline_origin.py`が位置合わせ管理ノードとの接続を確認して再生を開始し、
+最初の非空SLAM経路を受信したら、map原点（位置0、回転なし）のヒントを`/initialpose`へ一度送ります。
+管理ノード経由でVSLAMへ転送し、`localized`確認後に1倍速へ戻します。
+サービス呼び出し・ヒント送信の手動操作は不要です。画像再生はlocalize中も継続します。
+
+起動時localizeは無効です。snapshotは位置合わせ確認後の経路だけを記録し、
+位置合わせ確認済み・map座標の経路・非空点群が揃わない場合はraster/HD map後処理を実行しません。
+各準備・サービス・位置合わせ待ちの上限は`OFFLINE_LOCALIZATION_TIMEOUT_S`（既定60秒、実時間）、
+成功後の再生速度は`OFFLINE_REPLAY_RATE`（既定1.0）で変更できます。
+従来の`ENABLE_ROSBAG_WARMUP_STEP`による固定時間の再生／停止は使用しません。
+
+ROSを起動しない標準ライブラリの検証:
+
+```bash
+python3 -m unittest discover -s scripts -p test_localize_offline_origin.py
+```

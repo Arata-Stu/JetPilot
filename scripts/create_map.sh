@@ -23,6 +23,8 @@ RACELINE_DIRECTION="${RACELINE_DIRECTION:-forward}"
 CAMERA_TOPIC_CONFIG_FILE="${CAMERA_TOPIC_CONFIG_FILE:-}"
 VSLAM_LANDMARKS_TOPIC="${VSLAM_LANDMARKS_TOPIC:-/visual_slam/vis/landmarks_cloud}"
 VSLAM_SNAPSHOT_WRITE_INTERVAL_S="${VSLAM_SNAPSHOT_WRITE_INTERVAL_S:-5.0}"
+OFFLINE_LOCALIZATION_TIMEOUT_S="${OFFLINE_LOCALIZATION_TIMEOUT_S:-60}"
+OFFLINE_REPLAY_RATE="${OFFLINE_REPLAY_RATE:-1.0}"
 JETSON_REMOTE_USER="${JETSON_REMOTE_USER:-tamiya}"
 JETSON_REMOTE_IPS="${JETSON_REMOTE_IPS:-10.42.0.1 192.168.55.1 192.168.11.190}"
 JETSON_MAP_ROOT="${JETSON_MAP_ROOT:-/home/tamiya/workspaces/JetPilot/map}"
@@ -651,6 +653,11 @@ run_offline_eval() {
 
   [[ -d "${map_dir}/cuvgl_map" ]] || die "cuVGL map was not found: ${map_dir}/cuvgl_map"
   [[ -d "$cuvslam_map_dir" ]] || die "cuVSLAM map was not found for offline eval load: $cuvslam_map_dir"
+  python3 - "$cuvslam_map_dir" <<'PY' || die 'offline eval requires a saved cuVSLAM .mdb database'
+from pathlib import Path
+import sys
+sys.exit(0 if any(p.is_file() for p in Path(sys.argv[1]).glob('*.mdb')) else 1)
+PY
   rm -f "$snapshot_path"
   echo "[stage] offline eval will load cuVSLAM map: $cuvslam_map_dir"
   echo "[stage] offline eval use_sim_time: true"
@@ -696,7 +703,9 @@ run_offline_eval() {
     enable_localization:=true \
     vslam_enable_slam:=true \
     vslam_enable_visualization:=true \
-    vslam_localize_on_startup:=true \
+    vslam_localize_on_startup:=false \
+    enable_localization_manager:=true \
+    replay_rate:=0.2 \
     enable_vgl:=false \
     vgl_topic_config_file:="$topic_config_file" \
     vgl_model_dir:="$OUTPUT_MODEL_DIR" \
@@ -708,6 +717,7 @@ run_offline_eval() {
     enable_teleop:=false \
     enable_rc_serial:=false \
     enable_vslam_snapshot:=true \
+    vslam_snapshot_require_localized_map:=true \
     vslam_snapshot_output:="$snapshot_path" \
     vslam_snapshot_landmarks_topic:="$VSLAM_LANDMARKS_TOPIC" \
     vslam_snapshot_write_interval_s:="$VSLAM_SNAPSHOT_WRITE_INTERVAL_S" \
@@ -739,25 +749,16 @@ run_offline_eval() {
     die "offline eval readiness timed out after 180 seconds; VSLAM publishers did not become available"
   fi
 
-  echo "[stage] offline eval graph ready; preparing rosbag replay"
-  if is_true_value "${ENABLE_ROSBAG_WARMUP_STEP:-true}"; then
-    echo "[stage] starting 2-stage wait (warmup step)"
-    sleep 5
-    echo "[stage] advancing rosbag by ~1 image frame (0.15s) for lazy initialization"
-    ros2 service call /rosbag2_player/resume rosbag2_interfaces/srv/Resume '{}'
-    sleep 0.15
-    ros2 service call /rosbag2_player/pause rosbag2_interfaces/srv/Pause '{}' || true
-    echo "[stage] waiting 5s for VGL/VSLAM initialization to settle during pause"
-    sleep 5
-    echo "[stage] resuming rosbag playback after warmup"
-    ros2 service call /rosbag2_player/resume rosbag2_interfaces/srv/Resume '{}'
-  else
-    sleep 5
-    ros2 service call /rosbag2_player/resume rosbag2_interfaces/srv/Resume '{}'
+  echo "[stage] offline eval graph ready; localizing from origin after tracking starts"
+  if ! python3 "${SCRIPT_DIR}/localize_offline_origin.py" \
+    --timeout "$OFFLINE_LOCALIZATION_TIMEOUT_S" --replay-rate "$OFFLINE_REPLAY_RATE"; then
+    offline_stop_launch TERM 5 || true
+    die "offline origin localization failed; snapshot postprocess will not run"
   fi
 
   for offline_attempt in $(seq 1 15); do
-    if [[ -s "$snapshot_path" ]]; then
+    if [[ -s "$snapshot_path" ]] && python3 "${SCRIPT_DIR}/localize_offline_origin.py" \
+      --check-snapshot "$snapshot_path" >/dev/null 2>&1; then
       break
     fi
     if ! kill -0 "$offline_launch_pid" 2>/dev/null; then
@@ -765,9 +766,9 @@ run_offline_eval() {
     fi
     sleep 1
   done
-  if [[ ! -s "$snapshot_path" ]]; then
+  if ! python3 "${SCRIPT_DIR}/localize_offline_origin.py" --check-snapshot "$snapshot_path"; then
     offline_stop_launch TERM 5 || true
-    die "offline eval produced no VSLAM snapshot messages after replay started; refusing to drain an empty run"
+    die "offline eval produced no localized snapshot with landmarks; refusing to drain an invalid run"
   fi
 
   while kill -0 "$offline_launch_pid" 2>/dev/null; do
@@ -811,6 +812,8 @@ run_offline_eval() {
   trap - EXIT
 
   [[ -f "$snapshot_path" ]] || die "VSLAM snapshot was not created: $snapshot_path"
+  python3 "${SCRIPT_DIR}/localize_offline_origin.py" --check-snapshot "$snapshot_path" \
+    || die "offline eval snapshot is not localized or has no usable landmarks"
   [[ -d "$cuvslam_map_dir" ]] || die "cuVSLAM map was not created: $cuvslam_map_dir"
 
   maybe_run_offline_postprocess "$map_dir"
