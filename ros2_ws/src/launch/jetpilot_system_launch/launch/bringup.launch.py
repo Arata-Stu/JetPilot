@@ -566,11 +566,11 @@ def generate_launch_description() -> lut.LaunchDescription:
         cli=True)
     args.add_arg(
         'vgl_model_dir',
-        '/workspaces/ros2_ws/isaac_ros_assets/models/visual_global_localization',
+        'auto',
         cli=True)
     args.add_arg(
         'vgl_config_dir',
-        lu.get_path('jetpilot_system_launch', 'config/localization/vgl_config'),
+        'auto',
         cli=True)
     args.add_arg('vgl_image_qos_profile', 'SENSOR_DATA', cli=True)
     args.add_arg('enable_occupancy_map_server', False, cli=True)

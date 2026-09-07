@@ -6,6 +6,10 @@ find_package(ament_cmake_auto REQUIRED)
 if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
   ament_add_pytest_test(
+    test_vgl_model_profile
+    test/test_vgl_model_profile.py
+  )
+  ament_add_pytest_test(
     test_tt02_tf
     test/test_tt02_tf.py
   )

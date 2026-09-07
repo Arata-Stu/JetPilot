@@ -14,7 +14,9 @@
 # limitations under the License.
 #
 # SPDX-License-Identifier: Apache-2.0
-import os 
+import os
+import importlib.util
+from pathlib import Path
 from ament_index_python.packages import get_package_share_directory
 import isaac_ros_launch_utils.all_types as lut
 import isaac_ros_launch_utils as lu
@@ -97,12 +99,24 @@ def add_visual_global_localization(args: lu.ArgumentContainer) -> list[lut.Actio
     else:
         actions.append(lu.log_warn([f"VGL config file not found at: {config_yaml}. Using default parameters."]))
 
+    helper_path = Path(__file__).resolve().parents[1] / 'vgl_model_profile.py'
+    spec = importlib.util.spec_from_file_location('jetpilot_vgl_model_profile', helper_path)
+    helper = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(helper)
+    workspace = Path(os.environ.get('ROS2_WS', '/workspaces/ros2_ws'))
+    project = Path(os.environ.get('JETPILOT_PROJECT_ROOT', str(workspace.parent)))
+    model_dir, config_dir, selection = helper.resolve_profile(
+        args.vgl_map_dir, args.vgl_model_dir, args.vgl_config_dir,
+        lu.get_path('jetpilot_system_launch', 'config/localization/vgl_config'),
+        [workspace / 'isaac_ros_assets/models', project / 'tools/aliked_workspace/artifacts'])
+    actions.append(lu.log_info([f'{selection}: model={model_dir}, config={config_dir}']))
+
     params = {
         'num_cameras': num_cameras,
         'stereo_localizer_cam_ids': stereo_localizer_cam_ids,
         'map_dir': args.vgl_map_dir,
-        'config_dir': args.vgl_config_dir,
-        'model_dir': args.vgl_model_dir,
+        'config_dir': config_dir,
+        'model_dir': model_dir,
         'debug_dir': args.vgl_debug_dir,
         'debug_map_raw_dir': args.vgl_debug_map_raw_dir,
         'base_frame': args.vgl_base_frame,
@@ -139,10 +153,10 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('container_name')
     args.add_arg('vgl_enabled_stereo_cameras')
     args.add_arg('vgl_map_dir')
-    args.add_arg('vgl_config_dir', lu.get_path('jetpilot_system_launch', 'config/localization/vgl_config'))
+    args.add_arg('vgl_config_dir', 'auto')
     args.add_arg(
         'vgl_model_dir',
-        '/workspaces/ros2_ws/isaac_ros_assets/models/visual_global_localization')
+        'auto')
     args.add_arg('vgl_debug_dir', '')
     args.add_arg('vgl_debug_map_raw_dir', '')
     args.add_arg('vgl_map_frame', 'map')

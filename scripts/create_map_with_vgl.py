@@ -7,8 +7,12 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 
 from configure_vgl_extractor import configure
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'ros2_ws/src/launch/jetpilot_system_launch/launch'))
+from vgl_model_profile import model_onnx_identity
 
 
 def positive(value):
@@ -133,7 +137,8 @@ def build(args):
         shutil.copytree(source, target, symlinks=False)
         config = target / 'keypoint_creation_config.pb.txt'
         config.write_text(configure(config.read_text(), args.width, args.height))
-    record = dict(engine_record, model_dir=str(model), width=args.width, height=args.height,
+    record = dict(engine_record, model_dir=str(model), onnx_sha256=model_onnx_identity(model),
+                  width=args.width, height=args.height,
                   mapping_config='vgl_mapping_config', runtime_config='vgl_runtime_config',
                   status='building', vocabulary='new; no prebuilt vocabulary supplied')
     record_path = generated / 'vgl_profile.json'

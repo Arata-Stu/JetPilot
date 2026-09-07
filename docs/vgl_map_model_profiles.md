@@ -50,7 +50,7 @@ mapには以下も保存します。
 - `vgl_mapping_config/`：map生成に使用した設定
 - `vgl_runtime_config/`：同じ入力サイズに揃えた位置推定用設定
 
-位置推定では、このmapと対応するモデルを指定し、`vgl_config_dir`に新mapの`vgl_runtime_config`を渡してください。設定やモデルの自動選択は行いません。
+位置推定では、このmapと対応するモデルを指定し、`vgl_config_dir`に新mapの`vgl_runtime_config`を渡してください。`bringup`の既定値は`vgl_model_dir:=auto`・`vgl_config_dir:=auto`です。mapの`vgl_profile.json`からモデルと実行設定を自動選択するため、通常はmapの指定だけで起動できます。明示指定した引数は優先されます。
 モデルパスとエンジンSHA-256は生成環境の記録です。Jetsonでは同じONNXからJetson用エンジンを生成して使用します。
 
 Macでは標準ライブラリの制御テストとJavaScriptテストのみを実施しています。
@@ -69,3 +69,12 @@ python3 /workspaces/scripts/create_map_with_vgl.py \
 ```
 
 `map_frames/rectified/frames_meta.json`が必要です。既存の`cuvgl_map`やVGL設定・生成記録がある場合は上書きせず停止します。この再開はVGL生成までで、HD map等の後処理は実行しません。
+
+
+## mapとモデルの自動対応
+
+新しいmapには`onnx_sha256`も保存します。起動時は記録パスを優先し、見つからなければworkspaceモデルフォルダとALIKED実験フォルダで同じONNXを探索します。異なるGPUで生成したTensorRTエンジンのハッシュ同士は比較しません。ONNXと生成済みエンジンを実行ホストへ用意してください。該当モデルがない・複数候補があり特定できない場合は停止します。
+
+以前生成した`vgl_profile.json`にONNXハッシュがない場合は、記録された同じモデルパスのみを候補にします。実験フォルダの`engine-inspection.json`で入力形状と現在のエンジンファイルのハッシュを確認してから使用します。この場合、ONNXの同一性は未記録であることをログへ表示します。エンジン検査記録がない場合は実行ホストで`python3 lab.py inspect --name 424x240`を実行してください。
+
+`vgl_profile.json`自体がない旧mapは、従来の公式モデル・既定設定を維持します。今回の設定は`jetpilot_system_launch`をビルドして反映してください。
