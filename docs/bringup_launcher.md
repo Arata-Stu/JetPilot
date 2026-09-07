@@ -10,6 +10,23 @@ Inside the JetPilot Docker workspace:
 /workspaces/scripts/bringup.sh
 ```
 
+自己位置推定とVSLAMが有効な構成では、TUIの「VSLAM 追跡モード」で
+`vo`（ステレオ画像のみ）／`vio`（ステレオ画像 + IMU）を選択できます。
+`--vslam-mode vio` または `--set vslam_mode:=vio` を明示した場合は選択画面を省略します。
+非対話起動の既定値は `vo` です。VIOでbagを再生する場合は、画像とIMUの両方が必要です。
+
+`bringup.sh`からの起動では、平坦な床での走行を前提にodometryとSLAMの地面制約を
+ともに有効にします。選択した追跡モードと地面制約の値は起動確認画面に表示します。
+段差などを含む実験で解除する場合は、次の引数を指定してください。
+
+```text
+--set vslam_enable_ground_constraint_in_odometry:=false
+--set vslam_enable_ground_constraint_in_slam:=false
+```
+
+この設定は走行・bag再生用の起動設定です。`create_map.sh`のオフライン地図生成には
+引き継がれません。
+
 TUI で `realsense-silky` または `realsense-silky-flir` を選ぶと、起動確認の前に
 `SilkyEvCam bias file` の選択画面を表示します。
 `ros2_ws/src/launch/jetpilot_system_launch/config/sensing/silkyevcam/` 内の

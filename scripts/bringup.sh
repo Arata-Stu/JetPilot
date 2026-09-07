@@ -301,6 +301,8 @@ set_base_args() {
   set_arg enable_vslam true
   set_arg vslam_enable_slam true
   set_arg vslam_mode vo
+  set_arg vslam_enable_ground_constraint_in_odometry true
+  set_arg vslam_enable_ground_constraint_in_slam true
   set_arg vslam_localize_on_startup false
   set_arg enable_localization_manager true
   set_arg enable_vgl true
@@ -775,6 +777,25 @@ normalize_vslam_mode() {
   else
     set_vslam_mode "$(get_arg vslam_mode)"
   fi
+}
+
+configure_vslam_interactively() {
+  is_true "$(get_arg enable_localization)" || return 0
+  is_true "$(get_arg enable_vslam)" || return 0
+  [[ -z "$CLI_VSLAM_MODE" ]] || return 0
+
+  local override
+  local selection
+  if ((${#EXTRA_LAUNCH_ARGS[@]} > 0)); then
+    for override in "${EXTRA_LAUNCH_ARGS[@]}"; do
+      [[ "$override" == vslam_mode:=* ]] && return 0
+    done
+  fi
+
+  selection="$(choose_one 'VSLAM 追跡モード' \
+    'vo   ステレオ画像のみ' \
+    'vio  ステレオ画像 + IMU（再生時はIMU収録済みbagが必要）')" || exit $?
+  set_vslam_mode "${selection%%[[:space:]]*}"
 }
 
 enable_offline_replay_stack() {
@@ -1899,6 +1920,9 @@ print_summary() {
   printf '  localization : %s\n' "$(get_arg enable_localization)"
   if is_true "$(get_arg enable_localization)"; then
     printf '  VSLAM mode   : %s\n' "$(get_arg vslam_mode)"
+    printf '  地面制約     : odometry=%s / SLAM=%s\n' \
+      "$(get_arg vslam_enable_ground_constraint_in_odometry)" \
+      "$(get_arg vslam_enable_ground_constraint_in_slam)"
     if ! is_true "$(get_arg enable_localization_manager)" && [[ -z "$MAP_DIR" ]]; then
       printf '  VSLAM init   : mapless odometry (no saved map load/save)\n'
     else
@@ -2183,6 +2207,9 @@ if ((${#EXTRA_LAUNCH_ARGS[@]} > 0)); then
   done
 fi
 normalize_localization_init_mode
+if [[ "$INTERACTIVE" == 'true' ]]; then
+  configure_vslam_interactively
+fi
 normalize_vslam_mode
 if [[ "$INTERACTIVE" == 'true' ]]; then
   configure_silky_evcam_bias_interactively
