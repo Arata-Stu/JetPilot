@@ -1714,12 +1714,25 @@ def _custom_line_geometry_validation(
             "containment_checked": False,
         }
 
-    area_twice = sum(
-        polygon[index][0] * polygon[(index + 1) % len(polygon)][1]
-        - polygon[(index + 1) % len(polygon)][0] * polygon[index][1]
-        for index in range(len(polygon))
-    )
-    if not math.isfinite(area_twice) or abs(area_twice) <= CUSTOM_LINE_POINT_EPSILON_M:
+    closed_lane = bool(lane.get("closed_loop", True))
+    outer_bound, inner_bound = left_bound, right_bound
+    if closed_lane:
+        # Closed bounds are separate rings. Joining their endpoints would cut
+        # the drivable closing segment out of the corridor.
+        if abs(_signed_area_twice_xy(inner_bound)) > abs(_signed_area_twice_xy(outer_bound)):
+            outer_bound, inner_bound = inner_bound, outer_bound
+        outer_area = abs(_signed_area_twice_xy(outer_bound))
+        inner_area = abs(_signed_area_twice_xy(inner_bound))
+        usable = (
+            math.isfinite(outer_area) and math.isfinite(inner_area)
+            and inner_area > CUSTOM_LINE_POINT_EPSILON_M
+            and outer_area - inner_area > CUSTOM_LINE_POINT_EPSILON_M
+            and all(_point_inside_polygon(point, outer_bound) for point in inner_bound)
+        )
+    else:
+        area_twice = _signed_area_twice_xy(polygon)
+        usable = math.isfinite(area_twice) and abs(area_twice) > CUSTOM_LINE_POINT_EPSILON_M
+    if not usable:
         return {
             "valid": False,
             "issue": "primary lane bounds do not form a usable corridor",
@@ -1727,21 +1740,24 @@ def _custom_line_geometry_validation(
             "containment_checked": False,
         }
 
-    closed_lane = bool(lane.get("closed_loop", True))
     min_clearance = math.inf
     def validate_sample(xy: list[float], label: str) -> dict[str, Any] | None:
         nonlocal min_clearance
-        if not _point_inside_polygon(xy, polygon):
+        clearance = min(
+            _nearest_distance(xy, left_bound, closed_lane),
+            _nearest_distance(xy, right_bound, closed_lane),
+        )
+        inside = (
+            clearance <= CUSTOM_LINE_POINT_EPSILON_M
+            or (_point_inside_polygon(xy, outer_bound) and not _point_inside_polygon(xy, inner_bound))
+        ) if closed_lane else _point_inside_polygon(xy, polygon)
+        if not inside:
             return {
                 "valid": False,
                 "issue": f"{label} is outside the primary lane bounds",
                 "min_clearance_m": None if min_clearance == math.inf else min_clearance,
                 "containment_checked": True,
             }
-        clearance = min(
-            _nearest_distance(xy, left_bound, closed_lane),
-            _nearest_distance(xy, right_bound, closed_lane),
-        )
         min_clearance = min(min_clearance, clearance)
         return None
 

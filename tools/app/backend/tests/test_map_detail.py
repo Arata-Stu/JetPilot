@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from jetpilot_console.map_detail import (
     CUSTOM_LINE_MAX_POINTS,
     _derive_custom_trajectory,
+    _custom_line_geometry_validation,
     activate_custom_line,
     activate_hd_map_version,
     build_map_detail,
@@ -498,6 +499,26 @@ lanes:
 
 
 class CustomLineTest(unittest.TestCase):
+    def test_closed_centerline_clone_includes_closing_corridor(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            config, map_dir = self._make_closed_two_gate_map(Path(temporary_directory))
+            detail = create_custom_line(config, {"map_dir": str(map_dir), "name": "Full loop", "base": "centerline"})
+            self.assertTrue(detail["custom_lines"][0]["valid"])
+            # A point on the closing corridor, and either physical boundary,
+            # must remain usable; crossing the infield must still fail.
+            for xy in ([0, 5], [2, 5], [-2, 5]):
+                result = _custom_line_geometry_validation(map_dir, [{"x_m": xy[0], "y_m": xy[1]}], False)
+                self.assertTrue(result["valid"], result["issue"])
+            crossing = _custom_line_geometry_validation(
+                map_dir, [{"x_m": 0, "y_m": 5}, {"x_m": 10, "y_m": 5}], False,
+            )
+            self.assertFalse(crossing["valid"])
+            self.assertIn("segment[0]", crossing["issue"])
+            for xy in ([5, 5], [-3, 5]):
+                result = _custom_line_geometry_validation(map_dir, [{"x_m": xy[0], "y_m": xy[1]}], False)
+                self.assertFalse(result["valid"])
+                self.assertIn("outside", result["issue"])
+
     def test_closed_line_short_seam_has_valid_first_point_curvature(self) -> None:
         points = [
             {"x_m": x, "y_m": y, "speed_mps": 0.0}
@@ -687,13 +708,15 @@ lanes:
   - id: "lane_001"
     closed_loop: true
     left_bound:
-      - [-2, 12, 0]
-      - [5, 12, 0]
-      - [12, 12, 0]
+      - [2, 2, 0]
+      - [8, 2, 0]
+      - [8, 8, 0]
+      - [2, 8, 0]
     right_bound:
       - [-2, -2, 0]
-      - [5, -2, 0]
       - [12, -2, 0]
+      - [12, 12, 0]
+      - [-2, 12, 0]
     centerline:
       - [0, 0, 0]
       - [10, 0, 0]
