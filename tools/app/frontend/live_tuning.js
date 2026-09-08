@@ -2,14 +2,20 @@
 const tuning = {enabled:false, connected:false, epoch:0, busy:false, timer:null,
   host:'', user:'', mapPath:'', mapId:'', status:null, receivedAt:0,
   line:'centerline', speed:1, sectionSpeeds:{}, preview:null, previewDetail:null,
-  active:null, trail:[], error:''};
+  active:null, trail:[], error:'', editorLayers:null};
 
 function tuningVisible() {
   return tuning.enabled && state.tab === 'maps' && state.selectedMapPath === tuning.mapPath;
 }
+function endLiveTuning() {
+  disconnectTuning();
+  tuning.enabled = false;
+  if (tuning.editorLayers) state.mapLayers = {...tuning.editorLayers};
+  tuning.editorLayers = null;
+}
 function toggleLiveTuning() {
   if (tuning.enabled) {
-    disconnectTuning(); tuning.enabled = false;
+    endLiveTuning();
   } else {
     if (hasUnsavedMapEdits()) {
       toast('地図の変更を保存してから実車調整へ進んでください。', 'error');
@@ -20,6 +26,7 @@ function toggleLiveTuning() {
     if(tuning.mapPath!==state.selectedMapPath) Object.assign(tuning,{line:'centerline',speed:1,sectionSpeeds:{},status:null,mapId:''});
     Object.assign(tuning, {enabled:true, mapPath:state.selectedMapPath,
       host:target.host, user:target.user, preview:null, active:null, trail:[], error:''});
+    tuning.editorLayers = {...state.mapLayers};
     state.mapLayers = {...state.mapLayers, landmark:false, odometry:false, left_bound:true,
       right_bound:true, centerline:true, raceline:true, custom_line:true, section_gates:true, section_labels:true};
   }

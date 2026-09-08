@@ -1467,8 +1467,8 @@ function restoreRenderScrollPositions(root) {
 }
 
 function render() {
+  if (tuning.enabled && tuning.mapPath !== state.selectedMapPath) endLiveTuning();
   if (tuning.connected && !tuningVisible()) disconnectTuning();
-  if (tuning.enabled && tuning.mapPath !== state.selectedMapPath) tuning.enabled = false;
   stopAnalysisAnimationFrame();
   const app = $("app");
   captureRenderScrollPositions(app);

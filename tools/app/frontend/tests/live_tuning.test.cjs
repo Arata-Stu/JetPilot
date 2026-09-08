@@ -72,3 +72,43 @@ test('live map redraw never loads raster images, video or point cloud and caps c
   assert.equal(imageLoads,0);assert.equal(camera,0);assert.equal(cloud,0);
   assert.ok(canvas.width<=1400 && canvas.height<=1000);
 });
+
+test('returning from live adjustment restores raster drawing and the chosen layers',()=>{
+  const ctx=context();
+  const layers={landmark:true,odometry:true,left_bound:false,right_bound:true,
+    centerline:true,raceline:false,custom_line:false,section_gates:false,section_labels:false};
+  ctx.state.mapLayers={...layers};
+  Object.assign(ctx,{render(){},stopSimulationLoop(){},jetsonTarget:()=>({host:'localhost',user:'test'})});
+  ctx.toggleLiveTuning();
+  assert.equal(ctx.state.mapLayers.landmark,false);
+  ctx.toggleLiveTuning();
+  assert.deepEqual({...ctx.state.mapLayers},layers);
+  const app=fs.readFileSync(path.join(__dirname,'../app.js'),'utf8');
+  const begin=app.indexOf('function drawMapPreview()');
+  const end=app.indexOf('\nfunction ',begin+1);
+  let images=0;
+  const canvas={getContext:()=>({clearRect(){},fillRect(){},drawImage(){images++;}})};
+  ctx.state.selectedMapDetail.raster={image_url:'/raster.png',width:640,height:480};
+  Object.assign(ctx,{$:id=>id==='map-preview-canvas'?canvas:null,
+    refreshTuningPanel(){},updateMapCameraView(){},drawPointCloud(){},pointCloudActive:()=>false,
+    applyMapCanvasDisplay(){},drawGrid(){},drawMapLayers(){},drawTuningOverlay(){},
+    mapPreviewImages:new Map([['/raster.png',{complete:true,naturalWidth:640,naturalHeight:480}]]),console});
+  vm.runInContext(app.slice(begin,end),ctx);
+  ctx.drawMapPreview();
+  assert.equal(images,1);
+});
+
+test('ending adjustment after a map change preserves intentionally hidden layers',()=>{
+  const ctx=context();
+  ctx.state.mapLayers={landmark:false,odometry:true};
+  Object.assign(ctx,{render(){},stopSimulationLoop(){},jetsonTarget:()=>({host:'localhost',user:'test'})});
+  ctx.toggleLiveTuning();
+  ctx.state.selectedMapPath='/other-map';
+  ctx.endLiveTuning();
+  assert.equal(ctx.t.enabled,false);
+  assert.equal(ctx.t.editorLayers,null);
+  assert.deepEqual({...ctx.state.mapLayers},{landmark:false,odometry:true});
+  ctx.state.mapLayers.landmark=true;
+  ctx.endLiveTuning();
+  assert.equal(ctx.state.mapLayers.landmark,true);
+});
