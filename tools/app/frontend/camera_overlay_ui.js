@@ -30,7 +30,7 @@ function cameraProjectionMapIssue(timeline, detail) {
 function cameraOverlayLines(detail, draft=false) {
   const lanes=draft && state.mapEditor.mapPath===detail?.map?.path ? state.mapEditor.lanes : (detail?.hd_map?.lanes || []);
   const lines=[];
-  for(const lane of lanes) for(const [field,color] of [['left_bound','#45ed88'],['right_bound','#f280e9'],['centerline','#ffe65c']]) {
+  for(const lane of lanes) for(const [field,color] of [['left_bound','#45ed88'],['right_bound','#f280e9'],['centerline','#ffe65c'],['drivable_left_bound','#62b6ff'],['drivable_right_bound','#62b6ff']]) {
     lines.push({points:lane[field] || [], closed:lane.closed_loop, color});
   }
   if(detail?.raceline_csv?.points?.length) {
@@ -40,6 +40,13 @@ function cameraOverlayLines(detail, draft=false) {
   if(draft && state.customLineEditor.mapPath===detail?.map?.path && state.customLineEditor.workingLine) {
     const line=state.customLineEditor.workingLine;
     lines.push({points:customLineCoordinates(line), closed:line.closed_loop, color:'#ffa954'});
+  }
+  const obstacles=draft && state.mapEditor.mapPath===detail?.map?.path ? state.mapEditor.obstacles || [] : detail?.hd_map?.obstacles || [];
+  for (const obstacle of obstacles) {
+    const polygon=obstacle.polygon || [], height=Number(obstacle.height_m || 0);
+    lines.push({points:polygon, closed:true, color:'#ff7046'});
+    lines.push({points:polygon.map(p=>[p[0],p[1],height]), closed:true, color:'#ff7046', relativeZ:true});
+    for (const p of polygon) lines.push({points:[[p[0],p[1],0],[p[0],p[1],height]], closed:false, color:'#ff7046', relativeZ:true});
   }
   return lines;
 }
@@ -57,7 +64,7 @@ function paintCameraOverlay(ctx, width, height, timeline, payload, detail, draft
   ctx.lineWidth=Math.max(2,width/400);
   ctx.lineCap='round';
   for(const line of lines) {
-    const segments=CameraProjection.segments(line.points,line.closed,model,projection.camera_from_map,projection.image_geometry,width,height,z);
+    const segments=CameraProjection.segments(line.relativeZ ? line.points.map(p=>[p[0],p[1],z+(p[2] || 0)]) : line.points,line.closed,model,projection.camera_from_map,projection.image_geometry,width,height,z);
     ctx.strokeStyle=line.color;
     ctx.beginPath();
     for(const [a,b] of segments) {ctx.moveTo(...a);ctx.lineTo(...b);}
@@ -65,7 +72,7 @@ function paintCameraOverlay(ctx, width, height, timeline, payload, detail, draft
     drawn+=segments.length;
   }
   ctx.restore();
-  return drawn ? '投影中：左境界 緑 / 右境界 桃 / 中央 黄 / Raceline 水色 / Custom 橙' : '投影可能なラインが画角内にありません。';
+  return drawn ? '投影中：経路生成 緑・桃 / 走行可能 青 / 障害物 赤橙 / 中央 黄 / Raceline 水色 / Custom 橙' : '投影可能なラインが画角内にありません。';
 }
 
 function drawAnalysisCameraOverlays() {

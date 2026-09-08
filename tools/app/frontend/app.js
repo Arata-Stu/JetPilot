@@ -17,7 +17,7 @@ const DEFAULT_MAP_EDITOR_ASSIST_RANGE_POINTS = 4;
 const DEFAULT_MAP_EDITOR_ASSIST_SPACING_M = 0.08;
 const MAX_MAP_EDITOR_ASSIST_RANGE_POINTS = 30;
 const MAX_MAP_EDITOR_ASSIST_RESAMPLE_POINTS = 1200;
-const MAP_EDITOR_FIELDS = ["left_bound", "right_bound", "centerline"];
+const MAP_EDITOR_FIELDS = ["left_bound", "right_bound", "centerline", "drivable_left_bound", "drivable_right_bound"];
 const DEFAULT_CUSTOM_LINE_SPEED_MPS = 1.5;
 const MIN_CUSTOM_LINE_TARGET_SPEED_MPS = 0.1;
 
@@ -124,6 +124,7 @@ const state = {
   mapTopologyTool: "junctions",
   mapLayerSelectionsByMode: {},
   mapLayers: {
+    drivable: true, obstacles: true,
     landmark: true,
     left_bound: true,
     right_bound: true,
@@ -136,6 +137,8 @@ const state = {
     junctions: false,
   },
   mapEditor: {
+    saveError: "",
+    obstacles: [], obstacleId: "", drawingObstacle: false, obstacleVertex: null, obstacleDrag: null,
     enabled: false,
     mapPath: "",
     activeField: "left_bound",
@@ -1429,7 +1432,7 @@ async function refreshAll() {
 
 function setTab(tab) {
   if (isAnalysisTab(state.tab) && !isAnalysisTab(tab)) pauseAnalysisPlayback();
-  if (state.tab === "maps" && tab !== "maps") stopSimulationLoop();
+  if (state.tab === "maps" && tab !== "maps") { stopSimulationLoop(); clearSimulationComparison(); }
   if (
     state.tab === "fpv"
     && tab !== "fpv"
@@ -6433,7 +6436,7 @@ function renderMapInspectorTabs(detail) {
 
 function mapModeDefinition(mode) {
   return {
-    geometry: ["Geometry", "Physical bounds and centerline"],
+    geometry: ["Geometry", "走行可能・経路生成境界と障害物"],
     topology: ["Topology", "Sections, junctions and branches"],
     routes: ["Driving Lines", "Raceline and custom routes"],
     review: ["Review", "Readiness and final overlays"],
@@ -6660,6 +6663,110 @@ function hdRasterGenerationPayload() {
   };
 }
 
+const simulationComparison = { worker: null, results: null, signature: "", progress: 0, error: "", duration: 20, offset: 0, yawDegrees: 0 };
+
+function simulationComparisonInput() {
+  const path = simulationPathPoints();
+  return { path, closed: simulationPathClosed(path), profile: state.simulation.source === "custom",
+    settings: { ...state.simulation.settings }, duration: simulationComparison.duration,
+    offset: simulationComparison.offset, yawOffset: simulationComparison.yawDegrees * Math.PI / 180 };
+}
+
+function clearSimulationComparison() {
+  simulationComparison.worker?.terminate();
+  Object.assign(simulationComparison, { worker: null, results: null, signature: "", progress: 0, error: "" });
+}
+
+function updateSimulationComparisonOption(key, input) {
+  if (!["duration", "offset", "yawDegrees"].includes(key)) return;
+  const value = Number(input.value);
+  const valid = input.value.trim() !== "" && Number.isFinite(value) && value >= Number(input.min) && value <= Number(input.max);
+  input.setCustomValidity(valid ? "" : "指定範囲の数値を入力してください。");
+  if (!valid) return;
+  clearSimulationComparison();
+  simulationComparison[key] = value;
+  updateSimulationComparisonChrome();
+  drawSimulationPreview();
+}
+
+function cancelSimulationComparison() {
+  clearSimulationComparison();
+  updateSimulationComparisonChrome();
+  drawSimulationPreview();
+}
+
+function startSimulationComparison() {
+  stopSimulationLoop();
+  clearSimulationComparison();
+  const input = simulationComparisonInput();
+  if (input.path.length < 2) return;
+  if (!Array.from(document.querySelectorAll('.simulation-controls input')).filter(el => !el.disabled).every(el =>
+    el.value.trim() !== '' && Number.isFinite(Number(el.value)) && !el.validity.badInput && !el.validity.customError &&
+    (el.min === '' || Number(el.value) >= Number(el.min)) && (el.max === '' || Number(el.value) <= Number(el.max)))) {
+    simulationComparison.error = "比較条件の入力値を確認してください。";
+    updateSimulationComparisonChrome();
+    return;
+  }
+  simulationComparison.signature = JSON.stringify(input);
+  try {
+    // Isolate the MPC rollouts from UI events. A terminated run cannot publish old results.
+    const worker = new Worker('/simulation_compare.js');
+    simulationComparison.worker = worker;
+    worker.onmessage = ({ data }) => {
+      if (simulationComparison.worker !== worker) return;
+      if (simulationComparison.signature !== JSON.stringify(simulationComparisonInput())) {
+        cancelSimulationComparison();
+        return;
+      }
+      if (data.results || data.error) {
+        worker.terminate();
+        simulationComparison.worker = null;
+        simulationComparison.results = data.results || null;
+        simulationComparison.error = data.error || "";
+      } else simulationComparison.progress = data.progress;
+      updateSimulationComparisonChrome();
+      if (data.results) drawSimulationPreview();
+    };
+    worker.onerror = () => {
+      if (simulationComparison.worker !== worker) return;
+      worker.terminate();
+      simulationComparison.worker = null;
+      simulationComparison.error = "比較処理を起動できませんでした。ページを再読み込みしてください。";
+      updateSimulationComparisonChrome();
+    };
+    worker.postMessage(input);
+  } catch (error) {
+    clearSimulationComparison();
+    simulationComparison.error = error.message;
+  }
+  updateSimulationChrome();
+  updateSimulationComparisonChrome();
+  drawSimulationPreview();
+}
+
+function renderSimulationComparisonResults() {
+  const c = simulationComparison;
+  if (c.signature && c.signature !== JSON.stringify(simulationComparisonInput())) clearSimulationComparison();
+  if (c.error) return `<p class="warn" role="alert">${esc(c.error)}</p>`;
+  if (c.worker) return `<p role="status">3方式を計算中… ${Math.round(c.progress * 100)}%</p>`;
+  if (!c.results) return `<p class="field-hint">「3方式を比較」で同じ初期位置・停止状態から実行します。</p>`;
+  const number = value => value === null ? "—" : Number(value).toFixed(3);
+  return `<div class="simulation-comparison-table"><table>
+    <caption>${c.duration}秒・初期横ずれ ${c.offset} m・初期向き ${c.yawDegrees}° ／ 共通の速度・車両条件</caption>
+    <thead><tr><th>方式</th><th>追従誤差 RMS (m)</th><th>最大誤差 (m)</th><th>操舵変化 (rad/s)</th><th>走行距離 (m)</th><th>経過 (s)</th><th>結果</th></tr></thead>
+    <tbody>${c.results.map(r => `<tr><th><span style="color:${r.color}">●</span> ${esc(r.name)}</th><td>${number(r.rmsError)}</td><td>${number(r.maxError)}</td><td>${number(r.steeringRate)}</td><td>${r.distance.toFixed(2)}</td><td>${r.time.toFixed(2)}</td><td>${esc(r.status)}</td></tr>`).join("")}</tbody>
+  </table></div><p class="field-hint">誤差は車両位置から経路の線分までの距離です。操舵変化は単位時間あたりの変化量。途中終了した方式は経過時間と結果も確認してください。</p>`;
+}
+
+function updateSimulationComparisonChrome() {
+  const results = $("simulation-comparison-results");
+  if (results) results.innerHTML = renderSimulationComparisonResults();
+  const run = $("simulation-compare-button");
+  if (run) run.disabled = Boolean(simulationComparison.worker) || simulationPathPoints().length < 2;
+  const cancel = $("simulation-compare-cancel");
+  if (cancel) cancel.hidden = !simulationComparison.worker;
+}
+
 function renderSimulationPanel(detail) {
   ensureSimulationState(detail);
   const sim = state.simulation;
@@ -6680,17 +6787,24 @@ function renderSimulationPanel(detail) {
           <span id="simulation-status" class="${ready ? (sim.playing ? "running" : "ok") : "warn"}">${esc(status)}</span>
         </div>
         <div class="simulation-actions">
-          <button id="simulation-run-button" class="primary" onclick="toggleSimulationPlayback()" ${ready ? "" : "disabled"}>${sim.playing ? "Pause" : "Run"}</button>
+          <button id="simulation-compare-button" onclick="startSimulationComparison()" ${ready && !simulationComparison.worker ? "" : "disabled"}>3方式を比較</button>
+          <button id="simulation-compare-cancel" onclick="cancelSimulationComparison()" ${simulationComparison.worker ? "" : "hidden"}>比較を中止</button>
+          <button id="simulation-run-button" class="primary" onclick="toggleSimulationPlayback()" ${ready ? "" : "disabled"}>${sim.playing ? "Pause" : "PPを再生"}</button>
           <button onclick="stepSimulationOnce()" ${ready ? "" : "disabled"}>Step</button>
           <button onclick="resetSimulation()">Reset</button>
         </div>
       </div>
+      <p class="field-hint">3方式の追従を共通の簡易車両モデルで比較します。実車の制動・通信遅延・走行領域の安全判定は再現しません。</p>
       <div class="simulation-body">
         <div class="simulation-stage">
           <canvas id="simulation-canvas" width="920" height="520"></canvas>
         </div>
         <aside class="simulation-controls">
           <div class="simulation-control-grid">
+            <div class="field"><label for="simulation-compare-duration">比較時間 (s)</label><input id="simulation-compare-duration" type="number" min="1" max="120" step="1" value="${simulationComparison.duration}" oninput="updateSimulationComparisonOption('duration', this)" /></div>
+            <div class="field"><label for="simulation-compare-offset">初期横ずれ (m)</label><input id="simulation-compare-offset" type="number" min="-5" max="5" step="0.05" value="${simulationComparison.offset}" oninput="updateSimulationComparisonOption('offset', this)" /></div>
+            <div class="field"><label for="simulation-compare-yaw">初期向きのずれ (°)</label><input id="simulation-compare-yaw" type="number" min="-180" max="180" step="1" value="${simulationComparison.yawDegrees}" oninput="updateSimulationComparisonOption('yawDegrees', this)" /></div>
+            <div class="field full"><details><summary>方式別の条件</summary><p class="field-hint">Map Pursuit：横誤差補正 0.4、1.5–3.0 m/sで操舵を最大25%低減。MPC：12ステップ × 0.05秒、操舵15候補、予測最低速度0.2 m/s。重みは経路4・向き0.8・操舵0.15・終端2。実車コードの標準値です。</p></details></div>
             <div class="field full">
               <label for="simulation-source">Path source</label>
               <select id="simulation-source" onchange="setSimulationSource(this.value)">
@@ -6721,10 +6835,11 @@ function renderSimulationPanel(detail) {
             ${simulationNumberInput("maxDecelMps2", "Max decel (m/s^2)", 0.01, 0.1)}
           </div>
           <div class="simulation-metrics" id="simulation-metrics">
-            ${renderSimulationMetrics()}
+            <span class="field-hint">PP単独再生の状態</span>${renderSimulationMetrics()}
           </div>
         </aside>
       </div>
+      <div id="simulation-comparison-results" aria-live="polite">${renderSimulationComparisonResults()}</div>
     </section>
   `;
 }
@@ -7033,7 +7148,7 @@ function racelineGenerationPayload() {
 function renderLayerToggles() {
   const groups = [
     ["Reference", [["landmark", "Landmark"], ["odometry", "Odometry"]]],
-    ["Base HD Map", [["left_bound", "Left bound"], ["right_bound", "Right bound"], ["section_gates", "Section gates"], ["section_labels", "All section labels"], ["junctions", "Junctions"]]],
+    ["Base HD Map", [["drivable", "走行可能境界"], ["obstacles", "障害物"], ["left_bound", "経路生成：左"], ["right_bound", "経路生成：右"], ["section_gates", "Section gates"], ["section_labels", "All section labels"], ["junctions", "Junctions"]]],
     ["Driving Lines", [["centerline", "Centerline"], ["raceline", "Raceline"], ["custom_line", "Custom lines"]]],
   ];
   return `
@@ -7097,7 +7212,8 @@ function renderHdMapEditor(detail) {
         <button id="map-editor-redo" onclick="redoMapEditor()" ${editor.enabled && editor.redoStack.length ? "" : "disabled"}>Redo</button>
         <button id="map-editor-save" class="${canSave && saveState.dirty ? "primary" : ""} ${actionBusy("hd-map:save") ? "is-busy" : ""}" onclick="saveHdMapFromEditor()" ${canSave ? "" : "disabled"} ${actionButtonAttrs("hd-map:save", "HD map is saving...")}>${esc(actionButtonLabel("hd-map:save", "Save", "Saving..."))}</button>
       </div>
-      <div id="map-editor-save-reason" class="field-hint" role="status">${esc(saveState.issue || "境界・Centerline・Sectionをまとめて保存します")}</div>
+      <div id="map-editor-save-reason" class="field-hint" role="status">${esc(saveState.issue || "境界・障害物・Centerline・Sectionをまとめて保存します")}</div>
+      ${editor.saveError ? `<div class="field-hint warn-text" role="alert">${esc(editor.saveError)}</div>` : ""}
       <div id="map-editor-centerline-state" class="field-hint">${esc(saveState.centerline)}</div>
       <button id="map-editor-define-section" onclick="defineWholeCourseSection()" ${saveState.canDefine ? "" : "hidden"}>全コースを1 Sectionにする</button>
       </div>
@@ -7128,10 +7244,15 @@ function renderHdMapEditor(detail) {
       <label class="layer-toggle"><input id="lane-manual-center" type="checkbox" ${lane.centerline_mode === "manual" ? "checked" : ""} onchange="setManualCenterline(this.checked)" ${editor.enabled ? "" : "disabled"} />Centerlineの手修正を保持</label>
       <div class="field-hint">Centerlineも下のモードで追加・移動できます。手修正後は境界を動かしても保持されます。Auto Centerで自動生成に戻ります。</div>
       <div class="editor-field-row">
-        ${editorFieldButton("left_bound", "Left boundary")}
-        ${editorFieldButton("right_bound", "Right boundary")}
+        ${editorFieldButton("left_bound", "経路生成：左")}
+        ${editorFieldButton("right_bound", "経路生成：右")}
         ${editorFieldButton("centerline", "Centerline")}
+        ${editorFieldButton("drivable_left_bound", "走行可能：左")}
+        ${editorFieldButton("drivable_right_bound", "走行可能：右")}
       </div>
+      <div class="field-hint">緑・桃＝経路生成境界。青＝壁などの走行可能境界。走行可能境界の編集はCenterlineを動かしません。</div>
+      <button onclick="copyGenerationToDrivable()" ${editor.enabled ? "" : "disabled"}>現在の経路生成境界を走行可能境界へコピー</button>
+      ${renderMapObstacleEditor(detail)}
       <div class="editor-field-row" role="group" aria-label="点の編集モード">
         <button class="${editor.pointMode !== "add" ? "active" : ""}" aria-pressed="${editor.pointMode !== "add"}" onclick="setMapEditorPointMode('move')" ${editor.enabled && !editor.drawingLane ? "" : "disabled"}>点を移動</button>
         <button class="${editor.pointMode === "add" ? "active" : ""}" aria-pressed="${editor.pointMode === "add"}" onclick="setMapEditorPointMode('add')" ${editor.enabled && !editor.drawingLane ? "" : "disabled"}>点を追加</button>
@@ -7188,6 +7309,8 @@ function editorFieldButton(field, label) {
 }
 
 function setActiveMapEditorLane(laneId) {
+  if (state.mapEditor.drawingObstacle) return toast("先に障害物の描画を完了するか削除してください。", "error");
+  state.mapEditor.obstacleId = ""; state.mapEditor.obstacleDrag = null;
   state.mapEditor.drawingLane = false;
   if (!state.mapEditor.lanes.some((lane) => lane.id === laneId)) return;
   state.mapEditor.activeLaneId = laneId;
@@ -9342,6 +9465,182 @@ function copyHdMapEditorCommand(mapPath) {
   copyText(hdMapEditorCommand(mapPath), "HD map editor command copied");
 }
 
+function cloneMapObstacles(items = []) {
+  return (items || []).map(item => ({ id: item.id, name: item.name || item.id,
+    polygon: cloneMapPolyline(item.polygon || []), height_m: Number(item.height_m ?? 0.3), margin_m: Number(item.margin_m ?? 0) }));
+}
+
+function mapObstacleEditIssue(editor = state.mapEditor) {
+  if (editor.drawingObstacle) return "障害物の描画を完了してください（3点以上）。";
+  for (const item of editor.obstacles || []) {
+    if (item.polygon.length < 3) return `${item.name}: 障害物は3点以上で囲んでください。`;
+    if (![item.height_m, item.margin_m].every(v => Number.isFinite(v) && v >= 0 && v <= 100)) return `${item.name}: 高さ・余裕は0〜100mです。`;
+  }
+  return "";
+}
+
+function selectedMapObstacle() {
+  return (state.mapEditor.obstacles || []).find(item => item.id === state.mapEditor.obstacleId);
+}
+
+function renderMapObstacleEditor(detail) {
+  const editor = state.mapEditor, item = selectedMapObstacle();
+  return `<div class="map-obstacle-editor">
+    <h4>固定障害物</h4>
+    <div class="field-hint">段ボールなどの底面を地図上で囲みます。高さは表示用、余裕はラインを近づけない距離です。車幅を自動で足す設定ではありません。</div>
+    <div class="editor-actions">
+      <button onclick="startMapObstacle()" ${editor.enabled && !editor.drawingObstacle ? "" : "disabled"}>障害物を描く</button>
+      <button onclick="finishMapObstacle()" ${editor.drawingObstacle && item?.polygon.length >= 3 ? "" : "disabled"}>障害物の描画完了</button>
+      <button onclick="selectMapObstacle('')" ${editor.drawingObstacle ? "disabled" : ""}>境界の編集へ</button>
+    </div>
+    <select aria-label="編集する障害物" onchange="selectMapObstacle(this.value)" ${editor.enabled && !editor.drawingObstacle ? "" : "disabled"}>
+      <option value="">障害物を選択</option>
+      ${(editor.obstacles || []).map(o => `<option value="${esc(o.id)}" ${o.id === editor.obstacleId ? "selected" : ""}>${esc(o.name)}</option>`).join("")}
+    </select>
+    ${item ? `<label>名前<input value="${esc(item.name)}" onchange="updateMapObstacle('name',this.value)" ${editor.enabled ? "" : "disabled"} /></label>
+      <label>高さ (m)<input type="number" min="0" max="100" step="0.01" value="${item.height_m}" onchange="updateMapObstacle('height_m',this.value)" ${editor.enabled ? "" : "disabled"} /></label>
+      <label>余裕 (m)<input type="number" min="0" max="100" step="0.01" value="${item.margin_m}" onchange="updateMapObstacle('margin_m',this.value)" ${editor.enabled ? "" : "disabled"} /></label>
+      <div class="editor-actions"><button onclick="deleteMapObstacleVertex()" ${editor.enabled && Number.isInteger(editor.obstacleVertex) ? "" : "disabled"}>障害物の選択点を削除</button><button class="danger" onclick="deleteMapObstacle()" ${editor.enabled ? "" : "disabled"}>障害物を削除</button></div>` : ""}
+    <div class="field-hint">${editor.drawingObstacle ? "角を順にクリックし、3点以上で描画完了。" : "選択した障害物の頂点をドラッグすると変形、内部をドラッグすると全体を移動します。「点を追加」も使えます。"} HD MapのSaveで保存します。</div>
+    ${(detail.environment_issues || []).map(issue => `<div class="field-hint warn-text" role="status">保存済みラインの確認：${esc(issue)}</div>`).join("")}
+    <div class="field-hint">障害物の追加だけでは迂回経路は自動生成しません。経路生成境界を調整してラインを再生成してください。</div>
+  </div>`;
+}
+
+function copyGenerationToDrivable() {
+  if (!state.mapEditor.enabled) return;
+  rememberMapEditorState();
+  const lane = activeEditorLane();
+  lane.drivable_left_bound = cloneMapPolyline(lane.left_bound);
+  lane.drivable_right_bound = cloneMapPolyline(lane.right_bound);
+  markMapEditorDirty(); render();
+}
+
+function startMapObstacle() {
+  const editor = state.mapEditor;
+  if (!editor.enabled || editor.drawingObstacle) return;
+  rememberMapEditorState();
+  let n = 1;
+  while (editor.obstacles.some(item => item.id === `obstacle_${n}`)) n++;
+  const item = {id:`obstacle_${n}`, name:`障害物 ${n}`, polygon:[], height_m:0.3, margin_m:0};
+  editor.obstacles.push(item); editor.obstacleId = item.id;
+  editor.drawingObstacle = true; editor.drawingLane = false;
+  editor.selected = null; editor.dragging = null; editor.obstacleVertex = null;
+  state.mapLayers.obstacles = true;
+  markMapEditorDirty(); render();
+}
+
+function finishMapObstacle() {
+  if (!state.mapEditor.enabled || (selectedMapObstacle()?.polygon.length || 0) < 3) return;
+  rememberMapEditorState(); state.mapEditor.drawingObstacle = false;
+  state.mapEditor.pointMode = "move";
+  markMapEditorDirty(); render();
+}
+
+function selectMapObstacle(id) {
+  if (state.mapEditor.drawingObstacle) return;
+  state.mapEditor.obstacleId = id;
+  state.mapEditor.obstacleVertex = null; state.mapEditor.obstacleDrag = null;
+  state.mapEditor.selected = null; state.mapEditor.dragging = null;
+  if (id) state.mapEditor.drawingLane = false;
+  render();
+}
+
+function updateMapObstacle(field, value) {
+  const item = selectedMapObstacle();
+  if (!state.mapEditor.enabled || !item || !["name", "height_m", "margin_m"].includes(field)) return;
+  const next = field === "name" ? String(value).slice(0,120) : Number(value);
+  if (field !== "name" && (!Number.isFinite(next) || next < 0 || next > 100)) return;
+  rememberMapEditorState(); item[field] = next;
+  markMapEditorDirty(); render();
+}
+
+function deleteMapObstacle() {
+  if (!state.mapEditor.enabled || !selectedMapObstacle()) return;
+  rememberMapEditorState();
+  state.mapEditor.obstacles = state.mapEditor.obstacles.filter(o => o.id !== state.mapEditor.obstacleId);
+  state.mapEditor.obstacleId = ""; state.mapEditor.drawingObstacle = false;
+  state.mapEditor.obstacleVertex = null; state.mapEditor.obstacleDrag = null;
+  markMapEditorDirty(); render();
+}
+
+function deleteMapObstacleVertex() {
+  const item = selectedMapObstacle(), index = state.mapEditor.obstacleVertex;
+  if (!state.mapEditor.enabled || !item || !Number.isInteger(index)) return;
+  rememberMapEditorState(); item.polygon.splice(index,1); state.mapEditor.obstacleVertex = null;
+  markMapEditorDirty(); render();
+}
+
+function mapPointInObstacle(point, polygon) {
+  let inside = false;
+  for (let i=0,j=polygon.length-1;i<polygon.length;j=i++) {
+    const a=polygon[i],b=polygon[j];
+    if ((a[1]>point[1]) !== (b[1]>point[1]) && point[0]<(b[0]-a[0])*(point[1]-a[1])/(b[1]-a[1])+a[0]) inside=!inside;
+  }
+  return inside;
+}
+
+function handleMapObstacleDown(event) {
+  const editor = state.mapEditor, item = selectedMapObstacle(), detail = state.selectedMapDetail;
+  if (!editor.enabled || !item || editor.mapPath !== detail?.map?.path) return false;
+  if (event.button !== 0 || !mapEditorRasterReady(detail)) return true;
+  event.preventDefault();
+  const {canvas,point,hitRadius} = canvasEventInfo(event);
+  const world = mapPixelToWorld(detail,canvas.width,canvas.height,point);
+  if (!world) return true;
+  const project = mapPointProjector(detail,canvas.width,canvas.height);
+  const index = item.polygon.findIndex(p => pointDistance(project(p),point) <= hitRadius);
+  if (editor.drawingObstacle || editor.pointMode === "add") {
+    rememberMapEditorState();
+    let insert = item.polygon.length;
+    if (!editor.drawingObstacle && item.polygon.length >= 2) {
+      let best=Infinity;
+      item.polygon.forEach((p,i)=>{const d=pointSegmentDistance(point,project(p),project(item.polygon[(i+1)%item.polygon.length]));if(d<best){best=d;insert=i+1;}});
+    }
+    item.polygon.splice(insert,0,world); editor.obstacleVertex=insert;
+    markMapEditorDirty(); render();
+  } else {
+    editor.obstacleVertex = index >= 0 ? index : null;
+    if (index >= 0 || mapPointInObstacle(world,item.polygon)) {
+      editor.obstacleDrag = {index, world, polygon:cloneMapPolyline(item.polygon), snapshot:captureMapEditorSnapshot()};
+      canvas.setPointerCapture?.(event.pointerId);
+    }
+    drawMapPreview();
+  }
+  return true;
+}
+
+function handleMapObstacleMove(event) {
+  const editor = state.mapEditor, item = selectedMapObstacle(), drag = editor.obstacleDrag;
+  if (!editor.enabled || !item) return false;
+  if (!drag) return true;
+  const detail = state.selectedMapDetail;
+  const {canvas,point} = canvasEventInfo(event);
+  const world=mapPixelToWorld(detail,canvas.width,canvas.height,point);
+  if (!world || pointDistance(world,drag.world)<1e-9) return true;
+  if (drag.snapshot) {editor.undoStack.push(drag.snapshot);editor.redoStack=[];drag.snapshot=null;}
+  if (drag.index >= 0) item.polygon[drag.index]=world;
+  else item.polygon=drag.polygon.map(p=>[p[0]+world[0]-drag.world[0],p[1]+world[1]-drag.world[1]]);
+  markMapEditorDirty(); drawMapPreview();
+  return true;
+}
+
+function drawMapObstacles(ctx, detail, project, scale) {
+  if (state.mapLayers.obstacles === false) return;
+  const editor=state.mapEditor;
+  const items=editorLanesForDetail(detail) ? editor.obstacles : detail.hd_map?.obstacles || [];
+  for (const item of items || []) {
+    const points=item.polygon.map(project); if (!points.length) continue;
+    const selected=editor.enabled && editor.obstacleId === item.id;
+    ctx.save();ctx.beginPath();points.forEach(([x,y],i)=>i?ctx.lineTo(x,y):ctx.moveTo(x,y));
+    if (!(selected && editor.drawingObstacle)) ctx.closePath();
+    ctx.fillStyle="rgba(255,112,70,0.28)";ctx.fill();ctx.strokeStyle=selected?"#ffffff":"#ff7046";ctx.lineWidth=2*scale;ctx.stroke();
+    drawLabel(ctx,item.name,points[0][0],points[0][1]-10*scale,scale);
+    if (selected) for (const [x,y] of points) {ctx.beginPath();ctx.arc(x,y,5*scale,0,Math.PI*2);ctx.fillStyle="#ff7046";ctx.fill();}
+    ctx.restore();
+  }
+}
+
 function cloneMapPoint(point) {
   return [Number(point?.[0] || 0), Number(point?.[1] || 0)];
 }
@@ -9382,10 +9681,12 @@ function setManualCenterline(manual) {
 }
 
 function startPairedLane() {
+  if (state.mapEditor.drawingObstacle) return toast("先に障害物の描画を完了するか削除してください。", "error");
   if (!state.mapEditor.enabled || state.mapEditor.drawingLane) return;
   const width = Number($("lane-draw-width")?.value);
   if (!Number.isFinite(width) || width < 0.1 || width > 20) return toast("レーン幅は0.1〜20mで指定してください。", "error");
   rememberMapEditorState();
+  state.mapEditor.obstacleId = ""; state.mapEditor.obstacleDrag = null;
   const empty = activeEditorLane();
   const lane = { ...defaultEditorLane(), id: nextEditorLaneId(), closed_loop: false, primary: false, boundary_mode: "paired", centerline_mode: "auto" };
   if (MAP_EDITOR_FIELDS.every(f => !empty[f].length)) {
@@ -9408,6 +9709,9 @@ function finishPairedLane() {
   if (activeEditorLane().left_bound.length < 2) return toast("2点以上をクリックしてください。Undoで作成を戻せます。", "error");
   rememberMapEditorState();
   state.mapEditor.drawingLane = false;
+  const lane = activeEditorLane();
+  lane.drivable_left_bound = cloneMapPolyline(lane.left_bound);
+  lane.drivable_right_bound = cloneMapPolyline(lane.right_bound);
   state.mapEditor.placementPoint = null;
   state.mapEditor.pointMode = "move";
   state.mapEditor.activeField = "left_bound";
@@ -9416,6 +9720,7 @@ function finishPairedLane() {
 }
 
 function laneTopologyEditIssue(lane) {
+  if (["left", "right"].some(side => (lane[`drivable_${side}_bound`] || []).length && JSON.stringify(lane[`drivable_${side}_bound`]) !== JSON.stringify(lane[`${side}_bound`]))) return "走行可能境界を持つレーンの分割・結合は未対応です。新規レーンとして描いてください。";
   return mapEditorDirectionReverseIssue(state.selectedMapDetail, lane);
 }
 
@@ -9425,8 +9730,9 @@ function splitEditorLane() {
   try {
     const issue = laneTopologyEditIssue(lane);
     if (issue) throw new Error(issue);
-    if (!selected || selected.field === "centerline") throw new Error("Left / Rightを選び、分割する境界点をクリックしてください。");
+    if (!selected || !["left_bound", "right_bound"].includes(selected.field)) throw new Error("Left / Rightを選び、分割する境界点をクリックしてください。");
     const parts = LaneGeometry.split(lane, selected.index, nextEditorLaneId());
+    for (const part of parts) { part.drivable_left_bound = cloneMapPolyline(part.left_bound); part.drivable_right_bound = cloneMapPolyline(part.right_bound); }
     rememberMapEditorState();
     state.mapEditor.lanes.splice(state.mapEditor.lanes.indexOf(lane), 1, ...parts);
     state.mapEditor.selected = null;
@@ -9444,6 +9750,7 @@ function joinEditorLane() {
     const issue = laneTopologyEditIssue(lane) || laneTopologyEditIssue(target);
     if (issue) throw new Error(issue);
     const joined = LaneGeometry.join(lane, target);
+    joined.drivable_left_bound = cloneMapPolyline(joined.left_bound); joined.drivable_right_bound = cloneMapPolyline(joined.right_bound);
     rememberMapEditorState();
     state.mapEditor.lanes = state.mapEditor.lanes.filter(l => l.id !== target.id).map(l => l.id === lane.id ? joined : l);
     if (state.mapEditor.primaryLaneId === target.id) state.mapEditor.primaryLaneId = lane.id;
@@ -9461,6 +9768,8 @@ function cloneEditorLane(lane = defaultEditorLane()) {
     closed_loop: lane.closed_loop !== false,
     boundary_mode: lane.boundary_mode === "paired" ? "paired" : "independent",
     centerline_mode: lane.centerline_mode === "manual" ? "manual" : "auto",
+    drivable_left_bound: cloneMapPolyline(lane.drivable_left_bound || lane.left_bound || []),
+    drivable_right_bound: cloneMapPolyline(lane.drivable_right_bound || lane.right_bound || []),
     left_bound: cloneMapPolyline(lane.left_bound || []),
     right_bound: cloneMapPolyline(lane.right_bound || []),
     centerline: cloneMapPolyline(lane.centerline || []),
@@ -9475,6 +9784,7 @@ function defaultEditorLane() {
     left_bound: [],
     right_bound: [],
     centerline: [],
+    drivable_left_bound: [], drivable_right_bound: [],
   };
 }
 
@@ -9499,6 +9809,7 @@ function ensureMapEditor(detail, options = {}) {
     state.mapEditor = {
       ...state.mapEditor,
       mapPath,
+      saveError: "",
       dirty: false,
       revision,
       selected: null,
@@ -9507,6 +9818,7 @@ function ensureMapEditor(detail, options = {}) {
       primaryLaneId: primary.id,
       activeLaneId: primary.id,
       lanes,
+      obstacles: cloneMapObstacles(detail.hd_map?.obstacles), obstacleId: "", drawingObstacle: false, obstacleVertex: null, obstacleDrag: null,
       undoStack: [],
       redoStack: [],
       dragSnapshot: null,
@@ -9527,6 +9839,8 @@ function activeEditorLane() {
 function captureMapEditorSnapshot() {
   return {
     lanes: state.mapEditor.lanes.map(cloneEditorLane),
+    obstacles: cloneMapObstacles(state.mapEditor.obstacles),
+    obstacleId: state.mapEditor.obstacleId, drawingObstacle: state.mapEditor.drawingObstacle,
     primaryLaneId: state.mapEditor.primaryLaneId,
     activeLaneId: state.mapEditor.activeLaneId,
     activeField: state.mapEditor.activeField,
@@ -9539,6 +9853,10 @@ function captureMapEditorSnapshot() {
 function restoreMapEditorSnapshot(snapshot) {
   if (!snapshot) return;
   state.mapEditor.placementPoint = null;
+  state.mapEditor.obstacles = cloneMapObstacles(snapshot.obstacles);
+  state.mapEditor.obstacleId = snapshot.obstacleId || "";
+  state.mapEditor.drawingObstacle = Boolean(snapshot.drawingObstacle);
+  state.mapEditor.obstacleVertex = null; state.mapEditor.obstacleDrag = null;
   state.mapEditor.lanes = (snapshot.lanes || []).map(cloneEditorLane);
   if (!state.mapEditor.lanes.length) state.mapEditor.lanes = [defaultEditorLane()];
   state.mapEditor.primaryLaneId = snapshot.primaryLaneId || state.mapEditor.lanes[0].id;
@@ -11095,6 +11413,8 @@ function mapEditorLaneIssue(lane, primary) {
 }
 
 function mapEditorCollectionIssue(editor = state.mapEditor) {
+  const obstacleIssue = mapObstacleEditIssue(editor);
+  if (obstacleIssue) return obstacleIssue;
   const lanes = editor.lanes || [];
   if (!lanes.length) return "At least one lane is required";
   const seen = new Set();
@@ -11138,7 +11458,7 @@ function canSmoothSelectedEditorRange() {
   const selected = state.mapEditor.selected;
   if (!detail || !state.mapEditor.enabled || state.mapEditor.mapPath !== detail.map?.path || !selected) return false;
   if (!MAP_EDITOR_FIELDS.includes(selected.field)) return false;
-  if (LaneGeometry.paired(activeEditorLane()) && selected.field !== "centerline") return false;
+  if (LaneGeometry.paired(activeEditorLane()) && ["left_bound", "right_bound"].includes(selected.field)) return false;
   const lane = activeEditorLane();
   const points = lane[selected.field] || [];
   if (!points[selected.index]) return false;
@@ -11163,7 +11483,9 @@ function updateMapEditorAssistNumber(field, input) {
 }
 
 function setMapEditorField(field) {
+  if (state.mapEditor.drawingObstacle) return toast("先に障害物の描画を完了するか削除してください。", "error");
   if (!MAP_EDITOR_FIELDS.includes(field)) return;
+  state.mapEditor.obstacleId = ""; state.mapEditor.drawingObstacle = false;
   state.mapEditor.activeField = field;
   state.mapEditor.selected = null;
   state.mapEditor.dragging = null;
@@ -11266,6 +11588,9 @@ function reverseActiveMapEditorLaneDirection() {
     detail: "The START position stays fixed. Centerline order will reverse, and left/right boundaries will swap. Save HD Map to apply it.",
   })) return;
   rememberMapEditorState();
+  const oldDrivableLeft = lane.drivable_left_bound;
+  lane.drivable_left_bound = reverseDirectionPolyline(lane.drivable_right_bound || lane.right_bound, lane.closed_loop);
+  lane.drivable_right_bound = reverseDirectionPolyline(oldDrivableLeft || lane.left_bound, lane.closed_loop);
   const oldLeft = lane.left_bound;
   const oldRight = lane.right_bound;
   lane.centerline = reverseDirectionPolyline(lane.centerline, lane.closed_loop);
@@ -11301,7 +11626,7 @@ function updateMapEditorChrome() {
     save.classList.toggle("primary", saveState.canSave && saveState.dirty);
   }
   const reason = $("map-editor-save-reason");
-  if (reason) reason.textContent = saveState.issue || "境界・Centerline・Sectionをまとめて保存します";
+  if (reason) reason.textContent = saveState.issue || "境界・障害物・Centerline・Sectionをまとめて保存します";
   const centerline = $("map-editor-centerline-state");
   if (centerline) centerline.textContent = saveState.centerline;
   const define = $("map-editor-define-section");
@@ -11858,7 +12183,7 @@ function insertEditorPoint(lane, field, world, detail, pixel) {
   if (!lane[field]) lane[field] = [];
   const points = lane[field];
   if (points.length < 2) {
-    if (LaneGeometry.paired(lane) && field !== "centerline") {
+    if (LaneGeometry.paired(lane) && ["left_bound", "right_bound"].includes(field)) {
       const other = field === "left_bound" ? "right_bound" : "left_bound";
       const offset = points.length ? [lane[other][0][0] - points[0][0], lane[other][0][1] - points[0][1]] : [0, field === "left_bound" ? -1 : 1];
       lane[other].push([world[0] + offset[0], world[1] + offset[1]]);
@@ -11870,7 +12195,7 @@ function insertEditorPoint(lane, field, world, detail, pixel) {
   const insertIndex = segment
     ? (lane.closed_loop && segment.index === points.length - 1 ? points.length : segment.index + 1)
     : points.length;
-  if (LaneGeometry.paired(lane) && field !== "centerline") {
+  if (LaneGeometry.paired(lane) && ["left_bound", "right_bound"].includes(field)) {
     const other = field === "left_bound" ? "right_bound" : "left_bound";
     const prev = Math.max(0, insertIndex - 1), next = insertIndex % points.length;
     const a = points[prev], b = points[next];
@@ -12060,6 +12385,7 @@ function pairedLanePlacement(world) {
 
 function handleMapEditorPointerDown(event) {
   if (mapEditorInteractionLocked()) return;
+  if (handleMapObstacleDown(event)) return;
   if (state.customLineEditor.enabled) {
     handleCustomLinePointerDown(event);
     return;
@@ -12103,7 +12429,7 @@ function handleMapEditorPointerDown(event) {
     if (field === "centerline") lane.centerline_mode = "manual";
     const index = insertEditorPoint(lane, field, world, detail, point);
     state.mapEditor.selected = { field, index };
-    if (field !== "centerline") regenerateEditorCenterline(lane);
+    if (["left_bound", "right_bound"].includes(field)) regenerateEditorCenterline(lane);
     markMapEditorDirty();
   } else {
     state.mapEditor.selected = null;
@@ -12115,6 +12441,7 @@ function handleMapEditorPointerDown(event) {
 
 function handleMapEditorPointerMove(event) {
   if (mapEditorInteractionLocked()) return;
+  if (handleMapObstacleMove(event)) return;
   if (state.customLineEditor.enabled) {
     handleCustomLinePointerMove(event);
     return;
@@ -12150,12 +12477,13 @@ function handleMapEditorPointerMove(event) {
   }
   if (drag.field === "centerline") lane.centerline_mode = "manual";
   lane[drag.field][drag.index] = world;
-  if (drag.field !== "centerline") regenerateEditorCenterline(lane);
+  if (["left_bound", "right_bound"].includes(drag.field)) regenerateEditorCenterline(lane);
   markMapEditorDirty();
   drawMapPreview();
 }
 
 function handleMapEditorPointerUp(event) {
+  if (state.mapEditor.obstacleDrag) { state.mapEditor.obstacleDrag = null; render(); return; }
   if (["pointerleave", "pointercancel"].includes(event.type) && state.mapEditor.placementPoint) {
     state.mapEditor.placementPoint = null;
     drawMapPreview();
@@ -12190,14 +12518,14 @@ function deleteEditorPoint(target) {
   if (!lane[target.field] || !lane[target.field][target.index]) return false;
   rememberMapEditorState();
   if (target.field === "centerline") lane.centerline_mode = "manual";
-  if (LaneGeometry.paired(lane) && target.field !== "centerline") {
+  if (LaneGeometry.paired(lane) && ["left_bound", "right_bound"].includes(target.field)) {
     const other = target.field === "left_bound" ? "right_bound" : "left_bound";
     lane[other].splice(target.index, 1);
   }
   lane[target.field].splice(target.index, 1);
   state.mapEditor.selected = null;
   state.mapEditor.dragging = null;
-  if (target.field !== "centerline") regenerateEditorCenterline(lane);
+  if (["left_bound", "right_bound"].includes(target.field)) regenerateEditorCenterline(lane);
   markMapEditorDirty();
   return true;
 }
@@ -12239,7 +12567,7 @@ function smoothSelectedEditorRange() {
   rememberMapEditorState();
   if (selected.field === "centerline") lane.centerline_mode = "manual";
   // Independent smoothing changes point correspondence; require explicit conversion first.
-  if (LaneGeometry.paired(lane) && selected.field !== "centerline") {
+  if (LaneGeometry.paired(lane) && ["left_bound", "right_bound"].includes(selected.field)) {
     toast("ペア境界の平滑化は未対応です。点をドラッグして調整してください。", "error");
     return;
   }
@@ -12251,7 +12579,7 @@ function smoothSelectedEditorRange() {
   state.mapEditor.activeField = selected.field;
   state.mapEditor.dragging = null;
   state.mapEditor.dragSnapshot = null;
-  if (selected.field !== "centerline") regenerateEditorCenterline(lane);
+  if (["left_bound", "right_bound"].includes(selected.field)) regenerateEditorCenterline(lane);
   markMapEditorDirty();
   toast(`Smoothed ${range.segment.length} pts to ${smoothed.length} pts`);
   updateMapEditorChrome();
@@ -12350,6 +12678,7 @@ async function saveHdMapFromEditor() {
     detail: `Lane: ${state.mapEditor.primaryLaneId}\nLeft/right bounds and centerline files will be updated.`,
     destructive: true,
   })) return;
+  state.mapEditor.saveError = "";
   if (!beginAction("hd-map:save", "Saving HD map")) return;
   const wasEnabled = state.mapEditor.enabled;
   const requestContext = captureSelectedMapContext(mapPath);
@@ -12363,6 +12692,7 @@ async function saveHdMapFromEditor() {
         map_dir: mapPath,
         primary_lane_id: state.mapEditor.primaryLaneId,
         lanes: state.mapEditor.lanes,
+        obstacles: state.mapEditor.obstacles,
         section_gates: state.sectionEditor.gates,
       }),
     });
@@ -12394,7 +12724,7 @@ async function saveHdMapFromEditor() {
     toast(hasNewerEdits || newerSections ? "HD map snapshot saved; newer edits remain unsaved." : "HD map saved");
     render();
   } catch (error) {
-    toast(`HD map save failed: ${error.message}`, "error");
+    if (state.mapEditor.mapPath === mapPath) state.mapEditor.saveError = `保存できませんでした: ${error.message}`;
   } finally {
     endAction("hd-map:save", { renderAfter: state.tab === "maps" });
   }
@@ -12698,6 +13028,9 @@ function drawMapLayers(ctx, detail, width, height) {
     ? [...lanes.filter((lane) => lane.id !== activeLaneId), ...lanes.filter((lane) => lane.id === activeLaneId)]
     : lanes;
   for (const lane of orderedLanes) {
+    if (state.mapLayers.drivable !== false) {
+      for (const side of ["left", "right"]) drawPolyline(ctx, (lane[`drivable_${side}_bound`] || lane[`${side}_bound`] || []).map(toPixel), "#62b6ff", 1.5, lane.closed_loop, uiScale);
+    }
     const active = !editorLanes || lane.id === activeLaneId;
     if (state.mapLayers.left_bound) drawPolyline(ctx, (lane.left_bound || []).map(toPixel), active ? "#45c478" : "rgba(69, 196, 120, 0.20)", active ? 3 : 1.5, lane.closed_loop, uiScale);
     if (state.mapLayers.right_bound) drawPolyline(ctx, (lane.right_bound || []).map(toPixel), active ? "#d878d8" : "rgba(216, 120, 216, 0.20)", active ? 3 : 1.5, lane.closed_loop, uiScale);
@@ -12742,6 +13075,7 @@ function drawMapLayers(ctx, detail, width, height) {
     }
   }
   if (state.mapLayers.junctions) drawJunctionLayers(ctx, detail, toPixel, uiScale);
+  drawMapObstacles(ctx, detail, toPixel, uiScale);
   drawLanePlacementPreview(ctx, detail, toPixel, uiScale);
 }
 
@@ -13052,6 +13386,7 @@ function drawEditorPointHandles(ctx, detail, toPixel, uiScale = 1) {
     ["left_bound", "#45c478"],
     ["right_bound", "#d878d8"],
     ["centerline", "#e7c84b"],
+    ["drivable_left_bound", "#62b6ff"], ["drivable_right_bound", "#62b6ff"],
   ];
   ctx.save();
   if (LaneGeometry.paired(lane)) {
@@ -13144,7 +13479,7 @@ function mapPointProjector(detail, width, height) {
 function collectMapPoints(detail) {
   const points = [];
   for (const lane of detail.hd_map?.lanes || []) {
-    points.push(...(lane.left_bound || []), ...(lane.right_bound || []), ...(lane.centerline || []));
+    points.push(...(lane.left_bound || []), ...(lane.right_bound || []), ...(lane.centerline || []), ...(lane.drivable_left_bound || []), ...(lane.drivable_right_bound || []));
   }
   for (const gate of detail.hd_map?.section_gates || []) points.push(...(gate.line || []));
   points.push(...(detail.centerline_csv?.points || []), ...(detail.raceline_csv?.points || []));
@@ -13224,6 +13559,7 @@ function ensureSimulationState(detail = state.selectedMapDetail, options = {}) {
 function resetSimulationStateFromPath(detail = state.selectedMapDetail) {
   const sim = state.simulation;
   stopSimulationLoop();
+  clearSimulationComparison();
   const path = simulationPathPoints(detail);
   sim.playing = false;
   sim.rafId = 0;
@@ -13271,6 +13607,7 @@ function stopSimulationLoop() {
 }
 
 function toggleSimulationPlayback() {
+  cancelSimulationComparison();
   const path = simulationPathPoints();
   if (path.length < 2) return;
   state.simulation.playing = !state.simulation.playing;
@@ -13300,6 +13637,7 @@ function simulationPlaybackTick(timestampMs) {
 }
 
 function stepSimulationOnce() {
+  cancelSimulationComparison();
   if (state.simulation.playing) return;
   stepSimulation(0.1);
   drawSimulationPreview();
@@ -13312,7 +13650,10 @@ function updateSimulationSetting(key, input) {
   const valid = Number.isFinite(value) && value >= Number(input?.min || 0);
   input?.setCustomValidity(valid ? "" : "Enter a finite value in range");
   if (!valid) return;
+  clearSimulationComparison();
   state.simulation.settings[key] = value;
+  updateSimulationComparisonChrome();
+  drawSimulationPreview();
   if (key === "minLookaheadM" && state.simulation.settings.maxLookaheadM < value) {
     state.simulation.settings.maxLookaheadM = value;
     const maxInput = $("simulation-maxLookaheadM");
@@ -13466,15 +13807,16 @@ function updateSimulationChrome() {
   }
   const runButton = $("simulation-run-button");
   if (runButton) {
-    runButton.textContent = sim.playing ? "Pause" : "Run";
+    runButton.textContent = sim.playing ? "Pause" : "PPを再生";
     runButton.disabled = !ready;
   }
   updateSimulationMetricsDom();
+  updateSimulationComparisonChrome();
 }
 
 function updateSimulationMetricsDom() {
   const metrics = $("simulation-metrics");
-  if (metrics) metrics.innerHTML = renderSimulationMetrics();
+  if (metrics) metrics.innerHTML = `<span class="field-hint">PP単独再生の状態</span>${renderSimulationMetrics()}`;
 }
 
 function drawSimulationPreview() {
@@ -13504,8 +13846,17 @@ function drawSimulationPreview() {
   drawSimulationStartArrow(ctx, path, toPixel);
 
   const sim = state.simulation;
-  drawPolyline(ctx, sim.trajectory.map((point) => toPixel([point.x, point.y])), "#ffffff", 2.5, false);
-  if (sim.targetPoint) {
+  const compared = simulationComparison.results;
+  if (compared) {
+    for (const result of compared) {
+      drawPolyline(ctx, result.trace.map(point => toPixel([point.x, point.y])), result.color, 2.5, false);
+      const last = result.trace[result.trace.length - 1];
+      const [x, y] = toPixel([last.x, last.y]);
+      ctx.fillStyle = result.color;
+      ctx.beginPath(); ctx.arc(x, y, 5, 0, Math.PI * 2); ctx.fill();
+    }
+  } else drawPolyline(ctx, sim.trajectory.map((point) => toPixel([point.x, point.y])), "#ffffff", 2.5, false);
+  if (!compared && sim.targetPoint) {
     const [tx, ty] = toPixel([sim.targetPoint.x, sim.targetPoint.y]);
     ctx.save();
     ctx.strokeStyle = "#57c7c2";
@@ -13515,7 +13866,7 @@ function drawSimulationPreview() {
     ctx.stroke();
     ctx.restore();
   }
-  drawSimulationVehicle(ctx, detail, toPixel);
+  if (!compared) drawSimulationVehicle(ctx, detail, toPixel);
 
   if (path.length < 2) {
     ctx.save();

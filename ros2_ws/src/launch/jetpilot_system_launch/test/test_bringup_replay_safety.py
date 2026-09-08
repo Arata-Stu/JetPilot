@@ -57,6 +57,8 @@ class ReplaySafetyTest(unittest.TestCase):
 
     def test_safe_replay_covers_planning_and_controller_topics(self) -> None:
         expected_autonomy_topics = {
+            "/planning/safety_status",
+            "/hd_map/drivable_area",
             "/planning/requested_lane",
             "/planning/raceline_path",
             "/planning/raceline_trajectory",

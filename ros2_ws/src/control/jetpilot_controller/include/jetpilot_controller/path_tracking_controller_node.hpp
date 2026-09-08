@@ -20,6 +20,7 @@
 #include "jetpilot_controller/trajectory_speed_profile.hpp"
 #include "jetpilot_msgs/msg/control_command.hpp"
 #include "jetpilot_msgs/msg/planning_manager_status.hpp"
+#include "jetpilot_msgs/msg/planning_safety_status.hpp"
 #include "jetpilot_msgs/msg/trajectory.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "nav_msgs/msg/path.hpp"
@@ -129,6 +130,9 @@ private:
   std::optional<SteadyTime> opponent_odometry_received_at_;
   std::optional<SteadyTime> target_speed_received_at_;
   std::optional<SteadyTime> localization_state_received_at_;
+  jetpilot_msgs::msg::PlanningSafetyStatus safety_status_;
+  std::optional<SteadyTime> safety_status_received_at_;
+  rclcpp::Subscription<jetpilot_msgs::msg::PlanningSafetyStatus>::SharedPtr safety_status_sub_;
   bool planning_ready_{false};
   bool planning_ready_received_{false};
   bool localization_confirmed_{false};

@@ -4245,3 +4245,23 @@ tr:last-child td {
 .live-tuning-panel label { display: inline-flex; flex-direction: column; gap: 4px; }
 .live-tuning-panel .actions, .tuning-speeds { display:flex; flex-wrap:wrap; gap:12px; margin:12px 0; align-items:end; }
 .live-tuning-panel input[type=number] { width: 110px; }
+
+.map-obstacle-editor {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.map-obstacle-editor label { display: grid; gap: 4px; }
+.map-obstacle-editor input, .map-obstacle-editor select { min-width: 0; width: 100%; }
+.map-obstacle-editor .field-hint, .map-editor-block .warn-text {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.simulation-comparison-table { overflow-x: auto; margin-top: 16px; }
+.simulation-comparison-table table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.simulation-comparison-table th, .simulation-comparison-table td { padding: 10px; text-align: left; white-space: nowrap; border-bottom: 1px solid #303843; }
+.simulation-comparison-table caption { text-align: left; padding: 8px 0; color: #aab6c3; }

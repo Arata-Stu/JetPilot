@@ -2,6 +2,7 @@
   <arg name="config_file" default="$(find-pkg-share jetpilot_planning)/config/route_lane_selector.param.yaml"/>
   <arg name="raceline_config_file" default="$(find-pkg-share jetpilot_planning)/config/raceline_path_publisher.param.yaml"/>
   <arg name="use_sim_time" default="false"/>
+  <arg name="safety_config_file" default="$(find-pkg-share jetpilot_hdmap_publisher)/config/drivable_guard.param.yaml"/>
   <arg name="enable_raceline_publisher" default="false"/>
   <arg name="raceline_root" default=""/>
   <arg name="raceline_csv" default=""/>
@@ -58,6 +59,11 @@
     <param from="$(var config_file)"/>
     <param name="primary_trajectory_topic" value="$(var primary_trajectory_topic)"/>
     <param name="diagnostics_topic" value="$(var diagnostics_topic)"/>
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+  </node>
+  <node pkg="jetpilot_hdmap_publisher" exec="drivable_guard_node.py"
+        name="drivable_guard" output="screen">
+    <param from="$(var safety_config_file)"/>
     <param name="use_sim_time" value="$(var use_sim_time)"/>
   </node>
 </launch>

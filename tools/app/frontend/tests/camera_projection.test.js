@@ -79,3 +79,17 @@ test('estimated ground initializes Z with an explicit provisional label',()=>{
   assert.equal(vm.runInContext('cameraGroundHeightDefault(timeline)',c),-0.08);
   assert.match(vm.runInContext('cameraGroundHeightHint(timeline)',c),/推定/);
 });
+
+test('obstacle height is relative to the selected ground Z in the camera overlay',()=>{
+  const c=uiContext();
+  const seen=[];
+  c.CameraProjection={issue:()=>'',segments:(points,closed,model,matrix,geometry,w,h,z)=>{seen.push({points,z});return []}};
+  c.detail={map:{path:'/map'},localization_fingerprint:'same',hd_map:{lanes:[],obstacles:[{polygon:[[0,0],[1,0],[0,1]],height_m:.3}]}};
+  c.timeline={map:{path:'/map'},camera_projection:{localization_fingerprint:'same',models:{camera:{}}}};
+  c.payload={projection:{model_id:'camera',camera_from_map:[]}};
+  c.ctx={save(){},restore(){},beginPath(){},stroke(){}};
+  vm.runInContext('paintCameraOverlay(ctx,640,480,timeline,payload,detail,false,-.12)',c);
+  assert.equal(seen[0].z,-.12);
+  assert.ok(Math.abs(seen[1].points[0][2]-.18)<1e-12);
+  assert.equal(seen[2].points[0][2],-.12);
+});

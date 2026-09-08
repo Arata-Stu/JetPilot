@@ -14,8 +14,18 @@ def generate_launch_description():
         DeclareLaunchArgument('controller_config', default_value=controller),
         ExecuteProcess(cmd=['python3', str(Path(__file__).with_name('tuning_bridge.py')),
                             '--map-dir', LaunchConfiguration('map_dir')], output='screen'),
+        Node(package='jetpilot_hdmap_publisher', executable='drivable_guard_node.py',
+             name='drivable_guard', output='screen',
+             parameters=[str(Path(get_package_share_directory('jetpilot_hdmap_publisher')) /
+                             'config/drivable_guard.param.yaml')],
+             remappings=[('/planning/trajectory', '/tuning/trajectory'),
+                         ('/planning/trajectory_profile', '/tuning/trajectory_profile'),
+                         ('/planning/target_speed', '/tuning/target_speed'),
+                         ('/hd_map/drivable_area', '/tuning/drivable_area'),
+                         ('/planning/safety_status', '/tuning/safety_status')]),
         Node(package='jetpilot_controller', executable='path_tracking_controller_node',
              name='path_tracking_controller_node', output='screen',
+             remappings=[('/planning/safety_status', '/tuning/safety_status')],
              parameters=[LaunchConfiguration('controller_config'), {
                  'trajectory_topic': '/tuning/trajectory',
                  'trajectory_profile_topic': '/tuning/trajectory_profile',

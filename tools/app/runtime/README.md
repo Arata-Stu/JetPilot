@@ -55,7 +55,10 @@ cuVGL/cuVSLAM資産・reference snapshot・landmarks YAMLの内容ハッシュ�
 編集中の保存・プレビューは実車を変更しません。「適用」で形状・速度・HD Map・区間を一つの
 ハッシュ付きsnapshotとしてJetsonに送り、STOP中に交換します。センター／レース／Customの
 切替にもノードの再起動は不要です。通常のMapファイルや競技用経路選択設定は上書きしません。
-調整用controllerは `/tuning/*` の経路・速度・readyのみを使います。signal分岐・recoveryなどの
+適用したsnapshotの物理境界・固定障害物を`/tuning/drivable_area`へ出し、調整用の`drivable_guard`で判定します。
+調整用controllerは `/tuning/*` の経路・速度・readyと`/tuning/safety_status`を使います。
+通常の地図publisherの内容と混ざらないため、rollback時も経路と地図が同じ適用版へ戻ります。
+判定方法・車体寸法・制動の仮設定は[Plannerの走行領域チェック](../README.md#plannerの走行領域チェック)を参照してください。signal分岐・recoveryなどの
 競技planning managerを通すモードではありません。
 
 「直前の版に戻す」は同じbridgeプロセス内で一つ前のsnapshotへ戻します。

@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import math
 import stat
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
@@ -13,7 +13,7 @@ import rclpy
 import yaml
 from geometry_msgs.msg import Point, PoseStamped
 from jetpilot_msgs.msg import Junction as JunctionMsg
-from jetpilot_msgs.msg import JunctionArray
+from jetpilot_msgs.msg import JunctionArray, DrivableArea, DrivableLane, StaticObstacle
 from nav_msgs.msg import Path as PathMsg
 from rclpy.clock import Clock, ClockType
 from rclpy.node import Node
@@ -32,6 +32,8 @@ class Lane:
     left_bound: List[Point3]
     right_bound: List[Point3]
     centerline: List[Point3]
+    drivable_left_bound: List[Point3] = field(default_factory=list)
+    drivable_right_bound: List[Point3] = field(default_factory=list)
 
 
 @dataclass
@@ -73,6 +75,7 @@ class HdMap:
     section_gates: List[SectionGate]
     sections: List[Section]
     junctions: List[Junction]
+    obstacles: List[dict] = field(default_factory=list)
 
     def primary_lane(self) -> Optional[Lane]:
         for lane in self.lanes:
@@ -96,6 +99,17 @@ def read_points(rows: object) -> List[Point3]:
             continue
         z = float(row[2]) if len(row) >= 3 else 0.0
         points.append((float(row[0]), float(row[1]), z))
+    return points
+
+
+def read_physical_points(rows: object) -> List[Point3]:
+    if not isinstance(rows, list) or any(
+        not isinstance(row, (list, tuple)) or len(row) not in (2, 3) for row in rows
+    ):
+        raise ValueError("Invalid physical geometry points")
+    points = read_points(rows)
+    if any(not all(math.isfinite(v) for v in point) for point in points):
+        raise ValueError("Non-finite physical geometry")
     return points
 
 
@@ -144,6 +158,11 @@ def load_hd_map(path: Path, frame_override: str) -> HdMap:
     for lane_index, raw_lane in enumerate(raw_lanes, start=1):
         if not isinstance(raw_lane, dict):
             continue
+        explicit = ("drivable_left_bound" in raw_lane, "drivable_right_bound" in raw_lane)
+        if explicit[0] != explicit[1]:
+            raise ValueError("Both physical bounds must be supplied together")
+        if all(explicit) and (not raw_lane["drivable_left_bound"] or not raw_lane["drivable_right_bound"]):
+            raise ValueError("Explicit physical bounds cannot be empty")
         lanes.append(
             Lane(
                 lane_id=str(raw_lane.get("id") or f"lane_{lane_index:03d}"),
@@ -151,6 +170,8 @@ def load_hd_map(path: Path, frame_override: str) -> HdMap:
                 left_bound=read_points(raw_lane.get("left_bound", [])),
                 right_bound=read_points(raw_lane.get("right_bound", [])),
                 centerline=read_points(raw_lane.get("centerline", [])),
+                drivable_left_bound=read_physical_points(raw_lane.get("drivable_left_bound", raw_lane.get("left_bound", []))),
+                drivable_right_bound=read_physical_points(raw_lane.get("drivable_right_bound", raw_lane.get("right_bound", []))),
             )
         )
 
@@ -239,6 +260,16 @@ def load_hd_map(path: Path, frame_override: str) -> HdMap:
                 )
             )
 
+    obstacles = []
+    raw_obstacles = data.get("obstacles", [])
+    if not isinstance(raw_obstacles, list):
+        raise ValueError("HD map obstacles must be a list")
+    for raw in raw_obstacles:
+        points = read_physical_points(raw.get("polygon", []))
+        height = float(raw.get("height_m", 0.3))
+        if len(points) < 3 or not math.isfinite(height) or height < 0:
+            raise RuntimeError("Invalid HD map obstacle polygon or height")
+        obstacles.append({"id": str(raw.get("id", "obstacle")), "polygon": points, "height_m": height, "margin_m": float(raw.get("margin_m", 0.0))})
     return HdMap(
         frame_id=frame_override or str(data.get("frame_id") or "map"),
         primary_lane_id=primary_lane_id,
@@ -246,6 +277,7 @@ def load_hd_map(path: Path, frame_override: str) -> HdMap:
         section_gates=section_gates,
         sections=sections,
         junctions=junctions,
+        obstacles=obstacles,
     )
 
 
@@ -289,7 +321,11 @@ def transient_local_qos() -> QoSProfile:
 
 def color_for_field(marker: Marker, field_name: str) -> None:
     marker.color.a = 0.95
-    if field_name == "left_bound":
+    if field_name.startswith("drivable_"):
+        marker.color.r = 0.38
+        marker.color.g = 0.71
+        marker.color.b = 1.0
+    elif field_name == "left_bound":
         marker.color.r = 0.15
         marker.color.g = 0.95
         marker.color.b = 0.25
@@ -422,6 +458,8 @@ class HdMapPublisherNode(Node):
             if self.publish_primary_path
             else None
         )
+        self.environment_valid = False
+        self.environment_pub = self.create_publisher(DrivableArea, "/hd_map/drivable_area", qos)
         self.junction_pub = self.create_publisher(JunctionArray, "/hd_map/junctions", qos)
         self.section_marker_pub = (
             self.create_publisher(MarkerArray, "section_markers", qos)
@@ -457,6 +495,7 @@ class HdMapPublisherNode(Node):
             self.get_logger().error(message)
 
     def try_load_hd_map(self) -> bool:
+        self.environment_valid = False
         if not self.hd_map_yaml_path:
             self.log_load_issue(
                 ("empty_path",),
@@ -475,6 +514,7 @@ class HdMapPublisherNode(Node):
             )
             return False
         if self.hd_map is not None and signature == self.loaded_map_signature:
+            self.environment_valid = True
             self.rejected_map_signature = None
             self.last_load_issue_key = None
             return False
@@ -493,6 +533,7 @@ class HdMapPublisherNode(Node):
             return False
 
         reloaded = self.hd_map is not None
+        self.environment_valid = True
         self.hd_map = candidate
         self.loaded_map_signature = stable_signature
         self.rejected_map_signature = None
@@ -511,12 +552,38 @@ class HdMapPublisherNode(Node):
         return True
 
     def reload_hd_map(self) -> None:
-        if self.try_load_hd_map():
+        changed = self.try_load_hd_map()
+        self.publish_environment()
+        if changed:
             # Publish the complete replacement revision once from the steady
             # timer so GUI updates are visible while /clock is paused.
             self.publish_outputs()
 
+    def publish_environment(self) -> None:
+        output = DrivableArea()
+        output.header.stamp = self.get_clock().now().to_msg()
+        output.valid = self.environment_valid and self.hd_map is not None
+        output.reason = "" if output.valid else "HD map missing or reload rejected"
+        if output.valid:
+            output.header.frame_id = self.hd_map.frame_id
+            for lane in self.hd_map.lanes:
+                if not lane.drivable_left_bound and not lane.drivable_right_bound:
+                    continue
+                item = DrivableLane()
+                item.id, item.closed = lane.lane_id, lane.closed_loop
+                item.left_bound = [to_geometry_point(p, 0.0) for p in lane.drivable_left_bound]
+                item.right_bound = [to_geometry_point(p, 0.0) for p in lane.drivable_right_bound]
+                output.lanes.append(item)
+            for obstacle in self.hd_map.obstacles:
+                item = StaticObstacle()
+                item.id = obstacle['id']
+                item.polygon = [to_geometry_point(p, 0.0) for p in obstacle['polygon']]
+                item.margin_m = obstacle['margin_m']
+                output.obstacles.append(item)
+        self.environment_pub.publish(output)
+
     def publish_outputs(self) -> None:
+        self.publish_environment()
         if self.hd_map is None:
             return
 
@@ -571,7 +638,7 @@ class HdMapPublisherNode(Node):
         marker_array = MarkerArray()
         marker_id = 0
         for lane in self.hd_map.lanes:
-            for field_name in ("left_bound", "right_bound", "centerline"):
+            for field_name in ("left_bound", "right_bound", "centerline", "drivable_left_bound", "drivable_right_bound"):
                 points = getattr(lane, field_name)
                 if len(points) < 2:
                     continue
@@ -592,6 +659,26 @@ class HdMapPublisherNode(Node):
                 if lane.closed_loop and len(points) >= 3:
                     marker.points.append(to_geometry_point(points[0], self.marker_z_offset_m))
                 marker_array.markers.append(marker)
+        for obstacle in self.hd_map.obstacles:
+            marker = Marker()
+            marker.header.frame_id = self.hd_map.frame_id
+            marker.header.stamp = stamp
+            marker.ns = f"hd_map/obstacles/{obstacle['id']}"
+            marker.id = marker_id
+            marker_id += 1
+            marker.type = Marker.LINE_LIST
+            marker.action = Marker.ADD
+            marker.pose.orientation.w = 1.0
+            marker.scale.x = self.marker_line_width_m
+            marker.color.r, marker.color.g, marker.color.b, marker.color.a = 1.0, 0.44, 0.27, 1.0
+            points, height = obstacle["polygon"], obstacle["height_m"]
+            marker.points = []
+            for index, point in enumerate(points):
+                following = points[(index + 1) % len(points)]
+                for z in (0.0, height):
+                    marker.points.extend([to_geometry_point(point, z), to_geometry_point(following, z)])
+                marker.points.extend([to_geometry_point(point, 0.0), to_geometry_point(point, height)])
+            marker_array.markers.append(marker)
         return marker_array
 
     def build_section_markers(self, stamp) -> MarkerArray:

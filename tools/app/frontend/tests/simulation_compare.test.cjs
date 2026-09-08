@@ -1,0 +1,98 @@
+const {test}=require('node:test');
+const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const os=require('node:os');
+const path=require('node:path');
+const cp=require('node:child_process');
+const vm=require('node:vm');
+const api=require('../simulation_compare.js');
+const straight=[{x:0,y:0},{x:1,y:0},{x:2,y:0},{x:10,y:0}];
+
+test('all three methods use identical initial conditions and exact segment error',()=>{
+ const results=api.run({path:straight,closed:false,offset:.2,yawOffset:.05,duration:2});
+ assert.equal(results.length,3);
+ for(const r of results){assert.deepEqual(r.trace[0],{x:0,y:.2});assert.equal(r.status,'時間終了');assert.ok(r.rmsError>=0);assert.ok(r.maxError>=.2);assert.ok(r.distance>0);}
+ assert.equal(api.project([{x:0,y:0},{x:100,y:0}],50,1,false).d2,1);
+ assert.notDeepEqual(results[0].trace,results[1].trace);
+ assert.notDeepEqual(results[0].trace,results[2].trace);
+});
+test('deterministic run and custom zero speed profile',()=>{
+ const input={path:straight.map(p=>({...p,speed_mps:0})),profile:true,duration:.4};
+ const a=api.run(input),b=api.run(input);
+ assert.deepEqual(a,b);
+ for(const r of a) assert.equal(r.distance,0);
+});
+test('closed seam, open endpoint, and invalid inputs are handled',()=>{
+ const p=[{x:0,y:0},{x:2,y:0},{x:2,y:2},{x:0,y:2}];
+ assert.ok(Math.abs(api.project(p,-.1,1,true).d2-.01)<1e-12);
+ assert.ok(api.project(p,-.1,1,false).d2>1);
+});
+test('goal and invalid settings',()=>{
+ const r=api.run({path:[{x:0,y:0},{x:.1,y:0}],duration:1});
+ assert.ok(r.every(x=>x.status==='終点到達' && x.rmsError===null));
+ for(const input of [{path:straight,duration:NaN},{path:straight,settings:{mpcSteps:0}}, {path:straight,settings:{maxSteeringRad:2}}, {path:[{x:0,y:0},{x:0,y:0}]}]) assert.throws(()=>api.run(input));
+});
+
+test('browser equations match the actual C++ controllers',t=>{
+ const probe=cp.spawnSync('clang++',['--version']);
+ if(probe.error || probe.status!==0){t.skip('C++ compiler unavailable');return;}
+ const root=path.resolve(__dirname,'../../../..');
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'jetpilot-controller-parity-'));
+ try {
+  const source=`#include <iostream>\n#include <iomanip>\n#include "jetpilot_controller/pure_pursuit.hpp"\n#include "jetpilot_controller/map_pursuit.hpp"\n#include "jetpilot_controller/kinematic_mpc.hpp"\nusing namespace jetpilot_controller;\nint main(){std::cout<<std::setprecision(17); for(double speed:{0.,1.,2.5}) {TrackingInput in;in.speed_mps=speed;in.path={{0.,.2},{.5,.2},{1.,.4},{2.,1.},{3.,1.}};in.path_closed_override=false;PurePursuit a{PurePursuitParams{}};MapPursuit b{MapPursuitParams{}};KinematicMpc c{KinematicMpcParams{}}; for(auto* ctrl: {static_cast<PathTrackingController*>(&a),static_cast<PathTrackingController*>(&b),static_cast<PathTrackingController*>(&c)}){auto result=ctrl->compute(in);std::cout<<result.valid<<" "<<result.steering_command*.45<<"\\n";}}}`;
+  fs.writeFileSync(path.join(dir,'main.cpp'),source);
+  const src=path.join(root,'ros2_ws/src/control/jetpilot_controller');
+  cp.execFileSync('clang++',['-std=c++17','-O2','-I'+path.join(src,'include'),path.join(dir,'main.cpp'),...['pure_pursuit','map_pursuit','kinematic_mpc'].map(n=>path.join(src,'src',n+'.cpp')),'-o',path.join(dir,'parity')]);
+  const rows=cp.execFileSync(path.join(dir,'parity'),{encoding:'utf8'}).trim().split('\n');
+  let i=0;
+  for(const speed of [0,1,2.5]) for(const m of api.methods){
+   const [valid,expected]=rows[i++].split(' ').map(Number);
+   const actual=api.control(m.id,[{x:0,y:.2},{x:.5,y:.2},{x:1,y:.4},{x:2,y:1},{x:3,y:1}],{x:0,y:0,yaw:0,speed},api.defaults,false);
+   assert.equal(valid,1);assert.ok(Math.abs(actual-expected)<1e-12,`${m.id} ${speed}: ${actual} != ${expected}`);
+  }
+ } finally {fs.rmSync(dir,{recursive:true,force:true});}
+});
+
+function ui(){
+ class Worker {constructor(){this.terminated=false;Worker.instances.push(this);}postMessage(x){this.input=x;}terminate(){this.terminated=true;}}
+ Worker.instances=[];
+ const ctx=vm.createContext({Worker,window:{},localStorage:{getItem:()=>null},document:{querySelectorAll:()=>[],getElementById:()=>null},console,cancelAnimationFrame:()=>{}});
+ const source=fs.readFileSync(path.join(__dirname,'../app.js'),'utf8');vm.runInContext(source.slice(0,source.indexOf('\nwindow.')),ctx);
+ vm.runInContext(`drawSimulationPreview=()=>{};updateSimulationChrome=()=>{};updateSimulationComparisonChrome=()=>{};simulationPathPoints=()=>[{x:0,y:0},{x:10,y:0}];`,ctx);
+ return {ctx,Worker};
+}
+test('comparison UI cancels workers and rejects obsolete results',()=>{
+ const {ctx,Worker}=ui();ctx.startSimulationComparison();
+ const a=Worker.instances[0];assert.equal(a.input.duration,20);
+ ctx.cancelSimulationComparison();assert.ok(a.terminated);
+ a.onmessage({data:{results:[{name:'obsolete'}]}});
+ assert.equal(vm.runInContext('simulationComparison.results',ctx),null);
+ ctx.startSimulationComparison();const b=Worker.instances[1];
+ vm.runInContext('state.simulation.settings.targetSpeedMps=3',ctx);
+ b.onmessage({data:{results:[{name:'wrong settings'}]}});
+ assert.equal(vm.runInContext('simulationComparison.results',ctx),null);
+ assert.ok(b.terminated);
+});
+
+test('existing decimal defaults do not block compare because of HTML step mismatch',()=>{
+ const {ctx,Worker}=ui();
+ ctx.document.querySelectorAll=()=>[
+  {value:'0.45',min:'0.01',max:'',disabled:false,validity:{stepMismatch:true,badInput:false,customError:false}},
+  {value:'Custom profile',disabled:true},
+ ];
+ ctx.startSimulationComparison();assert.equal(Worker.instances.length,1);
+ ctx.cancelSimulationComparison();
+ ctx.document.querySelectorAll=()=>[{value:'',min:'0.01',max:'',disabled:false,validity:{}}];
+ ctx.startSimulationComparison();assert.equal(Worker.instances.length,1);
+ assert.match(vm.runInContext('simulationComparison.error',ctx),/入力値/);
+});
+
+test('changing conditions clears completed comparison and reset cancels a running comparison',()=>{
+ const {ctx,Worker}=ui();ctx.startSimulationComparison();
+ Worker.instances[0].onmessage({data:{results:[{name:'completed'}]}});
+ assert.notEqual(vm.runInContext('simulationComparison.results',ctx),null);
+ ctx.updateSimulationComparisonOption('offset',{value:'.25',min:'-5',max:'5',setCustomValidity:()=>{}});
+ assert.equal(vm.runInContext('simulationComparison.results',ctx),null);
+ ctx.startSimulationComparison();ctx.resetSimulationStateFromPath({});
+ assert.ok(Worker.instances.at(-1).terminated);
+});

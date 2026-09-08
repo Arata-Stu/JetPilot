@@ -115,7 +115,7 @@ TASK_STREAM_CHUNK_BYTES = 256 * 1024
 
 def _frontend_asset_version(frontend_root: Path) -> str:
     mtimes = []
-    for name in ("index.html", "app.js", "lane_geometry.js", "camera_projection.js", "camera_overlay_ui.js", "point_cloud_ui.js", "live_tuning.js", "styles.css"):
+    for name in ("index.html", "app.js", "lane_geometry.js", "camera_projection.js", "camera_overlay_ui.js", "point_cloud_ui.js", "live_tuning.js", "simulation_compare.js", "styles.css"):
         path = frontend_root / name
         if path.exists():
             mtimes.append(path.stat().st_mtime_ns)

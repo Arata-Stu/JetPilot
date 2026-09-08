@@ -17,6 +17,10 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   msg/JunctionArray.msg
   msg/OperationModeRequest.msg
   msg/OperationModeState.msg
+  msg/DrivableLane.msg
+  msg/StaticObstacle.msg
+  msg/DrivableArea.msg
+  msg/PlanningSafetyStatus.msg
   msg/PlanningManagerStatus.msg
   msg/RecoveryStatus.msg
   msg/ReidMatch.msg

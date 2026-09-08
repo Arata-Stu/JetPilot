@@ -1,0 +1,15 @@
+drivable_guard:
+  ros__parameters:
+    base_frame: base_link
+    # Full body extents from base_frame. Circumcircle includes these plus margin.
+    front_m: 0.25
+    rear_m: 0.25
+    width_m: 0.22
+    margin_m: 0.05
+    # Assumptions, NOT measured vehicle capabilities: calibrate on the real vehicle.
+    reaction_s: 0.3
+    braking_mps2: 1.0
+    route_preview_m: 0.5
+    step_m: 0.2
+    input_timeout_s: 0.5
+    map_timeout_s: 3.0

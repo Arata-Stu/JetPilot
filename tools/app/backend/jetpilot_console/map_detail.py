@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
+from .map_environment import normalize_obstacles, obstacle_path_issue
 from .config import ConsoleConfig
 from .indexes import _artifact, _dir_size, _iso_mtime
 
@@ -376,6 +377,22 @@ def _nearest_distance(point: list[float], polyline: list[list[float]], closed_lo
     )
 
 
+def _lane_drivable_bounds(lane: dict[str, Any]) -> dict[str, Any]:
+    supplied = [key in lane for key in ("drivable_left_bound", "drivable_right_bound")]
+    if any(supplied) and not all(supplied):
+        raise ValueError("both drivable bounds must be provided together")
+    result = {}
+    if not lane.get("left_bound") and not lane.get("right_bound") and not lane.get("drivable_left_bound") and not lane.get("drivable_right_bound"):
+        return result
+    for side in ("left", "right"):
+        key = f"drivable_{side}_bound"
+        points = _payload_points(lane[key]) if key in lane else _as_points(lane.get(f"{side}_bound", []))
+        if key in lane and len(points) < (3 if lane.get("closed_loop", True) else 2):
+            raise ValueError(f"{key} has too few points")
+        result[key] = points
+    return result
+
+
 def _lane_export_issue(lane: dict[str, Any]) -> str | None:
     closed_loop = bool(lane.get("closed_loop", True))
     bound_points = 3 if closed_loop else 2
@@ -546,6 +563,16 @@ def _write_hd_map_yaml(
         _append_world_points(lines, "left_bound", lane["left_bound"])
         _append_world_points(lines, "right_bound", lane["right_bound"])
         _append_world_points(lines, "centerline", lane["centerline"])
+        for key, points in _lane_drivable_bounds(lane).items():
+            _append_world_points(lines, key, points)
+    obstacles = normalize_obstacles(previous_data.get("obstacles", []))
+    lines.append("obstacles:" if obstacles else "obstacles: []")
+    for obstacle in obstacles:
+        lines.append(f"  - id: {_quote_yaml_string(obstacle['id'])}")
+        lines.append(f"    name: {_quote_yaml_string(obstacle['name'])}")
+        lines.append(f"    height_m: {_fmt_float(obstacle['height_m'])}")
+        lines.append(f"    margin_m: {_fmt_float(obstacle['margin_m'])}")
+        _append_world_points(lines, "polygon", obstacle["polygon"])
     _append_preserved_section_gates(lines, previous_data.get("section_gates"))
     _append_preserved_sections(lines, previous_data.get("sections"))
     _append_preserved_junctions(lines, previous_data.get("junctions"))
@@ -621,6 +648,7 @@ def _lanes_from_hd_data(data: dict[str, Any]) -> list[dict[str, Any]]:
             {
                 "id": lane_id,
                 **_lane_editor_metadata(raw_lane),
+                **_lane_drivable_bounds(raw_lane),
                 "closed_loop": bool(raw_lane.get("closed_loop", True)),
                 "left_bound": _as_points(raw_lane.get("left_bound", [])),
                 "right_bound": _as_points(raw_lane.get("right_bound", [])),
@@ -1090,6 +1118,7 @@ def _read_hd_map(path: Path) -> tuple[dict[str, Any], dict[str, Any] | None]:
                 "id": lane_id,
                 "primary": lane_id == primary_lane_id,
                 **_lane_editor_metadata(lane),
+                **_lane_drivable_bounds(lane),
                 "closed_loop": closed_loop,
                 "left_bound": _as_points(lane.get("left_bound", [])),
                 "right_bound": _as_points(lane.get("right_bound", [])),
@@ -1174,6 +1203,7 @@ def _read_hd_map(path: Path) -> tuple[dict[str, Any], dict[str, Any] | None]:
             "section_gates": gates,
             "sections": sections,
             "junctions": junctions,
+            "obstacles": normalize_obstacles(data.get("obstacles", [])),
         },
         _raster_from_hd_map(path, data),
     )
@@ -1694,8 +1724,12 @@ def _custom_line_geometry_validation(
     map_dir: Path,
     points: list[dict[str, float]],
     closed_loop: bool,
+    *,
+    lane_override: dict[str, Any] | None = None,
+    check_obstacles: bool = True,
+    clearance_m: float = 0.0,
 ) -> dict[str, Any]:
-    lane = _primary_lane_geometry(map_dir)
+    lane = lane_override if lane_override is not None else _primary_lane_geometry(map_dir)
     if lane is None:
         return {
             "valid": False,
@@ -1703,8 +1737,8 @@ def _custom_line_geometry_validation(
             "min_clearance_m": None,
             "containment_checked": False,
         }
-    left_bound = _as_points(lane.get("left_bound", []))
-    right_bound = _as_points(lane.get("right_bound", []))
+    left_bound = _as_points(lane.get("drivable_left_bound", lane.get("left_bound", [])))
+    right_bound = _as_points(lane.get("drivable_right_bound", lane.get("right_bound", [])))
     polygon = left_bound + list(reversed(right_bound))
     if len(left_bound) < 2 or len(right_bound) < 2 or len(polygon) < 3:
         return {
@@ -1751,10 +1785,10 @@ def _custom_line_geometry_validation(
             clearance <= CUSTOM_LINE_POINT_EPSILON_M
             or (_point_inside_polygon(xy, outer_bound) and not _point_inside_polygon(xy, inner_bound))
         ) if closed_lane else _point_inside_polygon(xy, polygon)
-        if not inside:
+        if not inside or clearance + 1e-9 < clearance_m:
             return {
                 "valid": False,
-                "issue": f"{label} is outside the primary lane bounds",
+                "issue": f"{label} is outside the drivable lane bounds or required clearance",
                 "min_clearance_m": None if min_clearance == math.inf else min_clearance,
                 "containment_checked": True,
             }
@@ -1790,6 +1824,14 @@ def _custom_line_geometry_validation(
             issue = validate_sample(xy, f"segment[{index}] sample[{sample_index}]")
             if issue is not None:
                 return issue
+    if check_obstacles:
+        hd_data = load_yaml(map_dir / f"{map_dir.name}_hd_map.yaml")
+        issue = obstacle_path_issue(
+            [[point["x_m"], point["y_m"]] for point in points], closed_loop,
+            normalize_obstacles(hd_data.get("obstacles", [])), clearance_m,
+        )
+        if issue:
+            return {"valid": False, "issue": issue, "min_clearance_m": min_clearance, "containment_checked": True}
     return {
         "valid": True,
         "issue": "",
@@ -3813,6 +3855,44 @@ def save_competition_routes(
     return detail
 
 
+def validate_raceline_environment(hd_map_path: Path, xy_points, clearance_m: float = 0.0) -> None:
+    """Reject generated output intersecting an authored physical environment."""
+    data = load_yaml(hd_map_path)
+    lane = next((item for item in data.get("lanes", []) if item.get("id") == data.get("primary_lane_id")), None)
+    if lane is None:
+        raise ValueError("primary lane is missing from the HD map")
+    closed = bool(lane.get("closed_loop", True))
+    points = [[float(p[0]), float(p[1])] for p in xy_points]
+    if not points or any(not math.isfinite(v) for p in points for v in p):
+        raise ValueError("raceline coordinates must be finite")
+    if "drivable_left_bound" in lane or "drivable_right_bound" in lane:
+        lane = {**lane, **_lane_drivable_bounds(lane)}
+        result = _custom_line_geometry_validation(
+            hd_map_path.parent, [{"x_m": p[0], "y_m": p[1]} for p in points], closed,
+            lane_override=lane, check_obstacles=False, clearance_m=clearance_m,
+        )
+        if not result["valid"]:
+            raise ValueError(result["issue"])
+    issue = obstacle_path_issue(points, closed, normalize_obstacles(data.get("obstacles", [])), clearance_m)
+    if issue:
+        raise ValueError(issue + "; adjust generation bounds to route around the obstacle")
+
+
+def _map_environment_issues(map_dir, hd_map, centerline, raceline):
+    issues = []
+    primary = next((lane for lane in hd_map.get("lanes", []) if lane.get("primary")), None)
+    if primary is None:
+        return issues
+    for name, record in (("Centerline", centerline), ("Raceline", raceline)):
+        if record.get("points"):
+            validation = _custom_line_geometry_validation(
+                map_dir, [{"x_m": p[0], "y_m": p[1]} for p in record["points"]], primary["closed_loop"],
+            )
+            if not validation["valid"]:
+                issues.append(f"{name}: {validation['issue']}")
+    return issues
+
+
 def build_map_detail(config: ConsoleConfig, map_dir_value: str) -> dict[str, Any]:
     map_dir = resolve_allowed_path(config, map_dir_value)
     if not map_dir.exists() or not map_dir.is_dir():
@@ -3886,6 +3966,7 @@ def build_map_detail(config: ConsoleConfig, map_dir_value: str) -> dict[str, Any
         "centerline_csv": centerline,
         "raceline_csv": raceline,
         "raceline_metadata": _read_json_file(raceline_meta_path),
+        "environment_issues": _map_environment_issues(map_dir, hd_map, centerline, raceline),
         "odometry": odometry,
         "stats": {
             "lane_count": len(hd_map.get("lanes", [])),
@@ -3939,10 +4020,13 @@ def save_hd_map(config: ConsoleConfig, payload: dict[str, Any]) -> dict[str, Any
         if lane_id in used_ids:
             lane_id = fallback_id
         used_ids.add(lane_id)
+        existing_lane = next((lane for lane in previous_data.get("lanes", []) if lane.get("id") == lane_id), {})
+        environment_lane = {**existing_lane, **raw_lane}
         lanes.append(
             {
                 "id": lane_id,
                 **_lane_editor_metadata(raw_lane),
+                **_lane_drivable_bounds(environment_lane),
                 "closed_loop": bool(raw_lane.get("closed_loop", True)),
                 "left_bound": _payload_points(raw_lane.get("left_bound")),
                 "right_bound": _payload_points(raw_lane.get("right_bound")),
@@ -3968,6 +4052,23 @@ def save_hd_map(config: ConsoleConfig, payload: dict[str, Any]) -> dict[str, Any
         previous_data["section_gates"] = _payload_section_gates(payload["section_gates"], set(lane_by_id))
         previous_data["sections"] = _build_sections_for_gates(
             previous_data.get("sections"), previous_data["section_gates"], lanes)
+    previous_data = dict(previous_data)
+    previous_data["obstacles"] = normalize_obstacles(payload.get("obstacles", previous_data.get("obstacles", [])))
+    # Preserve the physical contract even when an older client omits it.
+    # Lanes without separately saved bounds retain legacy behavior.
+    for raw_lane, lane in zip((item for item in raw_lanes if isinstance(item, dict)), lanes):
+        existing = next((item for item in previous_data.get("lanes", []) if item.get("id") == lane["id"]), {})
+        if "drivable_left_bound" not in raw_lane and "drivable_left_bound" not in existing:
+            continue
+        for field in ("left_bound", "right_bound"):
+            if not lane[field]:
+                continue
+            validation = _custom_line_geometry_validation(
+                map_dir, [{"x_m": p[0], "y_m": p[1]} for p in lane[field]], lane["closed_loop"],
+                lane_override=lane, check_obstacles=False,
+            )
+            if not validation["valid"]:
+                raise ValueError(f"{lane['id']} {field}: generation bounds must stay inside drivable bounds. {validation['issue']}")
     validated_previous_data = _validated_hd_topology(map_dir, previous_data, lanes)
     hd_map_path.parent.mkdir(parents=True, exist_ok=True)
     _write_hd_map_yaml(

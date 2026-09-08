@@ -289,6 +289,8 @@ def write_hd_map_yaml(
     primary_lane_id: str,
     centerline_csv_path: Optional[Path],
 ) -> None:
+    previous = load_yaml(output_path, allow_flat_fallback=False) if output_path.exists() else {}
+    old_lanes = {lane.get("id"): lane for lane in previous.get("lanes", [])}
     lines = [
         "format: tamiya_local_hd_map_v1",
         "frame_id: map",
@@ -323,6 +325,17 @@ def write_hd_map_yaml(
         _append_world_polyline(lines, "left_bound", lane.left_bound, geometry)
         _append_world_polyline(lines, "right_bound", lane.right_bound, geometry)
         _append_world_polyline(lines, "centerline", lane.centerline, geometry)
+        old_lane = old_lanes.get(lane.lane_id, {})
+        for key in ("drivable_left_bound", "drivable_right_bound"):
+            if key in old_lane:
+                lines.append(f"    {key}:")
+                for point in old_lane[key]:
+                    lines.append(f"      - [{_fmt_float(point[0])}, {_fmt_float(point[1])}, 0.0]")
+    # Keep richer Map UI metadata when this legacy geometry editor is used.
+    for key in ("obstacles", "section_gates", "sections", "junctions"):
+        if key in previous:
+            import json
+            lines.append(f"{key}: " + json.dumps(previous[key], ensure_ascii=False))
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")

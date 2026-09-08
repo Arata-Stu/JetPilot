@@ -329,6 +329,12 @@ void PathTrackingControllerNode::create_interfaces()
       target_speed_mps_ = static_cast<double>(message->data);
       target_speed_received_at_ = std::chrono::steady_clock::now();
     });
+  safety_status_sub_ = create_subscription<jetpilot_msgs::msg::PlanningSafetyStatus>(
+    "/planning/safety_status", rclcpp::QoS(1).reliable(),
+    [this](jetpilot_msgs::msg::PlanningSafetyStatus::ConstSharedPtr message) {
+      safety_status_ = *message;
+      safety_status_received_at_ = std::chrono::steady_clock::now();
+    });
   planning_ready_sub_ =
     create_subscription<std_msgs::msg::Bool>(planning_ready_topic_, latched_qos,
                                              [this](const std_msgs::msg::Bool::SharedPtr message)
@@ -630,6 +636,19 @@ double PathTrackingControllerNode::apply_steering_rate_limit(double requested)
 
 void PathTrackingControllerNode::control_cycle()
 {
+  // Use receipt time on a steady clock: paused ROS time must never keep permission alive.
+  if (!safety_status_received_at_ || seconds_since(*safety_status_received_at_) > 0.3)
+  {
+    publish_safety_stop("drivable safety status missing or stale");
+    return;
+  }
+  if (safety_status_.emergency || !safety_status_.ready)
+  {
+    publish_safety_stop(
+      std::string(safety_status_.emergency ? "EMERGENCY: " : "planning safety blocked: ") +
+      safety_status_.reason);
+    return;
+  }
   std::string reason;
   if (require_localization_state_)
   {
@@ -1160,8 +1179,12 @@ void PathTrackingControllerNode::publish_state(bool ready, const std::string & m
   diagnostic_msgs::msg::DiagnosticStatus status;
   status.name = "jetpilot_controller/path_tracking";
   status.hardware_id = "jetpilot_controller";
-  status.level = ready ? diagnostic_msgs::msg::DiagnosticStatus::OK
-                       : diagnostic_msgs::msg::DiagnosticStatus::WARN;
+  const bool physical_emergency = safety_status_received_at_ &&
+    seconds_since(*safety_status_received_at_) <= 0.3 && safety_status_.emergency;
+  status.level = physical_emergency ? diagnostic_msgs::msg::DiagnosticStatus::ERROR
+                 : ready ? diagnostic_msgs::msg::DiagnosticStatus::OK
+                         : diagnostic_msgs::msg::DiagnosticStatus::WARN;
+  status.values.push_back(diagnostic_value("physical_emergency", physical_emergency ? "true" : "false"));
   status.message = message;
   status.values.push_back(diagnostic_value("algorithm", algorithm_));
   status.values.push_back(diagnostic_value("current_speed_mps", std::to_string(current_speed_mps)));

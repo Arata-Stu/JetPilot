@@ -15,6 +15,7 @@ import math
 import os
 import sys
 import time
+from pathlib import Path
 from typing import Tuple
 
 import numpy as np
@@ -867,6 +868,19 @@ def run(args: argparse.Namespace) -> None:
     for direction, centerline, widths, direction_out_path in direction_plan:
         raceline, backend_used, opt_params = generate_with_selected_backend(args, centerline, widths)
 
+        hd_map_path = Path(args.hd_map) if getattr(args, "hd_map", None) else Path(
+            str(args.centerline).replace("_hd_map_centerline.csv", "_hd_map.yaml")
+        )
+        if hd_map_path != Path(args.centerline) and hd_map_path.exists():
+            # This validator uses only the standard library. The backend and
+            # standalone map tools share the same environment contract.
+            backend_root = Path(__file__).resolve().parents[2] / "tools" / "app" / "backend"
+            sys.path.insert(0, str(backend_root))
+            from jetpilot_console.map_detail import validate_raceline_environment
+            validate_raceline_environment(hd_map_path, raceline[:, 1:3], args.vehicle_width / 2 + args.safety_margin)
+        elif getattr(args, "hd_map", None):
+            raise RuntimeError(f"HD map not found: {hd_map_path}")
+
         np.savetxt(
             direction_out_path,
             raceline,
@@ -913,6 +927,7 @@ def build_arg_parser(preset: str = "race-stacks") -> argparse.ArgumentParser:
 
     p.add_argument("--centerline", required=True, help="Path to centerline CSV: x,y,w_tr_right,w_tr_left")
     p.add_argument("--output", required=True, help="Path to output raceline CSV")
+    p.add_argument("--hd-map", help="HD map with drivable bounds and static obstacles (auto-detected beside the centerline)")
 
     p.add_argument(
         "--preset",

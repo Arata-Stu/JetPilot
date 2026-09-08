@@ -23,8 +23,8 @@ def main():
     from tf2_ros import Buffer, TransformListener
     from std_msgs.msg import Bool, Float32, String
     from nav_msgs.msg import Odometry, Path as RosPath
-    from geometry_msgs.msg import PoseStamped
-    from jetpilot_msgs.msg import Trajectory, TrajectoryPoint, OperationModeState
+    from geometry_msgs.msg import PoseStamped, Point
+    from jetpilot_msgs.msg import Trajectory, TrajectoryPoint, OperationModeState, DrivableArea, DrivableLane, StaticObstacle
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--map-dir', required=True)
@@ -44,6 +44,7 @@ def main():
             self.path = self.create_publisher(RosPath, '/tuning/trajectory', qos)
             self.speed = self.create_publisher(Float32, '/tuning/target_speed', qos)
             self.ready_pub = self.create_publisher(Bool, '/tuning/ready', qos)
+            self.environment_pub = self.create_publisher(DrivableArea, '/tuning/drivable_area', qos)
             self.create_subscription(OperationModeState, '/operation_mode/state', self.mode, qos)
             self.create_subscription(Odometry, '/visual_slam/tracking/odometry', self.odometry, qos_profile_sensor_data)
             self.create_subscription(String, '/localization/pose_hint_state', self.localized, qos)
@@ -64,6 +65,39 @@ def main():
             v = msg.twist.twist.linear
             value = math.sqrt(v.x*v.x + v.y*v.y + v.z*v.z)
             self.state.update_speed(value if math.isfinite(value) else None)
+
+        def build_environment(self, snapshot):
+            environment = DrivableArea()
+            environment.header.frame_id = snapshot['frame_id']
+            hd_map = snapshot['hd_map']
+            def points(rows):
+                output = []
+                for row in rows:
+                    p = Point()
+                    p.x, p.y = float(row[0]), float(row[1])
+                    p.z = float(row[2]) if len(row) > 2 else 0.0
+                    output.append(p)
+                return output
+            for lane in hd_map.get('lanes', []):
+                if ('drivable_left_bound' in lane) != ('drivable_right_bound' in lane):
+                    raise ValueError('Both physical bounds must be supplied together')
+                left = lane.get('drivable_left_bound', lane.get('left_bound', []))
+                right = lane.get('drivable_right_bound', lane.get('right_bound', []))
+                if not left and not right:
+                    continue
+                item = DrivableLane()
+                item.id, item.closed = lane['id'], lane['closed_loop']
+                item.left_bound, item.right_bound = points(left), points(right)
+                environment.lanes.append(item)
+            for obstacle in hd_map.get('obstacles', []):
+                item = StaticObstacle()
+                item.id = obstacle['id']
+                item.polygon = points(obstacle['polygon'])
+                item.margin_m = float(obstacle.get('margin_m', 0.0))
+                environment.obstacles.append(item)
+            environment.valid = bool(environment.lanes)
+            environment.reason = '' if environment.valid else 'snapshot has no physical bounds'
+            return environment
 
         def build_messages(self, snapshot):
             msg = Trajectory()
@@ -87,7 +121,7 @@ def main():
                 stamped.header.frame_id = 'map'
                 stamped.pose = p.pose
                 path.poses.append(stamped)
-            return msg, path
+            return msg, path, self.build_environment(snapshot)
 
         def tick(self):
             state = self.state
@@ -131,8 +165,9 @@ def main():
             self.ready_pub.publish(Bool(data=ready))
             self.speed.publish(Float32(data=max(p[5] for p in state.active['points']) if ready else 0.0))
             if self.messages:
-                msg, path = self.messages
-                msg.header.stamp = path.header.stamp = self.get_clock().now().to_msg()
+                msg, path, environment = self.messages
+                msg.header.stamp = path.header.stamp = environment.header.stamp = self.get_clock().now().to_msg()
+                self.environment_pub.publish(environment)
                 self.profile.publish(msg)
                 self.path.publish(path)
 

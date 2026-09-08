@@ -23,6 +23,8 @@ bag_manager_node:
       - /planning/target_speed
       - /planning/selected_lane
       - /planning/ready
+      - /planning/safety_status
+      - /hd_map/drivable_area
       - /controller/ready
       - /controller/lookahead_point
 
