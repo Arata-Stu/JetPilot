@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 from jetpilot_console.map_detail import (
     CUSTOM_LINE_MAX_POINTS,
+    _derive_custom_trajectory,
     activate_custom_line,
     activate_hd_map_version,
     build_map_detail,
@@ -497,6 +498,38 @@ lanes:
 
 
 class CustomLineTest(unittest.TestCase):
+    def test_closed_line_short_seam_has_valid_first_point_curvature(self) -> None:
+        points = [
+            {"x_m": x, "y_m": y, "speed_mps": 0.0}
+            for x, y in [(0, 0), (0.1, 0), (0.1, 0.1), (-0.1, 0.1), (-1e-8, 0)]
+        ]
+        trajectory = _derive_custom_trajectory(points, True)
+        self.assertEqual(trajectory[0]["kappa_radpm"], 0.0)
+
+    def test_short_edges_preserve_curvature_and_reject_degenerate_tangent(self) -> None:
+        for scale in (1.0, 0.0001):
+            for direction in (1, -1):
+                points = [
+                    {"x_m": x * scale, "y_m": y * scale * direction, "speed_mps": 0.0}
+                    for x, y in [(1, 0), (0, 1), (-1, 0), (0, -1)]
+                ]
+                for row in _derive_custom_trajectory(points, True):
+                    self.assertAlmostEqual(row["kappa_radpm"], direction / scale)
+        points = [{"x_m": x, "y_m": 0.0, "speed_mps": 0.0} for x in (0, 1, 0)]
+        with self.assertRaisesRegex(ValueError, "valid tangent"):
+            _derive_custom_trajectory(points, False)
+
+    def test_clone_accepts_distinct_source_points_with_short_spacing(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            config, map_dir = self._make_map(Path(temporary_directory))
+            (map_dir / "course_a_hd_map_centerline.csv").write_text(
+                "0,0,1,1\n0.00000001,0,1,1\n1,0,1,1\n2,0,1,1\n",
+                encoding="utf-8",
+            )
+            detail = create_custom_line(config, {"map_dir": str(map_dir), "name": "Close points", "base": "centerline"})
+            self.assertEqual(len(detail["custom_lines"]), 1)
+            self.assertTrue(detail["custom_lines"][0]["valid"])
+
     def _make_map(self, root: Path) -> tuple[SimpleNamespace, Path]:
         map_dir = root / "course_a"
         map_dir.mkdir()

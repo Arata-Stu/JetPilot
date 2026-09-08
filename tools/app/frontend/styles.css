@@ -2289,6 +2289,15 @@ tr:last-child td {
   background: #10191a;
 }
 
+#custom-line-create-result,
+.custom-line-block #custom-line-status {
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow: visible;
+  text-overflow: clip;
+}
+
 .custom-line-create-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

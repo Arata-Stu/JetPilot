@@ -2433,14 +2433,15 @@ def _derive_custom_trajectory(
         a = math.hypot(current["x_m"] - previous["x_m"], current["y_m"] - previous["y_m"])
         b = math.hypot(following["x_m"] - current["x_m"], following["y_m"] - current["y_m"])
         c = math.hypot(following["x_m"] - previous["x_m"], following["y_m"] - previous["y_m"])
-        denominator = a * b * c
-        if not math.isfinite(denominator) or denominator <= CUSTOM_LINE_POINT_EPSILON_M:
+        # Check lengths in meters, not their cubic product. A short but
+        # distinct edge (e.g. next to a Section Gate) is still valid geometry.
+        if any(not math.isfinite(length) or length <= CUSTOM_LINE_POINT_EPSILON_M for length in (a, b, c)):
             raise ValueError(f"points[{index}] does not have a valid curvature neighborhood")
-        cross = (
-            (current["x_m"] - previous["x_m"]) * (following["y_m"] - current["y_m"])
-            - (current["y_m"] - previous["y_m"]) * (following["x_m"] - current["x_m"])
+        turn_sine = (
+            ((current["x_m"] - previous["x_m"]) / a) * ((following["y_m"] - current["y_m"]) / b)
+            - ((current["y_m"] - previous["y_m"]) / a) * ((following["x_m"] - current["x_m"]) / b)
         )
-        kappa_values.append(2.0 * cross / denominator)
+        kappa_values.append(2.0 * turn_sine / c)
 
     acceleration_values: list[float] = []
     for index in range(count):
