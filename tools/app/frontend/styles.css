@@ -217,6 +217,39 @@ textarea {
   color: var(--text);
 }
 
+.workspace-subnav { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }
+.home-task { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 10px 0; }
+.home-task strong { flex: 1; }
+.terminal.collapsed .terminal-meta, .terminal.collapsed .terminal-bar > button:not(:first-child):not(.danger) { display: none; }
+.terminal.collapsed .terminal-bar > button.danger:disabled { display: none; }
+.workspace-subnav button { background: transparent; color: var(--muted); }
+.workspace-subnav button.active { background: var(--panel-2); color: var(--text); border-color: var(--blue); }
+.purpose-home { padding: 12px 0 20px; }
+.purpose-home h1 { font-size: 26px; margin: 0 0 8px; }
+.purpose-home > p { color: var(--muted); margin: 0 0 24px; }
+.purpose-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+.purpose-card { display: flex; flex-direction: column; align-items: flex-start; gap: 14px; padding: 22px; text-align: left; white-space: normal; }
+.purpose-card strong { font-size: 18px; }
+.purpose-card > span { line-height: 1.7; color: var(--muted); }
+.purpose-card .purpose-open { margin-top: auto; color: var(--blue); }
+.utility-menu { position: relative; flex: none; }
+.utility-menu summary, .map-workspace-tools summary { cursor: pointer; padding: 8px 10px; }
+.utility-menu > div { position: absolute; right: 0; top: 100%; z-index: 30; display: grid; gap: 8px; width: 230px; padding: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px #0006; }
+.utility-menu button { text-align: left; }
+.map-workspace-tools .actions { padding: 10px; flex-wrap: wrap; }
+.tuning-workspace .live-tuning-panel { margin: 0; }
+.tuning-workspace .live-tuning-panel input { max-width: 100%; min-width: 0; }
+.tuning-workspace .live-tuning-panel label { max-width: 100%; }
+@media (max-width: 1100px) {
+  .purpose-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .brand { min-width: 0; }
+  .brand span { display: none; }
+}
+@media (max-width: 600px) {
+  .purpose-grid { grid-template-columns: 1fr; }
+  .purpose-card { padding: 18px; gap: 8px; }
+}
+
 .top-actions {
   display: flex;
   align-items: center;

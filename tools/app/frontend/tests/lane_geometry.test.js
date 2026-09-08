@@ -33,9 +33,10 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
 function editorContext() {
-  const context = vm.createContext({ window: {}, localStorage: {getItem: () => null}, console, LaneGeometry: G });
+  const context = vm.createContext({ window: {}, localStorage: {getItem: () => null}, console, LaneGeometry: G, setInterval: () => {} });
   const source = fs.readFileSync(path.join(__dirname, '../app.js'), 'utf8');
   vm.runInContext(source.slice(0, source.indexOf('\nwindow.')), context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../live_tuning.js'), 'utf8'), context);
   vm.runInContext(`
     updateMapEditorChrome = () => {};
     drawMapPreview = () => {};

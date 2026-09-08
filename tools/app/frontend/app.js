@@ -23,6 +23,7 @@ const MIN_CUSTOM_LINE_TARGET_SPEED_MPS = 0.1;
 
 const state = {
   tab: "dashboard",
+  e2eWorkspace: "evaluate",
   config: null,
   tasks: [],
   rosbags: [],
@@ -288,7 +289,7 @@ const state = {
     dashboardWorkflow: "overview",
     pendingActions: {},
   },
-  terminalCollapsed: false,
+  terminalCollapsed: true,
   logDialogOpen: false,
   logStickToEnd: true,
   logText: "",
@@ -372,19 +373,32 @@ const state = {
   },
 };
 
-const tabs = [
-  ["dashboard", "Dashboard"],
-  ["rosbags", "Rosbags"],
-  ["bag-analysis", "Bag Analysis"],
-  ["object-detection", "Object Detection"],
-  ["e2e-analysis", "E2E Analysis"],
-  ["map-builder", "Map Builder"],
-  ["joy-profile", "Joy Profile"],
-  ["fpv", "FPV"],
-  ["maps", "Maps"],
-  ["jetson", "Jetson"],
-  ["terminal", "Terminal"],
+const workspaces = [
+  { id: "drive", label: "走らせる", description: "映像を確認し、車両と操作を準備する", pages: [["fpv", "ライブ映像"], ["jetson", "車両・転送"], ["joy-profile", "コントローラー"]] },
+  { id: "map", label: "地図を作る・直す", description: "地図を選んで編集・調整、または新しく作成する", pages: [["maps", "地図・実車調整"], ["map-builder", "地図を新規作成"]] },
+  { id: "review", label: "走行を振り返る", description: "走行記録を選び、映像や軌跡を解析する", pages: [["rosbags", "走行記録"], ["bag-analysis", "走行解析"]] },
+  { id: "model", label: "モデルを育てる", description: "モデルを学習し、評価して車両へ配備する", pages: [["e2e-analysis", "E2Eモデル"], ["object-detection", "物体検出モデル"]] },
 ];
+
+function renderWorkspaceNavigation() {
+  const active = workspaces.find(workspace => workspace.pages.some(([tab]) => tab === state.tab));
+  return `<nav class="nav" aria-label="作業の目的">
+    <button class="${state.tab === "dashboard" ? "active" : ""}" onclick="setTab('dashboard')" ${state.tab === "dashboard" ? 'aria-current="page"' : ""}>ホーム</button>
+    ${workspaces.map(workspace => `<button class="${active === workspace ? "active" : ""}" onclick="setTab(${js(workspace.pages[0][0])})" ${active === workspace ? 'aria-current="true"' : ""}>${esc(workspace.label)}</button>`).join("")}
+  </nav>`;
+}
+
+function renderWorkspaceSubnav() {
+  const active = workspaces.find(workspace => workspace.pages.some(([tab]) => tab === state.tab));
+  if (!active) return "";
+  return `<nav class="workspace-subnav" aria-label="${esc(active.label)}の作業">${active.pages.map(([tab, label]) => `<button class="${state.tab === tab ? "active" : ""}" onclick="setTab(${js(tab)})" ${state.tab === tab ? 'aria-current="page"' : ""}>${esc(label)}</button>`).join("")}</nav>`;
+}
+
+function renderPurposeHome() {
+  return `<section class="purpose-home"><h1>今日は何をしますか？</h1><p>作業を選んで始めるか、下の最近使った地図・走行記録から続きを開けます。</p>
+    <div class="purpose-grid">${workspaces.map(workspace => `<button class="purpose-card" onclick="setTab(${js(workspace.pages[0][0])})"><strong>${esc(workspace.label)}</strong><span>${esc(workspace.description)}</span><span class="purpose-open">開く →</span></button>`).join("")}</div>
+  </section>`;
+}
 
 const mapPreviewImages = new Map();
 const preflightRequests = new Map();
@@ -1034,7 +1048,7 @@ function actionButtonLabel(key, label, busyLabel = "Working...") {
 }
 
 function mapEditorInteractionLocked() {
-  return actionBusy("hd-map-version:activate");
+  return tuningVisible() || actionBusy("hd-map-version:activate");
 }
 
 function beginAction(key, message = "") {
@@ -1462,21 +1476,17 @@ function render() {
     <div class="app">
       <header class="topbar">
         <div class="brand"><strong>JetPilot Console</strong><span>local workflow manager</span></div>
-        <nav class="nav">
-          ${tabs
-            .map(
-              ([key, label]) =>
-                `<button class="${state.tab === key ? "active" : ""}" onclick="setTab('${key}')">${label}</button>`,
-            )
-            .join("")}
-        </nav>
+        ${renderWorkspaceNavigation()}
         <div class="top-actions">
           <button onclick="refreshAll()">Refresh</button>
-          <button class="ghost" onclick="clearWebCache()">Clear Cache</button>
-          <button class="ghost" onclick="toggleTerminal()">${state.terminalCollapsed ? "Show Log" : "Hide Log"}</button>
+          <details class="utility-menu"><summary>補助ツール</summary><div>
+            <button onclick="setTab('terminal')">タスク履歴・コマンド</button>
+            <button onclick="toggleTerminal()">${state.terminalCollapsed ? "ログを表示" : "ログを閉じる"}</button>
+            <button onclick="clearWebCache()">キャッシュを消去</button>
+          </div></details>
         </div>
       </header>
-      <main class="content">${renderPage()}</main>
+      <main class="content">${renderWorkspaceSubnav()}${renderPage()}</main>
       ${renderTerminal()}
       ${renderLogDialog()}
       <div class="toast-region" id="toast-region" aria-live="polite"></div>
@@ -1737,10 +1747,9 @@ function renderDashboard() {
   const completeMaps = state.maps.filter((item) => item.complete_runtime_bundle);
   const recentMaps = state.maps.slice(0, 3);
   const recentBags = state.rosbags.slice(0, 3);
-  const workflow = currentDashboardWorkflow();
   return `
     <div class="page">
-      ${renderWorkflowHome(workflow)}
+      ${renderPurposeHome()}
       <div class="grid-3">
         ${metric("Running tasks", running.length, `${state.tasks.length} total task records`)}
         ${metric("Rosbags", state.rosbags.length, state.config ? state.config.record_root : "")}
@@ -1748,13 +1757,11 @@ function renderDashboard() {
       </div>
       <section class="panel">
         <div class="panel-header">
-          <h2>Running Tasks</h2>
+          <h2>実行中の処理</h2>
           <span class="spacer"></span>
-          <button onclick="setTab('jetson')">Jetson</button>
-          <button onclick="setTab('map-builder')">Map Builder</button>
-          <button onclick="refreshAll()">Refresh</button>
+          <button onclick="setTab('terminal')">すべての履歴</button>
         </div>
-        <div class="panel-body">${renderTaskTable(running.length ? running : state.tasks.slice(0, 4))}</div>
+        <div class="panel-body">${running.length ? running.map(task => `<div class="home-task"><span class="status ${esc(task.status)}">${esc(task.status)}</span><strong>${esc(task.title)}</strong><button onclick="selectTask(${js(task.task_id)})">ログを開く</button><button class="danger" onclick="stopTask(${js(task.task_id)})" ${task.status === "stopping" ? "disabled" : ""}>停止</button></div>`).join("") : '<div class="empty">実行中の処理はありません。</div>'}</div>
       </section>
       <div class="grid-2">
         <section class="panel">
@@ -3209,6 +3216,7 @@ function useE2ERunForOfflineEval() {
   }
   state.analysis.e2eMode = "supervised";
   state.analysis.e2eModelPath = run.onnx_path;
+  state.e2eWorkspace = "evaluate";
   render();
   requestAnimationFrame(() => $("e2e-offline-eval")?.scrollIntoView({ behavior: "smooth", block: "start" }));
   toast(`Offline evaluation model selected: ${run.name}`);
@@ -3601,10 +3609,21 @@ function renderObjectDetectionPipeline() {
     </div>`;
 }
 
+function setE2EWorkspace(workspace) {
+  if (!["train", "evaluate"].includes(workspace)) return;
+  if (workspace === "train") pauseAnalysisPlayback();
+  state.e2eWorkspace = workspace;
+  render();
+}
+
 function renderE2EAnalysis() {
   return `
     <div class="page analysis-page e2e-analysis-page">
-      ${renderE2EPipeline()}
+      <nav class="workspace-subnav" aria-label="E2Eモデルの作業">
+        <button class="${state.e2eWorkspace === "evaluate" ? "active" : ""}" aria-pressed="${state.e2eWorkspace === "evaluate"}" onclick="setE2EWorkspace('evaluate')">評価・走行結果</button>
+        <button class="${state.e2eWorkspace === "train" ? "active" : ""}" aria-pressed="${state.e2eWorkspace === "train"}" onclick="setE2EWorkspace('train')">学習・配備</button>
+      </nav>
+      ${state.e2eWorkspace === "train" ? renderE2EPipeline() : `
       <div class="analysis-create-layout">
         <section class="panel analysis-create-panel" id="e2e-offline-eval">
           <div class="panel-header"><h2>New E2E Analysis</h2><span class="spacer"></span><button onclick="refreshAnalysisData()">Refresh</button></div>
@@ -3618,7 +3637,7 @@ function renderE2EAnalysis() {
       <section class="panel analysis-viewer-panel">
         <div class="panel-header"><h2>E2E Bag Viewer</h2><span class="spacer"></span>${state.analysis.selectedId ? `<button onclick="reloadAnalysisResult()">Reload Result</button>` : ""}</div>
         <div class="panel-body" id="analysis-viewer-body">${renderAnalysisViewer()}</div>
-      </section>
+      </section>`}
     </div>`;
 }
 
@@ -6241,8 +6260,8 @@ function renderMaps() {
         </section>
         <section class="panel map-workspace-panel">
           <div class="panel-header">
-            <h2>Map Workspace</h2>
-            ${state.selectedMapPath ? `<button onclick="toggleLiveTuning()">${tuning.enabled ? "実車調整を終了" : "実車調整モード"}</button>` : ""}
+            <h2>${tuningVisible() ? "実車調整" : "地図編集"}</h2>
+            ${state.selectedMapPath ? `<button onclick="toggleLiveTuning()">${tuningVisible() ? "接続を終了して地図編集へ" : "実車調整へ"}</button>` : ""}
             <span class="spacer"></span>
             ${state.selectedMapPath ? `<button onclick="refreshSelectedMap()">Reload Map</button>` : ""}
           </div>
@@ -6337,15 +6356,15 @@ function renderMapWorkspace() {
           <h3>${esc(mapDisplayName(detail.map))}</h3>
           <div class="path" title="${esc(detail.map.path)}">${esc(detail.map.path)}</div>
         </div>
-        <div class="actions">
+        ${tuningVisible() ? "" : `<details class="map-workspace-tools"><summary>生成・転送・その他</summary><div class="actions">
           ${renderMapStageButton("prepare-hd-raster", detail.map.path, "Raster")}
           <button onclick="copyHdMapEditorCommand(${js(detail.map.path)})">Editor Cmd</button>
           ${renderMapStageButton("generate-raceline", detail.map.path, "Raceline")}
           ${renderMapStageButton("generate-preview", detail.map.path, "Preview")}
           <button onclick="fillTransferLocal(${js(detail.map.path)})">Transfer</button>
-        </div>
+        </div></details>`}
       </div>
-      ${state.mapWorkspaceMode === "review" ? `
+      ${!tuningVisible() && state.mapWorkspaceMode === "review" ? `
         <details class="map-review-build-checks">
           <summary><strong>Build checks</strong><span>Raster · Raceline · Preview</span></summary>
           <div class="map-stage-readiness-grid">
@@ -6354,9 +6373,8 @@ function renderMapWorkspace() {
             ${renderMapStageReadiness("generate-preview", detail.map.path, "Preview generation")}
           </div>
         </details>` : ""}
-      ${renderLiveTuning(detail)}
-      ${renderMapWorkspaceModes(detail)}
-      <div class="map-preview-grid">
+      ${tuningVisible() ? "" : renderMapWorkspaceModes(detail)}
+      <div class="map-preview-grid ${tuningVisible() ? "tuning-workspace" : ""}">
         <div class="map-preview-shell" data-scroll-key="${esc(`map-preview:${detail.map.path}`)}">
           <div class="map-canvas-toolbar" aria-label="Map view controls">
             <button onclick="zoomMapEditor(0.75)" aria-label="Zoom out">−</button>
@@ -6367,7 +6385,7 @@ function renderMapWorkspace() {
           <canvas
             id="map-preview-canvas"
             class="${state.mapEditor.enabled || state.customLineEditor.enabled || state.sectionEditor.enabled || state.junctionEditor.enabled ? "editing" : ""}"
-            ${mapEditorInteractionLocked() ? "inert aria-busy=\"true\"" : ""}
+            ${!tuningVisible() && mapEditorInteractionLocked() ? "inert aria-busy=\"true\"" : ""}
             width="900"
             height="620"
             onpointerdown="handleMapEditorPointerDown(event)"
@@ -6380,7 +6398,7 @@ function renderMapWorkspace() {
           ></canvas>
         </div>
         <aside class="map-side-panel">
-          ${renderMapInspectorTabs(detail)}
+          ${tuningVisible() ? renderLiveTuning(detail) : renderMapInspectorTabs(detail)}
         </aside>
       </div>
       ${tuningVisible() ? "" : renderSimulationDisclosure(detail)}

@@ -11,6 +11,11 @@ function toggleLiveTuning() {
   if (tuning.enabled) {
     disconnectTuning(); tuning.enabled = false;
   } else {
+    if (hasUnsavedMapEdits()) {
+      toast('地図の変更を保存してから実車調整へ進んでください。', 'error');
+      return;
+    }
+    stopSimulationLoop();
     const target = jetsonTarget();
     if(tuning.mapPath!==state.selectedMapPath) Object.assign(tuning,{line:'centerline',speed:1,sectionSpeeds:{},status:null,mapId:''});
     Object.assign(tuning, {enabled:true, mapPath:state.selectedMapPath,
@@ -34,7 +39,7 @@ function renderLiveTuning(detail) {
   }
   return `<section class="live-tuning-panel">
     <h3>実車調整モード</h3>
-    <p>画像・動画の転送なし。自己位置を約1秒ごとに取得します。地図・ライン・区間の編集は下の既存エディターを使い、保存後にプレビューしてください。</p>
+    <p>自己位置と走行ラインを確認し、速度を調整します。形状や区間を変更する場合は、上のボタンから地図編集へ戻ってください。</p>
     <div class="actions">
       <label>Jetson <input aria-label="調整先Jetson" value="${esc(tuning.host)}" ${tuning.connected ? 'disabled' : ''} onchange="tuning.host=this.value"></label>
       <label>ユーザー <input aria-label="Jetsonユーザー" value="${esc(tuning.user)}" ${tuning.connected ? 'disabled' : ''} onchange="tuning.user=this.value"></label>
@@ -45,9 +50,8 @@ function renderLiveTuning(detail) {
       <label>走行に使うライン <select aria-label="実車の走行ライン" onchange="selectTuningLine(this.value)">${lines.map(([id,label]) => `<option value="${esc(id)}" ${tuning.line===id?'selected':''}>${esc(label)}</option>`).join('')}</select></label>
       <label>全体の目標上限（m/s） <input aria-label="実車調整の全体速度" type="number" min="0.1" max="3" step="0.1" value="${tuning.speed}" onchange="tuning.speed=Number(this.value);tuning.preview=null;refreshTuningPanel()"></label>
     </div>
-    <details><summary>区間ごとの速度上限（空欄は全体値）</summary><div class="tuning-speeds">${sections.map(section => `<label>${esc(section.id)} <input aria-label="${esc(section.id)}の速度" type="number" min="0.1" max="3" step="0.1" value="${esc(tuning.sectionSpeeds[section.id] ?? '')}" onchange="setTuningSectionSpeed(${js(section.id)},this.value)"></label>`).join('') || '<p>下のTopologyでSection Gateを追加・保存してください。</p>'}</div></details>
+    <details><summary>区間ごとの速度上限（空欄は全体値）</summary><div class="tuning-speeds">${sections.map(section => `<label>${esc(section.id)} <input aria-label="${esc(section.id)}の速度" type="number" min="0.1" max="3" step="0.1" value="${esc(tuning.sectionSpeeds[section.id] ?? '')}" onchange="setTuningSectionSpeed(${js(section.id)},this.value)"></label>`).join('') || '<p>地図編集のTopologyで区間を追加・保存してください。</p>'}</div></details>
     <button onclick="selectTuningLine(tuning.line)">保存済みラインの速度を読み直す</button>
-    <p>Geometry：左右境界・センターの編集 ／ Topology：区間の追加 ／ Driving Lines：レース由来のCustom Line作成・形状編集</p>
     <div class="actions">
       <button onclick="prepareTuning()" ${tuning.busy?'disabled':''}>保存済み編集をプレビュー</button>
       <button id="tuning-apply" onclick="applyTuning(false)">この版を実車に適用</button>
