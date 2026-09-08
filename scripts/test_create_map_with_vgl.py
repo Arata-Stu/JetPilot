@@ -44,6 +44,7 @@ class MappingTest(unittest.TestCase):
                 commands.append(command)
                 if 'create_map_offline.py' in command:
                     self.assertNotIn('cuvgl', command)
+                    self.assertIn('--override=cuvslam.cfg_planar=true', command)
                     frames = generated / 'map_frames/rectified'
                     frames.mkdir(parents=True)
                     (frames / 'frames_meta.json').write_text('{}')

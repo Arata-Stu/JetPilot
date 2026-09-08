@@ -1453,6 +1453,8 @@ function restoreRenderScrollPositions(root) {
 }
 
 function render() {
+  if (tuning.connected && !tuningVisible()) disconnectTuning();
+  if (tuning.enabled && tuning.mapPath !== state.selectedMapPath) tuning.enabled = false;
   stopAnalysisAnimationFrame();
   const app = $("app");
   captureRenderScrollPositions(app);
@@ -6240,6 +6242,7 @@ function renderMaps() {
         <section class="panel map-workspace-panel">
           <div class="panel-header">
             <h2>Map Workspace</h2>
+            ${state.selectedMapPath ? `<button onclick="toggleLiveTuning()">${tuning.enabled ? "実車調整を終了" : "実車調整モード"}</button>` : ""}
             <span class="spacer"></span>
             ${state.selectedMapPath ? `<button onclick="refreshSelectedMap()">Reload Map</button>` : ""}
           </div>
@@ -6351,6 +6354,7 @@ function renderMapWorkspace() {
             ${renderMapStageReadiness("generate-preview", detail.map.path, "Preview generation")}
           </div>
         </details>` : ""}
+      ${renderLiveTuning(detail)}
       ${renderMapWorkspaceModes(detail)}
       <div class="map-preview-grid">
         <div class="map-preview-shell" data-scroll-key="${esc(`map-preview:${detail.map.path}`)}">
@@ -6379,7 +6383,7 @@ function renderMapWorkspace() {
           ${renderMapInspectorTabs(detail)}
         </aside>
       </div>
-      ${renderSimulationDisclosure(detail)}
+      ${tuningVisible() ? "" : renderSimulationDisclosure(detail)}
     </div>
   `;
 }
@@ -6399,7 +6403,7 @@ function renderMapInspectorTabs(detail) {
     </nav>
     <div class="map-inspector-content" data-scroll-key="${esc(`map-inspector:${detail.map.path}:${state.mapWorkspaceMode}:${tab}`)}">
       ${tab === "layers" ? renderLayerToggles() : tab === "view"
-        ? `${renderPointCloudControls(detail)}${renderMapCameraView(detail)}${renderHdRasterOptions(detail)}`
+        ? (tuningVisible() ? `<p>実車調整中は画像・動画・点群を読み込みません。</p>` : `${renderPointCloudControls(detail)}${renderMapCameraView(detail)}${renderHdRasterOptions(detail)}`)
         : renderMapModePanel(detail)}
     </div>`;
 }
@@ -12524,32 +12528,36 @@ function toggleMapLayer(layer, checked) {
 }
 
 function drawMapPreview() {
-  updateMapCameraView();
+  if (!tuningVisible()) updateMapCameraView();
+  refreshTuningPanel();
   const canvas = $("map-preview-canvas");
   if (!canvas || !state.selectedMapDetail) return;
   const detail = state.selectedMapDetail;
-  const imageUrl = detail.raster?.image_url || detail.preview_image_url || "";
+  const imageUrl = tuningVisible() ? "" : (detail.raster?.image_url || detail.preview_image_url || "");
   const draw = (image = null) => {
     try {
+      if (detail !== state.selectedMapDetail || canvas !== $("map-preview-canvas")) return;
       const raster = detail.raster || {};
       const naturalWidth = image?.naturalWidth || raster.width || 900;
       const naturalHeight = image?.naturalHeight || raster.height || 620;
-      canvas.width = Math.max(320, naturalWidth);
-      canvas.height = Math.max(240, naturalHeight);
+      const displayScale = tuningVisible() ? Math.min(1, 1400 / naturalWidth, 1000 / naturalHeight) : 1;
+      canvas.width = Math.max(320, Math.round(naturalWidth * displayScale));
+      canvas.height = Math.max(240, Math.round(naturalHeight * displayScale));
       applyMapCanvasDisplay(canvas, canvas.width, canvas.height);
       const ctx = canvas.getContext("2d");
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.fillStyle = "#0b0d10";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
-      if (image && state.mapLayers.landmark && !pointCloudActive(detail)) {
+      if (!tuningVisible() && image && state.mapLayers.landmark && !pointCloudActive(detail)) {
         ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
         ctx.fillStyle = "rgba(8, 10, 12, 0.08)";
         ctx.fillRect(0, 0, canvas.width, canvas.height);
       } else {
         drawGrid(ctx, canvas.width, canvas.height);
       }
-      drawPointCloud(ctx, detail, canvas.width, canvas.height);
+      if (!tuningVisible()) drawPointCloud(ctx, detail, canvas.width, canvas.height);
       drawMapLayers(ctx, detail, canvas.width, canvas.height);
+      drawTuningOverlay(ctx, detail, canvas.width, canvas.height);
     } catch (error) {
       console.warn("Map preview draw failed", error);
       const ctx = canvas.getContext("2d");

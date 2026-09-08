@@ -23,6 +23,7 @@
     # ============================================
     num_cameras: 2
     min_num_images: 2
+    # Isaac ROS: 0=Moderate, 1=Performance, 2=Precision (not tracking_mode).
     multicam_mode: 1
     # 0: stereo/multi-camera, 1: visual-inertial, 2: RGB-D
     # Launch selects 0 for vslam_mode:=vo and 1 for vslam_mode:=vio.
@@ -40,17 +41,11 @@
     # enable_ground_constraint_in_odometry: オドメトリ（リアルタイム）への制約
     # enable_ground_constraint_in_slam: SLAM（姿勢グラフ最適化）への制約
     # 
-    # true: z=0, roll=0, pitch=0 に固定 (3DOF: x,y,yaw のみ)
-    # false: z, roll, pitch を自由に使用 (6DOF)
-    # 
-    # 組み合わせ:
-    #   [true,  true ] 完全平坦地面（最も安定、ジャンプ不可）
-    #   [false, true ] 地上ロボット + 段差/ジャンプ（推奨：バランス型）
-    #   [false, false] ドローン、3D環境（ドリフト注意）
-    #   [true,  false] 非推奨（矛盾した設定）
+    # JetPilotは平坦な床での走行のみを想定し、両方を常時有効にする。
+    # ロボットの運動への制約であり、ランドマークの高さをゼロにする設定ではない。
     # ============================================
-    enable_ground_constraint_in_odometry: false
-    enable_ground_constraint_in_slam: false
+    enable_ground_constraint_in_odometry: true
+    enable_ground_constraint_in_slam: true
     
     # ============================================
     # SLAM Mode

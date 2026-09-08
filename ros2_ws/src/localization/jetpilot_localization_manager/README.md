@@ -129,3 +129,43 @@ The unit tests cover frame, finite-number, quaternion, covariance, and timestamp
 ```bash
 ros2 service call /localization/relocalize std_srvs/srv/Trigger '{}'
 ```
+
+## Foxgloveで再測位を切り分ける
+
+`/localization/manager/diagnostics`（`diagnostic_msgs/msg/DiagnosticArray`、reliable /
+transient-local）に、次の4項目を出力します。既定のFoxglove topic whitelistで配信されます。
+Raw Messagesでこのトピックを選び、`status`を展開すると各項目の`message`と`values`を確認できます。
+診断表示パネルを利用する場合も同じトピックを指定します。既定のbag記録対象にも追加しています。
+
+| 項目 | 確認できること |
+| --- | --- |
+| `Localization/Manager` | 全体のstateとreason、入力通番、直近入力の受付・拒否理由、要求元、試行回数、再起動要求 |
+| `Localization/VGL` | trigger送信、pose待ち、検証済みpose受信、失敗・timeout、手動poseによるスキップ |
+| `Localization/VSLAM` | `vo_status`、既存地図の測位フラグ、managerの確認状態、診断が新しいか |
+| `Localization/TF` | `map → odom`と`odom → base_link`それぞれの更新時刻・鮮度・hint送信後に更新されたか |
+
+joyのtrue入力は`last_input_source=joy_topic`、Foxgloveの`/initialpose`は`manual`、
+再測位serviceは`service`になります。手動poseではVGLを呼ばず、`bypassed_manual`と表示します。
+不正なframeやpose、原点測位中の入力拒否は`last_input_result=rejected:...`に残ります。
+直近入力情報は次の操作まで保持し、入力受付と全state遷移はINFOログにも記録します。
+`input_sequence`はこのノード内の操作通番であり、VGL/VSLAMの応答IDではありません。
+
+`localization_state_allows_control=false`は、managerの状態がcontrollerの測位条件を満たさない意味です。
+車両の実停止を計測した結果ではありません。controllerの`require_localization_state=true`時は
+`localized`以外を停止条件として扱います。実際の停止理由は`/controller/diagnostics`も確認してください。
+
+### 成功の意味と限界
+
+- `VGL/pose_validated`は検証済みposeの受信です。serviceのsuccessは受付結果であり、測位成功ではありません。
+- `VSLAM/localized_in_exist_map=true`だけで今回の再測位成功とは断定しません。既存の`No → Yes`確認を維持しています。
+- `TF/*_updated_after_hint=true`は、hint送信後の時刻を持つ新しいTFを観測した意味です。
+  hintによる補正が反映された証明ではありません。`pose_correction_verified=unknown`と明示します。
+- TF監視は標準構成の直接の動的TFを対象とし、配信元ノードの特定やTF競合の判定は行いません。
+- `observation_timeout_sec`（既定1.5秒）でROS時刻と実時間の両方を確認します。
+  古い時刻の再配信、未来時刻、停止したbag再生ではSTALEになり得ます。
+- この追加診断は観測用です。TF/VO異常から自動的に再測位・リセットする制御は追加していません。
+  VGL poseに要求IDがないため、キャンセル前の遅延応答と今回の応答を厳密に区別することもできません。
+
+再現時は`/localization/manager/diagnostics`、`/localization/pose_hint_state`、
+VSLAM/VGLのdiagnostics、`/tf`を同時に記録してください。
+成功ログ後にTFがSTALEなら追跡・配信経路、TFが新しいのに位置が違うなら測位結果・座標系を調べます。

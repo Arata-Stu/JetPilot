@@ -32,7 +32,18 @@ install(FILES README.md
 )
 
 if(BUILD_TESTING)
+  add_executable(test_stream_observation test/test_stream_observation.cpp)
+  target_compile_features(test_stream_observation PRIVATE cxx_std_17)
+  target_include_directories(test_stream_observation PRIVATE include)
+  # Keep assertions active in Release builds too.
+  target_compile_options(test_stream_observation PRIVATE -UNDEBUG)
+  add_test(NAME test_stream_observation COMMAND test_stream_observation)
   find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(test_manager_diagnostics test/test_manager_diagnostics.cpp)
+  if(TARGET test_manager_diagnostics)
+    target_compile_features(test_manager_diagnostics PUBLIC cxx_std_17)
+    target_link_libraries(test_manager_diagnostics ${PROJECT_NAME}_node_impl)
+  endif()
   ament_add_gtest(test_pose_validation test/test_pose_validation.cpp)
   if(TARGET test_pose_validation)
     target_compile_features(test_pose_validation PUBLIC cxx_std_17)

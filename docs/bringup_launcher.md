@@ -15,17 +15,19 @@ Inside the JetPilot Docker workspace:
 `--vslam-mode vio` または `--set vslam_mode:=vio` を明示した場合は選択画面を省略します。
 非対話起動の既定値は `vo` です。VIOでbagを再生する場合は、画像とIMUの両方が必要です。
 
-`bringup.sh`からの起動では、平坦な床での走行を前提にodometryとSLAMの地面制約を
-ともに有効にします。選択した追跡モードと地面制約の値は起動確認画面に表示します。
-段差などを含む実験で解除する場合は、次の引数を指定してください。
+JetPilotは平坦な床での走行を前提に、全launchでodometryとSLAMの地面制約を
+常時有効にします。無効を指定すると起動時にエラーになります。
+`create_map.sh`も、地図生成本体に`--override=cuvslam.cfg_planar=true`を渡し、
+snapshot再生ではodometryとSLAM両方の地面制約を明示します。
+既存地図は変更されないため、この条件で比較するには地図を再生成してください。
 
-```text
---set vslam_enable_ground_constraint_in_odometry:=false
---set vslam_enable_ground_constraint_in_slam:=false
-```
+RealSenseの既定値はRGB 424×240 / 30 Hz、赤外424×240 / 60 Hzです。
+TUIでは引き続き30 / 60 / 90 Hzを選べます。記録済みbagのFPSは変わりません。
 
-この設定は走行・bag再生用の起動設定です。`create_map.sh`のオフライン地図生成には
-引き継がれません。
+`multicam_mode`はIsaac ROSでは0=Moderate、1=Performance、2=Precisionです。
+TUIの「VSLAM 処理モード」で選択できます。既定値は1です。
+`--set vslam_multicam_mode:=2`を指定すると、この選択画面を省略してPrecisionで起動します。
+選択値はlaunchからYAMLより優先して適用されます。VO/VIOを選ぶ`tracking_mode`とは別です。
 
 保存地図で自己位置推定する構成では、TUIの「初期位置の決め方」で次を選択できます。
 

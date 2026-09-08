@@ -70,6 +70,7 @@ _REPLAY_ISOLATED_TOPICS = (
     '/visual_slam/tracking/odometry',
     '/visual_slam/tracking/slam_path',
     '/localization/vslam/diagnostics',
+    '/localization/manager/diagnostics',
     '/localization/vgl/diagnostics',
     '/realsense/diagnostics',
     '/planning/diagnostics',
@@ -451,7 +452,7 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('sensor_kit_enable_depth', False, cli=True)
     args.add_arg('sensor_kit_enable_color', True, cli=True)
     args.add_arg('sensor_kit_rgb_fps', '30', cli=True)
-    args.add_arg('sensor_kit_infra_fps', '90', cli=True)
+    args.add_arg('sensor_kit_infra_fps', '60', cli=True)
     args.add_arg('sensor_kit_enable_rtp_stream', False, cli=True)
     args.add_arg('sensor_kit_rtp_image_topic', '/realsense/color/image_raw', cli=True)
     args.add_arg('sensor_kit_rtp_host', '', cli=True)
@@ -534,9 +535,10 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('enable_vslam', True, cli=True)
     args.add_arg('vslam_enable_slam', True, cli=True)
     args.add_arg('vslam_mode', 'vo', cli=True)
+    args.add_arg('vslam_multicam_mode', '1', cli=True)
     args.add_arg('vslam_imu_topic', '/realsense/imu', cli=True)
-    args.add_arg('vslam_enable_ground_constraint_in_odometry', False, cli=True)
-    args.add_arg('vslam_enable_ground_constraint_in_slam', False, cli=True)
+    args.add_arg('vslam_enable_ground_constraint_in_odometry', True, cli=True)
+    args.add_arg('vslam_enable_ground_constraint_in_slam', True, cli=True)
     args.add_arg('vslam_enable_visualization', False, cli=True)
     args.add_arg('vslam_localize_on_startup', False, cli=True)
     args.add_arg('vslam_hint_request_topic', '/visual_slam/trigger_hint', cli=True)
@@ -999,6 +1001,7 @@ def generate_launch_description() -> lut.LaunchDescription:
                 'enable_vslam': args.enable_vslam,
                 'vslam_enable_slam': args.vslam_enable_slam,
                 'vslam_mode': args.vslam_mode,
+                'vslam_multicam_mode': args.vslam_multicam_mode,
                 'vslam_imu_topic': args.vslam_imu_topic,
                 'vslam_enable_ground_constraint_in_odometry':
                     args.vslam_enable_ground_constraint_in_odometry,

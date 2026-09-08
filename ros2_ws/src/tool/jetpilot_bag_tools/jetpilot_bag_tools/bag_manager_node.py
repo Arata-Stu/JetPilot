@@ -44,6 +44,7 @@ DEFAULT_TOPICS = [
     "/localization/pose_hint_state",
     "/localization/pose_hint_required",
     "/localization/vslam/diagnostics",
+    "/localization/manager/diagnostics",
     "/localization/vgl/diagnostics",
     "/planning/diagnostics",
     "/controller/diagnostics",

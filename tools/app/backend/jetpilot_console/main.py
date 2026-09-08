@@ -24,6 +24,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from .bag_analysis import AnalysisRepository, build_analysis_script, rosbag_detail
 from .config import ConsoleConfig
+from .live_tuning import prepare_snapshot, remote_request, map_identity, encoded
 from .vgl_models import input_size, resolve_model, scan_models
 from .e2e_analysis import scan_e2e_models
 from .e2e_pipeline import (
@@ -114,7 +115,7 @@ TASK_STREAM_CHUNK_BYTES = 256 * 1024
 
 def _frontend_asset_version(frontend_root: Path) -> str:
     mtimes = []
-    for name in ("index.html", "app.js", "lane_geometry.js", "camera_projection.js", "camera_overlay_ui.js", "point_cloud_ui.js", "styles.css"):
+    for name in ("index.html", "app.js", "lane_geometry.js", "camera_projection.js", "camera_overlay_ui.js", "point_cloud_ui.js", "live_tuning.js", "styles.css"):
         path = frontend_root / name
         if path.exists():
             mtimes.append(path.stat().st_mtime_ns)
@@ -382,6 +383,10 @@ class Handler(BaseHTTPRequestHandler):
 
         if self.server.state.joy_only:
             self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
+            return
+
+        if path.startswith("/api/tuning/"):
+            self._tuning_action(path.rsplit("/", 1)[-1], body)
             return
 
         if path == "/api/preflight":
@@ -991,6 +996,7 @@ class Handler(BaseHTTPRequestHandler):
             text = text.replace('src="/camera_projection.js"', f'src="/camera_projection.js?v={version}"')
             text = text.replace('src="/camera_overlay_ui.js"', f'src="/camera_overlay_ui.js?v={version}"')
             text = text.replace('src="/point_cloud_ui.js"', f'src="/point_cloud_ui.js?v={version}"')
+            text = text.replace('src="/live_tuning.js"', f'src="/live_tuning.js?v={version}"')
             text = text.replace('src="/app.js"', f'src="/app.js?v={version}"')
             payload = text.encode("utf-8")
         content_type = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
@@ -1175,6 +1181,45 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
         except Exception as exc:
             self._json({"error": f"failed to activate HD map version: {exc}"}, HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    def _tuning_action(self, action: str, body: dict[str, Any]) -> None:
+        config = self.server.state.config
+        try:
+            if action in ("prepare", "connect"):
+                root = resolve_allowed_path(config, str(body.get("map_dir") or ""))
+                with self.server.state.tasks.guard_resources([f"map-dir:{root}"]):
+                    if action == "prepare":
+                        snapshot = prepare_snapshot(config, body)
+                        directory = config.state_dir / "tuning"
+                        directory.mkdir(parents=True, exist_ok=True)
+                        destination = directory / (snapshot["revision"] + ".json")
+                        temporary = directory / (snapshot["revision"] + ".tmp")
+                        temporary.write_bytes(encoded(snapshot))
+                        temporary.replace(destination)
+                        result = {"snapshot": snapshot}
+                    else:
+                        local_id = map_identity(root)
+                        result = remote_request(config, body, "status")
+                        result["local_map_id"] = local_id
+            elif action == "apply":
+                revision = str(body.get("revision") or "")
+                if not re.fullmatch(r"[0-9a-f]{64}", revision):
+                    raise ValueError("プレビューを作成してください。")
+                snapshot = json.loads((config.state_dir / "tuning" / (revision + ".json")).read_text())
+                result = remote_request(config, body, "apply", {
+                    "snapshot": snapshot, "expected_revision": body.get("expected_revision"),
+                })
+            elif action in ("status", "active", "rollback"):
+                result = remote_request(config, body, action, {
+                    "expected_revision": body.get("expected_revision"),
+                })
+            else:
+                raise ValueError("unknown tuning action")
+            self._json(result)
+        except TaskResourceConflict as exc:
+            self._json({"error": "Mapは別の処理で使用中です。", "active_task": exc.active_task}, HTTPStatus.CONFLICT)
+        except (ValueError, OSError, KeyError, TypeError, subprocess.SubprocessError) as exc:
+            self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
 
     def _custom_line_action(self, body: dict[str, Any], action: Any, action_name: str) -> None:
         try:

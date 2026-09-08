@@ -71,11 +71,36 @@ LocalizationManagerNode::LocalizationManagerNode()
   pose_hint_state_topic_ =
     declare_parameter<std::string>("pose_hint_state_topic", "/localization/pose_hint_state");
 
+  manager_diagnostics_topic_ = declare_parameter<std::string>(
+    "manager_diagnostics_topic", "/localization/manager/diagnostics");
+  tf_map_frame_ = declare_parameter<std::string>("tf_map_frame", "map");
+  tf_odom_frame_ = declare_parameter<std::string>("tf_odom_frame", "odom");
+  tf_base_frame_ = declare_parameter<std::string>("tf_base_frame", "base_link");
+  observation_timeout_sec_ = std::max(0.01, nonnegative_parameter("observation_timeout_sec", 1.5));
+
   const auto status_qos = rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local();
   pose_hint_required_pub_ =
     create_publisher<std_msgs::msg::Bool>(pose_hint_required_topic_, status_qos);
   pose_hint_state_pub_ =
     create_publisher<std_msgs::msg::String>(pose_hint_state_topic_, status_qos);
+  manager_diagnostics_pub_ = create_publisher<diagnostic_msgs::msg::DiagnosticArray>(
+    manager_diagnostics_topic_, status_qos);
+  tf_sub_ = create_subscription<tf2_msgs::msg::TFMessage>(
+    "/tf", rclcpp::QoS(100).best_effort(),
+    [this](const tf2_msgs::msg::TFMessage::SharedPtr message) {
+      for (const auto & tf : message->transforms)
+      {
+        const auto stamp = rclcpp::Time(tf.header.stamp).nanoseconds();
+        if (tf.header.frame_id == tf_map_frame_ && tf.child_frame_id == tf_odom_frame_)
+        {
+          map_odom_observation_.observe(stamp, SteadyClock::now());
+        }
+        if (tf.header.frame_id == tf_odom_frame_ && tf.child_frame_id == tf_base_frame_)
+        {
+          odom_base_observation_.observe(stamp, SteadyClock::now());
+        }
+      }
+    });
   vslam_pose_hint_pub_ = create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>(
     vslam_pose_hint_topic_, rclcpp::QoS(10).reliable());
 
@@ -253,6 +278,9 @@ bool LocalizationManagerNode::map_origin_job_may_be_running() const
 void LocalizationManagerNode::transition(State state, std::string reason)
 {
   steady_now_ = SteadyClock::now();
+  RCLCPP_INFO(get_logger(), "Localization %s -> %s: %s (source=%s, input=%llu)",
+    state_name(state_), state_name(state), reason.c_str(), request_source_.c_str(),
+    static_cast<unsigned long long>(input_sequence_));
   state_ = state;
   reason_ = std::move(reason);
   publish_status();
@@ -265,6 +293,10 @@ void LocalizationManagerNode::begin_localization(const std::string & source)
   attempts_ = 0;
   pending_pose_.reset();
   request_source_ = source;
+  hint_sent_at_.reset();
+  last_hint_source_ = "none";
+  vgl_stage_ = use_vgl_ ? "waiting" : "disabled";
+  vgl_detail_ = "none";
   pose_hint_required_ = true;
 
   if (!use_vgl_)
@@ -285,6 +317,7 @@ void LocalizationManagerNode::start_attempt()
 
   ++attempts_;
   ++request_generation_;
+  vgl_stage_ = "waiting_for_dependencies";
   transition(State::kWaitingForDependencies, "waiting_for_vgl_service");
   set_deadline(dependency_wait_timeout_sec_);
   if (max_attempts_ > 0)
@@ -301,6 +334,7 @@ void LocalizationManagerNode::start_attempt()
 
 void LocalizationManagerNode::request_vgl()
 {
+  vgl_stage_ = "trigger_requested";
   const auto generation = request_generation_;
   transition(State::kWaitingForTriggerResponse, "waiting_for_vgl_trigger_response");
   set_deadline(vgl_response_timeout_sec_);
@@ -347,12 +381,19 @@ void LocalizationManagerNode::on_vgl_trigger_response(
     schedule_retry("vgl_trigger_rejected");
     return;
   }
+  vgl_stage_ = "waiting_for_pose";
+  vgl_detail_ = response->message;
   transition(State::kWaitingForVglPose, "waiting_for_vgl_pose");
   set_deadline(vgl_response_timeout_sec_);
 }
 
 void LocalizationManagerNode::schedule_retry(const std::string & reason)
 {
+  if (reason.rfind("vgl_", 0) == 0 || reason.rfind("invalid_vgl_pose:", 0) == 0)
+  {
+    vgl_stage_ = "failed_or_timed_out";
+    vgl_detail_ = reason;
+  }
   clear_pending_vgl_request();
   ++request_generation_;  // Invalidate any outstanding service response.
   pending_pose_.reset();
@@ -408,6 +449,8 @@ void LocalizationManagerNode::forward_pending_pose()
     return;
   }
 
+  hint_sent_at_ = SteadyClock::now();
+  hint_stamp_ns_ = now().nanoseconds();
   vslam_pose_hint_pub_->publish(pending_pose_.value());
   last_hint_source_ = pending_pose_source_;
   pending_pose_.reset();
@@ -459,6 +502,7 @@ void LocalizationManagerNode::on_manual_pose(const Pose::SharedPtr message)
 {
   if (map_origin_job_may_be_running())
   {
+    record_input("manual", "rejected:origin_localization_running");
     reason_ = "manual_pose_requires_restart_in_pose_hint_mode";
     publish_status();
     RCLCPP_WARN(get_logger(),
@@ -470,6 +514,7 @@ void LocalizationManagerNode::on_manual_pose(const Pose::SharedPtr message)
   const auto validation = validate_pose(*message, validation_options_, now().nanoseconds());
   if (!validation.valid)
   {
+    record_input("manual", "rejected:" + validation.reason);
     reason_ = "invalid_manual_pose:" + validation.reason;
     publish_status();
     RCLCPP_WARN(get_logger(), "Rejected manual pose: %s", validation.reason.c_str());
@@ -480,6 +525,11 @@ void LocalizationManagerNode::on_manual_pose(const Pose::SharedPtr message)
   ++request_generation_;
   attempts_ = 0;
   request_source_ = "manual";
+  record_input("manual", "accepted");
+  vgl_stage_ = "bypassed_manual";
+  vgl_detail_ = "manual pose accepted; VGL is not required";
+  hint_sent_at_.reset();
+  last_hint_source_ = "none";
   queue_pose(validation.pose, "manual");
 }
 
@@ -503,6 +553,8 @@ void LocalizationManagerNode::on_vgl_pose(const Pose::SharedPtr message)
     return;
   }
   clear_pending_vgl_request();
+  vgl_stage_ = "pose_validated";
+  vgl_detail_ = "received valid pose; this is not VSLAM confirmation";
   queue_pose(validation.pose, "vgl");
 }
 
@@ -524,10 +576,12 @@ void LocalizationManagerNode::on_localization_trigger(const std_msgs::msg::Bool:
   }
   if (map_origin_job_may_be_running())
   {
+    record_input("joy_topic", "rejected:origin_localization_running");
     reason_ = "localization_trigger_requires_restart_in_pose_hint_mode";
     publish_status();
     return;
   }
+  record_input("joy_topic", "accepted");
   begin_localization("topic");
 }
 
@@ -536,6 +590,7 @@ void LocalizationManagerNode::on_relocalize_service(const Trigger::Request::Shar
 {
   if (map_origin_job_may_be_running())
   {
+    record_input("service", "rejected:origin_localization_running");
     reason_ = "relocalize_requires_restart_in_pose_hint_mode";
     publish_status();
     response->success = false;
@@ -544,6 +599,7 @@ void LocalizationManagerNode::on_relocalize_service(const Trigger::Request::Shar
     return;
   }
 
+  record_input("service", "accepted");
   begin_localization("service");
   response->success = use_vgl_;
   response->message =
@@ -560,8 +616,15 @@ void LocalizationManagerNode::on_diagnostics(
     {
       continue;
     }
+    vo_status_ = "unknown";
+    diagnostics_observation_.observe(rclcpp::Time(message->header.stamp).nanoseconds(),
+                                     SteadyClock::now());
     for (const auto & value : status.values)
     {
+      if (value.key == "vo_status")
+      {
+        vo_status_ = value.value;
+      }
       if (value.key == vslam_localized_key_)
       {
         if (value.value == "Yes")
@@ -783,6 +846,96 @@ void LocalizationManagerNode::on_tick()
   }
 }
 
+void LocalizationManagerNode::record_input(const std::string & source, const std::string & result)
+{
+  ++input_sequence_;
+  last_input_source_ = source;
+  last_input_result_ = result;
+  RCLCPP_INFO(get_logger(), "Localization input %llu: %s %s",
+    static_cast<unsigned long long>(input_sequence_), source.c_str(), result.c_str());
+}
+
+void LocalizationManagerNode::publish_diagnostics()
+{
+  using Status = diagnostic_msgs::msg::DiagnosticStatus;
+  diagnostic_msgs::msg::DiagnosticArray output;
+  output.header.stamp = now();
+  const auto steady = SteadyClock::now();
+  const auto ros_ns = rclcpp::Time(output.header.stamp).nanoseconds();
+  const auto fresh = [&](const StreamObservation & observation) {
+    return observation.fresh(ros_ns, steady, observation_timeout_sec_);
+  };
+  const auto add = [&](const std::string & name, unsigned char level,
+                       const std::string & message) -> Status & {
+    auto & status = output.status.emplace_back();
+    status.name = "Localization/" + name;
+    status.hardware_id = "jetpilot_localization_manager";
+    status.level = level;
+    status.message = message;
+    return status;
+  };
+  const auto value = [](Status & status, const std::string & key, const std::string & text) {
+    diagnostic_msgs::msg::KeyValue entry;
+    entry.key = key;
+    entry.value = text;
+    status.values.push_back(std::move(entry));
+  };
+  const auto boolean = [](bool flag) -> std::string { return flag ? "true" : "false"; };
+
+  auto & manager = add("Manager", state_ == State::kLocalized ? Status::OK : Status::WARN,
+                       std::string(state_name(state_)) + ": " + reason_);
+  value(manager, "state", state_name(state_));
+  value(manager, "reason", reason_);
+  value(manager, "request_source", request_source_);
+  value(manager, "input_sequence", std::to_string(input_sequence_));
+  value(manager, "last_input_source", last_input_source_);
+  value(manager, "last_input_result", last_input_result_);
+  value(manager, "attempt", std::to_string(attempts_));
+  value(manager, "last_hint_source", last_hint_source_);
+  value(manager, "localization_state_allows_control", boolean(state_ == State::kLocalized));
+  value(manager, "control_note", "state gate only; actual vehicle stop is not observed");
+  value(manager, "pose_hint_required", boolean(pose_hint_required_));
+  value(manager, "restart_required", boolean(state_ == State::kMapOriginRestartRequired));
+
+  const bool vgl_ok = vgl_stage_ == "pose_validated" || vgl_stage_ == "bypassed_manual" ||
+                     vgl_stage_ == "disabled";
+  auto & vgl = add("VGL", vgl_ok ? Status::OK : Status::WARN, vgl_stage_);
+  value(vgl, "stage", vgl_stage_);
+  value(vgl, "detail", vgl_detail_);
+  value(vgl, "service_ready", boolean(vgl_trigger_client_->service_is_ready()));
+  value(vgl, "success_scope", "validated pose received; service acceptance alone is not success");
+
+  const bool diag_fresh = fresh(diagnostics_observation_);
+  auto & vslam = add("VSLAM", !diag_fresh ? Status::STALE :
+    (vo_status_ == "OK" && state_ == State::kLocalized ? Status::OK : Status::WARN),
+    !diag_fresh ? "diagnostics_missing_or_stale" : "tracking=" + vo_status_);
+  value(vslam, "vo_status", vo_status_);
+  value(vslam, "localized_in_exist_map", last_vslam_localized_.has_value() ?
+    boolean(*last_vslam_localized_) : "unknown");
+  value(vslam, "current_hint_saw_not_localized", boolean(saw_not_localized_since_hint_));
+  value(vslam, "manager_confirmation", state_name(state_));
+  value(vslam, "hint_subscriber_ready", boolean(vslam_subscriber_ready()));
+  value(vslam, "diagnostics_fresh", boolean(diag_fresh));
+
+  const bool tf_fresh = fresh(map_odom_observation_) && fresh(odom_base_observation_);
+  auto & tf = add("TF", tf_fresh ? Status::OK : Status::STALE,
+    tf_fresh ? "both_transforms_updating; pose correctness not verified" :
+               "transform_missing_or_stale");
+  const auto tf_values = [&](const std::string & name, const StreamObservation & observation) {
+    value(tf, name + "_fresh", boolean(fresh(observation)));
+    value(tf, name + "_stamp_ns", std::to_string(observation.stamp_ns));
+    value(tf, name + "_updated_after_hint", hint_sent_at_ ? boolean(
+      observation.advanced_at && *observation.advanced_at > *hint_sent_at_ &&
+      observation.stamp_ns > hint_stamp_ns_ && fresh(observation)) : "not_requested");
+  };
+  tf_values("map_to_odom", map_odom_observation_);
+  tf_values("odom_to_base", odom_base_observation_);
+  value(tf, "frames", tf_map_frame_ + " -> " + tf_odom_frame_ + " -> " + tf_base_frame_);
+  value(tf, "pose_correction_verified", "unknown");
+  value(tf, "observation_scope", "direct dynamic TF edges; broadcaster identity not verified");
+  manager_diagnostics_pub_->publish(output);
+}
+
 void LocalizationManagerNode::publish_status()
 {
   std_msgs::msg::Bool required_message;
@@ -814,6 +967,7 @@ void LocalizationManagerNode::publish_status()
   std_msgs::msg::String state_message;
   state_message.data = json.str();
   pose_hint_state_pub_->publish(state_message);
+  publish_diagnostics();
   last_status_publish_ = SteadyClock::now();
 }
 

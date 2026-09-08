@@ -13,6 +13,8 @@
 #include "std_msgs/msg/bool.hpp"
 #include "std_msgs/msg/string.hpp"
 #include "std_srvs/srv/trigger.hpp"
+#include "tf2_msgs/msg/tf_message.hpp"
+#include "jetpilot_localization_manager/stream_observation.hpp"
 
 namespace jetpilot_localization_manager
 {
@@ -72,6 +74,8 @@ private:
   void on_diagnostics(const diagnostic_msgs::msg::DiagnosticArray::SharedPtr message);
   void on_tick();
   void publish_status();
+  void record_input(const std::string & source, const std::string & result);
+  void publish_diagnostics();
 
   bool use_vgl_{false};
   bool autostart_{false};
@@ -100,6 +104,19 @@ private:
   std::string vslam_localized_key_;
   std::string pose_hint_required_topic_;
   std::string pose_hint_state_topic_;
+
+  std::string manager_diagnostics_topic_;
+  std::string tf_map_frame_, tf_odom_frame_, tf_base_frame_;
+  double observation_timeout_sec_{1.5};
+  StreamObservation map_odom_observation_, odom_base_observation_, diagnostics_observation_;
+  std::optional<SteadyTime> hint_sent_at_;
+  std::int64_t hint_stamp_ns_{0};
+  std::uint64_t input_sequence_{0};
+  std::string last_input_source_{"none"}, last_input_result_{"none"};
+  std::string vgl_stage_{"not_requested"}, vgl_detail_{"none"};
+  std::string vo_status_{"unknown"};
+  rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr manager_diagnostics_pub_;
+  rclcpp::Subscription<tf2_msgs::msg::TFMessage>::SharedPtr tf_sub_;
 
   State state_{State::kIdle};
   bool pose_hint_required_{false};

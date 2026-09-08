@@ -20,7 +20,7 @@ ROOT = next(p for p in Path(__file__).resolve().parents if (p / 'scripts/bringup
 
 
 class VslamTuiTest(unittest.TestCase):
-    def launch(self, mode='vo', overrides=(), preset='localization-only', init='pose-hint', line='current', closed=True, rgb='30', infra='90'):
+    def launch(self, mode='vo', overrides=(), preset='localization-only', init='pose-hint', line='current', closed=True, rgb='30', infra='60', multicam='1'):
         with tempfile.TemporaryDirectory() as directory:
             custom = Path(directory) / 'test_custom_line.csv'
             custom.write_text('0;0;0;0;0;1;0\n1;1;0;0;0;1;0\n')
@@ -44,6 +44,10 @@ class VslamTuiTest(unittest.TestCase):
                 '    print(key + "_MENU_SHOWN", file=sys.stderr)\n'
                 '    if os.environ[key] == "cancel": sys.exit(130)\n'
                 '    print(next(o for o in options if o.split()[0] == os.environ[key]))\n'
+                'elif "VSLAM 処理モード" in prompt:\n'
+                '    print("MULTICAM_MENU_SHOWN", file=sys.stderr)\n'
+                '    if os.environ["TEST_MULTICAM"] == "cancel": sys.exit(130)\n'
+                '    print(next(o for o in options if o.split()[0] == os.environ["TEST_MULTICAM"]))\n'
                 'elif "VSLAM 追跡モード" in prompt:\n'
                 '    print("VSLAM_MENU_SHOWN", file=sys.stderr)\n'
                 '    if os.environ["TEST_MODE"] == "cancel": sys.exit(130)\n'
@@ -58,7 +62,7 @@ class VslamTuiTest(unittest.TestCase):
             fake_fzf.chmod(0o755)
             env = dict(os.environ, PATH=f'{directory}:{os.environ["PATH"]}',
                        TEST_MODE=mode, TEST_PRESET=preset, TEST_INIT=init, TEST_LINE=line,
-                       TEST_RGB=rgb, TEST_INFRA=infra)
+                       TEST_RGB=rgb, TEST_INFRA=infra, TEST_MULTICAM=multicam)
             master, slave = pty.openpty()
             process = subprocess.Popen(
                 ['bash', str(ROOT / 'scripts/bringup.sh'), '--dry-run', '--no-bag-manager',
@@ -89,6 +93,31 @@ class VslamTuiTest(unittest.TestCase):
                     process.kill()
                 process.wait()
                 os.close(master)
+
+    def test_multicam_modes_reach_launch(self):
+        for mode in ('0', '1', '2'):
+            with self.subTest(mode=mode):
+                code, output = self.launch(multicam=mode)
+                self.assertEqual(code, 0, output)
+                self.assertIn('MULTICAM_MENU_SHOWN', output)
+                self.assertIn(f'vslam_multicam_mode:={mode}', output)
+
+    def test_explicit_multicam_skips_menu(self):
+        code, output = self.launch(multicam='cancel',
+                                  overrides=('--set', 'vslam_multicam_mode:=2'))
+        self.assertEqual(code, 0, output)
+        self.assertNotIn('MULTICAM_MENU_SHOWN', output)
+        self.assertIn('vslam_multicam_mode:=2', output)
+
+    def test_invalid_multicam_rejected(self):
+        code, output = self.launch(overrides=('--set', 'vslam_multicam_mode:=3'))
+        self.assertNotEqual(code, 0, output)
+        self.assertIn('vslam_multicam_mode must be', output)
+
+    def test_multicam_cancel_stops_launch(self):
+        code, output = self.launch(multicam='cancel')
+        self.assertNotEqual(code, 0, output)
+        self.assertNotIn('Command:', output)
 
     def test_modes_reach_launch_with_ground_constraints(self):
         for mode in ('vo', 'vio'):
@@ -145,14 +174,12 @@ class VslamTuiTest(unittest.TestCase):
                 self.assertNotIn('VSLAM_MENU_SHOWN', output)
                 self.assertIn('vslam_mode:=vio', output)
 
-    def test_ground_constraints_can_be_disabled(self):
+    def test_ground_constraints_cannot_be_disabled(self):
         args = tuple(f'vslam_enable_ground_constraint_in_{target}:=false'
                      for target in ('odometry', 'slam'))
         code, output = self.launch(overrides=args)
-        self.assertEqual(code, 0, output)
-        for arg in args:
-            self.assertIn(arg, output)
-        self.assertIn('odometry=false / SLAM=false', output)
+        self.assertNotEqual(code, 0, output)
+        self.assertIn('requires ground constraints', output)
 
     def test_disabled_localization_skips_menu(self):
         code, output = self.launch(preset='sensor', overrides=('--sensor-kit', 'realsense'))

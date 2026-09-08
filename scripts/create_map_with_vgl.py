@@ -121,6 +121,7 @@ def build(args):
         command = ['ros2', 'run', 'isaac_mapping_ros', 'create_map_offline.py',
                    f'--sensor_data_bag={args.sensor_data_bag}', f'--base_output_folder={base}',
                    f'--camera_topic_config={args.camera_topic_config}', f'--fs_model_res={args.fs_model_res}',
+                   '--override=cuvslam.cfg_planar=true',
                    '--steps_to_run', *pose_steps]
         print('[stage] create poses: ' + ' '.join(command), flush=True)
         subprocess.run(command, check=True)

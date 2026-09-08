@@ -122,7 +122,7 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('enable_depth', False)
     args.add_arg('enable_color', True)
     args.add_arg('rgb_fps', '30')
-    args.add_arg('infra_fps', '90')
+    args.add_arg('infra_fps', '60')
     args.add_arg('enable_rtp_stream', False)
     args.add_arg('rtp_image_topic', '/realsense/color/image_raw')
     args.add_arg('rtp_host', '')

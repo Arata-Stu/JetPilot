@@ -44,3 +44,10 @@
     # UI-facing, reliable transient-local topics.
     pose_hint_required_topic: "/localization/pose_hint_required"
     pose_hint_state_topic: "/localization/pose_hint_state"
+
+    # Foxglove diagnostics: observation only; does not change the controller gate.
+    manager_diagnostics_topic: "/localization/manager/diagnostics"
+    tf_map_frame: "map"
+    tf_odom_frame: "odom"
+    tf_base_frame: "base_link"
+    observation_timeout_sec: 1.5

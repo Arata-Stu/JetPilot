@@ -304,11 +304,12 @@ set_base_args() {
   set_arg enable_object_detection false
   set_arg enable_sensor_kit false
   set_arg sensor_kit_rgb_fps 30
-  set_arg sensor_kit_infra_fps 90
+  set_arg sensor_kit_infra_fps 60
   set_arg enable_localization false
   set_arg enable_vslam true
   set_arg vslam_enable_slam true
   set_arg vslam_mode vo
+  set_arg vslam_multicam_mode 1
   set_arg vslam_enable_ground_constraint_in_odometry true
   set_arg vslam_enable_ground_constraint_in_slam true
   set_arg vslam_localize_on_startup false
@@ -831,6 +832,22 @@ configure_vslam_interactively() {
     'vo   ステレオ画像のみ' \
     'vio  ステレオ画像 + IMU（再生時はIMU収録済みbagが必要）')" || exit $?
   set_vslam_mode "${selection%%[[:space:]]*}"
+}
+
+configure_vslam_multicam_interactively() {
+  is_true "$(get_arg enable_localization)" || return 0
+  is_true "$(get_arg enable_vslam)" || return 0
+  local override selection
+  if ((${#EXTRA_LAUNCH_ARGS[@]} > 0)); then
+    for override in "${EXTRA_LAUNCH_ARGS[@]}"; do
+      [[ "$override" == vslam_multicam_mode:=* ]] && return 0
+    done
+  fi
+  selection="$(choose_one 'VSLAM 処理モード' \
+    '1  Performance：速度優先（既定）' \
+    '2  Precision：精度優先' \
+    '0  Moderate：バランス')" || exit $?
+  set_arg vslam_multicam_mode "${selection%%[[:space:]]*}"
 }
 
 configure_localization_init_interactively() {
@@ -1806,6 +1823,15 @@ normalize_rosbag_path() {
 }
 
 validate_configuration() {
+  case "$(get_arg vslam_multicam_mode)" in
+    0|1|2) ;;
+    *) die 'vslam_multicam_mode must be 0 (Moderate), 1 (Performance), or 2 (Precision)' ;;
+  esac
+  local ground_target
+  for ground_target in odometry slam; do
+    [[ "$(get_arg "vslam_enable_ground_constraint_in_${ground_target}")" == true ]] \
+      || die 'JetPilot requires ground constraints in both odometry and SLAM'
+  done
   local fps_key
   for fps_key in sensor_kit_rgb_fps sensor_kit_infra_fps; do
     case "$(get_arg "$fps_key")" in
@@ -2077,6 +2103,11 @@ print_summary() {
   fi
   printf '  localization : %s\n' "$(get_arg enable_localization)"
   if is_true "$(get_arg enable_localization)"; then
+    case "$(get_arg vslam_multicam_mode)" in
+      0) echo '  VSLAM compute: 0 (Moderate)' ;;
+      1) echo '  VSLAM compute: 1 (Performance)' ;;
+      2) echo '  VSLAM compute: 2 (Precision)' ;;
+    esac
     printf '  VSLAM mode   : %s\n' "$(get_arg vslam_mode)"
     printf '  地面制約     : odometry=%s / SLAM=%s\n' \
       "$(get_arg vslam_enable_ground_constraint_in_odometry)" \
@@ -2393,6 +2424,7 @@ if [[ "$INTERACTIVE" == 'true' ]]; then
   configure_offline_origin_test_interactively
   configure_localization_init_interactively
   configure_vslam_interactively
+  configure_vslam_multicam_interactively
 fi
 normalize_localization_init_mode
 normalize_vslam_mode

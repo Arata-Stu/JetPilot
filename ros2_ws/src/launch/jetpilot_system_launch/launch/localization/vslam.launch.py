@@ -70,6 +70,12 @@ def remap_from_config(topic_config_file: str) -> tuple[list[tuple[str, str]], in
 
 
 def add_vslam(args: lu.ArgumentContainer) -> list[lut.Action]:
+    if not (lu.is_true(args.vslam_enable_ground_constraint_in_odometry)
+            and lu.is_true(args.vslam_enable_ground_constraint_in_slam)):
+        raise ValueError('JetPilot requires ground constraints in both odometry and SLAM')
+    multicam_mode = int(args.vslam_multicam_mode)
+    if multicam_mode not in (0, 1, 2):
+        raise ValueError('vslam_multicam_mode must be 0, 1, or 2')
     camera_names = args.vslam_enabled_stereo_cameras.split(',')
     use_rectified_images = lu.is_true(args.vslam_use_rectified_images)
 
@@ -126,6 +132,7 @@ def add_vslam(args: lu.ArgumentContainer) -> list[lut.Action]:
         'enable_ground_constraint_in_odometry': lut.ParameterValue(args.vslam_enable_ground_constraint_in_odometry, value_type=bool),
         'enable_ground_constraint_in_slam': lut.ParameterValue(args.vslam_enable_ground_constraint_in_slam, value_type=bool),
         'tracking_mode': tracking_mode_from_name(args.vslam_mode),
+        'multicam_mode': multicam_mode,
         'image_qos': args.vslam_image_qos,
         'save_map_folder_path': args.vslam_save_map_folder_path,
         'load_map_folder_path': args.vslam_load_map_folder_path,
@@ -171,6 +178,7 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('is_sim', False)
     args.add_arg('publish_odom_to_base_tf', True)
     args.add_arg('vslam_mode', 'vo')
+    args.add_arg('vslam_multicam_mode', '1')
     args.add_arg('vslam_imu_topic', '/realsense/imu')
     args.add_arg('vslam_publish_map_to_odom_tf', True)
     args.add_arg('vslam_enable_slam', False)
@@ -186,8 +194,8 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('vslam_trigger_hint_topic', '/visual_slam/trigger_hint')
     args.add_arg('vslam_diagnostics_topic', '/localization/vslam/diagnostics')
     args.add_arg('vslam_use_rectified_images', False)
-    args.add_arg('vslam_enable_ground_constraint_in_odometry', False)
-    args.add_arg('vslam_enable_ground_constraint_in_slam', False)
+    args.add_arg('vslam_enable_ground_constraint_in_odometry', True)
+    args.add_arg('vslam_enable_ground_constraint_in_slam', True)
     args.add_arg('vslam_img_mask_bottom', 0)
     args.add_arg('vslam_img_mask_left', 0)
     args.add_arg('vslam_img_mask_right', 0)

@@ -47,6 +47,7 @@ bag_manager_node:
       - /localization/pose_hint_required
       - /localization/current_section
       - /localization/vslam/diagnostics
+      - /localization/manager/diagnostics
       - /localization/vgl/diagnostics
       - /planning/diagnostics
       - /controller/diagnostics

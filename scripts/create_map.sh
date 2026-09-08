@@ -702,6 +702,8 @@ PY
     enable_sensor_kit:=false \
     enable_localization:=true \
     vslam_enable_slam:=true \
+    vslam_enable_ground_constraint_in_odometry:=true \
+    vslam_enable_ground_constraint_in_slam:=true \
     vslam_enable_visualization:=true \
     vslam_localize_on_startup:=false \
     enable_localization_manager:=true \

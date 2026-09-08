@@ -180,6 +180,7 @@ def add_nodes(args: lu.ArgumentContainer):
                 lu.is_true(args.vslam_enable_ground_constraint_in_slam),
             'vslam_camera_optical_frames': camera_optical_frames,
             'vslam_mode': args.vslam_mode,
+            'vslam_multicam_mode': args.vslam_multicam_mode,
             'vslam_imu_topic': args.vslam_imu_topic,
             'vslam_base_frame': base_frame,
             'vslam_use_rectified_images': True,
@@ -217,6 +218,7 @@ def add_nodes(args: lu.ArgumentContainer):
                 'use_vgl': vgl_started,
                 'autostart': cuvslam_map_available and not origin_startup,
                 'origin_startup': origin_startup,
+                'tf_base_frame': base_frame,
                 'use_sim_time': use_sim_time,
                 'vslam_hint_request_topic': args.vslam_hint_request_topic,
                 'vslam_pose_hint_topic': args.vslam_pose_hint_topic,
@@ -387,9 +389,10 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('enable_vslam', True, cli=True)
     args.add_arg('vslam_enable_slam', True, cli=True)
     args.add_arg('vslam_mode', 'vo', cli=True)
+    args.add_arg('vslam_multicam_mode', '1', cli=True)
     args.add_arg('vslam_imu_topic', '/realsense/imu', cli=True)
-    args.add_arg('vslam_enable_ground_constraint_in_odometry', False, cli=True)
-    args.add_arg('vslam_enable_ground_constraint_in_slam', False, cli=True)
+    args.add_arg('vslam_enable_ground_constraint_in_odometry', True, cli=True)
+    args.add_arg('vslam_enable_ground_constraint_in_slam', True, cli=True)
     args.add_arg('vslam_enable_visualization', False, cli=True)
     args.add_arg('vslam_localize_on_startup', False, cli=True)
     args.add_arg('vslam_hint_request_topic', '/visual_slam/trigger_hint', cli=True)
