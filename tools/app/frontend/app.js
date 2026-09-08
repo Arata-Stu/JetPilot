@@ -152,9 +152,11 @@ const state = {
     undoStack: [],
     redoStack: [],
     dragSnapshot: null,
+    placementPoint: null,
     assistRangePoints: DEFAULT_MAP_EDITOR_ASSIST_RANGE_POINTS,
     assistSpacingM: DEFAULT_MAP_EDITOR_ASSIST_SPACING_M,
   },
+  customLineCreate: { mapPath: "", name: "", source: "", speed: DEFAULT_CUSTOM_LINE_SPEED_MPS, message: "", error: false },
   customLineEditor: {
     enabled: false,
     mapPath: "",
@@ -1467,6 +1469,8 @@ function restoreRenderScrollPositions(root) {
 }
 
 function render() {
+  if (state.tab !== "maps" || !state.mapEditor.enabled || !state.mapEditor.drawingLane
+      || state.mapEditor.mapPath !== state.selectedMapPath) state.mapEditor.placementPoint = null;
   if (tuning.enabled && tuning.mapPath !== state.selectedMapPath) endLiveTuning();
   if (tuning.connected && !tuningVisible()) disconnectTuning();
   stopAnalysisAnimationFrame();
@@ -6392,6 +6396,7 @@ function renderMapWorkspace() {
             onpointermove="handleMapEditorPointerMove(event)"
             onpointerup="handleMapEditorPointerUp(event)"
             onpointerleave="handleMapEditorPointerUp(event)"
+            onpointercancel="handleMapEditorPointerUp(event)"
             ondblclick="handleMapEditorDoubleClick(event)"
             oncontextmenu="handleMapEditorContextMenu(event)"
             onwheel="handleMapEditorWheel(event)"
@@ -7119,7 +7124,7 @@ function renderHdMapEditor(detail) {
         <select id="lane-join-target" aria-label="結合先レーン">${editor.lanes.filter(l => l.id !== lane.id).map(l => `<option value="${esc(l.id)}">${esc(l.id)}</option>`).join("")}</select>
         <button onclick="joinEditorLane()" ${editor.enabled && editor.lanes.length > 1 ? "" : "disabled"}>終点→始点を結合</button>
       </div>
-      <div class="field-hint">${editor.drawingLane ? "進行方向に中心をクリックすると、指定幅で左右を同時に描きます。2点以上で描画完了。" : "ペアレーンは左右の同じ番号の点からcenterlineを生成します。境界の点追加・削除は反対側にも反映されます。分割はLeft / Rightを選び、端点以外をクリック。"}</div>
+      <div class="field-hint">${editor.drawingLane ? "カーソルを動かすと、次のクリックで配置される左右境界と中心線を破線で表示します。クリックで確定、2点以上で描画完了。最初の点は仮の向きで、次の点から進行方向が決まります。" : "ペアレーンは左右の同じ番号の点からcenterlineを生成します。境界の点追加・削除は反対側にも反映されます。分割はLeft / Rightを選び、端点以外をクリック。"}</div>
       <label class="layer-toggle"><input id="lane-manual-center" type="checkbox" ${lane.centerline_mode === "manual" ? "checked" : ""} onchange="setManualCenterline(this.checked)" ${editor.enabled ? "" : "disabled"} />Centerlineの手修正を保持</label>
       <div class="field-hint">Centerlineも下のモードで追加・移動できます。手修正後は境界を動かしても保持されます。Auto Centerで自動生成に戻ります。</div>
       <div class="editor-field-row">
@@ -7191,7 +7196,16 @@ function setActiveMapEditorLane(laneId) {
   render();
 }
 
+function customLineCreateForm(detail) {
+  const mapPath = detail?.map?.path || "";
+  if (state.customLineCreate.mapPath !== mapPath) {
+    state.customLineCreate = { mapPath, name: "", source: "", speed: DEFAULT_CUSTOM_LINE_SPEED_MPS, message: "", error: false };
+  }
+  return state.customLineCreate;
+}
+
 function renderCustomLineEditor(detail) {
+  const form = customLineCreateForm(detail);
   const editor = ensureCustomLineEditor(detail);
   const lines = customLinesFromDetail(detail);
   const activeId = activeCustomLineId(detail);
@@ -7229,20 +7243,21 @@ function renderCustomLineEditor(detail) {
         <span id="custom-line-status" class="${issue || repairWarning || activeIssue ? "warn" : editor.dirty ? "dirty" : active ? "ok" : ""}">${esc(issue || repairWarning || activeIssue || status)}</span>
       </div>
       <div class="custom-line-create-grid">
-        <input id="custom-line-create-name" class="full" placeholder="New line name" aria-label="New custom line name" />
+        <input id="custom-line-create-name" class="full" placeholder="New line name" aria-label="New custom line name" value="${esc(form.name)}" oninput="state.customLineCreate.name=this.value" />
         <label class="custom-line-create-field">
           <span>Copy shape from</span>
-          <select id="custom-line-create-source" aria-label="Clone source">
-            <option value="centerline" ${centerlineReady ? "" : "disabled"}>Centerline${centerlineReady ? "" : " (missing)"}</option>
-            <option value="raceline" ${racelineReady ? "" : "disabled"} ${!centerlineReady && racelineReady ? "selected" : ""}>Raceline${racelineReady ? "" : " (missing)"}</option>
+          <select id="custom-line-create-source" aria-label="Clone source" onchange="state.customLineCreate.source=this.value">
+            <option value="centerline" ${centerlineReady ? "" : "disabled"} ${form.source === "centerline" ? "selected" : ""}>Centerline${centerlineReady ? "" : " (missing)"}</option>
+            <option value="raceline" ${racelineReady ? "" : "disabled"} ${form.source === "raceline" || (!form.source && !centerlineReady && racelineReady) ? "selected" : ""}>Raceline${racelineReady ? "" : " (missing)"}</option>
           </select>
         </label>
         <label class="custom-line-create-field">
           <span>Whole line target (m/s)</span>
-          <input id="custom-line-create-speed" type="number" min="${MIN_CUSTOM_LINE_TARGET_SPEED_MPS}" step="0.05" value="${DEFAULT_CUSTOM_LINE_SPEED_MPS}" aria-label="Whole line target speed in meters per second" />
+          <input id="custom-line-create-speed" type="number" min="${MIN_CUSTOM_LINE_TARGET_SPEED_MPS}" step="0.05" value="${esc(form.speed)}" oninput="state.customLineCreate.speed=this.value" aria-label="Whole line target speed in meters per second" />
         </label>
         <button class="primary full ${actionBusy("custom-line:create") ? "is-busy" : ""}" onclick="createCustomLine()" ${sourceReady ? "" : "disabled"} ${actionButtonAttrs("custom-line:create", "Custom line is being created...")}>${esc(actionButtonLabel("custom-line:create", "Clone as Custom", "Creating..."))}</button>
       </div>
+      ${form.message ? `<div id="custom-line-create-result" class="field-hint ${form.error ? "warn-text" : ""}" role="${form.error ? "alert" : "status"}">${esc(form.message)}</div>` : ""}
       <div class="field-hint">手動ラインの作成：名前とコピー元を指定 → Clone as Custom → Edit shape。クリックで点を追加、ドラッグで移動、右クリックで削除。Saveで保存し、Use for driveで走行用に選択します。元のCenterline／Racelineは変更されません。</div>
       <div class="custom-line-list">
         ${lines.length
@@ -9381,6 +9396,7 @@ function startPairedLane() {
   state.mapEditor.activeLaneId = lane.id;
   state.mapEditor.laneWidth = width;
   state.mapEditor.drawingLane = true;
+  state.mapEditor.placementPoint = null;
   state.mapEditor.selected = null;
   state.mapEditor.dragging = null;
   markMapEditorDirty();
@@ -9392,6 +9408,7 @@ function finishPairedLane() {
   if (activeEditorLane().left_bound.length < 2) return toast("2点以上をクリックしてください。Undoで作成を戻せます。", "error");
   rememberMapEditorState();
   state.mapEditor.drawingLane = false;
+  state.mapEditor.placementPoint = null;
   state.mapEditor.pointMode = "move";
   state.mapEditor.activeField = "left_bound";
   markMapEditorDirty();
@@ -9521,6 +9538,7 @@ function captureMapEditorSnapshot() {
 
 function restoreMapEditorSnapshot(snapshot) {
   if (!snapshot) return;
+  state.mapEditor.placementPoint = null;
   state.mapEditor.lanes = (snapshot.lanes || []).map(cloneEditorLane);
   if (!state.mapEditor.lanes.length) state.mapEditor.lanes = [defaultEditorLane()];
   state.mapEditor.primaryLaneId = snapshot.primaryLaneId || state.mapEditor.lanes[0].id;
@@ -10093,19 +10111,27 @@ async function createCustomLine() {
   const name = String($("custom-line-create-name")?.value || "").trim();
   const sourceType = String($("custom-line-create-source")?.value || "centerline");
   const speed = Number($("custom-line-create-speed")?.value ?? DEFAULT_CUSTOM_LINE_SPEED_MPS);
+  const form = customLineCreateForm(detail);
+  Object.assign(form, { name, source: sourceType, speed: $("custom-line-create-speed")?.value ?? speed });
+  const fail = (message) => {
+    Object.assign(form, { message, error: true });
+    render();
+  };
   if (!name) {
-    toast("Enter a name for the custom line.", "error");
+    fail("ライン名を入力してください。");
     $("custom-line-create-name")?.focus();
     return;
   }
   if (!["centerline", "raceline"].includes(sourceType) || customLineSourcePoints(detail, sourceType).length < 2) {
-    toast(`${sourceType === "raceline" ? "Raceline" : "Centerline"} is not available.`, "error");
+    fail(`${sourceType === "raceline" ? "Raceline" : "Centerline"}の保存済みデータがありません。コピー元を作成・保存してください。`);
     return;
   }
   if (!Number.isFinite(speed) || speed < MIN_CUSTOM_LINE_TARGET_SPEED_MPS) {
-    toast(`Whole line target speed must be at least ${MIN_CUSTOM_LINE_TARGET_SPEED_MPS} m/s.`, "error");
+    fail(`目標速度は${MIN_CUSTOM_LINE_TARGET_SPEED_MPS} m/s以上で入力してください。`);
     return;
   }
+  if (actionBusy("custom-line:create")) return;
+  Object.assign(form, { message: "Custom Lineを作成中…", error: false });
   if (!beginAction("custom-line:create", "Creating custom line")) return;
   const mapPath = detail.map.path;
   const requestContext = captureSelectedMapContext(mapPath);
@@ -10141,11 +10167,11 @@ async function createCustomLine() {
       if (match) ensureCustomLineEditor(saved, { force: true, selectedId: match.id });
     }
     state.mapLayers.custom_line = true;
-    toast(applied.preservedEditor
-      ? `Created custom line “${name}”; newer editor changes remain unsaved.`
-      : `Created custom line “${name}”`);
+    Object.assign(form, { error: false, message: applied.preservedEditor
+      ? `「${name}」を作成しました。作成中に行った編集は未保存のまま保持しています。`
+      : `「${name}」を作成しました。一覧から選び、Edit shapeで編集できます。` });
   } catch (error) {
-    toast(`Custom line create failed: ${error.message}`, "error");
+    Object.assign(form, { error: true, message: `Custom Lineを作成できませんでした: ${error.message}` });
   } finally {
     endAction("custom-line:create");
   }
@@ -12024,6 +12050,14 @@ function deleteNearestCustomLinePoint(event) {
   if (nearest && deleteCustomLinePoint(nearest.index)) render();
 }
 
+function pairedLanePlacement(world) {
+  const editor = state.mapEditor;
+  if (!editor.enabled || !editor.drawingLane || !world || !world.every(Number.isFinite)) return null;
+  const spine = LaneGeometry.centers(activeEditorLane());
+  if (spine.length && pointDistance(spine.at(-1), world) < 0.02) return null;
+  return LaneGeometry.fromSpine([...spine, world], editor.laneWidth || 1);
+}
+
 function handleMapEditorPointerDown(event) {
   if (mapEditorInteractionLocked()) return;
   if (state.customLineEditor.enabled) {
@@ -12042,11 +12076,11 @@ function handleMapEditorPointerDown(event) {
   const lane = activeEditorLane();
   if (state.mapEditor.drawingLane) {
     const world = mapPixelToWorld(detail, canvas.width, canvas.height, point);
-    if (!world) return;
-    const spine = LaneGeometry.centers(lane);
-    if (spine.length && pointDistance(spine.at(-1), world) < 0.02) return;
+    const placement = pairedLanePlacement(world);
+    if (!placement) return;
     rememberMapEditorState();
-    Object.assign(lane, LaneGeometry.fromSpine([...spine, world], state.mapEditor.laneWidth || 1));
+    Object.assign(lane, placement);
+    state.mapEditor.placementPoint = null;
     markMapEditorDirty();
     drawMapPreview();
     return;
@@ -12091,6 +12125,14 @@ function handleMapEditorPointerMove(event) {
   }
   const detail = state.selectedMapDetail;
   const drag = state.mapEditor.dragging;
+  if (detail && state.mapEditor.enabled && state.mapEditor.drawingLane
+      && state.mapEditor.mapPath === detail.map?.path && mapEditorRasterReady(detail)) {
+    const { canvas, point } = canvasEventInfo(event);
+    const world = mapPixelToWorld(detail, canvas.width, canvas.height, point);
+    state.mapEditor.placementPoint = pairedLanePlacement(world) ? world : null;
+    drawMapPreview();
+    return;
+  }
   if (!detail || !drag || !state.mapEditor.enabled || state.mapEditor.mapPath !== detail.map?.path) return;
   if (state.mapEditor.pointMode === "add") return;
   event.preventDefault();
@@ -12114,6 +12156,10 @@ function handleMapEditorPointerMove(event) {
 }
 
 function handleMapEditorPointerUp(event) {
+  if (["pointerleave", "pointercancel"].includes(event.type) && state.mapEditor.placementPoint) {
+    state.mapEditor.placementPoint = null;
+    drawMapPreview();
+  }
   if (mapEditorInteractionLocked()) return;
   if (state.customLineEditor.enabled) {
     handleCustomLinePointerUp(event);
@@ -12696,6 +12742,36 @@ function drawMapLayers(ctx, detail, width, height) {
     }
   }
   if (state.mapLayers.junctions) drawJunctionLayers(ctx, detail, toPixel, uiScale);
+  drawLanePlacementPreview(ctx, detail, toPixel, uiScale);
+}
+
+function drawLanePlacementPreview(ctx, detail, toPixel, uiScale) {
+  if (mapEditorInteractionLocked() || state.mapEditor.mapPath !== detail.map?.path) return;
+  const placement = pairedLanePlacement(state.mapEditor.placementPoint);
+  if (!placement) return;
+  const left = placement.left_bound.map(toPixel);
+  const right = placement.right_bound.map(toPixel);
+  const center = placement.centerline.map(toPixel);
+  ctx.save();
+  const polygon = [...left, ...right.slice().reverse()];
+  ctx.beginPath();
+  polygon.forEach(([x, y], index) => index ? ctx.lineTo(x, y) : ctx.moveTo(x, y));
+  ctx.closePath();
+  ctx.fillStyle = "rgba(87, 199, 194, 0.14)";
+  ctx.fill();
+  ctx.setLineDash([7 * uiScale, 5 * uiScale]);
+  drawPolyline(ctx, left, "#45c478", 2, false, uiScale);
+  drawPolyline(ctx, right, "#d878d8", 2, false, uiScale);
+  drawPolyline(ctx, center, "#e7c84b", 2, false, uiScale);
+  drawPolyline(ctx, [left.at(-1), right.at(-1)], "#57c7c2", 2, false, uiScale);
+  ctx.setLineDash([]);
+  const [x, y] = center.at(-1);
+  ctx.beginPath();
+  ctx.arc(x, y, 5 * uiScale, 0, Math.PI * 2);
+  ctx.strokeStyle = "#57c7c2";
+  ctx.lineWidth = 2 * uiScale;
+  ctx.stroke();
+  ctx.restore();
 }
 
 function mapDirectionMarker(detail, lanes) {

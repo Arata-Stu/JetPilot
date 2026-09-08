@@ -104,6 +104,60 @@ function pointerEditorContext() {
   return c;
 }
 
+test('lane placement hover previews the exact committed geometry without changing the draft or undo', () => {
+  const c = pointerEditorContext();
+  vm.runInContext(`
+    state.mapEditor.drawingLane = true; state.mapEditor.laneWidth = 2;
+    globalThis.before = JSON.stringify(captureMapEditorSnapshot());
+    move([5, 3]);
+    globalThis.preview = pairedLanePlacement(state.mapEditor.placementPoint);
+  `, c);
+  assert.equal(vm.runInContext('JSON.stringify(captureMapEditorSnapshot()) === before', c), true);
+  assert.equal(vm.runInContext('state.mapEditor.undoStack.length', c), 0);
+  assert.equal(vm.runInContext('preview.centerline.length', c), 4);
+  assert.notEqual(vm.runInContext('preview.left_bound[2][0]', c), 4);
+  vm.runInContext('down([5, 3])', c);
+  for (const field of ['left_bound', 'right_bound', 'centerline']) {
+    assert.equal(vm.runInContext(`JSON.stringify(activeEditorLane().${field}) === JSON.stringify(preview.${field})`, c), true);
+  }
+  assert.equal(vm.runInContext('state.mapEditor.placementPoint', c), null);
+  assert.equal(vm.runInContext('state.mapEditor.undoStack.length', c), 1);
+});
+
+test('lane placement handles the first point, ignores near duplicates, and clears on leave or undo', () => {
+  const c = pointerEditorContext();
+  vm.runInContext(`
+    state.mapEditor.drawingLane = true;
+    Object.assign(activeEditorLane(), {left_bound:[],right_bound:[],centerline:[]});
+    move([0,0]);
+  `, c);
+  assert.equal(vm.runInContext('pairedLanePlacement(state.mapEditor.placementPoint).centerline.length', c), 1);
+  vm.runInContext('down([0,0]); move([0.001,0]);', c);
+  assert.equal(vm.runInContext('state.mapEditor.placementPoint', c), null);
+  vm.runInContext('move([2,0]); handleMapEditorPointerUp({type:"pointerleave"});', c);
+  assert.equal(vm.runInContext('state.mapEditor.placementPoint', c), null);
+  vm.runInContext('move([2,0]); down([2,0]); move([3,1]); undoMapEditor();', c);
+  assert.equal(vm.runInContext('state.mapEditor.placementPoint', c), null);
+  assert.equal(vm.runInContext('activeEditorLane().centerline.length', c), 1);
+});
+
+test('lane placement overlay draws a translucent footprint and dashed bounds without leaking canvas style', () => {
+  const c = pointerEditorContext();
+  const events=[];
+  c.previewCanvas = {
+    save(){events.push('save');},restore(){events.push('restore');},
+    beginPath(){},moveTo(){},lineTo(){},closePath(){},arc(){},stroke(){},
+    fill(){events.push(this.fillStyle);},setLineDash(value){events.push(Array.from(value));},
+  };
+  vm.runInContext(`
+    state.mapEditor.drawingLane = true; move([5,3]);
+    drawLanePlacementPreview(previewCanvas, state.selectedMapDetail, p => p, 1);
+  `, c);
+  assert.ok(events.includes('rgba(87, 199, 194, 0.14)'));
+  assert.ok(events.some(item => Array.isArray(item) && item[0] === 7 && item[1] === 5));
+  assert.equal(events.filter(item => item === 'save').length, events.filter(item => item === 'restore').length);
+});
+
 test('move mode ignores blank clicks and drags each boundary independently with undo', () => {
   for (const field of ['left_bound', 'right_bound']) {
     const c = pointerEditorContext();
