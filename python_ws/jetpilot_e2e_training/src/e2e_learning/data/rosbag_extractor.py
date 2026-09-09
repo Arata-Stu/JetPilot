@@ -13,6 +13,7 @@ from rosbags.highlevel import AnyReader
 from tqdm import tqdm
 
 from e2e_learning.utils.io import ensure_dir, write_csv, write_yaml
+from e2e_learning.data.timestamps import alignment_timestamp_ns, stamp_to_ns
 
 
 @dataclass(frozen=True)
@@ -35,16 +36,7 @@ class ExtractConfig:
     imu_samples: int = 10
     image_extension: str = "jpg"
     jpeg_quality: int = 92
-
-
-def stamp_to_ns(msg: Any, fallback_ns: int) -> int:
-    stamp = getattr(getattr(msg, "header", None), "stamp", None)
-    if stamp is None:
-        return int(fallback_ns)
-    value = int(getattr(stamp, "sec", 0)) * 1_000_000_000 + int(
-        getattr(stamp, "nanosec", 0)
-    )
-    return value if value > 0 else int(fallback_ns)
+    timestamp_source: str = "bag"
 
 
 def control_from_msg(msg: Any) -> dict[str, float]:
@@ -213,7 +205,7 @@ def _collect_signals(
             reader.messages(connections=connections), desc="index signals"
         ):
             msg = reader.deserialize(rawdata, connection.msgtype)
-            stamp_ns = stamp_to_ns(msg, timestamp)
+            stamp_ns = alignment_timestamp_ns(msg, timestamp, config.timestamp_source)
             try:
                 if connection.topic == config.control_topic:
                     controls.append((stamp_ns, control_from_msg(msg)))
@@ -230,6 +222,8 @@ def _collect_signals(
 
 
 def extract_dataset(config: ExtractConfig) -> dict[str, Any]:
+    if config.timestamp_source not in {"bag", "header"}:
+        raise ValueError("timestamp_source must be bag or header")
     if config.task not in {"control", "trajectory"}:
         raise ValueError("task must be control or trajectory")
     if config.trajectory_points < 2:
@@ -251,6 +245,9 @@ def extract_dataset(config: ExtractConfig) -> dict[str, Any]:
     dropped_without_control = 0
     dropped_without_trajectory = 0
     failed_images = 0
+    image_count = 0
+    image_time_min = None
+    image_time_max = None
     with AnyReader([config.bag_path]) as reader:
         image_connections = [
             connection for connection in reader.connections if connection.topic == config.image_topic
@@ -260,7 +257,10 @@ def extract_dataset(config: ExtractConfig) -> dict[str, Any]:
         message_iter: Iterable = reader.messages(connections=image_connections)
         for connection, timestamp, rawdata in tqdm(message_iter, desc="extract images"):
             msg = reader.deserialize(rawdata, connection.msgtype)
-            stamp_ns = stamp_to_ns(msg, timestamp)
+            stamp_ns = alignment_timestamp_ns(msg, timestamp, config.timestamp_source)
+            image_count += 1
+            image_time_min = stamp_ns if image_time_min is None else min(image_time_min, stamp_ns)
+            image_time_max = stamp_ns if image_time_max is None else max(image_time_max, stamp_ns)
             control = _nearest(controls, control_times, stamp_ns, config.max_control_dt_sec)
             trajectory = _trajectory_label(odometry, odometry_times, stamp_ns, config)
             if config.task == "control" and control is None:
@@ -339,6 +339,11 @@ def extract_dataset(config: ExtractConfig) -> dict[str, Any]:
         "input_width": config.input_width,
         "input_height": config.input_height,
         "sample_count": count,
+        "timestamp_source": config.timestamp_source,
+        "image_message_count": image_count,
+        "image_time_range_ns": [image_time_min, image_time_max],
+        "control_time_range_ns": [control_times[0], control_times[-1]] if control_times else [],
+        "odometry_time_range_ns": [odometry_times[0], odometry_times[-1]] if odometry_times else [],
         "max_control_dt_sec": config.max_control_dt_sec,
         "max_odometry_dt_sec": config.max_odometry_dt_sec,
         "trajectory_horizon_sec": config.trajectory_horizon_sec,
@@ -354,5 +359,14 @@ def extract_dataset(config: ExtractConfig) -> dict[str, Any]:
     }
     write_yaml(config.output_dir / "metadata.yaml", metadata)
     if math.isclose(count, 0):
-        raise RuntimeError(f"No aligned samples were extracted to {samples_path}")
+        raise RuntimeError(
+            f"No aligned samples were extracted to {samples_path}. "
+            f"timestamp_source={config.timestamp_source}, images={image_count}, "
+            f"controls={len(controls)}, dropped_without_control={dropped_without_control}, "
+            f"dropped_without_trajectory={dropped_without_trajectory}, failed_images={failed_images}. "
+            f"Image time range(ns)={metadata['image_time_range_ns']}, "
+            f"control time range(ns)={metadata['control_time_range_ns']}, "
+            f"odometry time range(ns)={metadata['odometry_time_range_ns']}. "
+            "See metadata.yaml; use timestamp_source=bag to match Offline Analysis."
+        )
     return metadata

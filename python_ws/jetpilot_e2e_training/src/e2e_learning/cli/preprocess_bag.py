@@ -17,6 +17,7 @@ def main(cfg: DictConfig) -> None:
         input_width=int(data.input_width),
         input_height=int(data.input_height),
         max_control_dt_sec=float(data.max_control_dt_sec),
+        timestamp_source=str(data.timestamp_source),
         task=str(data.task),
         odometry_topic=str(data.odometry_topic),
         imu_topic=str(data.imu_topic),

@@ -267,6 +267,9 @@ def build_preprocess_task(config: Any, body: dict[str, Any]) -> PipelineTaskSpec
     width = _integer(body.get("input_width", 212), label="input width", minimum=32, maximum=4096)
     height = _integer(body.get("input_height", 120), label="input height", minimum=32, maximum=4096)
     max_dt = _number(body.get("max_control_dt_sec", 0.1), label="max control dt", minimum=0.001, maximum=5.0)
+    timestamp_source = str(body.get("timestamp_source") or "bag")
+    if timestamp_source not in {"bag", "header"}:
+        raise ValueError("timestamp_source must be bag or header")
     max_odom_dt = _number(body.get("max_odometry_dt_sec", 0.15), label="max odometry dt", minimum=0.001, maximum=5.0)
     task = str(body.get("task") or "control")
     if task not in {"control", "trajectory"}:
@@ -291,6 +294,7 @@ def build_preprocess_task(config: Any, body: dict[str, Any]) -> PipelineTaskSpec
             f"data.input_width={width}",
             f"data.input_height={height}",
             f"data.max_control_dt_sec={max_dt}",
+            f"data.timestamp_source={timestamp_source}",
             f"data.max_odometry_dt_sec={max_odom_dt}",
             f"data.trajectory_points={trajectory_points}",
             f"data.trajectory_horizon_sec={trajectory_horizon}",

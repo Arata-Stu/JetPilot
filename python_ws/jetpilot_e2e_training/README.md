@@ -12,6 +12,17 @@ trajectoryの教師は記録odometryから生成します。画像時刻の姿�
 
 ## trajectoryデータの作成
 
+データセット作成の時刻合わせは既定で`data.timestamp_source=bag`を使い、
+Offline E2E Analysisと同じbag記録時刻で画像・制御・odometry・IMUを対応付けます。
+イベントカメラのデバイス時計と制御のROS時計が異なるbagでも、header時計を混在させません。
+UIでは`Alignment & IMU` → `Alignment clock`から選択できます。
+全センサーのheader時計を同期済みで撮影時刻を優先する場合は`header`を指定してください。
+bag時刻には配信・記録の遅延が含まれるため、撮影時刻の厳密な同期を保証するものではありません。
+
+`No aligned samples`の場合、`metadata.yaml`とエラーに時刻ソース・画像数・
+時刻範囲・除外理由の件数を出力します。時刻不一致以外に画像のデコード失敗や
+教師の記録区間不足もあり得るため、これらを確認してください。
+
 ```bash
 source /opt/env/bin/activate
 cd python_ws/jetpilot_e2e_training

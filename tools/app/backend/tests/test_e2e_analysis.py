@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 import unittest
 
-from jetpilot_console.e2e_analysis import control_error_summary, finite_summary
+from jetpilot_console.e2e_analysis import control_error_summary, finite_summary, is_steering_only
 from jetpilot_console.e2e_analysis_worker import (
     _aggressive_events,
     _aggressiveness_score,
@@ -12,11 +12,38 @@ from jetpilot_console.e2e_analysis_worker import (
     _enrich_trajectory_dynamics,
     _relative_future_trajectory,
     _teacher_free_metrics,
+    _control_predictions,
+    _exclude_throttle_metrics,
     trajectory_error_summary,
 )
 
 
 class E2EAnalysisMetricTests(unittest.TestCase):
+    def test_steering_only_ignores_placeholder_throttle(self) -> None:
+        self.assertTrue(is_steering_only({"steering_only": True}))
+        self.assertTrue(is_steering_only({"output": {"learned_fields": ["steering"]}}))
+        self.assertFalse(is_steering_only({"output": {"fields": ["steering", "throttle"]}}))
+        self.assertEqual(_control_predictions({"steering": 0.3, "throttle": 0.0}, True), (0.3, None))
+        self.assertEqual(_control_predictions({"steering": 0.3, "throttle": 0.2}, False), (0.3, 0.2))
+        records = [{"t": 0.0, "steering_pred": 0.3, "throttle_pred": None}]
+        from jetpilot_console.e2e_analysis_worker import _attach_applied_controls
+        _attach_applied_controls(records, [{"t": 0.0, "steering": 0.2, "throttle": 0.2}])
+        self.assertEqual(records[0]["throttle_applied"], 0.2)
+        self.assertIsNone(records[0]["throttle_applied_error"])
+
+    def test_steering_only_metrics_exclude_throttle_at_all_summary_levels(self) -> None:
+        metrics = {
+            "steering": {"mae": 0.1}, "throttle": {"mae": 0.2},
+            "throttle_applied": {"mae": 0.2},
+            "teacher_free": {"throttle_rate_abs_per_s": {}, "throttle_saturation_rate": 0.0, "sample_count": 4},
+        }
+        _exclude_throttle_metrics(metrics)
+        self.assertTrue(metrics["steering_only"])
+        self.assertNotIn("throttle", metrics)
+        self.assertNotIn("throttle_applied", metrics)
+        self.assertEqual(metrics["steering"], {"mae": 0.1})
+        self.assertEqual(metrics["teacher_free"], {"sample_count": 4})
+
     def test_finite_summary_ignores_invalid_values_and_interpolates_percentiles(self) -> None:
         summary = finite_summary([1, 2, 3, float("nan"), None, "bad"])
 

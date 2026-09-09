@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 from .analysis_worker import Progress, _atomic_json, _update_json_object, _utc_now
-from .e2e_analysis import control_error_summary, finite_summary
+from .e2e_analysis import control_error_summary, finite_summary, is_steering_only
 from .map_detail import load_yaml
 
 
@@ -70,6 +70,23 @@ def _mode_name(record: Mapping[str, Any] | None) -> str:
     except (TypeError, ValueError):
         return str(raw or "").upper()
     return aliases.get(numeric, str(numeric))
+
+
+def _control_predictions(decoded: dict[str, Any], steering_only: bool):
+    return (
+        _finite(decoded.get("steering")),
+        None if steering_only else _finite(decoded.get("throttle")),
+    )
+
+
+def _exclude_throttle_metrics(metrics: dict[str, Any]) -> None:
+    metrics["steering_only"] = True
+    metrics.pop("throttle", None)
+    metrics.pop("throttle_applied", None)
+    teacher_free = metrics.get("teacher_free")
+    if isinstance(teacher_free, dict):
+        teacher_free.pop("throttle_rate_abs_per_s", None)
+        teacher_free.pop("throttle_saturation_rate", None)
 
 
 def _metadata(model_path: Path) -> dict[str, Any]:
@@ -184,6 +201,7 @@ def _supervised_predictions(
     trajectory_times = [float(item["t"]) for item in trajectory]
     imu_times = [float(item["t"]) for item in imu_records]
     metadata = _metadata(model_path)
+    steering_only = is_steering_only(metadata)
     task = str(metadata.get("task") or metadata.get("output", {}).get("task") or "control")
     architecture = metadata.get("architecture") if isinstance(metadata.get("architecture"), dict) else {}
     sequence_length = max(1, int(architecture.get("sequence_length") or 1))
@@ -278,8 +296,7 @@ def _supervised_predictions(
             missing_teacher += 1
         steering_gt = _finite(teacher.get("steering")) if teacher else None
         throttle_gt = _finite(teacher.get("throttle")) if teacher else None
-        steering_pred = _finite(decoded.get("steering"))
-        throttle_pred = _finite(decoded.get("throttle"))
+        steering_pred, throttle_pred = _control_predictions(decoded, steering_only)
         preprocess_ms = (preprocessed - started) / 1.0e6
         inference_ms = (finished - preprocessed) / 1.0e6
         total_ms = (finished - started) / 1.0e6
@@ -369,6 +386,8 @@ def _supervised_predictions(
         "task": task,
         "architecture": architecture,
     }
+    if steering_only:
+        _exclude_throttle_metrics(metrics)
     return samples, metrics
 
 
@@ -935,6 +954,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         teacher_free["event_count"] = len(events)
         metrics["teacher_free"] = teacher_free
     sections = _section_metrics(records, trajectory, task)
+    if metrics.get("steering_only"):
+        _exclude_throttle_metrics(metrics)
+        for section in sections:
+            _exclude_throttle_metrics(section)
     e2e_payload = {
         "schema_version": 2,
         "mode": args.mode,

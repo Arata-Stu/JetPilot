@@ -51,6 +51,7 @@ const state = {
     inputWidth: 212,
     inputHeight: 120,
     maxControlDtSec: 0.1,
+    timestampSource: "bag",
     maxOdometryDtSec: 0.15,
     trajectoryPoints: 10,
     trajectoryHorizonSec: 1.5,
@@ -3212,6 +3213,7 @@ function createE2EDataset() {
       input_width: pipeline.inputWidth,
       input_height: pipeline.inputHeight,
       max_control_dt_sec: pipeline.maxControlDtSec,
+      timestamp_source: pipeline.timestampSource,
       max_odometry_dt_sec: pipeline.maxOdometryDtSec,
       trajectory_points: pipeline.trajectoryPoints,
       trajectory_horizon_sec: pipeline.trajectoryHorizonSec,
@@ -3337,7 +3339,7 @@ function renderE2EPipeline() {
             <div class="field"><label>IMU topic</label><input value="${esc(pipeline.imuTopic)}" onchange="updateE2EPipelineOption('imuTopic', this.value)" /></div>
             <div class="e2e-compact-fields"><label>Width<input type="number" min="32" value="${esc(pipeline.inputWidth)}" onchange="updateE2EPipelineOption('inputWidth', this.value)" /></label><label>Height<input type="number" min="32" value="${esc(pipeline.inputHeight)}" onchange="updateE2EPipelineOption('inputHeight', this.value)" /></label><label>Max Δt (s)<input type="number" min="0.001" step="0.01" value="${esc(pipeline.maxControlDtSec)}" onchange="updateE2EPipelineOption('maxControlDtSec', this.value)" /></label></div>
             ${pipeline.datasetTask === "trajectory" ? `<div class="e2e-compact-fields"><label>Points<input type="number" min="2" value="${esc(pipeline.trajectoryPoints)}" onchange="updateE2EPipelineOption('trajectoryPoints', this.value)" /></label><label>Horizon (s)<input type="number" min="0.1" step="0.1" value="${esc(pipeline.trajectoryHorizonSec)}" onchange="updateE2EPipelineOption('trajectoryHorizonSec', this.value)" /></label><label>Scale (m)<input type="number" min="0.1" step="0.1" value="${esc(pipeline.trajectoryScaleM)}" onchange="updateE2EPipelineOption('trajectoryScaleM', this.value)" /></label></div>` : ""}
-            <details><summary>Alignment & IMU</summary><div class="e2e-compact-fields"><label>Odom Δt<input type="number" min="0.001" step="0.01" value="${esc(pipeline.maxOdometryDtSec)}" onchange="updateE2EPipelineOption('maxOdometryDtSec', this.value)" /></label><label>IMU window (s)<input type="number" min="0.01" step="0.1" value="${esc(pipeline.imuWindowSec)}" onchange="updateE2EPipelineOption('imuWindowSec', this.value)" /></label><label>IMU samples<input type="number" min="1" value="${esc(pipeline.imuSamples)}" onchange="updateE2EPipelineOption('imuSamples', this.value)" /></label></div></details>
+            <details><summary>Alignment & IMU</summary><div class="field"><label>Alignment clock</label><select onchange="updateE2EPipelineOption('timestampSource', this.value)">${[["bag", "Bag recording time (same as Offline Analysis)"], ["header", "Header stamp (synchronized sensors only)"]].map(([value, label]) => `<option value="${value}" ${pipeline.timestampSource === value ? "selected" : ""}>${esc(label)}</option>`).join("")}</select></div><div class="e2e-compact-fields"><label>Odom Δt<input type="number" min="0.001" step="0.01" value="${esc(pipeline.maxOdometryDtSec)}" onchange="updateE2EPipelineOption('maxOdometryDtSec', this.value)" /></label><label>IMU window (s)<input type="number" min="0.01" step="0.1" value="${esc(pipeline.imuWindowSec)}" onchange="updateE2EPipelineOption('imuWindowSec', this.value)" /></label><label>IMU samples<input type="number" min="1" value="${esc(pipeline.imuSamples)}" onchange="updateE2EPipelineOption('imuSamples', this.value)" /></label></div></details>
             <button class="primary ${actionBusy("e2e-pipeline:dataset") ? "is-busy" : ""}" onclick="createE2EDataset()" ${state.analysis.selectedBagPath && imageTopic && (pipeline.datasetTask === "trajectory" ? pipeline.odometryTopic : pipeline.controlTopic) ? "" : "disabled"} ${actionButtonAttrs("e2e-pipeline:dataset", "Dataset creation is starting...")}>${esc(actionButtonLabel("e2e-pipeline:dataset", "Create dataset", "Starting..."))}</button>
           </article>
           <article class="e2e-pipeline-stage">
@@ -4247,6 +4249,7 @@ function renderAnalysisViewer() {
 }
 
 function e2eMetricText(value, suffix = "", digits = 3) {
+  if (value == null || value === "") return "-";
   const number = Number(value);
   return Number.isFinite(number) ? `${number.toFixed(digits)}${suffix}` : "-";
 }
@@ -4269,7 +4272,9 @@ function renderE2ESummaryPanel() {
     ? [
       ["Steering MAE", e2eMetricText(metrics.steering?.mae)],
       ["Steering RMSE", e2eMetricText(metrics.steering?.rmse)],
-      ["Throttle MAE", e2eMetricText(metrics.throttle?.mae)],
+      ...(metrics.steering_only
+        ? [["Learning target", "Steering only · throttle excluded"]]
+        : [["Throttle MAE", e2eMetricText(metrics.throttle?.mae)]]),
       ["Inference p50", e2eMetricText(metrics.inference_ms?.p50, " ms", 2)],
       ["Inference p95", e2eMetricText(metrics.inference_ms?.p95, " ms", 2)],
       ["Deadline misses", `${Number(metrics.deadline_miss_count || 0)} (${e2eMetricText(Number(metrics.deadline_miss_rate || 0) * 100, "%", 1)})`],
@@ -5676,22 +5681,26 @@ function drawAnalysisTimeline() {
       ],
     },
     {
-      label: "THROTTLE GT/PRED",
+      label: e2e?.metrics?.steering_only ? "THROTTLE RECORDED" : "THROTTLE GT/PRED",
       min: 0,
       max: 1,
       lines: [
         { records: predictions, value: (item) => item.throttle_gt, color: "#d8dee9" },
-        { records: predictions, value: (item) => item.throttle_pred ?? item.throttle, color: "#45c478" },
+        ...(e2e?.metrics?.steering_only ? [] : [
+          { records: predictions, value: (item) => item.throttle_pred ?? item.throttle, color: "#45c478" },
+        ]),
         { records: recordedAppliedControls, value: (item) => item.throttle, color: "#bd93f9" },
       ],
     },
     {
-      label: "CONTROL ERROR",
+      label: e2e?.metrics?.steering_only ? "STEERING ERROR" : "CONTROL ERROR",
       min: -errorMax,
       max: errorMax,
       lines: [
         { records: predictions, value: (item) => item.steering_error ?? item.steering_applied_error, color: "#ff6b6b" },
-        { records: predictions, value: (item) => item.throttle_error ?? item.throttle_applied_error, color: "#f0b35a" },
+        ...(e2e?.metrics?.steering_only ? [] : [
+          { records: predictions, value: (item) => item.throttle_error ?? item.throttle_applied_error, color: "#f0b35a" },
+        ]),
       ],
     },
     {

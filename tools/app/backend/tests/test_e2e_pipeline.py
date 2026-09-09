@@ -109,6 +109,7 @@ class E2EPipelineTests(unittest.TestCase):
         self.assertEqual(spec.kind, "e2e-preprocess")
         self.assertIn(f"data.bag_path={self.bag.resolve()}", spec.command)
         self.assertIn("data.image_topic=/camera/image", spec.command)
+        self.assertIn("data.timestamp_source=bag", spec.command)
         self.assertIn("data.imu_topic=/realsense/imu", spec.command)
         self.assertTrue(spec.artifacts[0]["path"].endswith("datasets/dataset-a"))
 
@@ -122,6 +123,13 @@ class E2EPipelineTests(unittest.TestCase):
                     "control_topic": "/teleop/control_cmd",
                 },
             )
+
+    def test_preprocess_timestamp_source_override_and_validation(self) -> None:
+        body = {"rosbag": str(self.bag), "dataset_name": "clock-test", "image_topic": "/event_camera/event_image"}
+        spec = build_preprocess_task(self.config, {**body, "timestamp_source": "header"})
+        self.assertIn("data.timestamp_source=header", spec.command)
+        with self.assertRaisesRegex(ValueError, "timestamp_source"):
+            build_preprocess_task(self.config, {**body, "timestamp_source": "unknown"})
 
     def test_train_and_export_tasks_preserve_selected_configuration(self) -> None:
         dataset = self._dataset()

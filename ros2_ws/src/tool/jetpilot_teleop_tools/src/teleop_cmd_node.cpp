@@ -201,6 +201,13 @@ void TeleopCmdNode::handle_joy(const sensor_msgs::msg::Joy & joy)
                   ? static_cast<float>(brake_value_)
                   : 0.0F;
     if (fixed_throttle_mode_) {
+      // L2 normally requests reverse; during collection it overrides cruise with braking.
+      const double brake_trigger = normalized_trigger(
+        joy, reverse_axis_, 1.0, reverse_trigger_min_, reverse_trigger_max_,
+        reverse_trigger_inverted_);
+      if (brake_trigger > deadzone_) {
+        cmd.brake = std::max(cmd.brake, static_cast<float>(brake_trigger));
+      }
       cmd.throttle = cmd.brake > 0.0F ? 0.0F : static_cast<float>(fixed_throttle_);
       cmd.reverse = 0.0F;
     }

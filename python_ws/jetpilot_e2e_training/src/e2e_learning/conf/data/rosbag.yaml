@@ -15,6 +15,9 @@ input_width: 212
 input_height: 120
 
 max_control_dt_sec: 0.1
+# Match Offline Analysis by using one bag-recording clock for every stream.
+# Select header only when sensor and control header clocks are synchronized.
+timestamp_source: bag
 max_odometry_dt_sec: 0.15
 trajectory_horizon_sec: 1.5
 trajectory_points: 10

@@ -52,6 +52,13 @@ def _read_metadata(path: Path) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def is_steering_only(metadata: dict[str, Any]) -> bool:
+    output = metadata.get("output")
+    return metadata.get("steering_only") is True or (
+        isinstance(output, dict) and output.get("learned_fields") == ["steering"]
+    )
+
+
 def _model_record(path: Path, root: Path) -> dict[str, Any]:
     metadata = _read_metadata(path)
     model_input = metadata.get("input") if isinstance(metadata.get("input"), dict) else {}
@@ -62,6 +69,7 @@ def _model_record(path: Path, root: Path) -> dict[str, Any]:
         "name": str(metadata.get("model_name") or path.parent.name),
         "kind": str(metadata.get("model_kind") or "e2e_control"),
         "task": str(metadata.get("task") or model_output.get("task") or "control"),
+        "steering_only": is_steering_only(metadata),
         "architecture": metadata.get("architecture") if isinstance(metadata.get("architecture"), dict) else {},
         "root": str(root),
         "relative_path": str(path.relative_to(root)),
