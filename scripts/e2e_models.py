@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 
-def inspect_model(path: Path, sensor: str, steering_only: bool) -> dict:
+def inspect_model(path: Path, sensor: str, steering_only: bool | None) -> dict:
     path = path.expanduser().resolve()
     metadata = json.loads((path / "metadata.json").read_text())
     config = metadata.get("config", {})
@@ -14,12 +14,12 @@ def inspect_model(path: Path, sensor: str, steering_only: bool) -> dict:
     topic = str(metadata.get("image_topic") or data.get("image_topic") or "")
     modality = metadata.get("modality")
     actual_sensor = "event" if modality == "event_image" or topic.endswith("/event_image") else "rgb" if modality == "rgb" or topic else "unknown"
-    actual_steering = metadata.get("steering_only") is True or output.get("learned_fields") == ["steering"]
+    actual_steering = metadata.get("steering_only") is True or output.get("learned_fields") == ["steering"] or output.get("requires_fixed_throttle_mode") is True
     if actual_sensor != sensor:
         raise ValueError(f"sensor mismatch: selected={sensor}, model={actual_sensor}")
     if str(metadata.get("task") or output.get("task") or "control") != "control":
         raise ValueError("this bringup requires a control model, not a trajectory model")
-    if actual_steering != steering_only:
+    if steering_only is not None and actual_steering != steering_only:
         raise ValueError("model learning target does not match e2e/e2e-steering")
     shape = metadata.get("input", {}).get("shape", [])
     architecture = metadata.get("architecture", {})
@@ -31,12 +31,12 @@ def inspect_model(path: Path, sensor: str, steering_only: bool) -> dict:
         raise ValueError("model image dimensions must be fixed positive integers")
     return {
         "path": str(path), "name": str(metadata.get("model_name") or path.name),
-        "width": shape[3], "height": shape[2],
+        "width": shape[3], "height": shape[2], "steering_only": actual_steering,
         "engine": (path / "model.plan").is_file(),
     }
 
 
-def list_models(root: Path, sensor: str, steering_only: bool) -> list[dict]:
+def list_models(root: Path, sensor: str, steering_only: bool | None) -> list[dict]:
     records = []
     seen = set()
     if not root.is_dir():
@@ -57,16 +57,22 @@ def main():
     parser.add_argument("action", choices=["list", "validate"])
     parser.add_argument("path", type=Path)
     parser.add_argument("--sensor", choices=["rgb", "event"], required=True)
-    parser.add_argument("--steering-only", action="store_true")
+    target = parser.add_mutually_exclusive_group()
+    target.add_argument("--steering-only", action="store_true")
+    target.add_argument("--auto-throttle", action="store_true")
     args = parser.parse_args()
+    steering_only = None if args.auto_throttle else args.steering_only
     try:
         if args.action == "list":
-            for record in list_models(args.path, args.sensor, args.steering_only):
-                label = f"{record['name']} ({record['width']}x{record['height']}, {'TRT ready' if record['engine'] else 'build needed'})"
+            for record in list_models(args.path, args.sensor, steering_only):
+                mode = "固定スロットル" if record["steering_only"] else "モデルがスロットルを予測"
+                label = f"{record['name']} ({mode}, {record['width']}x{record['height']}, {'TRT ready' if record['engine'] else 'build needed'})"
                 if not any(char in record["path"] + label for char in "\t\r\n"):
                     print(f"{record['path']}\t{label}")
         else:
-            record = inspect_model(args.path, args.sensor, args.steering_only)
+            record = inspect_model(args.path, args.sensor, steering_only)
+            if args.auto_throttle:
+                print(f"e2e_fixed_throttle_mode\t{str(record['steering_only']).lower()}")
             print(f"e2e_network_image_width\t{record['width']}")
             print(f"e2e_network_image_height\t{record['height']}")
     except (OSError, ValueError, TypeError, AttributeError) as error:

@@ -22,7 +22,7 @@ snapshot再生ではodometryとSLAM両方の地面制約を明示します。
 既存地図は変更されないため、この条件で比較するには地図を再生成してください。
 
 RealSenseの既定値はRGB 424×240 / 30 Hz、赤外424×240 / 60 Hzです。
-TUIでは引き続き30 / 60 / 90 Hzを選べます。記録済みbagのFPSは変わりません。
+TUIではOFF / 30 / 60 / 90 Hzを選べます。記録済みbagのFPSは変わりません。
 
 `multicam_mode`はIsaac ROSでは0=Moderate、1=Performance、2=Precisionです。
 TUIの「VSLAM 処理モード」で選択できます。既定値は1です。
@@ -336,3 +336,68 @@ TUIでも`jpbb`を先頭に表示します。明示した車両プロファイ�
 
 更新後は`jetpilot_system_launch`をビルドし直し、setupを読み込んでください。
 詳細は[実車調整手順](../tools/app/runtime/README.md)を参照してください。
+
+
+### データ収集（record）
+
+TUIでは `record` を選択します。rosbag managerを有効にし、操作方式を
+「Joyでステア・スロットルを操作」または「ステアを操作・スロットル固定」から選びます。
+固定値の初期値は0.2です。固定モードではR2による速度調整を使わず、L2で停止します。
+起動直後のSTOPや走行モードの切り替え、記録開始・終了は従来どおりです。
+rosbag managerが有効でも起動直後に自動記録が始まるわけではありません。
+
+RealSenseのRGB・InfraはそれぞれOFF / 30 / 60 / 90 Hzを選べます。
+InfraのOFFはinfra1・infra2の両方に適用します。EVS単独の場合、この選択は表示しません。
+記録用TUIではbag managerのON/OFFとRTP設定の質問を省略します。
+
+```bash
+# Joy操作で収集
+bash scripts/bringup.sh record
+# 固定スロットル0.2、RGB 30 Hz、Infraなし
+bash scripts/bringup.sh record --set teleop_fixed_throttle_mode:=true \
+  --set fixed_throttle:=0.2 --set sensor_kit_infra_fps:=0
+```
+
+引数でpresetを指定した起動は従来どおり非対話です。TUIは引数なしで起動してください。
+従来の `e2e-collect` は固定スロットル収集のCLI互換名として残しています。
+学習対象の選択は学習UIで行います。このpresetはデータ収集の設定です。
+
+
+### E2E走行の入口を統一
+
+TUIでは `e2e` からセンサーとモデルを選択します。モデル一覧には学習対象に応じた
+スロットル方式を表示し、metadataの `steering_only`、`output.learned_fields`、
+`output.requires_fixed_throttle_mode` から固定スロットルの必要性を判定します。
+ステアのみのモデルでは固定スロットル（初期値0.2）、通常モデルでは予測スロットルを使います。
+固定値の質問は固定モデルを選んだ場合だけ表示します。
+旧モデルでこれらの情報がない場合は、従来の通常モデルとして扱います。
+
+RGB・InfraのHz選択はデータ収集と共通です。RGBモデルでRGBをOFFにすると起動前にエラーになります。
+RTP設定の質問は省略します。bag managerは標準で有効です。
+
+```bash
+bash scripts/bringup.sh e2e --e2e-model /workspaces/ros2_ws/models/e2e/camera_steering
+```
+
+上記もmetadataから固定モードに切り替わります。固定値は `--set fixed_throttle:=0.2` で指定できます。
+`e2e-steering` は固定モデル限定のCLI互換名として残しています。
+明示した `e2e_fixed_throttle_mode` とモデルが矛盾する場合は、設定を上書きせずエラーにします。
+非対話でモデル未指定の場合の配備先は従来どおりcamera_control／event_controlです。
+この自動設定はbringup.sh経由で適用されます。
+
+
+### 用途から起動するメニュー
+
+引数なしの `bash scripts/bringup.sh` は、最初に次の用途を表示します。
+
+- データ収集：Joy／固定スロットルの収集設定
+- E2E走行：モデルを選び、metadataに合わせて推論設定
+- 通常走行：手動走行／自己位置推定付き手動走行／ルールベース自動走行
+- オフライン再生：地図なしVSLAM／保存地図での自己位置推定など
+- 詳細：従来の全プリセット（センサー単独、調整、customなど）
+
+実走行の操作系を起動するプリセットは、rosbag managerを標準ONにしています。
+ON/OFFの質問は表示しません。記録開始要求が来るまで録画は開始しません。
+待機中は開始要求の受付と状態通知を行い、記録対象の画像は購読しません。
+オフライン再生とcustomの構成は従来どおりです。
+不要な場合は `--no-bag-manager` で無効にできます。既存のCLIプリセット名は変更していません。

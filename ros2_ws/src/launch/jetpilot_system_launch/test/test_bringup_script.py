@@ -246,7 +246,7 @@ def test_drive_presets_enable_live_sensor_teleop_and_vehicle_on_jetson() -> None
     assert "enable_sensor_kit:=true" in output
     assert "enable_tool:=true" in output
     assert "enable_jetson_stats:=true" in output
-    assert "enable_bag_manager:=false" in output
+    assert "enable_bag_manager:=true" in output
     assert "enable_joy:=true" in output
     assert "enable_teleop:=true" in output
     assert "enable_operation:=true" in output
@@ -2289,3 +2289,74 @@ def test_bias_tui_reprompts_for_missing_file_and_json(tmp_path: Path) -> None:
     assert result.stdout.count("読み取り可能な .bias ファイルを指定してください") == 2
     command = shlex.split(result.stdout.split("Command:", 1)[1].split("Dry-run:", 1)[0])
     assert f"sensor_kit_silky_evcam_bias_file:={valid}" in command
+
+
+def test_record_preset_supports_joy_fixed_throttle_and_camera_off() -> None:
+    output = run_launcher("record", "--dry-run").stdout
+    assert "enable_bag_manager:=true" in output
+    assert "teleop_fixed_throttle_mode:=false" in output
+    assert "enable_e2e_inference:=false" in output
+    output = run_launcher(
+        "record", "--dry-run", "--set", "teleop_fixed_throttle_mode:=true",
+        "--set", "sensor_kit_rgb_fps:=0", "--set", "sensor_kit_infra_fps:=0",
+    ).stdout
+    assert "fixed_throttle:=0.2" in output
+    assert "teleop_fixed_throttle_mode:=true" in output
+    assert "sensor_kit_rgb_fps:=0" in output
+    assert "sensor_kit_infra_fps:=0" in output
+    result = run_launcher(
+        "record", "--dry-run", "--set", "teleop_fixed_throttle_mode:=true",
+        "--set", "fixed_throttle:=1.1", check=False,
+    )
+    assert result.returncode != 0
+
+
+def test_realsense_disabled_streams_keep_valid_driver_profiles() -> None:
+    source = (PROJECT_ROOT / "ros2_ws/src/launch/jetpilot_system_launch/launch/sensors/realsense.launch.py").read_text()
+    tree = ast.parse(source)
+    params = next(node for node in ast.walk(tree) if isinstance(node, ast.Dict)
+                  and any(isinstance(key, ast.Constant) and key.value == "enable_infra1" for key in node.keys))
+    from types import SimpleNamespace
+    for rgb, infra in ((0, 60), (30, 0), (0, 0), (30, 30)):
+        values = {}
+        env = {"rgb_fps": rgb, "infra_fps": infra,
+               "args": SimpleNamespace(enable_color=True),
+               "lu": SimpleNamespace(is_true=bool)}
+        for key, value in zip(params.keys, params.values):
+            if key.value in ("enable_color", "enable_infra1", "enable_infra2",
+                             "rgb_camera.color_profile", "depth_module.infra_profile", "enable_sync"):
+                values[key.value] = eval(compile(ast.Expression(value), "parameters", "eval"), env)
+        assert values["enable_color"] == (rgb > 0)
+        assert values["enable_infra1"] == values["enable_infra2"] == (infra > 0)
+        assert not values["rgb_camera.color_profile"].endswith("x0")
+        assert not values["depth_module.infra_profile"].endswith("x0")
+        assert values["enable_sync"] == (rgb > 0 and infra > 0 and rgb == infra)
+
+
+def test_live_bag_manager_defaults_on_and_can_be_disabled() -> None:
+    for preset in ("record", "e2e", "drive", "teleop"):
+        output = run_launcher(preset, "--dry-run").stdout
+        assert "enable_bag_manager:=true" in output
+        output = run_launcher(preset, "--no-bag-manager", "--dry-run").stdout
+        assert "enable_bag_manager:=false" in output
+
+
+def test_purpose_menu_routes_to_existing_presets() -> None:
+    source = LAUNCHER.read_text()
+    function = source.split("choose_preset_interactively() {", 1)[1].split("\nconfigure_e2e_model()", 1)[0]
+    for purpose, child in (("record", "record"), ("e2e", "e2e"),
+                           ("driving", "drive"), ("driving", "competition"),
+                           ("offline", "offline-vslam"), ("advanced", "sensor")):
+        # Substitute just the selector; execute the real menu-routing function.
+        script = """
+set -eu
+choose_one() {
+  if [[ "$1" == '用途を選択' ]]; then printf '%s' "$PURPOSE";
+  else printf '%s' "$CHILD"; fi
+}
+print_presets() { printf 'sensor  Sensor only\n'; }
+die() { exit 1; }
+choose_preset_interactively() {""" + function + "\nchoose_preset_interactively\nprintf '%s' \"$PRESET\"\n"
+        env = dict(os.environ, PURPOSE=purpose, CHILD=child)
+        result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, check=True)
+        assert result.stdout == child

@@ -29,8 +29,8 @@ def launch_realsense(args: lu.ArgumentContainer) -> list[lut.Action]:
     actions = []
     rgb_fps = int(args.rgb_fps)
     infra_fps = int(args.infra_fps)
-    if rgb_fps not in (30, 60, 90) or infra_fps not in (30, 60, 90):
-        raise ValueError('RealSense RGB/Infra FPS must be 30, 60, or 90')
+    if rgb_fps not in (0, 30, 60, 90) or infra_fps not in (0, 30, 60, 90):
+        raise ValueError('RealSense RGB/Infra FPS must be 0 (OFF), 30, 60, or 90')
 
     # Prepare parameters
     parameters = []
@@ -44,16 +44,16 @@ def launch_realsense(args: lu.ArgumentContainer) -> list[lut.Action]:
     parameters.append(config_yaml)
     parameters.append({
         'use_sim_time': lu.is_true(args.use_sim_time),
-        'enable_infra1': True,
-        'enable_infra2': True,
+        'enable_infra1': infra_fps > 0,
+        'enable_infra2': infra_fps > 0,
         'enable_depth': lu.is_true(args.enable_depth),
-        'enable_color': True,
+        'enable_color': lu.is_true(args.enable_color) and rgb_fps > 0,
         'enable_rgbd': False,
         # IMU streams are disabled by default in realsense.param.yaml.
-        'rgb_camera.color_profile': f'424x240x{rgb_fps}',
-        'depth_module.infra_profile': f'424x240x{infra_fps}',
+        'rgb_camera.color_profile': f'424x240x{rgb_fps or 30}',
+        'depth_module.infra_profile': f'424x240x{infra_fps or 60}',
         # Do not synchronize streams running at different frame rates.
-        'enable_sync': rgb_fps == infra_fps,
+        'enable_sync': rgb_fps > 0 and infra_fps > 0 and rgb_fps == infra_fps,
         'align_depth.enable': False,
         'colorizer.enable': False,
         'decimation_filter.enable': False,

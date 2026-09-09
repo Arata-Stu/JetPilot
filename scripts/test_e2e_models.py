@@ -54,6 +54,37 @@ class E2EModelSelectionTests(unittest.TestCase):
         bad = subprocess.run(args + ["--e2e-model", str(self.root / "camera_control")], text=True, capture_output=True)
         self.assertNotEqual(bad.returncode, 0)
 
+    def test_auto_throttle_lists_both_targets(self):
+        records = list_models(self.root, "rgb", None)
+        self.assertEqual({r["steering_only"] for r in records}, {True, False})
+
+    def test_e2e_adapts_to_selected_model_and_preserves_fixed_value(self):
+        for target in ("control", "steering"):
+            result = subprocess.run([
+                "bash", str(ROOT / "scripts/bringup.sh"), "e2e", "--dry-run",
+                "--e2e-model", str(self.root / f"camera_{target}"),
+                "--set", "fixed_throttle:=0.25",
+            ], text=True, capture_output=True, check=True)
+            self.assertIn(f"e2e_fixed_throttle_mode:={'true' if target == 'steering' else 'false'}", result.stdout)
+            self.assertIn("fixed_throttle:=0.25", result.stdout)
+
+    def test_explicit_throttle_conflict_and_rgb_off_are_rejected(self):
+        args = ["bash", str(ROOT / "scripts/bringup.sh"), "e2e", "--dry-run",
+                "--e2e-model", str(self.root / "camera_steering")]
+        for override in ("e2e_fixed_throttle_mode:=false", "sensor_kit_rgb_fps:=0"):
+            result = subprocess.run(args + ["--set", override], text=True, capture_output=True)
+            self.assertNotEqual(result.returncode, 0)
+        result = subprocess.run(args + ["--set", "sensor_kit_infra_fps:=0"], text=True, capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_required_fixed_throttle_metadata_is_recognized(self):
+        path = self.root / "camera_steering" / "metadata.json"
+        metadata = json.loads(path.read_text())
+        del metadata["steering_only"]
+        metadata["output"] = {"requires_fixed_throttle_mode": True}
+        path.write_text(json.dumps(metadata))
+        self.assertTrue(inspect_model(path.parent, "rgb", None)["steering_only"])
+
     def test_online_models_require_single_image(self):
         path = self.root / "camera_control" / "metadata.json"
         metadata = json.loads(path.read_text())

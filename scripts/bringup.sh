@@ -112,10 +112,9 @@ offline-localization Rosbag replay + VGL/VSLAM localization + RViz (bag/map requ
 vehicle              Selected vehicle interface only
 teleop               Joy/teleop/operation + selected vehicle interface
 drive                Live sensor + joy/teleop/operation + selected vehicle interface
-e2e-collect          RGB steering data collection with fixed throttle
-e2e-steering         TensorRT steering inference with fixed throttle
+record              データ収集（Joy / 固定スロットル・rosbag manager）
 calibration          Live sensor + mapless VSLAM odometry + teleop + vehicle + bag recording
-e2e                  Live RealSense + E2E inference + joy/teleop/operation + vehicle
+e2e                  E2E走行（モデルからスロットル方式を自動選択）
 runtime              Live sensor/localization/teleop + Foxglove pose fallback + vehicle (map required)
 map-view             Live localization + HD map + Foxglove initial pose (map required, no actuator)
 tuning               Live tuning UI + sensor/localization + selected vehicle (map required)
@@ -224,7 +223,7 @@ known_preset() {
   case "$1" in
     sensor|localization-only|localization|localize-live|replay-localization|\
       offline-vslam|offline-vslam-map|offline-localization|\
-      vehicle|teleop|drive|calibration|e2e-collect|e2e-steering|e2e|runtime|map-view|tuning|competition|\
+      vehicle|teleop|drive|calibration|record|e2e-collect|e2e-steering|e2e|runtime|map-view|tuning|competition|\
       vehicle-pca|vehicle-vesc|teleop-pca|teleop-vesc|\
       drive-pca|drive-vesc|runtime-pca|runtime-vesc|custom) return 0 ;;
     *) return 1 ;;
@@ -721,7 +720,7 @@ resolve_rviz_config() {
 
 enable_teleop_stack() {
   set_arg enable_tool true
-  set_arg enable_bag_manager false
+  set_arg enable_bag_manager true
   set_arg enable_joy true
   set_arg enable_teleop true
   set_arg enable_operation true
@@ -729,7 +728,7 @@ enable_teleop_stack() {
 
 enable_drive_stack() {
   set_arg enable_tool true
-  set_arg enable_bag_manager false
+  set_arg enable_bag_manager true
   set_arg enable_joy true
   set_arg enable_teleop true
   set_arg enable_operation true
@@ -1036,6 +1035,14 @@ apply_preset() {
       set_arg enable_vgl false
       set_arg enable_localization_manager false
       set_arg publish_vehicle_description true
+      REQUIRES_VEHICLE=true
+      ;;
+    record)
+      set_arg enable_sensor_kit true
+      enable_drive_stack
+      set_arg enable_bag_manager true
+      set_arg teleop_fixed_throttle_mode false
+      set_arg fixed_throttle 0.2
       REQUIRES_VEHICLE=true
       ;;
     e2e-collect)
@@ -1612,14 +1619,42 @@ interactive_custom() {
 }
 
 choose_preset_interactively() {
-  local selection
+  local selection line
   local options=()
-  local line
-
-  while IFS= read -r line; do
-    options+=("$line")
-  done < <(print_presets)
-  selection="$(choose_one 'JetPilot bringup preset' "${options[@]}")" || exit $?
+  selection="$(choose_one '用途を選択' \
+    'record   データ収集' \
+    'e2e      E2E走行' \
+    'driving  通常走行' \
+    'offline  オフライン再生' \
+    'advanced 詳細（全プリセット）')" || exit $?
+  case "${selection%%[[:space:]]*}" in
+    record|e2e)
+      PRESET="${selection%%[[:space:]]*}"
+      return 0
+      ;;
+    driving)
+      options=(
+        'drive        Joyによる手動走行'
+        'runtime      自己位置推定付き手動走行（地図が必要）'
+        'competition  ルールベース自動走行（地図が必要）'
+      )
+      ;;
+    offline)
+      options=(
+        'offline-vslam         地図なしでVSLAMを実行'
+        'offline-vslam-map     保存地図でVSLAM自己位置推定'
+        'offline-localization  保存地図でVGL・VSLAM自己位置推定'
+        'replay-localization   自己位置推定用の再生設定'
+      )
+      ;;
+    advanced)
+      while IFS= read -r line; do
+        options+=("$line")
+      done < <(print_presets)
+      ;;
+    *) die "unknown purpose: $selection" ;;
+  esac
+  selection="$(choose_one '起動内容を選択' "${options[@]}")" || exit $?
   PRESET="${selection%%[[:space:]]*}"
 }
 
@@ -1629,6 +1664,10 @@ configure_e2e_model() {
   local model_root="${E2E_MODEL_BASE:-${ROS2_WS}/models/e2e}"
   local helper="${SCRIPT_DIR}/e2e_models.py"
   local options=() flags=() input_options=()
+  local auto_throttle=true
+  [[ "$PRESET" != e2e-steering ]] || auto_throttle=false
+  current="$(get_arg e2e_fixed_throttle_mode 2>/dev/null || true)"
+  [[ -z "$current" ]] || auto_throttle=false
   if [[ "$INTERACTIVE" == true && -z "$(get_arg e2e_image_topic 2>/dev/null || true)" ]]; then
     if ((${#SENSOR_KIT_RTP_TOPICS[@]} > 0)); then
       for line in "${SENSOR_KIT_RTP_TOPICS[@]}"; do
@@ -1652,6 +1691,9 @@ configure_e2e_model() {
     base=event
   fi
   flags=(--sensor "$sensor")
+  if [[ "$auto_throttle" == true ]]; then
+    flags+=(--auto-throttle)
+  fi
   if is_true "$(get_arg e2e_fixed_throttle_mode 2>/dev/null || printf false)"; then
     target=steering
     flags+=(--steering-only)
@@ -1663,7 +1705,7 @@ configure_e2e_model() {
       [[ -n "$line" ]] && options+=("$line")
     done <<< "$records"
     options+=('モデルのディレクトリを手入力...')
-    choice="$(choose_one "E2E model ($sensor / $target)" "${options[@]}")" || exit $?
+    choice="$(choose_one "E2E model ($sensor)" "${options[@]}")" || exit $?
     if [[ "$choice" == 'モデルのディレクトリを手入力...' ]]; then
       selected="$(prompt_path 'E2E model directory' "${model_root}/${base}_${target}")"
     else
@@ -1682,10 +1724,30 @@ configure_e2e_model() {
       || die "$key=$current does not match model metadata ($value)"
     set_arg "$key" "$value"
   done <<< "$records"
+  if is_true "$(get_arg e2e_fixed_throttle_mode 2>/dev/null || true)"; then
+    current="$(get_arg fixed_throttle 2>/dev/null || true)"
+    set_arg fixed_throttle "${current:-0.2}"
+  fi
+}
+
+configure_recording_interactively() {
+  [[ "$PRESET" == 'record' ]] || return 0
+  local override selection
+  if ((${#EXTRA_LAUNCH_ARGS[@]} > 0)); then
+    for override in "${EXTRA_LAUNCH_ARGS[@]}"; do
+      [[ "$override" == teleop_fixed_throttle_mode:=* ]] && return 0
+    done
+  fi
+  selection="$(choose_one 'データ収集の操作方式' 'joy    Joyでステア・スロットルを操作' 'fixed  ステアを操作・スロットル固定（L2で停止）')" || exit $?
+  case "${selection%%[[:space:]]*}" in
+    joy) set_arg teleop_fixed_throttle_mode false ;;
+    fixed) set_arg teleop_fixed_throttle_mode true ;;
+    *) die "unknown recording mode: $selection" ;;
+  esac
 }
 
 configure_fixed_throttle_interactively() {
-  [[ "$PRESET" == 'e2e-collect' || "$PRESET" == 'e2e-steering' ]] || return 0
+  is_true "$(get_arg teleop_fixed_throttle_mode 2>/dev/null || true)" || is_true "$(get_arg e2e_fixed_throttle_mode 2>/dev/null || true)" || return 0
   local override value
   if ((${#EXTRA_LAUNCH_ARGS[@]} > 0)); then
     for override in "${EXTRA_LAUNCH_ARGS[@]}"; do
@@ -1694,33 +1756,6 @@ configure_fixed_throttle_interactively() {
   fi
   read -r -p "固定スロットル (0〜1) [$(get_arg fixed_throttle)]: " value
   set_arg fixed_throttle "${value:-$(get_arg fixed_throttle)}"
-}
-
-configure_bag_manager_interactively() {
-  local selection
-  local current
-  local options=()
-
-  current="$(get_arg enable_bag_manager)"
-  if is_true "$current"; then
-    options+=('on   Bag manager ON')
-    options+=('off  Bag manager OFF')
-  else
-    options+=('off  Bag manager OFF')
-    options+=('on   Bag manager ON')
-  fi
-
-  selection="$(choose_one 'Bag manager' "${options[@]}")" || exit $?
-  case "${selection%%[[:space:]]*}" in
-    on)
-      set_arg enable_tool true
-      set_arg enable_bag_manager true
-      ;;
-    off)
-      set_arg enable_bag_manager false
-      ;;
-    *) die "unknown bag manager selection: $selection" ;;
-  esac
 }
 
 configure_rtp_interactively() {
@@ -1811,6 +1846,8 @@ configure_realsense_fps_interactively() {
     [[ "$explicit" == 'false' ]] || continue
     current="$(get_arg "$key")"
     options=("$current Hz（現在値）")
+    [[ "$current" != 0 ]] || options=("0 OFF（現在値）")
+    [[ "$current" == 0 ]] || options+=("0 OFF（使用しない）")
     for fps in 30 60 90; do
       [[ "$fps" == "$current" ]] || options+=("$fps Hz")
     done
@@ -1834,7 +1871,9 @@ configure_sensor_kit_interactively() {
 
   selection="$(choose_one 'Sensor kit launch' "${options[@]}")" || exit $?
   apply_sensor_kit "${selection%%[[:space:]]*}"
-  configure_rtp_interactively
+  if [[ "$PRESET" != record && "$PRESET" != e2e-collect && "$PRESET" != e2e && "$PRESET" != e2e-steering ]]; then
+    configure_rtp_interactively
+  fi
 }
 
 configure_silky_evcam_bias_interactively() {
@@ -1940,7 +1979,7 @@ normalize_rosbag_path() {
 }
 
 validate_configuration() {
-  if [[ "$PRESET" == 'e2e-collect' || "$PRESET" == 'e2e-steering' ]]; then
+  if is_true "$(get_arg teleop_fixed_throttle_mode 2>/dev/null || true)" || is_true "$(get_arg e2e_fixed_throttle_mode 2>/dev/null || true)"; then
     "$PYTHON_BIN" - "$(get_arg fixed_throttle)" <<'PYVALIDATE' || die 'fixed_throttle must be a number within [0, 1]'
 import math
 import sys
@@ -1963,10 +2002,16 @@ PYVALIDATE
   local fps_key
   for fps_key in sensor_kit_rgb_fps sensor_kit_infra_fps; do
     case "$(get_arg "$fps_key")" in
-      30|60|90) ;;
-      *) die "$fps_key must be 30, 60, or 90" ;;
+      0|30|60|90) ;;
+      *) die "$fps_key must be 0 (OFF), 30, 60, or 90" ;;
     esac
   done
+  if is_true "$(get_arg enable_e2e_inference)" \
+    && ! is_true "$(get_arg e2e_event_image_mode 2>/dev/null || true)" \
+    && is_true "$(get_arg enable_sensor_kit)"; then
+    [[ "$(get_arg sensor_kit_rgb_fps)" != 0 ]] \
+      || die 'RGBモデルの推論にはRGB配信が必要です。RGB HzをOFF以外にしてください。'
+  fi
   local configured_path
   local foxglove_startup=false
   local mapping_output
@@ -2311,8 +2356,13 @@ print_summary() {
   if is_true "$(get_arg enable_e2e_inference)"; then
     printf '  E2E input    : %s\n' "$(get_arg e2e_image_topic 2>/dev/null || printf /realsense/color/image_raw)"
     printf '  E2E model    : %s\n' "$(get_arg e2e_model_root)"
+    if is_true "$(get_arg e2e_fixed_throttle_mode 2>/dev/null || true)"; then
+      printf '  E2E throttle : 固定（ステアのみ推論）\n'
+    else
+      printf '  E2E throttle : モデルが予測\n'
+    fi
   fi
-  if [[ "$PRESET" == 'e2e-collect' || "$PRESET" == 'e2e-steering' ]]; then
+  if is_true "$(get_arg teleop_fixed_throttle_mode 2>/dev/null || true)" || is_true "$(get_arg e2e_fixed_throttle_mode 2>/dev/null || true)"; then
     printf '  固定スロットル: %s (R2・速度調整ボタンは不使用)\n' "$(get_arg fixed_throttle)"
   fi
   printf '  map          : %s\n' "${MAP_DIR:-none}"
@@ -2527,9 +2577,6 @@ fi
 if [[ -n "$CLI_SENSOR_KIT" ]]; then
   apply_sensor_kit "$CLI_SENSOR_KIT"
 fi
-if [[ "$INTERACTIVE" == 'true' && "$PRESET" != 'custom' && -z "$CLI_BAG_MANAGER" ]]; then
-  configure_bag_manager_interactively
-fi
 if [[ -n "$CLI_BAG_MANAGER" ]]; then
   if is_true "$CLI_BAG_MANAGER"; then
     set_arg enable_tool true
@@ -2583,6 +2630,7 @@ if ((${#EXTRA_LAUNCH_ARGS[@]} > 0)); then
 fi
 configure_e2e_model
 if [[ "$INTERACTIVE" == 'true' ]]; then
+  configure_recording_interactively
   configure_fixed_throttle_interactively
   configure_realsense_fps_interactively
   configure_offline_origin_test_interactively
