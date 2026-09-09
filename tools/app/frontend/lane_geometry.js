@@ -120,19 +120,86 @@ const LaneGeometry = (() => {
     if (gap < .001) throw new Error("端点が一致しています。「端点を直接接続」を使用してください。");
     const unit = (p, q) => { const d = distance(p,q); if (d < 1e-6) throw new Error("端点の向きが定まりません。"); return [(q[0]-p[0])/d,(q[1]-p[1])/d]; };
     const u = unit(a.centerline.at(-2), start), v = unit(end, b.centerline[1]);
-    const count = Math.max(12, Math.ceil(gap/.1));
-    if (count > 2000) throw new Error("接続区間が長すぎます。");
-    const curve = (p,q) => Array.from({length:count+1}, (_,i) => {
-      const t=i/count, h=1-t;
-      return [0,1].map(k => mode === "straight" ? p[k]*h+q[k]*t
-        : h*h*h*p[k]+3*h*h*t*(p[k]+u[k]*gap/3)+3*h*t*t*(q[k]-v[k]*gap/3)+t*t*t*q[k]);
-    });
-    const lane = {id, primary:false, closed_loop:false, boundary_mode:"paired", centerline_mode:"manual",
-      successor_ids:[b.id], default_successor_id:b.id,
-      centerline:curve(start,end)};
+    const cross = (p,q) => p[0]*q[1]-p[1]*q[0];
+    const dot = (p,q) => p[0]*q[0]+p[1]*q[1];
+    const delta = end.map((x,k)=>x-start[k]);
+    const turn = Math.atan2(cross(u,v),dot(u,v));
+    const samples = [];
+    const append = (p,tangent) => {
+      if (!samples.length || distance(samples.at(-1).p,p)>1e-8) samples.push({p,tangent});
+      if (samples.length>2001) throw new Error("接続区間が長すぎます。");
+    };
+    const line = (p,q,tangent) => {
+      const n = Math.max(1,Math.ceil(distance(p,q)/.1));
+      if (n>2000) throw new Error("接続区間が長すぎます。");
+      for (let i=0;i<=n;i++) append(p.map((x,k)=>x+(q[k]-x)*i/n),tangent);
+    };
+    const offsets = {};
     for (const key of ["left_bound","right_bound","drivable_left_bound","drivable_right_bound"]) {
       const fallback = key.replace("drivable_", "");
-      lane[key] = curve((a[key] || a[fallback]).at(-1),(b[key] || b[fallback])[0]);
+      const p = (a[key]?.length ? a[key] : a[fallback]).at(-1);
+      const q = (b[key]?.length ? b[key] : b[fallback])[0];
+      const local = (point,origin,tangent) => {
+        const d=point.map((x,k)=>x-origin[k]);
+        return [dot(d,tangent),cross(tangent,d)];
+      };
+      offsets[key]={p,q,from:local(p,start,u),to:local(q,end,v)};
+    }
+    const det=cross(u,v);
+    const approach = Math.abs(det)>1e-6 ? cross(delta,v)/det : -1;
+    const departure = Math.abs(det)>1e-6 ? cross(u,delta)/det : -1;
+    if (mode !== "straight" && approach>1e-6 && departure>1e-6 && Math.abs(turn)<Math.PI-.05) {
+      // One constant-radius arc plus any straight remainder, rather than an
+      // ellipse-shaped cubic spanning unequal distances to the corner.
+      const trim=Math.min(approach,departure);
+      const radius=trim/Math.tan(Math.abs(turn)/2), sign=Math.sign(turn);
+      const inner=Math.max(0,...Object.values(offsets).flatMap(o=>[sign*o.from[1],sign*o.to[1]]));
+      if (radius<=inner+.02) throw new Error("カーブ半径がレーン幅に対して小さすぎます。入口・出口を交点から離してください。");
+      const entry=start.map((x,k)=>x+u[k]*(approach-trim));
+      const exit=end.map((x,k)=>x-v[k]*(departure-trim));
+      const center=[entry[0]-u[1]*radius*sign,entry[1]+u[0]*radius*sign];
+      line(start,entry,u);
+      const angle=Math.atan2(entry[1]-center[1],entry[0]-center[0]);
+      const n=Math.max(2,Math.ceil(radius*Math.abs(turn)/.1),Math.ceil(Math.abs(turn)/.05));
+      if (n>2000) throw new Error("接続区間が長すぎます。");
+      for (let i=1;i<=n;i++) {
+        const theta=angle+turn*i/n;
+        append([center[0]+radius*Math.cos(theta),center[1]+radius*Math.sin(theta)],[-sign*Math.sin(theta),sign*Math.cos(theta)]);
+      }
+      line(exit,end,v);
+    } else {
+      const count = Math.max(12, Math.ceil(gap/.1));
+      if (count>2000) throw new Error("接続区間が長すぎます。");
+      for (let i=0;i<=count;i++) {
+        const t=i/count,h=1-t;
+        const p=start.map((x,k)=>mode==="straight" ? x*h+end[k]*t
+          : h*h*h*x+3*h*h*t*(x+u[k]*gap/3)+3*h*t*t*(end[k]-v[k]*gap/3)+t*t*t*end[k]);
+        const d=start.map((x,k)=>mode==="straight" ? delta[k]
+          : h*h*u[k]*gap+6*h*t*(end[k]-v[k]*gap/3-x-u[k]*gap/3)+t*t*v[k]*gap);
+        const length=Math.hypot(...d);
+        if (length<1e-8) throw new Error("滑らかな接続を作れません。端点の位置と向きを調整してください。");
+        append(p,d.map(x=>x/length));
+      }
+    }
+    samples[0]={p:[...start],tangent:u};
+    samples[samples.length-1]={p:[...end],tangent:v};
+    const stations=[0];
+    for(let i=1;i<samples.length;i++) stations.push(stations.at(-1)+distance(samples[i-1].p,samples[i].p));
+    const lane = {id, primary:false, closed_loop:false, boundary_mode:"paired", centerline_mode:"manual",
+      successor_ids:[b.id], default_successor_id:b.id, centerline:samples.map(s=>s.p)};
+    for (const [key,o] of Object.entries(offsets)) {
+      if (mode === "straight") {
+        lane[key]=samples.map((_,i)=>o.p.map((x,k)=>x+(o.q[k]-x)*i/(samples.length-1)));
+        lane[key][0]=[...o.p]; lane[key][lane[key].length-1]=[...o.q];
+        continue;
+      }
+      lane[key]=samples.map(({p,tangent},i)=>{
+        const t=stations[i]/stations.at(-1), blend=t*t*(3-2*t);
+        const along=o.from[0]*(1-blend)+o.to[0]*blend;
+        const across=o.from[1]*(1-blend)+o.to[1]*blend;
+        return [p[0]+along*tangent[0]-across*tangent[1],p[1]+along*tangent[1]+across*tangent[0]];
+      });
+      lane[key][0]=[...o.p]; lane[key][lane[key].length-1]=[...o.q];
     }
     return lane;
   }

@@ -457,6 +457,28 @@ test('straight connector and invalid closed/zero-gap connection', () => {
   assert.throws(()=>G.connector(a,{...b,centerline:[[1,0],[2,0]]},'bad'));
 });
 
+test('90 degree connectors use a circle and preserve lane width instead of ballooning', () => {
+  for(const sign of [1,-1]) for(const x of [2,4]) {
+    const a=lane([[-1,0],[0,0]]);
+    const b={...lane([[x,2*sign],[x,3*sign]]),id:'b'};
+    a.drivable_left_bound=a.left_bound.map(p=>[p[0],p[1]+.1]);
+    a.drivable_right_bound=a.right_bound.map(p=>[p[0],p[1]-.1]);
+    b.drivable_left_bound=b.left_bound.map(p=>[p[0]-.1*sign,p[1]]);
+    b.drivable_right_bound=b.right_bound.map(p=>[p[0]+.1*sign,p[1]]);
+    const c=G.connector(a,b,'turn');
+    c.centerline.forEach((p,i)=>{
+      if(p[0]>x-2+1e-8) assert.ok(Math.abs(Math.hypot(p[0]-(x-2),p[1]-2*sign)-2)<1e-8);
+      else assert.ok(Math.abs(p[1])<1e-8);
+      assert.ok(Math.abs(Math.hypot(...c.left_bound[i].map((v,k)=>v-c.right_bound[i][k]))-2)<1e-8);
+      assert.ok(Math.abs(Math.hypot(...c.drivable_left_bound[i].map((v,k)=>v-c.drivable_right_bound[i][k]))-2.2)<1e-8);
+      if(i) assert.ok(Math.hypot(...p.map((v,k)=>v-c.centerline[i-1][k]))>1e-8);
+    });
+    assert.deepEqual(c.left_bound[0],a.left_bound.at(-1));
+    assert.deepEqual(c.right_bound.at(-1),b.right_bound[0]);
+  }
+  assert.throws(()=>G.connector(lane([[-1,0],[0,0]]),{...lane([[.5,.5],[.5,1.5]]),id:'b'},'tight'),/半径/);
+});
+
 test('editor connection survives undo/redo', () => {
   const c=editorContext();
   vm.runInContext(`
