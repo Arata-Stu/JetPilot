@@ -123,6 +123,7 @@ const state = {
   mapInspectorTab: "edit",
   mapTopologyTool: "junctions",
   mapLayerSelectionsByMode: {},
+  mapOdomRanges: {},
   mapLayers: {
     drivable: true, obstacles: true,
     landmark: true,
@@ -7506,7 +7507,41 @@ function racelineGenerationPayload() {
   };
 }
 
+function mapOdomRange() {
+  return state.mapOdomRanges[state.selectedMapPath] || {start: 0, end: 100};
+}
+
+function odometryDisplayPoints(points, range) {
+  if (!points?.length) return [];
+  const first = Math.floor((points.length - 1) * range.start / 100);
+  const last = Math.floor((points.length - 1) * range.end / 100);
+  return points.slice(first, last + 1);
+}
+
+function setMapOdomRange(edge, value) {
+  const range = {...mapOdomRange()};
+  if (edge === 'all') {
+    range.start = 0;
+    range.end = 100;
+  } else {
+    const number = Number(value);
+    if (!Number.isFinite(number) || !['start', 'end'].includes(edge)) return;
+    range[edge] = Math.max(0, Math.min(100, number));
+    if (edge === 'start') range.start = Math.min(range.start, range.end);
+    else range.end = Math.max(range.start, range.end);
+  }
+  state.mapOdomRanges[state.selectedMapPath] = range;
+  for (const key of ['start', 'end']) {
+    const input = $(`odom-range-${key}`);
+    if (input) input.value = range[key];
+  }
+  const label = $('odom-range-label');
+  if (label) label.textContent = `${range.start}–${range.end}%`;
+  drawMapPreview();
+}
+
 function renderLayerToggles() {
+  const odomRange = mapOdomRange();
   const groups = [
     ["Reference", [["landmark", "Landmark"], ["odometry", "Odometry"]]],
     ["Base HD Map", [["drivable", "走行可能境界"], ["obstacles", "障害物"], ["left_bound", "経路生成：左"], ["right_bound", "経路生成：右"], ["section_gates", "Section gates"], ["section_labels", "All section labels"], ["junctions", "Junctions"]]],
@@ -7526,6 +7561,13 @@ function renderLayerToggles() {
               </label>`).join("")}
           </div>
         </div>`).join("")}
+      <div class="layer-group">
+        <span>Odometry 表示区間 <strong id="odom-range-label">${odomRange.start}–${odomRange.end}%</strong></span>
+        <label>開始 <input id="odom-range-start" type="range" min="0" max="100" step="1" value="${odomRange.start}" oninput="setMapOdomRange('start', this.value)" /></label>
+        <label>終了 <input id="odom-range-end" type="range" min="0" max="100" step="1" value="${odomRange.end}" oninput="setMapOdomRange('end', this.value)" /></label>
+        <button type="button" onclick="setMapOdomRange('all')">全区間</button>
+        <div class="field-hint">Odometryをオンにして表示。保存された点の順序で区間を指定します（経過時間の割合ではありません）。</div>
+      </div>
     </details>
   `;
 }
@@ -13532,7 +13574,7 @@ function drawMapLayers(ctx, detail, width, height) {
   const lanes = editorLanes || detail.hd_map?.lanes || [];
   const showCenterline = state.mapLayers.centerline && (!editorLanes || state.mapEditor.showCenterline);
   if (state.mapLayers.odometry && detail.odometry?.points?.length) {
-    drawPolyline(ctx, detail.odometry.points.map(toPixel), "rgba(47, 128, 237, 0.86)", 2.5, false, uiScale);
+    drawPolyline(ctx, odometryDisplayPoints(detail.odometry.points, mapOdomRange()).map(toPixel), "rgba(47, 128, 237, 0.86)", 2.5, false, uiScale);
   }
   const activeLaneId = editorLanes ? state.mapEditor.activeLaneId : "";
   const orderedLanes = editorLanes
@@ -14822,6 +14864,7 @@ window.setSimulationCenterlineDirection = setSimulationCenterlineDirection;
 window.openMapWorkspace = openMapWorkspace;
 window.refreshSelectedMap = refreshSelectedMap;
 window.toggleMapLayer = toggleMapLayer;
+window.setMapOdomRange = setMapOdomRange;
 window.createCustomLine = createCustomLine;
 window.selectCustomLine = selectCustomLine;
 window.toggleCustomLineEditor = toggleCustomLineEditor;
