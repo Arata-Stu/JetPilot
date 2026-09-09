@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "kind": "sensor_kit",
+  "id": "event-camera",
+  "label": "Event camera only (SilkyEvCam/OpenEB)",
+  "order": 35,
+  "aliases": ["event-only"],
+  "launch": {
+    "package": "jetpilot_system_launch",
+    "file": "launch/sensors/event_camera.launch.py"
+  },
+  "arguments": {
+    "sensor_kit_camera_name": "event_camera",
+    "sensor_kit_rtp_image_topic": "/event_camera/event_image",
+    "sensor_kit_enable_flir": false,
+    "publish_vehicle_evs_description": true,
+    "e2e_event_image_mode": true,
+    "e2e_image_topic": "/event_camera/event_image",
+    "e2e_model_root": "/workspaces/ros2_ws/models/e2e/event_control"
+  },
+  "rtp_topics": []
+}

@@ -3154,7 +3154,11 @@ function updateE2EPipelineOption(key, value) {
   if (key === "runDir") {
     const run = selectedE2ERun();
     if (run?.task === "trajectory") state.e2ePipeline.deployPreset = "camera_trajectory";
-    else if (run?.task === "control") state.e2ePipeline.deployPreset = "camera_control";
+    else if (run?.task === "control") {
+      const dataset = state.e2ePipeline.datasets.find((item) => item.path === run.dataset_dir);
+      const imageTopic = dataset?.image_topic || run.image_topic || "";
+      state.e2ePipeline.deployPreset = imageTopic.endsWith("/event_image") ? "event_control" : "camera_control";
+    }
   }
   render();
 }

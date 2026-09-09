@@ -2,6 +2,15 @@
   "default": "camera_control",
   "presets": [
     {
+      "id": "event_control",
+      "label": "Event Camera Control",
+      "description": "Event accumulation image to steering/throttle (event-camera sensor kit)",
+      "model_name": "event_control",
+      "model_kind": "e2e_control",
+      "modality": "event_image",
+      "metadata_filename": "metadata.json"
+    },
+    {
       "id": "camera_control",
       "label": "Camera Control",
       "description": "Single image to steering/throttle",

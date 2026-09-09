@@ -31,6 +31,9 @@ TOP_LEVEL_FIELDS = {
     "rtp_topics",
 }
 SENSOR_KIT_INTEGRATION_ARGUMENTS = {
+    "e2e_event_image_mode",
+    "e2e_image_topic",
+    "e2e_model_root",
     "localization_camera_name",
     "publish_vehicle_evs_description",
     "vgl_topic_config_file",

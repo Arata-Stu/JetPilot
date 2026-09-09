@@ -40,6 +40,7 @@ def apply_dataset_metadata(cfg: DictConfig) -> None:
             f"Dataset task is {dataset_task}, but model task is {model_task}: {metadata_path}"
         )
     for key in (
+        "image_topic",
         "input_width",
         "input_height",
         "trajectory_horizon_sec",

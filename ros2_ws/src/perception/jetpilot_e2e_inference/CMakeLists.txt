@@ -44,6 +44,7 @@ set_target_properties(
 ament_python_install_package(${PROJECT_NAME})
 
 install(PROGRAMS
+  jetpilot_e2e_inference/event_image_adapter.py
   jetpilot_e2e_inference/e2e_pytorch_inference_node.py
   scripts/build_tensorrt_engine.sh
   scripts/deploy_tensorrt_tui.sh

@@ -196,6 +196,7 @@ def scan_runs(config: Any) -> list[dict[str, Any]]:
                 "task": str(model_data.get("task") or metrics.get("task") or "control"),
                 "architecture": metrics.get("architecture") if isinstance(metrics.get("architecture"), dict) else {},
                 "dataset_dir": str(data.get("dataset_dir") or metrics.get("dataset_dir") or ""),
+                "image_topic": str(data.get("image_topic") or ""),
                 "input_width": int(data.get("input_width") or 0),
                 "input_height": int(data.get("input_height") or 0),
                 "best_checkpoint": str(best_path) if best_path.is_file() else "",

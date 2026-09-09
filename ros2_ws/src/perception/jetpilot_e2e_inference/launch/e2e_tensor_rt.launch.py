@@ -2,7 +2,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
-from launch_ros.actions import ComposableNodeContainer, LoadComposableNodes
+from launch_ros.actions import ComposableNodeContainer, LoadComposableNodes, Node
 from launch_ros.descriptions import ComposableNode
 from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
@@ -17,6 +17,12 @@ def generate_launch_description():
     param_file = LaunchConfiguration("param_file")
     container_name = LaunchConfiguration("container_name")
 
+    def event_value(event, camera):
+        return PythonExpression([
+            "'", event, "' if '", LaunchConfiguration("event_image_mode"),
+            "'.lower() == 'true' else '", camera, "'",
+        ])
+
     image_encoder = ComposableNode(
         package="isaac_ros_dnn_image_encoder",
         plugin="nvidia::isaac_ros::dnn_inference::DnnImageEncoderNode",
@@ -27,10 +33,10 @@ def generate_launch_description():
                 # RealSense publishes both Image and CameraInfo as Best Effort.
                 "input_qos": "SENSOR_DATA",
                 "input_image_width": ParameterValue(
-                    LaunchConfiguration("input_image_width"), value_type=int
+                    event_value(LaunchConfiguration("network_image_width"), LaunchConfiguration("input_image_width")), value_type=int
                 ),
                 "input_image_height": ParameterValue(
-                    LaunchConfiguration("input_image_height"), value_type=int
+                    event_value(LaunchConfiguration("network_image_height"), LaunchConfiguration("input_image_height")), value_type=int
                 ),
                 "network_image_width": ParameterValue(
                     LaunchConfiguration("network_image_width"), value_type=int
@@ -38,7 +44,7 @@ def generate_launch_description():
                 "network_image_height": ParameterValue(
                     LaunchConfiguration("network_image_height"), value_type=int
                 ),
-                "input_encoding": LaunchConfiguration("input_encoding"),
+                "input_encoding": event_value("rgb8", LaunchConfiguration("input_encoding")),
                 "enable_padding": ParameterValue(
                     LaunchConfiguration("enable_padding"), value_type=bool
                 ),
@@ -51,8 +57,8 @@ def generate_launch_description():
             }
         ],
         remappings=[
-            ("image", LaunchConfiguration("image_topic")),
-            ("camera_info", LaunchConfiguration("camera_info_topic")),
+            ("image", event_value("/e2e/event/image", LaunchConfiguration("image_topic"))),
+            ("camera_info", event_value("/e2e/event/camera_info", LaunchConfiguration("camera_info_topic"))),
             ("tensors", LaunchConfiguration("tensor_input_topic")),
         ],
         extra_arguments=[{"use_intra_process_comms": True}],
@@ -149,6 +155,7 @@ def generate_launch_description():
             DeclareLaunchArgument("container_name", default_value="multi_sensor_container"),
             DeclareLaunchArgument("run_standalone", default_value="true"),
             DeclareLaunchArgument("use_sim_time", default_value="false"),
+            DeclareLaunchArgument("event_image_mode", default_value="false"),
             DeclareLaunchArgument("image_topic", default_value="/realsense/color/image_raw"),
             DeclareLaunchArgument(
                 "camera_info_topic", default_value="/realsense/color/camera_info"
@@ -234,6 +241,23 @@ def generate_launch_description():
                 composable_node_descriptions=[],
                 output="screen",
                 condition=IfCondition(LaunchConfiguration("run_standalone")),
+            ),
+            Node(
+                package="jetpilot_e2e_inference",
+                executable="event_image_adapter.py",
+                name="e2e_event_image_adapter",
+                output="screen",
+                parameters=[{
+                    "width": ParameterValue(LaunchConfiguration("network_image_width"), value_type=int),
+                    "height": ParameterValue(LaunchConfiguration("network_image_height"), value_type=int),
+                    "use_sim_time": ParameterValue(LaunchConfiguration("use_sim_time"), value_type=bool),
+                }],
+                remappings=[
+                    ("event_image", LaunchConfiguration("image_topic")),
+                    ("image", "/e2e/event/image"),
+                    ("camera_info", "/e2e/event/camera_info"),
+                ],
+                condition=IfCondition(LaunchConfiguration("event_image_mode")),
             ),
             LoadComposableNodes(
                 target_container=container_name,

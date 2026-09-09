@@ -216,7 +216,52 @@ C++ decoderをすべてそこへロードします。E2E側は`run_standalone:=f
 実行方法です。従来controllerとE2Eはどちらも`/auto/control_cmd`へpublishするため、
 `enable_control`と`enable_e2e_inference`の同時有効化は拒否されます。
 
-## PyTorch推論
+## イベントカメラ単独のTensorRT制御
+
+SilkyEvCam/OpenEBの`/event_camera/event_image`（VGA 640×480、`bgr8`）を
+使う単一フレームの操舵・スロットル予測に対応します。生イベントを直接入力する
+モデルではなく、ドライバーが25 Hzで生成する蓄積画像を使います。
+`event-camera`センサー設定はRealSenseを起動しません。
+
+1. データ収集時は`bringup.sh teleop --vehicle jpbb --sensor-kit event-camera --bag-manager`
+   で起動し、イベント画像と教師の`/teleop/control_cmd`をrosbagへ記録します。
+2. ConsoleのE2E画面で画像トピックを`/event_camera/event_image`、Learning taskを
+   `Control`、画像サイズを212×120にしてデータセットを作成します。
+3. 単一画像・IMUなしの`pilotnet_scratch`で学習し、ONNXへ出力します。
+4. 配備プリセット`Event Camera Control`を選んで転送・TensorRTビルドします。
+   配備先は`models/e2e/event_control`です。
+5. Jetsonの実行用コンテナ内で起動します。
+
+```bash
+/workspaces/scripts/bringup.sh e2e --vehicle jpbb --sensor-kit event-camera
+```
+
+手動でエンジンを作る場合:
+
+```bash
+/workspaces/scripts/e2e_trt.sh /workspaces/ros2_ws/models/e2e/event_control
+```
+
+実行時は`e2e_event_image_adapter`が蓄積画像を`INTER_AREA`で212×120に縮小し、
+RGBへ変換して`/e2e/event/image`へ出力します。画像前処理ノードの完全時刻同期用に、
+同じheaderの`/e2e/event/camera_info`も生成します。このCameraInfoは未較正
+（K=0）であり、投影や自己位置推定には使いません。正規化とNCHW化、TensorRT推論、
+制御出力は既存経路を利用します。画像変換はCPU上の別プロセスで動きます。
+
+学習と実行では同じイベント蓄積周期・色設定・biasを使用してください。
+別サイズで学習した場合は起動時の`e2e_network_image_width`と
+`e2e_network_image_height`も合わせます。イベント用モデルを先に配備する必要があり、
+`event-camera`設定はRGB用の`latest`を自動流用しません。
+
+既にドライバーを起動している場合の推論単独起動:
+
+```bash
+ros2 launch jetpilot_e2e_inference e2e_tensor_rt.launch.py \
+  event_image_mode:=true image_topic:=/event_camera/event_image \
+  model_root:=/workspaces/ros2_ws/models/e2e/event_control
+```
+
+## PyTorch推論（起動例）
 
 推論ノード単体を起動する場合:
 
