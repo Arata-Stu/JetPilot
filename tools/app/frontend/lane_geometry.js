@@ -21,7 +21,7 @@ const LaneGeometry = (() => {
     return { left_bound, right_bound, centerline: points.map(p => [...p]) };
   }
   // Circular fillets keep the offset radius positive on the inside of a turn.
-  function roundedSpine(points, width, margin = 0) {
+  function roundedSpine(points, width, margin = 0, strict = true) {
     if (points.length < 3) return points.map(p => [...p]);
     const result = [[...points[0]]];
     for (let i = 1; i < points.length - 1; i++) {
@@ -34,6 +34,7 @@ const LaneGeometry = (() => {
       const trim = Math.min(before*.45, after*.45, Math.max(width, .3)*tangent);
       const radius = trim/tangent;
       if (!Number.isFinite(radius) || radius <= width/2 + margin + .02) {
+        if (!strict) { result.push([...p]); continue; }
         const error = new Error(`描画点[${i}]の曲がりが幅に対して急すぎます。前後の点の間隔を広げるか、レーン幅・余裕を小さくしてください。`);
         error.pointIndex = i;
         throw error;
@@ -51,8 +52,9 @@ const LaneGeometry = (() => {
     result.push([...points.at(-1)]);
     return result;
   }
-  function drawnLane(points, width, margin = 0) {
-    const spine = roundedSpine(points, width, margin);
+  function drawnLane(points, width, margin = 0, round = false) {
+    // Authoring must remain possible even where a constant-width fillet cannot fit.
+    const spine = round ? roundedSpine(points, width, margin, false) : points;
     const result = fromSpine(spine, width);
     const physical = fromSpine(spine, width + 2*margin);
     result.drivable_left_bound = physical.left_bound;

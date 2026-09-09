@@ -7647,7 +7647,8 @@ function renderHdMapEditor(detail) {
         <select id="lane-join-target" aria-label="結合先レーン">${editor.lanes.filter(l => l.id !== lane.id).map(l => `<option value="${esc(l.id)}">${esc(l.id)}</option>`).join("")}</select>
         <button onclick="joinEditorLane()" ${editor.enabled && editor.lanes.length > 1 ? "" : "disabled"}>終点→始点を結合</button>
       </div>
-      <div class="field-hint">新規描画は角を丸め、走行可能境界を片側10cm（変更可能）広げます。青い境界は実際の壁の位置に合わせて確認してください。</div>
+      <label class="layer-toggle"><input type="checkbox" ${editor.roundCorners ? "checked" : ""} onchange="setLaneCornerAssist(this.checked)" ${editor.enabled ? "" : "disabled"} />角を丸める補助（任意）</label>
+      <div class="field-hint">補助は初期状態でオフです。オンでも丸められない急な角はクリック位置を保持します。描画途中でも切り替えできます。走行可能境界の余裕は片側10cm（変更可能）。青い境界は実際の壁の位置に合わせて確認してください。</div>
       <div class="field-hint">${editor.drawingLane ? "カーソルを動かすと、次のクリックで配置される左右境界と中心線を破線で表示します。クリックで確定、2点以上で描画完了。最初の点は仮の向きで、次の点から進行方向が決まります。" : "ペアレーンは左右の同じ番号の点からcenterlineを生成します。境界の点追加・削除は反対側にも反映されます。分割はLeft / Rightを選び、端点以外をクリック。"}</div>
       <div class="inspector-block">
         <h4>分岐・合流の接続</h4>
@@ -10147,6 +10148,18 @@ function startPairedLane() {
   render();
 }
 
+function setLaneCornerAssist(checked) {
+  if (!state.mapEditor.enabled || mapEditorInteractionLocked()) return;
+  rememberMapEditorState();
+  state.mapEditor.roundCorners = Boolean(checked);
+  if (state.mapEditor.drawingLane && state.mapEditor.drawSpine?.length) {
+    Object.assign(activeEditorLane(), LaneGeometry.drawnLane(state.mapEditor.drawSpine,
+      state.mapEditor.laneWidth || 1, state.mapEditor.laneMargin ?? .1, state.mapEditor.roundCorners));
+    markMapEditorDirty();
+  }
+  render();
+}
+
 function finishPairedLane() {
   if (!state.mapEditor.drawingLane) return;
   if (activeEditorLane().left_bound.length < 2) return toast("2点以上をクリックしてください。Undoで作成を戻せます。", "error");
@@ -10339,6 +10352,7 @@ function captureMapEditorSnapshot() {
     dirty: state.mapEditor.dirty,
     drawingLane: Boolean(state.mapEditor.drawingLane),
     drawSpine: state.mapEditor.drawSpine?.map(p => [...p]),
+    roundCorners: Boolean(state.mapEditor.roundCorners),
   };
 }
 
@@ -10362,6 +10376,7 @@ function restoreMapEditorSnapshot(snapshot) {
   state.mapEditor.dirty = Boolean(snapshot.dirty);
   state.mapEditor.drawingLane = Boolean(snapshot.drawingLane);
   state.mapEditor.drawSpine = snapshot.drawSpine?.map(p => [...p]);
+  state.mapEditor.roundCorners = Boolean(snapshot.roundCorners);
   state.mapEditor.validationMarker = null;
   state.mapEditor.saveError = "";
   state.mapEditor.revision = Number(state.mapEditor.revision || 0) + 1;
@@ -12945,7 +12960,7 @@ function pairedLanePlacement(world) {
   const spine = editor.drawSpine || LaneGeometry.centers(activeEditorLane());
   if (spine.length && pointDistance(spine.at(-1), world) < 0.02) return null;
   try {
-    return LaneGeometry.drawnLane([...spine, world], editor.laneWidth || 1, editor.laneMargin ?? 0.1);
+    return LaneGeometry.drawnLane([...spine, world], editor.laneWidth || 1, editor.laneMargin ?? 0.1, Boolean(editor.roundCorners));
   } catch (error) {
     return { issue: error.message, point: spine[error.pointIndex] || world };
   }

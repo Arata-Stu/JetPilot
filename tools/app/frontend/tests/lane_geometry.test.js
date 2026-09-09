@@ -4,7 +4,7 @@ const G = require('../lane_geometry.js');
 test('rounded hairpins retain endpoints, positive inside radius and separate physical margins', () => {
   for (const sign of [1,-1]) {
     const points = [[0,0],[4,0],[4,4*sign],[0,4*sign]];
-    const result = G.drawnLane(points,1,.1);
+    const result = G.drawnLane(points,1,.1,true);
     assert.deepEqual(result.centerline[0],points[0]);
     assert.deepEqual(result.centerline.at(-1),points.at(-1));
     for (let i=0;i<result.centerline.length;i++) {
@@ -21,8 +21,8 @@ test('rounded hairpins retain endpoints, positive inside radius and separate phy
     for (const field of ['left_bound','right_bound','drivable_left_bound','drivable_right_bound']) assert.deepEqual(joined[field],a[field]);
     joined.centerline.forEach((p,i) => assert.ok(Math.hypot(...p.map((v,k)=>v-a.centerline[i][k]))<1e-9));
   }
-  assert.throws(()=>G.drawnLane([[0,0],[.5,0],[.5,.5]],1,.1),/描画点\[1\]/);
-  assert.throws(()=>G.drawnLane([[0,0],[2,0],[0,0]],1,.1),/曲がり/);
+  assert.throws(()=>G.roundedSpine([[0,0],[.5,0],[.5,.5]],1,.1),/描画点\[1\]/);
+  assert.throws(()=>G.roundedSpine([[0,0],[2,0],[0,0]],1,.1),/曲がり/);
   const zero = G.drawnLane([[0,0],[4,0]],1,0);
   assert.deepEqual(zero.drivable_left_bound,zero.left_bound);
 });
@@ -140,7 +140,7 @@ function pointerEditorContext() {
 test('lane placement hover previews the exact committed geometry without changing the draft or undo', () => {
   const c = pointerEditorContext();
   vm.runInContext(`
-    state.mapEditor.drawingLane = true; state.mapEditor.laneWidth = 2;
+    state.mapEditor.drawingLane = true; state.mapEditor.laneWidth = 2; state.mapEditor.roundCorners = true;
     globalThis.before = JSON.stringify(captureMapEditorSnapshot());
     move([5, 3]);
     globalThis.preview = pairedLanePlacement(state.mapEditor.placementPoint);
@@ -422,17 +422,40 @@ test('HD-only delete confirms scope and resets editors only for the same selecte
   }
 });
 
-test('invalid tight turn cannot alter the drawn lane and undo restores authored clicks', () => {
+test('tight hairpins remain drawable with assist off or on and undo restores clicks', () => {
+  for (const enabled of [false,true]) {
+    const c = pointerEditorContext();
+    c.assist = enabled;
+    vm.runInContext(`
+      state.mapEditor.drawingLane=true; state.mapEditor.drawSpine=[]; state.mapEditor.laneWidth=1;
+      state.mapEditor.roundCorners=assist;
+      down([0,0]); down([.5,0]); move([.5,.5]);
+      globalThis.preview=pairedLanePlacement(state.mapEditor.placementPoint);
+      down([.5,.5]);
+    `,c);
+    assert.equal(vm.runInContext('state.mapEditor.drawSpine.length',c),3);
+    assert.equal(vm.runInContext('JSON.stringify(activeEditorLane().centerline)===JSON.stringify(preview.centerline)',c),true);
+    assert.equal(vm.runInContext('activeEditorLane().centerline[1][0]',c),.5);
+    vm.runInContext('undoMapEditor()',c);
+    assert.equal(vm.runInContext('state.mapEditor.drawSpine.length',c),2);
+  }
+});
+
+test('corner assist can be toggled during drawing without losing clicks and undone', () => {
   const c = pointerEditorContext();
   vm.runInContext(`
     state.mapEditor.drawingLane=true; state.mapEditor.drawSpine=[]; state.mapEditor.laneWidth=1;
-    down([0,0]); down([.5,0]);
-    globalThis.beforeInvalid=JSON.stringify(captureMapEditorSnapshot());
-    down([.5,.5]);
+    down([0,0]); down([4,0]); down([4,4]);
   `,c);
-  assert.equal(vm.runInContext('JSON.stringify(captureMapEditorSnapshot())===beforeInvalid',c),true);
+  assert.equal(vm.runInContext('activeEditorLane().centerline.length',c),3);
+  vm.runInContext('setLaneCornerAssist(true)',c);
+  assert.ok(vm.runInContext('activeEditorLane().centerline.length',c)>3);
+  assert.equal(vm.runInContext('state.mapEditor.drawSpine.length',c),3);
+  vm.runInContext('setLaneCornerAssist(false)',c);
+  assert.equal(vm.runInContext('activeEditorLane().centerline.length',c),3);
   vm.runInContext('undoMapEditor()',c);
-  assert.equal(vm.runInContext('state.mapEditor.drawSpine.length',c),1);
+  assert.equal(vm.runInContext('state.mapEditor.roundCorners',c),true);
+  assert.ok(vm.runInContext('activeEditorLane().centerline.length',c)>3);
 });
 
 test('curve connector preserves lane identities, endpoint geometry and successor', () => {
