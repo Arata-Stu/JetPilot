@@ -204,7 +204,7 @@ Selecting `vehicle` opens the vehicle interface selector next. The same selectio
 non-interactively with `--components`; available names include `sensor`, `replay`, `localization`,
 `occupancy-map`, `hd-map`, `bag-manager`, `foxglove`, `joy`, `teleop`, `operation`, `planning`,
 `control`, `e2e`, `rviz`, and `vehicle`. Pass
-`--vehicle pca` or `--vehicle vesc` when a non-interactive preset/component enables `vehicle`.
+`--vehicle pca` or `--vehicle vesc` to override the default `jpbb` when a preset/component enables `vehicle`.
 Selecting `control` also enables `planning` and the operation command mux.
 Selecting `e2e` enables E2E inference and the operation command mux but leaves the sensor and
 vehicle choices explicit. `control` and `e2e` cannot be selected together.
@@ -317,3 +317,22 @@ ROS domain.
 PCA9685 and VESC select their own package, launch file, and parameter YAML as one unit. The vehicle
 camera transform is independent from the actuator interface, so `sensor` and localization presets can
 publish `base_link -> realsense_camera_link` without opening either hardware driver.
+
+
+## 実車調整と既定の車両
+
+TUIの`tuning`は、センサー・自己位置推定・操作系・車両・実車調整サービスを一括起動します。
+NotebookのUIでラインと区間速度を選択・適用するため、TUIの走行ライン選択は省略します。
+Map選択は`cuvgl_map/`または`cuvslam_map/`のある実体フォルダーを対象にします。
+
+```sh
+/workspaces/scripts/bringup.sh tuning --map /workspaces/map/course_a
+```
+
+車両を使うpreset/componentで`--vehicle`を省略した場合は`jpbb`を使用します。
+TUIでも`jpbb`を先頭に表示します。明示した車両プロファイルや既存の`drive-vesc`等は優先されます。
+既定値は`BRINGUP_DEFAULT_VEHICLE`でも変更できます。センサーのみ・localizationのみ・replayでは、
+車両は引き続き有効になりません。
+
+更新後は`jetpilot_system_launch`をビルドし直し、setupを読み込んでください。
+詳細は[実車調整手順](../tools/app/runtime/README.md)を参照してください。

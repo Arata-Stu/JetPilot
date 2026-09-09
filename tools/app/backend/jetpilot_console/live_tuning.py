@@ -20,6 +20,8 @@ def encoded(value):
 
 def map_identity(root):
     """Portable content identity; unlike mtime, survives rsync and copying."""
+    if not root.is_dir():
+        raise ValueError(f'Map directory does not exist or is not a directory: {root}')
     digest = hashlib.sha256()
     found = False
     for name in ('cuvgl_map', 'cuvslam_map', 'vslam_reference_snapshot.json', 'vslam_landmarks.yaml'):
@@ -33,7 +35,12 @@ def map_identity(root):
                     digest.update(chunk)
             digest.update(b'\0')
     if not found:
-        raise ValueError('自己位置推定用マップがありません。VSLAM/VGLマップを用意してください。')
+        raise ValueError(
+            f'No localization map files found in: {root}. '
+            'Expected files under cuvgl_map/ or cuvslam_map/, or '
+            'vslam_reference_snapshot.json or vslam_landmarks.yaml. '
+            'Check map_dir, the container mount, and whether these entries are empty or broken symlinks.'
+        )
     return digest.hexdigest()
 
 
@@ -117,16 +124,41 @@ def remote_request(config, body, action, payload=None):
     config.state_dir.mkdir(parents=True, exist_ok=True)
     target = validate_ssh_target(str(body.get('user') or config.jetson_user), str(body.get('host') or config.jetson_ips[0]))
     # Only a fixed loopback endpoint is accessible; no client-supplied shell or URL.
-    script = "import sys,urllib.request,urllib.error; data=sys.stdin.buffer.read(); req=urllib.request.Request('http://127.0.0.1:8781/" + action + "',data=data,headers={'Content-Type':'application/json'});\ntry:\n r=urllib.request.urlopen(req,timeout=8); print(r.read().decode())\nexcept urllib.error.HTTPError as e:\n print(e.read().decode())"
-    result = subprocess.run(
-        ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=3', '-o', 'ControlMaster=auto',
-         '-o', 'ControlPersist=30', '-o', f'ControlPath={config.state_dir}/tuning-%C', target,
-         'python3 -c ' + shlex.quote(script)],
-        input=encoded(payload or {}), capture_output=True, timeout=12,
-    )
+    script = """import sys,json,urllib.request,urllib.error
+data=sys.stdin.buffer.read()
+req=urllib.request.Request('http://127.0.0.1:8781/""" + action + """',data=data,headers={'Content-Type':'application/json'})
+try:
+    # The service is on this SSH host, never on an HTTP proxy.
+    opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with opener.open(req,timeout=8) as response:
+        print(response.read().decode())
+except urllib.error.HTTPError as error:
+    print(error.read().decode())
+except (urllib.error.URLError, OSError) as error:
+    print(json.dumps({'connection_error':str(error)}))
+"""
+    try:
+        result = subprocess.run(
+            ['ssh', '-o', 'BatchMode=yes', '-o', 'ConnectTimeout=3', '-o', 'ControlMaster=auto',
+             '-o', 'ControlPersist=30', '-o', f'ControlPath={config.state_dir}/tuning-%C', target,
+             'python3 -c ' + shlex.quote(script)],
+            input=encoded(payload or {}), capture_output=True, timeout=12,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ValueError(f'{target} から12秒以内に応答がありません。SSH接続と調整サービスの起動ログを確認してください。適用要求は結果未確認のため、自動再送していません。') from exc
     if result.returncode:
-        raise ValueError('Jetsonの実車調整サービスに接続できません: ' + result.stderr.decode(errors='replace')[-600:])
-    response = json.loads(result.stdout)
+        detail = result.stderr.decode(errors='replace')[-600:]
+        if result.returncode == 255:
+            raise ValueError(f'{target} へのSSH接続に失敗しました。ホスト名・SSH鍵・known_hostsを確認してください: {detail}')
+        raise ValueError(f'{target} で接続確認プログラムを実行できません。SSH先のpython3を確認してください: {detail}')
+    try:
+        response = json.loads(result.stdout)
+    except (ValueError, UnicodeError) as exc:
+        raise ValueError('SSH先から正しいJSON応答を取得できません。ログイン時の標準出力や8781番ポートのサービスを確認してください。') from exc
+    if not isinstance(response, dict):
+        raise ValueError('調整サービスの応答形式が不正です。NotebookとJetsonのコードを同じ版にしてください。')
+    if response.get('connection_error'):
+        raise ValueError(f'SSH接続は成功しましたが、Jetson内の調整サービス（127.0.0.1:8781）から応答を取得できません。tuning.launch.pyの起動・起動ログと、Dockerの場合はhost networkingを確認してください: {response["connection_error"]}')
     if response.get('error'):
         raise ValueError(response['error'])
     return response

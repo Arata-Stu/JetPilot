@@ -5,6 +5,38 @@ Notebookの **Maps → 対象Mapを開く → 実車調整モード** から使�
 Jetsonからはmap座標の自己位置・速度・操作モード・適用版だけを約1 Hzで取得します。
 転送はSSHの既存接続を再利用し、走行ライン全体はプレビュー・適用・適用版変更時だけ送ります。
 
+## TUIからまとめて起動する（推奨）
+
+更新後、Jetsonで`jetpilot_system_launch`のインストールを更新してください。
+
+```sh
+cd /workspaces/ros2_ws
+colcon build --packages-select jetpilot_system_launch --symlink-install
+source /workspaces/ros2_ws/install/setup.bash
+/workspaces/scripts/bringup.sh
+```
+
+TUIで`tuning`を選ぶと、センサー・自己位置推定・操作系・車両・調整サービスとcontrollerを
+まとめて起動します。車両プロファイルの既定は`jpbb`です。ほかの車両はTUIまたは`--vehicle`で選べます。
+自己位置推定の初期化は既存TUIと同じ手順で行います。走行ラインはNotebookのUIから選ぶため、
+このpresetではTUIの走行ライン選択を省略します。通常走行用のplanning/controllerとの重複起動は拒否します。
+
+```sh
+/workspaces/scripts/bringup.sh tuning --map /workspaces/map/course_a
+```
+
+Mapは`cuvgl_map/`または`cuvslam_map/`が直接入っているフォルダーを選んでください。
+日時付きサブフォルダーに生成物がある場合は、親フォルダーではなくそのサブフォルダーを指定します。
+この一括起動を使う場合、別に起動したセンサー・localization・調整launchは先に終了してください。
+
+## 自己位置が表示されない場合
+
+HTTP/SSHの「接続中」と、自己位置を取得できていることは別です。UIにTFの取得失敗理由、
+TF座標、ROS_DOMAIN_ID、各topicの配信元数を表示します。`localized`なのに位置がない場合は
+`map → base_link`のTFと時刻差を確認してください。TFは0.5秒以内のものだけ採用します。
+「走行許可失効」は適用・走行条件の表示で、位置表示を直接無効にするものではありません。
+表示用の接続はMANUALなどでも可能ですが、適用・許可の再取得は引き続きSTOP・停車確認が必要です。
+
 ## Jetsonの起動
 
 このディレクトリと `tools/app/backend/jetpilot_console` を含む同じリポジトリをJetsonにも配置します。
@@ -15,10 +47,18 @@ Notebook・Jetsonの自己位置推定用Mapは同じ内容にしてください
 3. **自己位置推定と同じROS_DOMAIN_ID・ROS環境**で、以下を起動します。
 
 ```sh
-# リポジトリのルートで、ROS workspaceのsetupを読み込んだ後に実行
-ros2 launch tools/app/runtime/tuning.launch.py \
+# 標準Docker環境。現在のディレクトリに依存しない絶対パスを使用
+source /workspaces/ros2_ws/install/setup.bash
+ros2 launch /workspaces/tools/app/runtime/tuning.launch.py \
   map_dir:=/workspaces/map/course_a
 ```
+
+`/workspaces`以外に配置した場合は、リポジトリの配置先に合わせて絶対パスを変更してください。
+`source install/setup.bash`を実行するROS workspace直下には、通常`tools/app`はありません。
+launchファイルが指定位置に存在しないと、ROS 2がその引数をパッケージ名として扱い、
+`is not a valid package name`となることがあります。
+`ls /workspaces/tools/app/runtime/tuning.launch.py`でも見つからない場合は、Jetson側に
+今回追加したコードが配置されているか、Docker内にリポジトリ全体がマウントされているかを確認してください。
 
 車両用controller設定がある場合は `controller_config:=/absolute/path/controller.param.yaml`
 を指定します。標準の設定は `jetpilot_controller/config/controller.param.yaml` です。

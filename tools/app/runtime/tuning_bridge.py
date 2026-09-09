@@ -4,6 +4,7 @@ from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'backend'))
 import argparse
+import os
 import json
 import math
 import queue
@@ -133,11 +134,12 @@ def main():
                 stamp = Time.from_msg(tf.header.stamp)
                 age = (self.get_clock().now() - stamp).nanoseconds / 1e9
                 t, q = tf.transform.translation, tf.transform.rotation
+                state.pose_issue = f'map → base_link のTFが古い、未来時刻、または不正です（時刻差 {age:.3f} 秒）。'
                 if 0 <= age <= 0.5 and all(math.isfinite(v) for v in (t.x, t.y, q.x, q.y, q.z, q.w)):
                     state.pose = {'x': t.x, 'y': t.y,
                                   'yaw': math.atan2(2*(q.w*q.z+q.x*q.y), 1-2*(q.y*q.y+q.z*q.z))}
-            except Exception:
-                pass
+            except Exception as exc:
+                state.pose_issue = f'map → base_link のTFを取得できません: {str(exc)[:300]}'
             try:
                 action, body, reply, deadline = requests.get_nowait()
                 try:
@@ -146,6 +148,14 @@ def main():
                     if action == 'status':
                         state.touch_lease()
                         result = state.status()
+                        result['ros'] = {
+                            'domain_id': os.environ.get('ROS_DOMAIN_ID', '0'),
+                            'rmw': os.environ.get('RMW_IMPLEMENTATION', 'default'),
+                            'map_dir': str(Path(args.map_dir).resolve()),
+                            'publishers': {topic: self.count_publishers(topic) for topic in (
+                                '/tf', '/tf_static', '/localization/pose_hint_state',
+                                '/visual_slam/tracking/odometry', '/operation_mode/state')},
+                        }
                     elif action == 'active':
                         result = {'snapshot': state.active}
                     else:
@@ -204,6 +214,7 @@ def main():
     server = HTTPServer(('127.0.0.1', 8781), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     node = Bridge()
+    node.get_logger().info(f'Tuning service listening on 127.0.0.1:8781; map={Path(args.map_dir).resolve()}; ROS_DOMAIN_ID={os.environ.get("ROS_DOMAIN_ID", "0")}. Waiting for localization and a UI snapshot.')
     try:
         rclpy.spin(node)
     finally:

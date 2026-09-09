@@ -20,8 +20,19 @@ ROOT = next(p for p in Path(__file__).resolve().parents if (p / 'scripts/bringup
 
 
 class VslamTuiTest(unittest.TestCase):
+    def test_tuning_tui_defaults_to_jpbb_and_skips_line_menu(self):
+        code, output = self.launch(preset='tuning')
+        self.assertEqual(code, 0, output)
+        self.assertIn('vehicle      : jpbb', output)
+        self.assertIn('enable_live_tuning:=true', output)
+        self.assertIn('TEST_INIT_MENU_SHOWN', output)
+        self.assertNotIn('TEST_LINE_MENU_SHOWN', output)
+
     def launch(self, mode='vo', overrides=(), preset='localization-only', init='pose-hint', line='current', closed=True, rgb='30', infra='60', multicam='1'):
         with tempfile.TemporaryDirectory() as directory:
+            if preset == 'tuning':
+                (Path(directory) / 'cuvslam_map').mkdir()
+                (Path(directory) / 'cuvslam_map' / 'test.mdb').write_text('dry run fixture')
             custom = Path(directory) / 'test_custom_line.csv'
             custom.write_text('0;0;0;0;0;1;0\n1;1;0;0;0;1;0\n')
             custom.with_suffix('.meta.json').write_text(json.dumps({

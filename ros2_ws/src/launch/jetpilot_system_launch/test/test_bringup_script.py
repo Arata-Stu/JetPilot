@@ -214,12 +214,12 @@ def test_jpbb_vehicle_profile_resolves_without_changing_existing_backends() -> N
     assert "jetpilot_bridge_interface_node.param.yaml" in output
 
 
-def test_generic_vehicle_presets_require_an_interface_noninteractively() -> None:
+def test_generic_vehicle_presets_default_to_jpbb_noninteractively() -> None:
     for preset in ("drive", "e2e"):
         result = run_launcher(preset, "--dry-run", check=False)
 
-        assert result.returncode != 0
-        assert "requires --vehicle PROFILE" in result.stderr
+        assert result.returncode == 0, result.stderr
+        assert "vehicle      : jpbb" in result.stdout
 
 
 def test_vehicle_presets_select_matching_driver_configuration() -> None:

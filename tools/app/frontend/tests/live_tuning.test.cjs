@@ -112,3 +112,14 @@ test('ending adjustment after a map change preserves intentionally hidden layers
   ctx.endLiveTuning();
   assert.equal(ctx.state.mapLayers.landmark,true);
 });
+test('manual mode can connect for telemetry while applying still requires STOP',async()=>{
+  const ctx=context();ctx.render=()=>{};
+  ctx.api=async url=>url.endsWith('/connect') ? {
+    map_id:'A',local_map_id:'A',mode:2,localization:'localized',
+    pose:{x:1,y:2,yaw:0},apply_issue:'STOPにしてください',lease_live:false,
+  } : {snapshot:null};
+  await ctx.connectTuning();
+  assert.equal(ctx.t.connected,true);
+  assert.equal(ctx.t.status.pose.x,1);
+  assert.match(ctx.tuningApplyIssue(),/STOP/);
+});

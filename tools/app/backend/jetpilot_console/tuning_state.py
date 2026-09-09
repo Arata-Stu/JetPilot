@@ -18,6 +18,7 @@ class TuningState:
         self.localization = ''
         self.localization_at = float('-inf')
         self.pose = None
+        self.pose_issue = "map → base_link のTFをまだ受信していません。"
         self.lease_at = float('-inf')
         self.conflict = False
 
@@ -69,10 +70,14 @@ class TuningState:
 
     def status(self):
         now = self.clock()
+        def age(stamp):
+            return round(now - stamp, 3) if stamp != float('-inf') else None
         return {'map_id': self.map_id, 'revision': self.active['revision'] if self.active else '',
                 'line': self.active['line'] if self.active else '',
                 'can_rollback': self.previous is not None, 'mode': self.mode,
                 'speed_mps': self.speed if now - self.speed_at < 0.5 else None,
                 'localization': self.localization if now - self.localization_at < 1.5 else 'stale',
-                'pose': self.pose, 'ready': self.ready(), 'lease_live': now - self.lease_at < 4.0,
+                'pose': self.pose, 'pose_issue': self.pose_issue if self.pose is None else '',
+                'localization_age_s': age(self.localization_at), 'odometry_age_s': age(self.speed_at),
+                'mode_age_s': age(self.mode_at), 'ready': self.ready(), 'lease_live': now - self.lease_at < 4.0,
                 'apply_issue': self.apply_issue()}

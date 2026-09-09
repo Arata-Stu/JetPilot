@@ -137,6 +137,17 @@ sections:
         os.utime(path,(1,1));self.assertEqual(before,map_identity(self.root))
         path.write_text('other');self.assertNotEqual(before,map_identity(self.root))
 
+    def test_map_identity_reports_missing_directory_and_empty_assets(self):
+        missing=self.root/'missing'
+        with self.assertRaisesRegex(ValueError, 'Map directory does not exist'):
+            map_identity(missing)
+        missing.mkdir()
+        (missing/'cuvslam_map').mkdir()
+        (missing/'cuvgl_map').symlink_to(missing/'not-mounted')
+        with self.assertRaisesRegex(ValueError, 'No localization map files found') as caught:
+            map_identity(missing)
+        self.assertIn(str(missing), str(caught.exception))
+
     def test_unknown_section_and_foreign_frame_rejected(self):
         with self.assertRaises(ValueError):self.prepare(section_speeds_mps={'deleted':1})
         path=self.root/'course_hd_map.yaml'
@@ -177,5 +188,29 @@ sections:
             args,kwargs=run.call_args
             self.assertNotIn(payload['literal'],' '.join(args[0]))
             self.assertEqual(kwargs['input'],encoded(payload))
+
+    def test_remote_connection_errors_identify_the_failed_stage(self):
+        config=SimpleNamespace(state_dir=self.root/'state',jetson_user='pilot',jetson_ips=['127.0.0.1'])
+        cases = [
+            (255, b'', b'Permission denied (publickey)', 'SSH接続に失敗'),
+            (127, b'', b'python3: command not found', 'python3'),
+            (0, b'{"connection_error":"Connection refused"}', b'', 'SSH接続は成功'),
+            (0, b'login banner\n{}', b'', 'JSON応答'),
+            (0, b'[]', b'', '応答形式'),
+            (0, '{"error":"STOPにしてください"}'.encode(), b'', 'STOPにしてください'),
+        ]
+        for code, stdout, stderr, expected in cases:
+            with self.subTest(expected=expected), patch('jetpilot_console.live_tuning.subprocess.run') as run:
+                run.return_value=SimpleNamespace(returncode=code,stdout=stdout,stderr=stderr)
+                with self.assertRaisesRegex(ValueError, expected):
+                    remote_request(config, {}, 'status')
+
+    def test_remote_timeout_is_not_retried(self):
+        import subprocess
+        config=SimpleNamespace(state_dir=self.root/'state',jetson_user='pilot',jetson_ips=['127.0.0.1'])
+        with patch('jetpilot_console.live_tuning.subprocess.run', side_effect=subprocess.TimeoutExpired('ssh', 12)) as run:
+            with self.assertRaisesRegex(ValueError, '自動再送していません'):
+                remote_request(config, {}, 'apply')
+            self.assertEqual(run.call_count, 1)
 
 if __name__=='__main__':unittest.main()

@@ -6,7 +6,8 @@ import re
 import isaac_ros_launch_utils as lu
 import isaac_ros_launch_utils.all_types as lut
 import yaml
-from launch.actions import OpaqueFunction
+from launch.actions import OpaqueFunction, IncludeLaunchDescription
+from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, OrSubstitution
 from launch_ros.actions import ComposableNodeContainer
@@ -230,6 +231,30 @@ def _validate_autonomous_command_source(context):
     return []
 
 
+def _include_live_tuning(context):
+    if not _launch_bool(context, 'enable_live_tuning'):
+        return []
+    for name in ('enable_control', 'enable_e2e_inference', 'enable_planning',
+                 'enable_competition_planning', 'enable_raceline_publisher',
+                 'enable_custom_trajectory_publisher', 'enable_rosbag_replay', 'use_sim_time'):
+        if _launch_bool(context, name):
+            raise RuntimeError(f'Live tuning cannot be combined with {name}')
+    for name in ('enable_localization', 'enable_vslam', 'enable_localization_manager', 'enable_operation'):
+        if not _launch_bool(context, name):
+            raise RuntimeError(f'Live tuning requires {name}')
+    filename = LaunchConfiguration('live_tuning_launch_file').perform(context)
+    if not os.path.isfile(filename):
+        raise RuntimeError(f'Live tuning launch file not found: {filename}. Check the project mount.')
+    map_dir = LaunchConfiguration('map_dir').perform(context)
+    if not any(os.path.isdir(os.path.join(map_dir, name)) for name in ('cuvgl_map', 'cuvslam_map')):
+        raise RuntimeError(f'Select the actual localization map directory, not its parent: {map_dir}')
+    return [IncludeLaunchDescription(PythonLaunchDescriptionSource(filename), launch_arguments={
+        'map_dir': map_dir,
+        'controller_config': LaunchConfiguration('control_param').perform(context),
+        'throttle_calibration_file': LaunchConfiguration('control_throttle_calibration_file').perform(context),
+    }.items())]
+
+
 def _create_processing_component_container(context):
     sensor_enabled = _launch_bool(context, 'enable_sensor_kit')
     e2e_enabled = _launch_bool(context, 'enable_e2e_inference')
@@ -383,6 +408,8 @@ def generate_launch_description() -> lut.LaunchDescription:
         lu.get_path('jetpilot_system_launch', 'config/operation/operation.param.yaml'),
         cli=True)
 
+    args.add_arg('enable_live_tuning', False, cli=True)
+    args.add_arg('live_tuning_launch_file', '/workspaces/tools/app/runtime/tuning.launch.py', cli=True)
     args.add_arg('enable_control', False, cli=True)
     args.add_arg(
         'control_param',
@@ -677,6 +704,7 @@ def generate_launch_description() -> lut.LaunchDescription:
 
     actions = args.get_launch_actions()
     actions.append(OpaqueFunction(function=_validate_autonomous_command_source))
+    actions.append(OpaqueFunction(function=_include_live_tuning))
     actions.append(OpaqueFunction(function=_validate_replay_vehicle_safety))
     actions.append(OpaqueFunction(function=_validate_foxglove_configuration))
     # The top-level launch owns the single image-processing container. Sensor,

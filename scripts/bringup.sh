@@ -19,6 +19,7 @@ PROFILE_ROOT="${BRINGUP_PROFILE_ROOT:-${PROJECT_ROOT}/ros2_ws/src/launch/jetpilo
 
 PRESET=''
 VEHICLE_BACKEND='none'
+DEFAULT_VEHICLE_PROFILE="${BRINGUP_DEFAULT_VEHICLE:-jpbb}"
 SENSOR_KIT_PROFILE=''
 MAP_DIR="${BRINGUP_MAP_DIR:-}"
 ROSBAG="${BRINGUP_ROSBAG:-}"
@@ -114,6 +115,7 @@ calibration          Live sensor + mapless VSLAM odometry + teleop + vehicle + b
 e2e                  Live RealSense + E2E inference + joy/teleop/operation + vehicle
 runtime              Live sensor/localization/teleop + Foxglove pose fallback + vehicle (map required)
 map-view             Live localization + HD map + Foxglove initial pose (map required, no actuator)
+tuning               Live tuning UI + sensor/localization + selected vehicle (map required)
 competition          Signal-aware rule planner + recovery + controller + live runtime (map required)
 custom               Interactive component selection; all components start OFF
 EOF
@@ -149,7 +151,7 @@ Options:
                         Explicitly treat the custom line as closed
       --rate RATE      Rosbag replay rate (default: 1.0)
       --vehicle PROFILE
-                        Select a discovered vehicle interface profile
+                        Select a discovered vehicle interface profile (default: jpbb for vehicle presets)
       --bag-manager    Enable bag manager recording control
       --no-bag-manager Disable bag manager recording control
       --sensor-kit NAME
@@ -218,7 +220,7 @@ known_preset() {
   case "$1" in
     sensor|localization-only|localization|localize-live|replay-localization|\
       offline-vslam|offline-vslam-map|offline-localization|\
-      vehicle|teleop|drive|calibration|e2e|runtime|map-view|competition|\
+      vehicle|teleop|drive|calibration|e2e|runtime|map-view|tuning|competition|\
       vehicle-pca|vehicle-vesc|teleop-pca|teleop-vesc|\
       drive-pca|drive-vesc|runtime-pca|runtime-vesc|custom) return 0 ;;
     *) return 1 ;;
@@ -299,6 +301,8 @@ set_base_args() {
   set_arg competition_route_config_file ''
   set_arg enable_raceline_publisher false
   set_arg enable_custom_trajectory_publisher false
+  set_arg enable_live_tuning false
+  set_arg live_tuning_launch_file "${PROJECT_ROOT}/tools/app/runtime/tuning.launch.py"
   set_arg enable_control false
   set_arg enable_e2e_inference false
   set_arg enable_object_detection false
@@ -887,6 +891,7 @@ configure_offline_origin_test_interactively() {
 }
 
 configure_driving_line_interactively() {
+  is_true "$(get_arg enable_live_tuning)" && return 0
   [[ -z "$RACELINE_CSV" && -z "$CUSTOM_LINE_CSV" ]] || return 0
   [[ "$REQUIRES_RACELINE" != 'true' && "$REQUIRES_CUSTOM_LINE" != 'true' ]] || return 0
   is_true "$(get_arg enable_e2e_inference)" && return 0
@@ -1039,6 +1044,14 @@ apply_preset() {
       enable_teleop_stack
       set_arg enable_sensor_kit true
       enable_live_localization_stack
+      REQUIRES_VEHICLE=true
+      REQUIRES_MAP=true
+      ;;
+    tuning)
+      enable_teleop_stack
+      set_arg enable_sensor_kit true
+      enable_live_localization_stack
+      set_arg enable_live_tuning true
       REQUIRES_VEHICLE=true
       REQUIRES_MAP=true
       ;;
@@ -1409,6 +1422,11 @@ is_discoverable_map() {
   local map_dir="$1"
 
   [[ -d "$map_dir" ]] || return 1
+
+  if is_true "$(get_arg enable_live_tuning 2>/dev/null || false)"; then
+    [[ -d "$map_dir/cuvgl_map" || -d "$map_dir/cuvslam_map" ]]
+    return
+  fi
 
   if is_true "$(get_arg enable_competition_planning 2>/dev/null || false)"; then
     [[ -f "${map_dir%/}/competition_route.param.yaml" ]] \
@@ -1785,7 +1803,11 @@ configure_vehicle_interactively() {
 
   profile_list="$(list_profiles vehicle)"
   while IFS=$'\t' read -r profile_id label; do
-    [[ -n "$profile_id" ]] || continue
+    [[ "$profile_id" == "$DEFAULT_VEHICLE_PROFILE" ]] || continue
+    options+=("$profile_id  $label (既定)")
+  done <<< "$profile_list"
+  while IFS=$'\t' read -r profile_id label; do
+    [[ -n "$profile_id" && "$profile_id" != "$DEFAULT_VEHICLE_PROFILE" ]] || continue
     options+=("$profile_id  $label")
   done <<< "$profile_list"
 
@@ -1885,6 +1907,21 @@ validate_configuration() {
   if is_true "$(get_arg enable_planning)" \
     && is_true "$(get_arg enable_competition_planning)"; then
     die 'enable_planning and enable_competition_planning cannot both be true'
+  fi
+  if is_true "$(get_arg enable_live_tuning)"; then
+    [[ -n "$MAP_DIR" && ( -d "$MAP_DIR/cuvgl_map" || -d "$MAP_DIR/cuvslam_map" ) ]] \
+      || die 'tuning requires the actual map directory containing cuvgl_map/ or cuvslam_map/; select the timestamped child, not its parent'
+    [[ -f "$(get_arg live_tuning_launch_file)" ]] || die 'live tuning launch file is missing from the project mount'
+    ! is_true "$replay" || die 'live tuning cannot be combined with rosbag replay'
+    local required
+    for required in enable_localization enable_vslam enable_localization_manager enable_operation; do
+      is_true "$(get_arg "$required")" || die "live tuning requires $required"
+    done
+    ! is_true "$(get_arg use_sim_time)" || die 'live tuning requires live ROS time'
+    local conflicting
+    for conflicting in enable_control enable_e2e_inference enable_planning enable_competition_planning enable_raceline_publisher enable_custom_trajectory_publisher; do
+      ! is_true "$(get_arg "$conflicting")" || die "live tuning cannot be combined with $conflicting"
+    done
   fi
   if [[ "$REQUIRES_VEHICLE" == 'true' ]] && ! is_true "$vehicle"; then
     die "preset '$PRESET' requires --vehicle PROFILE (see --list-vehicles)"
@@ -2047,6 +2084,9 @@ ensure_ros_environment() {
   if is_true "$(get_arg enable_control)"; then
     packages+=(jetpilot_controller)
   fi
+  if is_true "$(get_arg enable_live_tuning)"; then
+    packages+=(jetpilot_controller jetpilot_hdmap_publisher)
+  fi
   if is_true "$(get_arg enable_object_detection)"; then
     packages+=(jetpilot_object_detection)
   fi
@@ -2101,6 +2141,7 @@ print_summary() {
         "$(get_arg sensor_kit_rtp_port 2>/dev/null || printf '5004')"
     fi
   fi
+  printf '  live tuning  : %s\n' "$(get_arg enable_live_tuning)"
   printf '  localization : %s\n' "$(get_arg enable_localization)"
   if is_true "$(get_arg enable_localization)"; then
     case "$(get_arg vslam_multicam_mode)" in
@@ -2357,6 +2398,9 @@ fi
 if [[ "$INTERACTIVE" == 'true' && -z "${CLI_VEHICLE:-}" ]] \
   && [[ "$REQUIRES_VEHICLE" == 'true' ]]; then
   configure_vehicle_interactively
+fi
+if [[ "$REQUIRES_VEHICLE" == 'true' && "$VEHICLE_BACKEND" == 'none' && -z "${CLI_VEHICLE:-}" ]]; then
+  apply_vehicle "$DEFAULT_VEHICLE_PROFILE"
 fi
 if [[ "$INTERACTIVE" == 'true' && -z "$CLI_SENSOR_KIT" ]] \
   && is_true "$(get_arg enable_sensor_kit)"; then

@@ -99,7 +99,6 @@ async function connectTuning() {
     const status=await tuningRequest('connect');
     if(epoch!==tuning.epoch) return;
     if(status.map_id!==status.local_map_id) throw new Error('NotebookとJetsonの自己位置推定用マップが一致しません。');
-    if(status.mode!==3) throw new Error('接続する前に操作モードをSTOPへ切り替えてください。');
     tuning.mapId=status.local_map_id; tuning.status=status; tuning.connected=true;
     tuning.receivedAt=Date.now();
     const active=await tuningRequest('active');
@@ -174,12 +173,17 @@ async function applyTuning(rollback) {
 function refreshTuningPanel() {
   const el=$('tuning-status');
   if(!el)return;
+  const rosDetailsOpen=$('tuning-ros-status')?.open || false;
   const status=tuning.status;
   const fresh=tuning.connected && Date.now()-tuning.receivedAt<3000;
   const mode={1:'AUTO',2:'MANUAL',3:'STOP',4:'PROPO'}[status?.mode] || '不明';
   const preview=tuning.previewDetail===state.selectedMapDetail ? tuning.preview : null;
   el.innerHTML=`<p>${fresh?'接続中':'未接続・受信停止'}${fresh && !status?.lease_live ? '（走行許可失効：STOPで停車してください）' : ''} · ${esc(fresh?status?.localization:'位置情報なし')} · ${esc(mode)} · ${fresh && status?.speed_mps!=null ? Number(status.speed_mps).toFixed(2)+' m/s':'速度不明'}</p>
     <p>実車：${esc(status?.line || '未適用')} / ${esc(status?.revision?.slice(0,12) || '—')}<br>プレビュー：${esc(preview?.line || '未作成')} / ${esc(preview?.revision?.slice(0,12) || '—')}${preview ? ` · ${preview.points.length}点 · 最大 ${Math.max(...preview.points.map(p=>p[5])).toFixed(2)} m/s` : ''}</p>
+    ${fresh && !status?.pose ? `<p role="status">${esc(status?.pose_issue || '自己位置のTFを待っています。')}</p>` : ''}
+    ${fresh && status?.localization!=='localized' ? `<p>自己位置推定の確定待ちです。センサー・localizationの起動と初期位置を確認してください。</p>` : ''}
+    ${fresh && status?.pose ? `<p>実車位置：x=${Number(status.pose.x).toFixed(2)} m / y=${Number(status.pose.y).toFixed(2)} m</p>` : ''}
+    ${fresh && status?.ros ? `<details id="tuning-ros-status" ${rosDetailsOpen?'open':''}><summary>ROS受信状況</summary><p>Domain ${esc(status.ros.domain_id)} · ${esc(status.ros.rmw)}<br>Map: ${esc(status.ros.map_dir)}</p>${Object.entries(status.ros.publishers || {}).map(([topic,count])=>`<p>${esc(topic)}：配信元 ${Number(count)}</p>`).join('')}</details>` : ''}
     <p>白：実車の適用ライン　青：プレビュー　橙：自己位置・走行軌跡</p>
     ${tuning.error?`<p role="alert">${esc(tuning.error)}</p>`:''}
     <p>${esc(tuningApplyIssue())}</p>`;
