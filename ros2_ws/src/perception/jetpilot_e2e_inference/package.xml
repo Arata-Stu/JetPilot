@@ -18,6 +18,7 @@
   <depend>isaac_ros_tensor_list_interfaces</depend>
   <depend>jetpilot_msgs</depend>
   <depend>nav_msgs</depend>
+  <depend>rcl_interfaces</depend>
   <depend>rclcpp</depend>
   <depend>rclcpp_components</depend>
   <depend>std_msgs</depend>

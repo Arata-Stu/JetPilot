@@ -394,7 +394,7 @@ const state = {
 };
 
 const workspaces = [
-  { id: "drive", label: "走らせる", description: "映像を確認し、車両と操作を準備する", pages: [["fpv", "ライブ映像"], ["jetson", "車両・転送"], ["joy-profile", "コントローラー"]] },
+  { id: "drive", label: "走らせる", description: "映像を確認し、車両と操作を準備する", pages: [["runtime", "実機"], ["fpv", "ライブ映像"], ["jetson", "車両・転送"], ["joy-profile", "コントローラー"]] },
   { id: "map", label: "地図を作る・直す", description: "地図を選んで編集・調整、または新しく作成する", pages: [["maps", "地図・実車調整"], ["map-builder", "地図を新規作成"]] },
   { id: "review", label: "走行を振り返る", description: "走行記録を選び、映像や軌跡を解析する", pages: [["rosbags", "走行記録"], ["bag-analysis", "走行解析"]] },
   { id: "model", label: "モデルを育てる", description: "モデルを学習し、評価して車両へ配備する", pages: [["e2e-analysis", "E2Eモデル"], ["object-detection", "物体検出モデル"]] },
@@ -1571,6 +1571,7 @@ function updateLogOnly(chunk = "", append = false) {
 }
 
 function renderPage() {
+  if (state.tab === "runtime") return renderRuntime();
   if (state.tab === "rosbags") return renderRosbags();
   if (state.tab === "bag-analysis") return renderBagAnalysis();
   if (state.tab === "object-detection") return renderObjectDetectionPipeline();

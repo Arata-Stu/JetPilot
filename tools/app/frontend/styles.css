@@ -4306,3 +4306,8 @@ tr:last-child td {
 .simulation-controller-parameters { min-width: 0; margin: 12px 0; padding: 12px; border: 1px solid #303843; border-radius: 8px; }
 .simulation-controller-parameters legend { padding: 0 6px; font-weight: 600; }
 #simulation-pursuit-settings[hidden] { display: none; }
+
+.runtime-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; margin: 16px 0; }
+.runtime-grid label { display: flex; flex-direction: column; gap: 6px; }
+.runtime-panel fieldset { border: 1px solid var(--border, #ccd2db); border-radius: 10px; margin: 18px 0; padding: 16px; }
+.runtime-log { max-height: 420px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }

@@ -77,6 +77,7 @@ private:
                      double target_speed_mps, double steering_command, double curvature,
                      const TrailingResult & trailing);
 
+  rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr parameter_callback_handle_;
   std::string algorithm_;
   std::string base_frame_;
   std::string trajectory_topic_;

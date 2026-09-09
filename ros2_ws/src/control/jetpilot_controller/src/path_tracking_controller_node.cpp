@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <iomanip>
 #include <limits>
+#include "jetpilot_controller/controller_tuning.hpp"
+#include "rcl_interfaces/msg/parameter_descriptor.hpp"
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -67,6 +69,45 @@ PathTrackingControllerNode::PathTrackingControllerNode()
   declare_and_read_parameters();
   create_controller();
   create_interfaces();
+  rcl_interfaces::msg::ParameterDescriptor tuning_descriptor;
+  tuning_descriptor.read_only = true;
+  const auto adjustable = declare_parameter<std::vector<std::string>>("dynamic_tuning_parameters",
+    std::vector<std::string>{"algorithm","min_lookahead_m","max_lookahead_m","lookahead_speed_gain_s","max_steering_angle_rad","max_steering_command","map_lateral_error_gain","mpc_path_error_weight","mpc_heading_error_weight","mpc_steering_weight","throttle_kp","throttle_ki","throttle_kd","throttle_feedforward","brake_kp","max_throttle_command","max_brake_command","max_target_speed_mps","max_steering_rate_per_s"}, tuning_descriptor);
+  // Parameter services and the control timer share the default mutually exclusive group.
+  parameter_callback_handle_ = add_on_set_parameters_callback(
+    [this, adjustable](const std::vector<rclcpp::Parameter> & parameters) {
+      rcl_interfaces::msg::SetParametersResult result;
+      result.successful = false;
+      try {
+        ControllerTuning next{algorithm_, pure_pursuit_params_, map_pursuit_params_,
+          kinematic_mpc_params_, longitudinal_controller_->params(), max_target_speed_mps_,
+          max_steering_rate_per_s_};
+        bool changed = false;
+        for (const auto & parameter : parameters) {
+          const auto & name = parameter.get_name();
+          if (std::find(adjustable.begin(), adjustable.end(), name) == adjustable.end()) continue;
+          changed = true;
+          if (name == "algorithm") next.set_algorithm(parameter.as_string());
+          else next.set(name, parameter.as_double());
+        }
+        if (changed) {
+          next.validate();
+          auto lateral = next.lateral_changed ? next.make_lateral() : nullptr;
+          auto longitudinal = next.longitudinal_changed ?
+            std::make_unique<LongitudinalController>(next.longitudinal) : nullptr;
+          // Commit only after the entire candidate configuration is validated.
+          algorithm_ = next.algorithm;
+          pure_pursuit_params_ = next.pure; map_pursuit_params_ = next.map;
+          kinematic_mpc_params_ = next.mpc;
+          max_target_speed_mps_ = next.max_speed;
+          max_steering_rate_per_s_ = next.steering_rate;
+          if (lateral) lateral_controller_ = std::move(lateral);
+          if (longitudinal) longitudinal_controller_ = std::move(longitudinal);
+        }
+        result.successful = true;
+      } catch (const std::exception & error) { result.reason = error.what(); }
+      return result;
+    });
 
   const auto period = std::chrono::duration<double>(1.0 / control_rate_hz_);
   timer_ = create_wall_timer(std::chrono::duration_cast<std::chrono::nanoseconds>(period),

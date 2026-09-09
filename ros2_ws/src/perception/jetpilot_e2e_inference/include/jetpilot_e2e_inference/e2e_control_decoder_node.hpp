@@ -1,7 +1,9 @@
 #ifndef JETPILOT_E2E_INFERENCE__E2E_CONTROL_DECODER_NODE_HPP_
 #define JETPILOT_E2E_INFERENCE__E2E_CONTROL_DECODER_NODE_HPP_
 
+#include <atomic>
 #include <chrono>
+#include "rcl_interfaces/msg/set_parameters_result.hpp"
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -36,7 +38,10 @@ private:
   double throttle_min_{0.0};
   double throttle_max_{1.0};
   bool fixed_throttle_mode_{false};
-  double fixed_throttle_{0.2};
+  std::atomic<double> fixed_throttle_{0.2};
+  std::atomic<double> steering_scale_{1.0};
+  std::atomic<double> steering_offset_{0.0};
+  rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr parameter_callback_handle_;
   double stale_timeout_sec_{0.2};
   double deadline_ms_{33.3};
   std::uint64_t sequence_{0U};

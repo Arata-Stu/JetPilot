@@ -24,6 +24,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from .bag_analysis import AnalysisRepository, build_analysis_script, rosbag_detail
 from .config import ConsoleConfig
+from .remote_runtime import request as runtime_request
 from .live_tuning import prepare_snapshot, remote_request, map_identity, encoded
 from .vgl_models import input_size, resolve_model, scan_models
 from .e2e_analysis import scan_e2e_models
@@ -117,7 +118,7 @@ TASK_STREAM_CHUNK_BYTES = 256 * 1024
 
 def _frontend_asset_version(frontend_root: Path) -> str:
     mtimes = []
-    for name in ("index.html", "app.js", "lane_geometry.js", "camera_projection.js", "camera_overlay_ui.js", "point_cloud_ui.js", "live_tuning.js", "simulation_compare.js", "network_simulation.js", "styles.css"):
+    for name in ("index.html", "app.js", "lane_geometry.js", "camera_projection.js", "camera_overlay_ui.js", "point_cloud_ui.js", "live_tuning.js", "runtime.js", "simulation_compare.js", "network_simulation.js", "styles.css"):
         path = frontend_root / name
         if path.exists():
             mtimes.append(path.stat().st_mtime_ns)
@@ -386,6 +387,13 @@ class Handler(BaseHTTPRequestHandler):
 
         if self.server.state.joy_only:
             self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
+            return
+
+        if path.startswith("/api/runtime/"):
+            try:
+                self._json(runtime_request(body, path.rsplit("/", 1)[-1]))
+            except (ValueError, TypeError, OSError) as exc:
+                self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
             return
 
         if path.startswith("/api/tuning/"):
@@ -1016,6 +1024,7 @@ class Handler(BaseHTTPRequestHandler):
             text = text.replace('src="/camera_projection.js"', f'src="/camera_projection.js?v={version}"')
             text = text.replace('src="/camera_overlay_ui.js"', f'src="/camera_overlay_ui.js?v={version}"')
             text = text.replace('src="/point_cloud_ui.js"', f'src="/point_cloud_ui.js?v={version}"')
+            text = text.replace('src="/runtime.js"', f'src="/runtime.js?v={version}"')
             text = text.replace('src="/live_tuning.js"', f'src="/live_tuning.js?v={version}"')
             text = text.replace('src="/app.js"', f'src="/app.js?v={version}"')
             payload = text.encode("utf-8")

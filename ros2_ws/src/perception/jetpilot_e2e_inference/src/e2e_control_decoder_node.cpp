@@ -17,6 +17,7 @@
 #include "diagnostic_msgs/msg/key_value.hpp"
 #include "isaac_ros_nitros/types/cuda_stream_pool.hpp"
 #include "rclcpp_components/register_node_macro.hpp"
+#include "rcl_interfaces/msg/parameter_descriptor.hpp"
 #include "std_msgs/msg/header.hpp"
 
 namespace jetpilot_e2e_inference
@@ -53,9 +54,49 @@ E2EControlDecoderNode::E2EControlDecoderNode(const rclcpp::NodeOptions & options
   throttle_max_ = declare_parameter<double>("throttle_max", 1.0);
   fixed_throttle_mode_ = declare_parameter<bool>("fixed_throttle_mode", false);
   fixed_throttle_ = declare_parameter<double>("fixed_throttle", 0.2);
-  if (!std::isfinite(fixed_throttle_) || fixed_throttle_ < 0.0 || fixed_throttle_ > 1.0) {
+  if (!std::isfinite(fixed_throttle_.load()) || fixed_throttle_ < 0.0 || fixed_throttle_ > 1.0) {
     throw std::invalid_argument("fixed_throttle must be finite and within [0, 1]");
   }
+  steering_scale_ = declare_parameter<double>("steering_scale", 1.0);
+  steering_offset_ = declare_parameter<double>("steering_offset", 0.0);
+  if (!std::isfinite(steering_scale_.load()) || steering_scale_ < 0.0 || steering_scale_ > 3.0 ||
+      !std::isfinite(steering_offset_.load()) || steering_offset_ < -1.0 || steering_offset_ > 1.0) {
+    throw std::invalid_argument("steering scale/offset is outside its allowed range");
+  }
+  rcl_interfaces::msg::ParameterDescriptor tuning_descriptor;
+  tuning_descriptor.read_only = true;
+  declare_parameter<std::vector<std::string>>("dynamic_tuning_parameters",
+    std::vector<std::string>{"fixed_throttle", "steering_scale", "steering_offset"}, tuning_descriptor);
+
+  parameter_callback_handle_ = add_on_set_parameters_callback(
+    [this](const std::vector<rclcpp::Parameter> & parameters) {
+      rcl_interfaces::msg::SetParametersResult result;
+      result.successful = true;
+      for (const auto & parameter : parameters) {
+        const auto & name = parameter.get_name();
+        if (name != "fixed_throttle" && name != "steering_scale" && name != "steering_offset") continue;
+        if (parameter.get_type() != rclcpp::ParameterType::PARAMETER_DOUBLE) {
+          result.successful = false;
+          result.reason = name + " must be a double";
+          return result;
+        }
+        const auto value = parameter.as_double();
+        const auto minimum = name == "steering_offset" ? -1.0 : 0.0;
+        const auto maximum = name == "steering_scale" ? 3.0 : 1.0;
+        if (!std::isfinite(value) || value < minimum || value > maximum) {
+          result.successful = false;
+          result.reason = name + " is outside its allowed range";
+          return result;
+        }
+      }
+      for (const auto & parameter : parameters) {
+        const auto & name = parameter.get_name();
+        if (name == "fixed_throttle") fixed_throttle_.store(parameter.as_double());
+        if (name == "steering_scale") steering_scale_.store(parameter.as_double());
+        if (name == "steering_offset") steering_offset_.store(parameter.as_double());
+      }
+      return result;
+    });
   stale_timeout_sec_ = declare_parameter<double>("stale_timeout_sec", 0.2);
   deadline_ms_ = declare_parameter<double>("deadline_ms", 33.3);
   const auto diagnostics_topic =
@@ -173,9 +214,9 @@ void E2EControlDecoderNode::on_tensor(TensorList::ConstSharedPtr message)
       command.header.frame_id = "base_link";
     }
     command.steering = std::clamp(
-      static_cast<double>(steering), steering_min_, steering_max_);
+      static_cast<double>(steering) * steering_scale_.load() + steering_offset_.load(), steering_min_, steering_max_);
     command.throttle = std::clamp(
-      fixed_throttle_mode_ ? fixed_throttle_ : static_cast<double>(throttle),
+      fixed_throttle_mode_ ? fixed_throttle_.load() : static_cast<double>(throttle),
       throttle_min_, throttle_max_);
     command.brake = 0.0;
     command.reverse = 0.0;

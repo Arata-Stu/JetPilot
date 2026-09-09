@@ -18,10 +18,11 @@ TeleopCmdNode::TeleopCmdNode() : Node("teleop_cmd_node")
   deadman_button_ = declare_parameter<int>("deadman_button", 3);
   fixed_throttle_mode_ = declare_parameter<bool>("fixed_throttle_mode", false);
   fixed_throttle_ = declare_numeric_parameter("fixed_throttle", 0.2);
-  if (!std::isfinite(fixed_throttle_) || fixed_throttle_ < 0.0 || fixed_throttle_ > 1.0) {
+  if (!std::isfinite(fixed_throttle_.load()) || fixed_throttle_ < 0.0 || fixed_throttle_ > 1.0) {
     throw std::invalid_argument("fixed_throttle must be finite and within [0, 1]");
   }
   steering_scale_ = declare_numeric_parameter("steering_scale", 1.0);
+  steering_offset_ = declare_numeric_parameter("steering_offset", 0.0);
   throttle_scale_step_ = std::max(0.0, declare_numeric_parameter("throttle_scale_step", 0.05));
   throttle_scale_min_ = std::clamp(
     declare_numeric_parameter("throttle_scale_min", 0.0), 0.0, 1.0);
@@ -41,6 +42,15 @@ TeleopCmdNode::TeleopCmdNode() : Node("teleop_cmd_node")
   reverse_trigger_min_ = declare_numeric_parameter("reverse_trigger_min", trigger_min_);
   reverse_trigger_max_ = declare_numeric_parameter("reverse_trigger_max", trigger_max_);
   reverse_trigger_inverted_ = declare_parameter<bool>("reverse_trigger_inverted", false);
+
+  if (!std::isfinite(steering_scale_.load()) || steering_scale_ < 0.0 || steering_scale_ > 3.0 ||
+      !std::isfinite(steering_offset_.load()) || steering_offset_ < -1.0 || steering_offset_ > 1.0) {
+    throw std::invalid_argument("steering scale/offset is outside its allowed range");
+  }
+  rcl_interfaces::msg::ParameterDescriptor tuning_descriptor;
+  tuning_descriptor.read_only = true;
+  declare_parameter<std::vector<std::string>>("dynamic_tuning_parameters",
+    std::vector<std::string>{"throttle_scale", "fixed_throttle", "steering_scale", "steering_offset"}, tuning_descriptor);
 
   parameter_callback_handle_ = add_on_set_parameters_callback(
     [this](const std::vector<rclcpp::Parameter> & parameters) {
@@ -153,25 +163,31 @@ rcl_interfaces::msg::SetParametersResult TeleopCmdNode::handle_parameters(
   result.successful = true;
   for (const auto & parameter : parameters)
   {
-    if (parameter.get_name() != "throttle_scale")
-    {
-      continue;
-    }
-    if (parameter.get_type() != rclcpp::ParameterType::PARAMETER_DOUBLE)
-    {
+    const auto & name = parameter.get_name();
+    if (name != "throttle_scale" && name != "fixed_throttle" &&
+        name != "steering_scale" && name != "steering_offset") continue;
+    if (parameter.get_type() != rclcpp::ParameterType::PARAMETER_DOUBLE) {
       result.successful = false;
-      result.reason = "throttle_scale must be a double";
+      result.reason = name + " must be a double";
       return result;
     }
-    const double value = parameter.as_double();
-    if (!std::isfinite(value) || value < throttle_scale_min_ || value > throttle_scale_max_)
-    {
+    const auto value = parameter.as_double();
+    const auto minimum = name == "steering_offset" ? -1.0 :
+      name == "throttle_scale" ? throttle_scale_min_ : 0.0;
+    const auto maximum = name == "steering_scale" ? 3.0 :
+      name == "throttle_scale" ? throttle_scale_max_ : 1.0;
+    if (!std::isfinite(value) || value < minimum || value > maximum) {
       result.successful = false;
-      result.reason = "throttle_scale must be within configured min/max";
+      result.reason = name + " is outside its allowed range";
       return result;
     }
-    throttle_scale_.store(value);
-    RCLCPP_INFO(get_logger(), "Throttle scale changed to %.3f", value);
+  }
+  for (const auto & parameter : parameters) {
+    const auto & name = parameter.get_name();
+    if (name == "throttle_scale") throttle_scale_.store(parameter.as_double());
+    if (name == "fixed_throttle") fixed_throttle_.store(parameter.as_double());
+    if (name == "steering_scale") steering_scale_.store(parameter.as_double());
+    if (name == "steering_offset") steering_offset_.store(parameter.as_double());
   }
   return result;
 }
@@ -188,7 +204,7 @@ void TeleopCmdNode::handle_joy(const sensor_msgs::msg::Joy & joy)
   if (deadman_pressed)
   {
     const double steering = has_axis(joy, steering_axis_)
-                              ? apply_deadzone(joy.axes[steering_axis_]) * steering_scale_
+                              ? apply_deadzone(joy.axes[steering_axis_]) * steering_scale_.load() + steering_offset_.load()
                               : 0.0;
     cmd.steering = static_cast<float>(std::clamp(steering, -1.0, 1.0));
     cmd.throttle = static_cast<float>(
@@ -208,7 +224,7 @@ void TeleopCmdNode::handle_joy(const sensor_msgs::msg::Joy & joy)
       if (brake_trigger > deadzone_) {
         cmd.brake = std::max(cmd.brake, static_cast<float>(brake_trigger));
       }
-      cmd.throttle = cmd.brake > 0.0F ? 0.0F : static_cast<float>(fixed_throttle_);
+      cmd.throttle = cmd.brake > 0.0F ? 0.0F : static_cast<float>(fixed_throttle_.load());
       cmd.reverse = 0.0F;
     }
   }

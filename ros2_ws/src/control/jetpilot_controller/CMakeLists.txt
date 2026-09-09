@@ -41,6 +41,10 @@ install(FILES README.md
 )
 
 if(BUILD_TESTING)
+  add_executable(test_controller_tuning test/test_controller_tuning_standalone.cpp)
+  target_compile_features(test_controller_tuning PRIVATE cxx_std_17)
+  target_link_libraries(test_controller_tuning ${PROJECT_NAME}_core)
+  add_test(NAME test_controller_tuning COMMAND test_controller_tuning)
   add_executable(test_closed_laps test/test_closed_laps.cpp)
   target_compile_features(test_closed_laps PRIVATE cxx_std_17)
   target_link_libraries(test_closed_laps ${PROJECT_NAME}_core)
