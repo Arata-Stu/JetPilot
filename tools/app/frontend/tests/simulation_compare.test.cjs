@@ -54,7 +54,7 @@ test('browser equations match the actual C++ controllers',t=>{
 });
 
 function ui(){
- class Worker {constructor(){this.terminated=false;Worker.instances.push(this);}postMessage(x){this.input=x;}terminate(){this.terminated=true;}}
+ class Worker {constructor(){this.terminated=false;this.messages=[];Worker.instances.push(this);}postMessage(x){this.input=x;this.messages.push(x);}terminate(){this.terminated=true;}}
  Worker.instances=[];
  const ctx=vm.createContext({Worker,window:{},localStorage:{getItem:()=>null},document:{querySelectorAll:()=>[],getElementById:()=>null},console,cancelAnimationFrame:()=>{}});
  const source=fs.readFileSync(path.join(__dirname,'../app.js'),'utf8');vm.runInContext(source.slice(0,source.indexOf('\nwindow.')),ctx);
@@ -95,4 +95,50 @@ test('changing conditions clears completed comparison and reset cancels a runnin
  assert.equal(vm.runInContext('simulationComparison.results',ctx),null);
  ctx.startSimulationComparison();ctx.resetSimulationStateFromPath({});
  assert.ok(Worker.instances.at(-1).terminated);
+});
+
+test('live sessions start at zero, advance all cars at the same clock and match batch results',()=>{
+ const input={path:straight,closed:false,duration:.4,offset:.1,controller:'all'};
+ const live=api.createSession(input);
+ assert.ok(live.advance(0).frames.every(f=>f.time===0 && f.trace.length===1));
+ const tick=live.advance(5);
+ assert.ok(tick.frames.every(f=>Math.abs(f.time-.1)<1e-12 && f.trace.length===6));
+ let result=tick;
+ while(!result.done) result=live.advance();
+ assert.deepEqual(result.frames,api.run(input));
+ for(const controller of ['pure_pursuit','map_pursuit','kinematic_mpc']) {
+  const one=api.createSession({...input,controller}).advance(3);
+  assert.equal(one.frames.length,1);assert.equal(one.frames[0].id,controller);
+  assert.ok(one.frames[0].time>0);
+ }
+});
+
+test('Run uses the selected controller; Pause preserves the worker and Step resumes that state',()=>{
+ const {ctx,Worker}=ui();ctx.requestAnimationFrame=()=>1;
+ vm.runInContext("state.simulation.controller='kinematic_mpc'",ctx);
+ ctx.toggleSimulationPlayback();
+ const w=Worker.instances[0];assert.equal(w.input.type,'start');assert.equal(w.input.input.controller,'kinematic_mpc');
+ const session=api.createSession(w.input.input);
+ w.onmessage({data:session.advance(0)});
+ ctx.simulationPlaybackTick(100);ctx.simulationPlaybackTick(200);
+ assert.equal(w.input.type,'step');
+ w.onmessage({data:session.advance(w.input.count)});
+ const time=vm.runInContext('state.simulation.time',ctx);assert.ok(time>0);
+ ctx.toggleSimulationPlayback();assert.equal(vm.runInContext('state.simulation.playing',ctx),false);assert.equal(w.terminated,false);
+ const sent=w.messages.length;ctx.simulationPlaybackTick(300);assert.equal(w.messages.length,sent);
+ ctx.stepSimulationOnce();assert.equal(w.input.count,5);
+ w.onmessage({data:session.advance(5)});
+ assert.ok(Math.abs(vm.runInContext('state.simulation.time',ctx)-time-.1)<1e-12);
+ ctx.setSimulationController('map_pursuit');assert.ok(w.terminated);
+ ctx.toggleSimulationPlayback();assert.equal(Worker.instances.at(-1).input.input.controller,'map_pursuit');
+});
+
+test('initial Step waits for initialization then advances without starting playback',()=>{
+ const {ctx,Worker}=ui();ctx.stepSimulationOnce();const w=Worker.instances[0];
+ const session=api.createSession(w.input.input);
+ assert.equal(w.messages.length,1);
+ w.onmessage({data:session.advance(0)});assert.equal(w.input.type,'step');assert.equal(w.input.count,5);
+ w.onmessage({data:session.advance(5)});
+ assert.equal(vm.runInContext('state.simulation.playing',ctx),false);
+ assert.ok(Math.abs(vm.runInContext('state.simulation.time',ctx)-.1)<1e-12);
 });

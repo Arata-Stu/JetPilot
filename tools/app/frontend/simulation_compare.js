@@ -80,7 +80,7 @@
     }
     return clamp(steering,-s.maxSteeringRad,s.maxSteeringRad);
   }
-  function run(input, progress=()=>{}) {
+  function createSession(input) {
     const s={...defaults,...input.settings}, path=input.path;
     const duration=Number(input.duration ?? 20), offset=Number(input.offset ?? 0), yawOffset=Number(input.yawOffset ?? 0);
     if (!Array.isArray(path) || path.length<2 || path.length>20000 ||
@@ -99,10 +99,12 @@
     const heading=Math.atan2(next.y-path[0].y,next.x-path[0].x);
     const start={x:path[0].x-Math.sin(heading)*offset,y:path[0].y+Math.cos(heading)*offset,yaw:heading+yawOffset,speed:0};
     const steps=Math.ceil(duration/s.dtS);
-    return methods.map((method, methodIndex)=>{
-      const car={...start}, trace=[{x:car.x,y:car.y}], initial=project(path,car.x,car.y,input.closed);
+    function* simulate(method) {
+      const car={...start,targetSpeed:input.profile?path[0].speed_mps:s.targetSpeedMps}, trace=[{x:car.x,y:car.y}], initial=project(path,car.x,car.y,input.closed);
       let squaredError=0, maxError=Math.sqrt(initial.d2), time=0, distance=0, steeringChange=0, previous=0, samples=0;
-      let status='時間終了';
+      let status='実行中';
+      const snapshot=()=>({...method,trace,time,distance,status,samples,maxError,rmsError:time?Math.sqrt(squaredError/time):null,steeringRate:time?steeringChange/time:null,car:{...car,steering:previous,error:Math.sqrt(project(path,car.x,car.y,input.closed).d2)}});
+      yield snapshot();
       for(let i=0;i<steps;i++) {
         const dt=Math.min(s.dtS,duration-time);
         const p=project(path,car.x,car.y,input.closed);
@@ -116,6 +118,7 @@
           for(let j=0;j<path.length;j++) {const q=(path[j].x-car.x)**2+(path[j].y-car.y)**2;if(q<d){d=q;nearest=j;}}
           target=path[nearest].speed_mps;
         }
+        car.targetSpeed=target;
         const error=target-car.speed;
         const accel=error>=0?Math.min(s.maxAccelMps2,error*1.8):Math.max(-s.maxDecelMps2,error*2.4);
         const previousSpeed=car.speed;
@@ -128,19 +131,46 @@
         steeringChange+=Math.abs(delta-previous);previous=delta;
         time+=dt;distance+=average*dt;samples++;
         trace.push({x:car.x,y:car.y});
-        if(i%20===0) progress((methodIndex+i/steps)/methods.length);
+        yield snapshot();
       }
-      return {...method,trace,time,distance,status,samples,maxError,rmsError:time?squaredError**.5/Math.sqrt(time):null,
-        steeringRate:time?steeringChange/time:null};
-    });
+      if(status==='実行中') status='時間終了';
+      return snapshot();
+    }
+    const selected=input.controller && input.controller!=='all' ? methods.filter(m=>m.id===input.controller) : methods;
+    if(!selected.length) throw new Error('未対応のcontrollerです。');
+    const runners=selected.map(method=>{const generator=simulate(method);return {generator,last:generator.next()};});
+    return {advance(count=1) {
+      for(let i=0;i<count;i++) for(const r of runners) if(!r.last.done) r.last=r.generator.next();
+      return {frames:runners.map(r=>r.last.value),done:runners.every(r=>r.last.done)};
+    }};
   }
-  const api={defaults,methods,project,control,run};
+  function run(input,progress=()=>{}) {
+    const session=createSession(input);
+    let output=session.advance(0);
+    while(!output.done) {
+      output=session.advance(20);
+      progress(Math.min(1,Math.max(...output.frames.map(r=>r.time))/(input.duration ?? 20)));
+    }
+    return output.frames;
+  }
+
+  const api={defaults,methods,project,control,run,createSession};
   if(typeof module!=='undefined' && module.exports) module.exports=api;
   else root.SimulationCompare=api;
   if(typeof WorkerGlobalScope!=='undefined' && root instanceof WorkerGlobalScope) {
+    let session=null;
     root.onmessage=event=>{
-      try {const results=run(event.data,progress=>root.postMessage({progress}));root.postMessage({results});}
-      catch(error) {root.postMessage({error:error.message});}
+      try {
+        if(event.data.type==='start') {
+          session=createSession(event.data.input);
+          root.postMessage({...session.advance(0),live:true});
+        } else if(event.data.type==='step') {
+          if(!session) throw new Error('Simulationが開始されていません。');
+          root.postMessage({...session.advance(Math.max(1,Math.min(10,event.data.count || 1))),live:true});
+        } else {
+          const results=run(event.data,progress=>root.postMessage({progress}));root.postMessage({results});
+        }
+      } catch(error) {root.postMessage({error:error.message});}
     };
   }
 })(typeof self!=='undefined'?self:globalThis);

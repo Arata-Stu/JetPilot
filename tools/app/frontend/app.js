@@ -221,6 +221,7 @@ const state = {
   simulation: {
     source: "raceline",
     centerlineDirection: "forward",
+    controller: "pure_pursuit",
     playing: false,
     mapPath: "",
     rafId: 0,
@@ -6663,6 +6664,93 @@ function hdRasterGenerationPayload() {
   };
 }
 
+const simulationLive = { worker: null, frames: null, pending: false, done: false, stepRequested: 0 };
+
+function stopSimulationLive() {
+  stopSimulationLoop();
+  simulationLive.worker?.terminate();
+  Object.assign(simulationLive, { worker: null, frames: null, pending: false, done: false, stepRequested: 0 });
+}
+
+function setSimulationController(value) {
+  if (!["pure_pursuit", "map_pursuit", "kinematic_mpc", "all"].includes(value)) return;
+  state.simulation.controller = value;
+  resetSimulation();
+}
+
+function startSimulationLiveComparison() {
+  setSimulationController("all");
+  const select = $("simulation-controller");
+  if (select) select.value = "all";
+  toggleSimulationPlayback();
+}
+
+function ensureSimulationLive() {
+  if (simulationLive.worker && !simulationLive.done) return true;
+  clearSimulationComparison();
+  const input = { ...simulationComparisonInput(), controller: state.simulation.controller || "pure_pursuit" };
+  if (input.path.length < 2) return false;
+  if (!Array.from(document.querySelectorAll('.simulation-controls input')).filter(el => !el.disabled).every(el =>
+    el.value.trim() !== '' && Number.isFinite(Number(el.value)) && !el.validity.badInput && !el.validity.customError &&
+    (el.min === '' || Number(el.value) >= Number(el.min)) && (el.max === '' || Number(el.value) <= Number(el.max)))) {
+    simulationComparison.error = "入力値を確認してください。";
+    updateSimulationChrome();
+    return false;
+  }
+  try {
+    const worker = new Worker('/simulation_compare.js');
+    simulationLive.worker = worker;
+    simulationLive.pending = true;
+    simulationComparison.signature = JSON.stringify(simulationComparisonInput());
+    worker.onmessage = ({data}) => {
+      if (simulationLive.worker !== worker) return;
+      if (simulationComparison.signature !== JSON.stringify(simulationComparisonInput())) { cancelSimulationComparison(); return; }
+      simulationLive.pending = false;
+      if (data.error) {
+        stopSimulationLive();
+        simulationComparison.error = data.error;
+      } else {
+        simulationLive.frames = data.frames;
+        simulationLive.done = Boolean(data.done);
+        simulationComparison.results = data.frames;
+        const frame = data.frames[0];
+        Object.assign(state.simulation, { x: frame.car.x, y: frame.car.y, yaw: frame.car.yaw,
+          speed: frame.car.speed, profileTargetSpeedMps: frame.car.targetSpeed, time: Math.max(...data.frames.map(r => r.time)), distance: frame.distance,
+          steeringRad: frame.car.steering, crossTrackErrorM: frame.car.error || 0, maxCrossTrackErrorM: frame.maxError,
+          targetPoint: null });
+        if (data.done) stopSimulationLoop();
+        if (simulationLive.stepRequested && !data.done) {
+          const count = simulationLive.stepRequested;
+          simulationLive.stepRequested = 0;
+          requestSimulationLiveStep(count);
+        }
+      }
+      drawSimulationPreview();
+      updateSimulationChrome();
+    };
+    worker.onerror = () => {
+      if (simulationLive.worker !== worker) return;
+      stopSimulationLive();
+      simulationComparison.error = "Simulationの計算に失敗しました。再読み込みしてください。";
+      updateSimulationChrome();
+    };
+    worker.postMessage({type:"start", input});
+    return true;
+  } catch (error) {
+    stopSimulationLive();
+    simulationComparison.error = error.message;
+    updateSimulationChrome();
+    return false;
+  }
+}
+
+function requestSimulationLiveStep(count) {
+  if (!simulationLive.worker || simulationLive.done) return;
+  if (simulationLive.pending) { simulationLive.stepRequested = count; return; }
+  simulationLive.pending = true;
+  simulationLive.worker.postMessage({type:"step", count});
+}
+
 const simulationComparison = { worker: null, results: null, signature: "", progress: 0, error: "", duration: 20, offset: 0, yawDegrees: 0 };
 
 function simulationComparisonInput() {
@@ -6673,6 +6761,7 @@ function simulationComparisonInput() {
 }
 
 function clearSimulationComparison() {
+  stopSimulationLive();
   simulationComparison.worker?.terminate();
   Object.assign(simulationComparison, { worker: null, results: null, signature: "", progress: 0, error: "" });
 }
@@ -6749,12 +6838,12 @@ function renderSimulationComparisonResults() {
   if (c.signature && c.signature !== JSON.stringify(simulationComparisonInput())) clearSimulationComparison();
   if (c.error) return `<p class="warn" role="alert">${esc(c.error)}</p>`;
   if (c.worker) return `<p role="status">3方式を計算中… ${Math.round(c.progress * 100)}%</p>`;
-  if (!c.results) return `<p class="field-hint">「3方式を比較」で同じ初期位置・停止状態から実行します。</p>`;
+  if (!c.results) return `<p class="field-hint">Controllerを選んでRun。Pauseで一時停止、Stepで0.1秒進みます。3台は同じ時刻で比較します。</p>`;
   const number = value => value === null ? "—" : Number(value).toFixed(3);
   return `<div class="simulation-comparison-table"><table>
-    <caption>${c.duration}秒・初期横ずれ ${c.offset} m・初期向き ${c.yawDegrees}° ／ 共通の速度・車両条件</caption>
+    <caption>${state.simulation.time.toFixed(2)} / ${c.duration}秒・初期横ずれ ${c.offset} m・初期向き ${c.yawDegrees}° ／ 共通の速度・車両条件</caption>
     <thead><tr><th>方式</th><th>追従誤差 RMS (m)</th><th>最大誤差 (m)</th><th>操舵変化 (rad/s)</th><th>走行距離 (m)</th><th>経過 (s)</th><th>結果</th></tr></thead>
-    <tbody>${c.results.map(r => `<tr><th><span style="color:${r.color}">●</span> ${esc(r.name)}</th><td>${number(r.rmsError)}</td><td>${number(r.maxError)}</td><td>${number(r.steeringRate)}</td><td>${r.distance.toFixed(2)}</td><td>${r.time.toFixed(2)}</td><td>${esc(r.status)}</td></tr>`).join("")}</tbody>
+    <tbody>${c.results.map(r => `<tr><th><span style="color:${r.color}">●</span> ${esc(r.name)}</th><td>${number(r.rmsError)}</td><td>${number(r.maxError)}</td><td>${number(r.steeringRate)}</td><td>${r.distance.toFixed(2)}</td><td>${r.time.toFixed(2)}</td><td>${esc(r.status === "実行中" && !state.simulation.playing ? "一時停止" : r.status)}</td></tr>`).join("")}</tbody>
   </table></div><p class="field-hint">誤差は車両位置から経路の線分までの距離です。操舵変化は単位時間あたりの変化量。途中終了した方式は経過時間と結果も確認してください。</p>`;
 }
 
@@ -6773,7 +6862,7 @@ function renderSimulationPanel(detail) {
   const path = simulationPathPoints(detail);
   const customLine = selectedCustomLine(detail);
   const ready = path.length >= 2;
-  const status = !ready ? "Need path" : sim.playing ? "Running" : sim.time > 0 ? "Paused" : "Ready";
+  const status = !ready ? "Need path" : simulationLive.done ? "Finished" : sim.playing ? "Running" : sim.time > 0 ? "Paused" : "Ready";
   const sourceOptions = [
     ["raceline", "Raceline"],
     ["centerline", "Centerline"],
@@ -6787,10 +6876,10 @@ function renderSimulationPanel(detail) {
           <span id="simulation-status" class="${ready ? (sim.playing ? "running" : "ok") : "warn"}">${esc(status)}</span>
         </div>
         <div class="simulation-actions">
-          <button id="simulation-compare-button" onclick="startSimulationComparison()" ${ready && !simulationComparison.worker ? "" : "disabled"}>3方式を比較</button>
+          <button id="simulation-compare-button" onclick="startSimulationLiveComparison()" ${ready && !simulationComparison.worker ? "" : "disabled"}>3台を同時にRun</button>
           <button id="simulation-compare-cancel" onclick="cancelSimulationComparison()" ${simulationComparison.worker ? "" : "hidden"}>比較を中止</button>
-          <button id="simulation-run-button" class="primary" onclick="toggleSimulationPlayback()" ${ready ? "" : "disabled"}>${sim.playing ? "Pause" : "PPを再生"}</button>
-          <button onclick="stepSimulationOnce()" ${ready ? "" : "disabled"}>Step</button>
+          <button id="simulation-run-button" class="primary" onclick="toggleSimulationPlayback()" ${ready ? "" : "disabled"}>${sim.playing ? "Pause" : "Run"}</button>
+          <button id="simulation-step-button" onclick="stepSimulationOnce()" ${ready && !sim.playing ? "" : "disabled"}>Step</button>
           <button onclick="resetSimulation()">Reset</button>
         </div>
       </div>
@@ -6801,7 +6890,12 @@ function renderSimulationPanel(detail) {
         </div>
         <aside class="simulation-controls">
           <div class="simulation-control-grid">
-            <div class="field"><label for="simulation-compare-duration">比較時間 (s)</label><input id="simulation-compare-duration" type="number" min="1" max="120" step="1" value="${simulationComparison.duration}" oninput="updateSimulationComparisonOption('duration', this)" /></div>
+            <div class="field full"><label for="simulation-controller">Controller</label>
+              <select id="simulation-controller" onchange="setSimulationController(this.value)">
+                ${[["pure_pursuit","Pure Pursuit"],["map_pursuit","Map Pursuit"],["kinematic_mpc","Kinematic MPC"],["all","3方式を同時に再生"]].map(([id,name])=>`<option value="${id}" ${(sim.controller || "pure_pursuit") === id ? "selected" : ""}>${name}</option>`).join("")}
+              </select>
+            </div>
+            <div class="field"><label for="simulation-compare-duration">実行時間 (s)</label><input id="simulation-compare-duration" type="number" min="1" max="120" step="1" value="${simulationComparison.duration}" oninput="updateSimulationComparisonOption('duration', this)" /></div>
             <div class="field"><label for="simulation-compare-offset">初期横ずれ (m)</label><input id="simulation-compare-offset" type="number" min="-5" max="5" step="0.05" value="${simulationComparison.offset}" oninput="updateSimulationComparisonOption('offset', this)" /></div>
             <div class="field"><label for="simulation-compare-yaw">初期向きのずれ (°)</label><input id="simulation-compare-yaw" type="number" min="-180" max="180" step="1" value="${simulationComparison.yawDegrees}" oninput="updateSimulationComparisonOption('yawDegrees', this)" /></div>
             <div class="field full"><details><summary>方式別の条件</summary><p class="field-hint">Map Pursuit：横誤差補正 0.4、1.5–3.0 m/sで操舵を最大25%低減。MPC：12ステップ × 0.05秒、操舵15候補、予測最低速度0.2 m/s。重みは経路4・向き0.8・操舵0.15・終端2。実車コードの標準値です。</p></details></div>
@@ -6835,7 +6929,7 @@ function renderSimulationPanel(detail) {
             ${simulationNumberInput("maxDecelMps2", "Max decel (m/s^2)", 0.01, 0.1)}
           </div>
           <div class="simulation-metrics" id="simulation-metrics">
-            <span class="field-hint">PP単独再生の状態</span>${renderSimulationMetrics()}
+            <span class="field-hint">選択方式の状態（3台時はPure Pursuit）</span>${renderSimulationMetrics()}
           </div>
         </aside>
       </div>
@@ -13607,41 +13701,35 @@ function stopSimulationLoop() {
 }
 
 function toggleSimulationPlayback() {
-  cancelSimulationComparison();
-  const path = simulationPathPoints();
-  if (path.length < 2) return;
-  state.simulation.playing = !state.simulation.playing;
-  state.simulation.lastTickMs = 0;
-  updateSimulationChrome();
   if (state.simulation.playing) {
-    state.simulation.rafId = requestAnimationFrame(simulationPlaybackTick);
-  } else {
     stopSimulationLoop();
     updateSimulationChrome();
+    return;
   }
+  if (!ensureSimulationLive()) return;
+  state.simulation.playing = true;
+  state.simulation.lastTickMs = 0;
+  state.simulation.rafId = requestAnimationFrame(simulationPlaybackTick);
+  updateSimulationChrome();
 }
 
 function simulationPlaybackTick(timestampMs) {
   const sim = state.simulation;
   if (!sim.playing) return;
   if (!sim.lastTickMs) sim.lastTickMs = timestampMs;
-  const elapsedS = Math.min(0.08, Math.max(0, (timestampMs - sim.lastTickMs) / 1000));
-  sim.lastTickMs = timestampMs;
-  const dt = Math.max(0.005, Math.min(sim.settings.dtS, elapsedS || sim.settings.dtS));
-  const steps = Math.max(1, Math.ceil(elapsedS / dt));
-  const stepDt = elapsedS > 0 ? elapsedS / steps : dt;
-  for (let index = 0; index < steps; index += 1) stepSimulation(stepDt);
-  drawSimulationPreview();
-  updateSimulationMetricsDom();
+  const dt = sim.settings.dtS;
+  const elapsed = (timestampMs - sim.lastTickMs) / 1000;
+  if (elapsed >= dt && !simulationLive.pending) {
+    requestSimulationLiveStep(Math.max(1, Math.min(4, Math.floor(elapsed / dt))));
+    sim.lastTickMs = timestampMs;
+  }
   sim.rafId = requestAnimationFrame(simulationPlaybackTick);
 }
 
 function stepSimulationOnce() {
-  cancelSimulationComparison();
   if (state.simulation.playing) return;
-  stepSimulation(0.1);
-  drawSimulationPreview();
-  updateSimulationChrome();
+  if (!ensureSimulationLive()) return;
+  requestSimulationLiveStep(Math.max(1, Math.round(0.1 / state.simulation.settings.dtS)));
 }
 
 function updateSimulationSetting(key, input) {
@@ -13680,115 +13768,6 @@ function setSimulationCenterlineDirection(direction) {
   resetSimulation();
 }
 
-function stepSimulation(dt) {
-  const detail = state.selectedMapDetail;
-  const path = simulationPathPoints(detail);
-  const sim = state.simulation;
-  const settings = sim.settings;
-  if (path.length < 2 || !Number.isFinite(dt) || dt <= 0) return;
-
-  const tracking = computePurePursuitTarget(path, {
-    x: sim.x,
-    y: sim.y,
-    yaw: sim.yaw,
-    speed: sim.speed,
-    settings,
-  });
-  if (!tracking) return;
-
-  const profileSpeed = Number(path[tracking.nearestIndex]?.speed_mps);
-  const targetSpeedMps = state.simulation.source === "custom" && Number.isFinite(profileSpeed)
-    ? Math.max(0, profileSpeed)
-    : settings.targetSpeedMps;
-  sim.profileTargetSpeedMps = targetSpeedMps;
-  const speedError = targetSpeedMps - sim.speed;
-  const accelCommand = speedError >= 0
-    ? Math.min(settings.maxAccelMps2, speedError * 1.8)
-    : Math.max(-settings.maxDecelMps2, speedError * 2.4);
-  const drag = settings.dragPerS * sim.speed;
-  const accel = accelCommand - drag;
-  const previousSpeed = sim.speed;
-  sim.speed = Math.max(0, sim.speed + accel * dt);
-  sim.steeringRad = tracking.steeringRad;
-  sim.throttle = Math.max(0, accelCommand / Math.max(1e-6, settings.maxAccelMps2));
-  sim.brake = Math.max(0, -accelCommand / Math.max(1e-6, settings.maxDecelMps2));
-
-  const averageSpeed = (previousSpeed + sim.speed) * 0.5;
-  sim.x += averageSpeed * Math.cos(sim.yaw) * dt;
-  sim.y += averageSpeed * Math.sin(sim.yaw) * dt;
-  sim.yaw = normalizeAngle(sim.yaw + (averageSpeed / Math.max(1e-6, settings.wheelbaseM)) * Math.tan(sim.steeringRad) * dt);
-  sim.time += dt;
-  sim.distance += Math.max(0, averageSpeed * dt);
-  sim.nearestIndex = tracking.nearestIndex;
-  sim.targetIndex = tracking.targetIndex;
-  sim.targetPoint = tracking.targetPoint;
-  sim.crossTrackErrorM = tracking.crossTrackErrorM;
-  sim.maxCrossTrackErrorM = Math.max(sim.maxCrossTrackErrorM, tracking.crossTrackErrorM);
-  if (tracking.progress < sim.lastProgress - 0.55 && simulationPathClosed(path)) sim.lapCount += 1;
-  sim.lastProgress = tracking.progress;
-
-  const previous = sim.trajectory[sim.trajectory.length - 1];
-  if (!previous || Math.hypot(previous.x - sim.x, previous.y - sim.y) > 0.03) {
-    sim.trajectory.push({ x: sim.x, y: sim.y });
-    if (sim.trajectory.length > 3000) sim.trajectory.shift();
-  }
-}
-
-function computePurePursuitTarget(path, input) {
-  const { x, y, yaw, speed, settings } = input;
-  let nearestIndex = 0;
-  let nearestDistance = Infinity;
-  let progressDistance = 0;
-  let progressAtNearest = 0;
-  for (let index = 0; index < path.length; index += 1) {
-    const distance = Math.hypot(path[index].x - x, path[index].y - y);
-    if (distance < nearestDistance) {
-      nearestDistance = distance;
-      nearestIndex = index;
-      progressAtNearest = progressDistance;
-    }
-    if (index + 1 < path.length) {
-      progressDistance += Math.hypot(path[index + 1].x - path[index].x, path[index + 1].y - path[index].y);
-    }
-  }
-  const totalLength = Math.max(progressDistance, 1e-6);
-  const closed = simulationPathClosed(path);
-  const lookahead = Math.max(
-    settings.minLookaheadM,
-    Math.min(settings.maxLookaheadM, settings.minLookaheadM + Math.abs(speed) * settings.lookaheadGainS),
-  );
-  let targetIndex = nearestIndex;
-  let travelled = 0;
-  const maximumSegments = closed ? path.length : Math.max(1, path.length - 1 - nearestIndex);
-  for (let count = 0; count < maximumSegments; count += 1) {
-    const current = targetIndex;
-    let next = current + 1;
-    if (next >= path.length) next = closed ? 0 : path.length - 1;
-    travelled += Math.hypot(path[next].x - path[current].x, path[next].y - path[current].y);
-    targetIndex = next;
-    if (travelled >= lookahead || (!closed && targetIndex >= path.length - 1)) break;
-  }
-  const targetPoint = path[targetIndex];
-  const dx = targetPoint.x - x;
-  const dy = targetPoint.y - y;
-  const localX = Math.cos(yaw) * dx + Math.sin(yaw) * dy;
-  const localY = -Math.sin(yaw) * dx + Math.cos(yaw) * dy;
-  const denominator = Math.max(1e-6, localX * localX + localY * localY);
-  const curvature = 2 * localY / denominator;
-  const steeringRad = Math.max(
-    -settings.maxSteeringRad,
-    Math.min(settings.maxSteeringRad, Math.atan(settings.wheelbaseM * curvature)),
-  );
-  return {
-    nearestIndex,
-    targetIndex,
-    targetPoint,
-    steeringRad,
-    crossTrackErrorM: nearestDistance,
-    progress: progressAtNearest / totalLength,
-  };
-}
-
 function normalizeAngle(angle) {
   let output = angle;
   while (output > Math.PI) output -= Math.PI * 2;
@@ -13799,7 +13778,7 @@ function normalizeAngle(angle) {
 function updateSimulationChrome() {
   const ready = simulationPathPoints(state.selectedMapDetail).length >= 2;
   const sim = state.simulation;
-  const status = !ready ? "Need path" : sim.playing ? "Running" : sim.time > 0 ? "Paused" : "Ready";
+  const status = !ready ? "Need path" : simulationLive.done ? "Finished" : sim.playing ? "Running" : sim.time > 0 ? "Paused" : "Ready";
   const statusEl = $("simulation-status");
   if (statusEl) {
     statusEl.textContent = status;
@@ -13807,16 +13786,18 @@ function updateSimulationChrome() {
   }
   const runButton = $("simulation-run-button");
   if (runButton) {
-    runButton.textContent = sim.playing ? "Pause" : "PPを再生";
+    runButton.textContent = sim.playing ? "Pause" : "Run";
     runButton.disabled = !ready;
   }
+  const step = $("simulation-step-button");
+  if (step) step.disabled = !ready || sim.playing;
   updateSimulationMetricsDom();
   updateSimulationComparisonChrome();
 }
 
 function updateSimulationMetricsDom() {
   const metrics = $("simulation-metrics");
-  if (metrics) metrics.innerHTML = `<span class="field-hint">PP単独再生の状態</span>${renderSimulationMetrics()}`;
+  if (metrics) metrics.innerHTML = `<span class="field-hint">選択方式の状態（3台時はPure Pursuit）</span>${renderSimulationMetrics()}`;
 }
 
 function drawSimulationPreview() {
@@ -13846,14 +13827,18 @@ function drawSimulationPreview() {
   drawSimulationStartArrow(ctx, path, toPixel);
 
   const sim = state.simulation;
-  const compared = simulationComparison.results;
+  const compared = simulationLive.frames || simulationComparison.results;
   if (compared) {
     for (const result of compared) {
       drawPolyline(ctx, result.trace.map(point => toPixel([point.x, point.y])), result.color, 2.5, false);
       const last = result.trace[result.trace.length - 1];
       const [x, y] = toPixel([last.x, last.y]);
-      ctx.fillStyle = result.color;
-      ctx.beginPath(); ctx.arc(x, y, 5, 0, Math.PI * 2); ctx.fill();
+      if (result.car) {
+        drawSimulationVehicle(ctx, detail, toPixel, result.car, result.color);
+      } else {
+        ctx.fillStyle = result.color;
+        ctx.beginPath(); ctx.arc(x, y, 5, 0, Math.PI * 2); ctx.fill();
+      }
     }
   } else drawPolyline(ctx, sim.trajectory.map((point) => toPixel([point.x, point.y])), "#ffffff", 2.5, false);
   if (!compared && sim.targetPoint) {
@@ -13926,8 +13911,7 @@ function drawSimulationStartArrow(ctx, path, toPixel) {
   ctx.restore();
 }
 
-function drawSimulationVehicle(ctx, detail, toPixel) {
-  const sim = state.simulation;
+function drawSimulationVehicle(ctx, detail, toPixel, sim = state.simulation, color = "#f2f5f8") {
   const [x, y] = toPixel([sim.x, sim.y]);
   if (!Number.isFinite(x) || !Number.isFinite(y)) return;
   const rasterYaw = detail?.raster?.resolution_m_per_px
@@ -13936,7 +13920,7 @@ function drawSimulationVehicle(ctx, detail, toPixel) {
   ctx.save();
   ctx.translate(x, y);
   ctx.rotate(rasterYaw - sim.yaw);
-  ctx.fillStyle = "#f2f5f8";
+  ctx.fillStyle = color;
   ctx.strokeStyle = "#050709";
   ctx.lineWidth = 2;
   ctx.beginPath();
