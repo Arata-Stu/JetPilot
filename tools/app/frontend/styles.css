@@ -2626,6 +2626,43 @@ tr:last-child td {
   background: #18314a;
 }
 
+.editor-boundary-fields {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.editor-boundary-fields .editor-boundary-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding-inline: 8px;
+  font-size: 14px;
+  border-color: color-mix(in srgb, var(--boundary-color) 45%, #30363d);
+}
+
+#map-editor-field-left_bound { --boundary-color: #45c478; }
+#map-editor-field-right_bound { --boundary-color: #d878d8; }
+#map-editor-field-drivable_left_bound,
+#map-editor-field-drivable_right_bound { --boundary-color: #62b6ff; }
+#map-editor-field-centerline {
+  --boundary-color: #e7c84b;
+  grid-column: 1 / -1;
+}
+
+.editor-boundary-swatch {
+  width: 14px;
+  height: 4px;
+  flex: 0 0 14px;
+  border-radius: 2px;
+  background: var(--boundary-color);
+}
+
+.editor-boundary-fields .editor-boundary-button.active {
+  border-color: var(--boundary-color);
+  background: color-mix(in srgb, var(--boundary-color) 20%, #161b22);
+  box-shadow: inset 0 0 0 1px var(--boundary-color);
+}
+
 .editor-zoom-row span {
   min-width: 48px;
   color: var(--muted);

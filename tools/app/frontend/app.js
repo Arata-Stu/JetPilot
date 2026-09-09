@@ -7665,12 +7665,12 @@ function renderHdMapEditor(detail) {
       </div>
       <label class="layer-toggle"><input id="lane-manual-center" type="checkbox" ${lane.centerline_mode === "manual" ? "checked" : ""} onchange="setManualCenterline(this.checked)" ${editor.enabled ? "" : "disabled"} />Centerlineの手修正を保持</label>
       <div class="field-hint">Centerlineも下のモードで追加・移動できます。手修正後は境界を動かしても保持されます。Auto Centerで自動生成に戻ります。</div>
-      <div class="editor-field-row">
+      <div class="editor-field-row editor-boundary-fields" role="group" aria-label="編集する線">
         ${editorFieldButton("left_bound", "経路生成：左")}
         ${editorFieldButton("right_bound", "経路生成：右")}
-        ${editorFieldButton("centerline", "Centerline")}
         ${editorFieldButton("drivable_left_bound", "走行可能：左")}
         ${editorFieldButton("drivable_right_bound", "走行可能：右")}
+        ${editorFieldButton("centerline", "Centerline")}
       </div>
       <div class="field-hint">緑・桃＝経路生成境界。青＝壁などの走行可能境界。走行可能境界の編集はCenterlineを動かしません。</div>
       <button onclick="copyGenerationToDrivable()" ${editor.enabled ? "" : "disabled"}>現在の経路生成境界を走行可能境界へコピー</button>
@@ -7727,7 +7727,7 @@ function renderHdMapEditor(detail) {
 
 function editorFieldButton(field, label) {
   const active = state.mapEditor.activeField === field;
-  return `<button id="map-editor-field-${esc(field)}" class="${active ? "active" : ""}" onclick="setMapEditorField(${js(field)})" ${state.mapEditor.enabled ? "" : "disabled"}>${esc(label)}</button>`;
+  return `<button id="map-editor-field-${esc(field)}" class="editor-boundary-button ${active ? "active" : ""}" aria-pressed="${active}" onclick="setMapEditorField(${js(field)})" ${state.mapEditor.enabled ? "" : "disabled"}><span class="editor-boundary-swatch" aria-hidden="true"></span>${esc(label)}</button>`;
 }
 
 function setActiveMapEditorLane(laneId) {
