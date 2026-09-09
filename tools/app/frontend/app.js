@@ -6516,6 +6516,7 @@ function applyMapLayerPreset(mode) {
 }
 
 function setMapWorkspaceMode(mode) {
+  topologyPlacementHover = null;
   if (!["geometry", "topology", "routes", "review"].includes(mode)) return;
   state.mapLayerSelectionsByMode[state.mapWorkspaceMode] = { ...state.mapLayers };
   state.mapWorkspaceMode = mode;
@@ -6535,6 +6536,7 @@ function setMapWorkspaceMode(mode) {
 }
 
 function setMapTopologyTool(tool) {
+  topologyPlacementHover = null;
   if (!["sections", "junctions"].includes(tool)) return;
   state.mapTopologyTool = tool;
   state.sectionEditor.enabled = false;
@@ -7981,6 +7983,20 @@ function renderJunctionEditor(detail) {
         <h4>Junctions</h4>
         <span id="junction-editor-status" aria-live="polite" class="${ready ? (collectionIssue ? "warn" : editor.dirty ? "dirty" : "ok") : "warn"}">${esc(status)}</span>
       </div>
+      <details class="junction-howto">
+        <summary>Junctionの設定手順</summary>
+        <p>Junctionは「信号の指示で走行ルートを選ぶ設定」です。菱形を置くだけでは分岐判断は始まりません。</p>
+        <ol>
+          <li>Sectionsで分岐の手前と通過後に区間を作成して保存します。</li>
+          <li>Edit → New。Signal IDは検出側が出すIDに合わせます。</li>
+          <li>Placeで菱形の表示位置を配置します。Snapは最初のActivation区間の終了ゲートへ配置します。</li>
+          <li>Activation sectionsに、信号の指示を受け付ける手前の区間を選びます。</li>
+          <li>Left / Straight / Rightに、その指示で走る既存ルートを割り当てます。現状は3方向とも必須です。</li>
+          <li>Release sectionsに、分岐通過後に選択を解除する区間を選びます。Activationとは別の区間です。</li>
+          <li>Save後、Reviewで各ルートの実行時の登録・配信先を確認します。</li>
+        </ol>
+        <p>例：手前の区間で「左」を受信 → Leftのルートを保持 → 通過後のRelease区間で解除。Activationに入ると、有効な指示を受けるまで停止します。</p>
+      </details>
       <div class="junction-toolbar">
         <button class="${editor.enabled ? "primary" : ""}" onclick="toggleJunctionEditor()" ${ready ? "" : "disabled"}>${editor.enabled ? "Editing" : "Edit"}</button>
         <button onclick="createJunction()" ${editor.enabled && ready ? "" : "disabled"}>New</button>
@@ -11076,6 +11092,7 @@ function updateSectionEditorChrome() {
 }
 
 function toggleSectionEditor() {
+  topologyPlacementHover = null;
   if (!state.selectedMapDetail) return;
   ensureSectionEditor(state.selectedMapDetail);
   state.sectionEditor.enabled = !state.sectionEditor.enabled;
@@ -11177,6 +11194,68 @@ function nearestJunctionMarker(detail, pixel, hitRadius) {
   return best?.junction || null;
 }
 
+let topologyPlacementHover = null;
+
+function topologyPlacementCandidate(detail, info) {
+  if (!detail || state.mapWorkspaceMode !== "topology" || mapEditorInteractionLocked()) return null;
+  const {canvas, point, hitRadius} = info;
+  const world = mapPixelToWorld(detail, canvas.width, canvas.height, point);
+  if (!world) return null;
+  if (state.mapTopologyTool === "sections" && state.sectionEditor.enabled && state.sectionEditor.mapPath === detail.map?.path) {
+    const existing = nearestSectionGate(detail, point, hitRadius * 1.3);
+    if (existing) return {kind:"select-gate", line:existing.line, point:existing.line[0].map((v,i)=>(Number(v)+Number(existing.line[1][i]))/2), label:`${existing.id} を選択`};
+    const lane = sectionEditorLane(detail);
+    const projection = lane ? projectPointToLane(world, lane) : null;
+    const resolution = Number(detail.raster?.resolution_m_per_px || 0);
+    const maxDistanceM = Math.max(0.25, hitRadius * (resolution || 0.02) * 2.0);
+    if (!projection || projection.distance > maxDistanceM) return null;
+    return {kind:"gate", point:projection.point, line:gateLineForLaneProjection(lane, projection), lane, projection,
+      label:`Gateを配置 · ${lane.id || "lane"} · s=${projection.s_m.toFixed(2)} m`};
+  }
+  if (state.mapTopologyTool === "junctions" && state.junctionEditor.enabled && !state.junctionEditor.dragging && state.junctionEditor.mapPath === detail.map?.path) {
+    const existing = nearestJunctionMarker(detail, point, hitRadius * 1.5);
+    if (existing) return {kind:"select-junction", point:existing.position, label:`${existing.id} を選択 / ドラッグ`};
+    if (state.junctionEditor.placing && selectedJunction()) return {kind:"junction", point:world, label:`Junctionを配置 · X=${world[0].toFixed(2)} Y=${world[1].toFixed(2)}`};
+  }
+  return null;
+}
+
+function updateTopologyPlacementHover(event) {
+  const detail = state.selectedMapDetail;
+  const info = canvasEventInfo(event);
+  topologyPlacementHover = topologyPlacementCandidate(detail, info) ? {
+    mapPath:detail.map.path, tool:state.mapTopologyTool, point:[...info.point], hitRadius:info.hitRadius,
+    width:info.canvas.width, height:info.canvas.height,
+  } : null;
+}
+
+function drawTopologyPlacementPreview(ctx, detail, toPixel, uiScale = 1) {
+  const hover = topologyPlacementHover;
+  if (!hover || hover.mapPath !== detail.map?.path || hover.tool !== state.mapTopologyTool) return;
+  const candidate = topologyPlacementCandidate(detail, {canvas:{width:hover.width,height:hover.height},point:hover.point,hitRadius:hover.hitRadius});
+  if (!candidate) return;
+  const [x,y] = toPixel(candidate.point);
+  ctx.save();
+  ctx.strokeStyle = "#57e2d5";
+  ctx.fillStyle = "rgba(87,226,213,0.20)";
+  ctx.lineWidth = 2 * uiScale;
+  ctx.setLineDash([5 * uiScale,4 * uiScale]);
+  if (candidate.line) {
+    const [a,b] = candidate.line.map(toPixel);
+    ctx.beginPath(); ctx.moveTo(...a); ctx.lineTo(...b); ctx.stroke();
+  }
+  ctx.beginPath(); ctx.moveTo(...hover.point); ctx.lineTo(x,y); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.beginPath();
+  if (candidate.kind.includes("junction")) {
+    const r = 10 * uiScale;
+    ctx.moveTo(x,y-r); ctx.lineTo(x+r,y); ctx.lineTo(x,y+r); ctx.lineTo(x-r,y); ctx.closePath();
+  } else ctx.arc(x,y,7 * uiScale,0,Math.PI*2);
+  ctx.fill(); ctx.stroke();
+  drawLabel(ctx,candidate.label,x+12*uiScale,y-12*uiScale,uiScale);
+  ctx.restore();
+}
+
 function handleJunctionEditorPointerDown(event) {
   const detail = state.selectedMapDetail;
   const isJunctionView = state.mapWorkspaceMode === "topology" && state.mapTopologyTool === "junctions";
@@ -11204,10 +11283,11 @@ function handleJunctionEditorPointerDown(event) {
   }
   const selected = selectedJunction();
   if (!selected || !state.junctionEditor.placing) return false;
-  const world = mapPixelToWorld(detail, canvas.width, canvas.height, point);
-  if (!world) return false;
+  const candidate = topologyPlacementCandidate(detail, {canvas, point, hitRadius});
+  if (candidate?.kind !== "junction") return false;
   event.preventDefault();
-  selected.position = world;
+  selected.position = [...candidate.point];
+  topologyPlacementHover = null;
   state.junctionEditor.placing = false;
   markJunctionEditorDirty();
   render();
@@ -11258,13 +11338,10 @@ function handleSectionEditorPointerDown(event) {
     drawMapPreview();
     return true;
   }
-  const world = mapPixelToWorld(detail, canvas.width, canvas.height, point);
-  const lane = sectionEditorLane(detail);
-  const projection = world && lane ? projectPointToLane(world, lane) : null;
-  if (!projection || !lane) return false;
-  const resolution = Number(detail.raster?.resolution_m_per_px || 0);
-  const maxDistanceM = Math.max(0.25, hitRadius * (resolution || 0.02) * 2.0);
-  if (projection.distance > maxDistanceM) return false;
+  const candidate = topologyPlacementCandidate(detail, {canvas, point, hitRadius});
+  if (candidate?.kind !== "gate") return false;
+  const {lane, projection} = candidate;
+  topologyPlacementHover = null;
   const gate = {
     id: nextSectionGateId(),
     lane_id: lane.id || detail.hd_map?.primary_lane_id || "lane_001",
@@ -11483,6 +11560,7 @@ function junctionCollectionIssue(detail) {
 }
 
 function toggleJunctionEditor() {
+  topologyPlacementHover = null;
   const detail = state.selectedMapDetail;
   if (!detail) return;
   ensureJunctionEditor(detail);
@@ -11544,6 +11622,7 @@ function createJunction() {
 }
 
 function selectJunction(junctionId) {
+  topologyPlacementHover = null;
   state.junctionEditor.selectedJunctionId = junctionId;
   state.junctionEditor.placing = false;
   render();
@@ -11619,6 +11698,7 @@ function toggleJunctionSection(field, sectionId, checked) {
 }
 
 function toggleJunctionPlacement() {
+  topologyPlacementHover = null;
   if (!state.junctionEditor.enabled || !selectedJunction()) return;
   state.junctionEditor.placing = !state.junctionEditor.placing;
   render();
@@ -12748,6 +12828,12 @@ function handleMapEditorPointerDown(event) {
 
 function handleMapEditorPointerMove(event) {
   if (mapEditorInteractionLocked()) return;
+  if (state.sectionEditor.enabled || state.junctionEditor.enabled) {
+    updateTopologyPlacementHover(event);
+    if (state.junctionEditor.enabled) handleJunctionEditorPointerMove(event);
+    drawMapPreview();
+    return;
+  }
   if (handleMapObstacleMove(event)) return;
   if (state.customLineEditor.enabled) {
     handleCustomLinePointerMove(event);
@@ -12790,6 +12876,10 @@ function handleMapEditorPointerMove(event) {
 }
 
 function handleMapEditorPointerUp(event) {
+  if (["pointerleave", "pointercancel"].includes(event.type) && topologyPlacementHover) {
+    topologyPlacementHover = null;
+    drawMapPreview();
+  }
   if (state.mapEditor.obstacleDrag) { state.mapEditor.obstacleDrag = null; render(); return; }
   if (["pointerleave", "pointercancel"].includes(event.type) && state.mapEditor.placementPoint) {
     state.mapEditor.placementPoint = null;
@@ -13384,6 +13474,7 @@ function drawMapLayers(ctx, detail, width, height) {
   if (state.mapLayers.junctions) drawJunctionLayers(ctx, detail, toPixel, uiScale);
   drawMapObstacles(ctx, detail, toPixel, uiScale);
   drawLanePlacementPreview(ctx, detail, toPixel, uiScale);
+  drawTopologyPlacementPreview(ctx, detail, toPixel, uiScale);
 }
 
 function drawLanePlacementPreview(ctx, detail, toPixel, uiScale) {
