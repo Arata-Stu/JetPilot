@@ -18,6 +18,7 @@ from .security import (
 
 NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 EXPERIMENTS = {
+    "pilotnet_steering": {"label": "Steering only · PilotNet (fixed throttle)", "stages": 1, "task": "control"},
     "pilotnet_scratch": {"label": "Control · PilotNet", "stages": 1, "task": "control"},
     "control_pilotnet_fusion": {"label": "Control · PilotNet (fusion baseline)", "stages": 1, "task": "control", "model": "fusion"},
     "control_pilotnet_gru": {"label": "Control · PilotNet + GRU", "stages": 1, "task": "control", "model": "fusion"},
@@ -197,6 +198,7 @@ def scan_runs(config: Any) -> list[dict[str, Any]]:
                 "architecture": metrics.get("architecture") if isinstance(metrics.get("architecture"), dict) else {},
                 "dataset_dir": str(data.get("dataset_dir") or metrics.get("dataset_dir") or ""),
                 "image_topic": str(data.get("image_topic") or ""),
+                "steering_only": bool(model_data.get("steering_only", False)),
                 "input_width": int(data.get("input_width") or 0),
                 "input_height": int(data.get("input_height") or 0),
                 "best_checkpoint": str(best_path) if best_path.is_file() else "",

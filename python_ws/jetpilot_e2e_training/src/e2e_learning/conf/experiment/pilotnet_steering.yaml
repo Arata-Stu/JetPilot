@@ -1,0 +1,10 @@
+# @package _global_
+defaults:
+  - override /model: pilotnet
+  - override /train: default
+
+model:
+  steering_only: true
+
+run:
+  name: pilotnet_steering

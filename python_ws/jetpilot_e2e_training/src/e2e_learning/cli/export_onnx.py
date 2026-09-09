@@ -111,11 +111,17 @@ def main(cfg: DictConfig) -> None:
             "activations": ["tanh", "sigmoid"],
         }
 
+    if bool(getattr(run_cfg.model, "steering_only", False)):
+        output_metadata["activations"] = ["tanh", "constant_zero"]
+        output_metadata["learned_fields"] = ["steering"]
+        output_metadata["requires_fixed_throttle_mode"] = True
+
     metadata = {
         "format_version": 2,
         "model_name": str(run_cfg.run.name),
         "model_kind": model_name,
         "task": task,
+        "steering_only": bool(getattr(run_cfg.model, "steering_only", False)),
         "architecture": {
             "backbone": str(getattr(run_cfg.model, "backbone", model_name)),
             "temporal": str(getattr(run_cfg.model, "temporal", "none")),

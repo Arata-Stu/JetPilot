@@ -3,8 +3,9 @@ from torch import nn
 
 
 class PilotNet(nn.Module):
-    def __init__(self, input_channels: int = 3, output_dim: int = 2) -> None:
+    def __init__(self, input_channels: int = 3, output_dim: int = 2, steering_only: bool = False) -> None:
         super().__init__()
+        self.steering_only = steering_only
         self.features = nn.Sequential(
             nn.Conv2d(input_channels, 24, kernel_size=5, stride=2),
             nn.ELU(inplace=True),
@@ -26,7 +27,7 @@ class PilotNet(nn.Module):
             nn.ELU(inplace=True),
             nn.Linear(50, 10),
             nn.ELU(inplace=True),
-            nn.Linear(10, output_dim),
+            nn.Linear(10, 1 if steering_only else output_dim),
         )
 
     def set_encoder_trainable(self, trainable: bool) -> None:
@@ -36,5 +37,5 @@ class PilotNet(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         raw = self.head(self.features(x))
         steering = torch.tanh(raw[:, 0:1])
-        throttle = torch.sigmoid(raw[:, 1:2])
+        throttle = torch.zeros_like(steering) if self.steering_only else torch.sigmoid(raw[:, 1:2])
         return torch.cat([steering, throttle], dim=1)

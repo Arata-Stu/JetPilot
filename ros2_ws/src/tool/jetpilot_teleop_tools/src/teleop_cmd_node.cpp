@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cmath>
+#include <stdexcept>
 
 #include "jetpilot_teleop_tools/teleop_cmd_node.hpp"
 #include "rcl_interfaces/msg/parameter_descriptor.hpp"
@@ -15,6 +16,11 @@ TeleopCmdNode::TeleopCmdNode() : Node("teleop_cmd_node")
   reverse_axis_ = declare_parameter<int>("reverse_axis", 2);
   brake_button_ = declare_parameter<int>("brake_button", -1);
   deadman_button_ = declare_parameter<int>("deadman_button", 3);
+  fixed_throttle_mode_ = declare_parameter<bool>("fixed_throttle_mode", false);
+  fixed_throttle_ = declare_numeric_parameter("fixed_throttle", 0.2);
+  if (!std::isfinite(fixed_throttle_) || fixed_throttle_ < 0.0 || fixed_throttle_ > 1.0) {
+    throw std::invalid_argument("fixed_throttle must be finite and within [0, 1]");
+  }
   steering_scale_ = declare_numeric_parameter("steering_scale", 1.0);
   throttle_scale_step_ = std::max(0.0, declare_numeric_parameter("throttle_scale_step", 0.05));
   throttle_scale_min_ = std::clamp(
@@ -123,6 +129,7 @@ double TeleopCmdNode::normalized_trigger(const sensor_msgs::msg::Joy & joy, cons
 
 void TeleopCmdNode::adjust_throttle_scale(const double direction)
 {
+  if (fixed_throttle_mode_) return;
   const double previous = throttle_scale_.load();
   const double requested = std::clamp(
     previous + direction * throttle_scale_step_, throttle_scale_min_, throttle_scale_max_);
@@ -176,7 +183,8 @@ void TeleopCmdNode::handle_joy(const sensor_msgs::msg::Joy & joy)
   cmd.header.frame_id = "base_link";
 
   const bool deadman_pressed =
-    deadman_button_ < 0 || (has_button(joy, deadman_button_) && joy.buttons[deadman_button_] != 0);
+    fixed_throttle_mode_ || deadman_button_ < 0 ||
+    (has_button(joy, deadman_button_) && joy.buttons[deadman_button_] != 0);
   if (deadman_pressed)
   {
     const double steering = has_axis(joy, steering_axis_)
@@ -192,6 +200,10 @@ void TeleopCmdNode::handle_joy(const sensor_msgs::msg::Joy & joy)
     cmd.brake = has_button(joy, brake_button_) && joy.buttons[brake_button_] != 0
                   ? static_cast<float>(brake_value_)
                   : 0.0F;
+    if (fixed_throttle_mode_) {
+      cmd.throttle = cmd.brake > 0.0F ? 0.0F : static_cast<float>(fixed_throttle_);
+      cmd.reverse = 0.0F;
+    }
   }
   else
   {

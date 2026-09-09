@@ -51,6 +51,11 @@ E2EControlDecoderNode::E2EControlDecoderNode(const rclcpp::NodeOptions & options
   steering_max_ = declare_parameter<double>("steering_max", 1.0);
   throttle_min_ = declare_parameter<double>("throttle_min", 0.0);
   throttle_max_ = declare_parameter<double>("throttle_max", 1.0);
+  fixed_throttle_mode_ = declare_parameter<bool>("fixed_throttle_mode", false);
+  fixed_throttle_ = declare_parameter<double>("fixed_throttle", 0.2);
+  if (!std::isfinite(fixed_throttle_) || fixed_throttle_ < 0.0 || fixed_throttle_ > 1.0) {
+    throw std::invalid_argument("fixed_throttle must be finite and within [0, 1]");
+  }
   stale_timeout_sec_ = declare_parameter<double>("stale_timeout_sec", 0.2);
   deadline_ms_ = declare_parameter<double>("deadline_ms", 33.3);
   const auto diagnostics_topic =
@@ -170,7 +175,8 @@ void E2EControlDecoderNode::on_tensor(TensorList::ConstSharedPtr message)
     command.steering = std::clamp(
       static_cast<double>(steering), steering_min_, steering_max_);
     command.throttle = std::clamp(
-      static_cast<double>(throttle), throttle_min_, throttle_max_);
+      fixed_throttle_mode_ ? fixed_throttle_ : static_cast<double>(throttle),
+      throttle_min_, throttle_max_);
     command.brake = 0.0;
     command.reverse = 0.0;
     command_pub_->publish(command);

@@ -81,6 +81,11 @@ def _predict(model, images, imu, model_name: str, use_imu: bool):
     return model(images[:, -1])
 
 
+class SteeringLoss(nn.Module):
+    def forward(self, prediction, target):
+        return nn.functional.mse_loss(prediction[:, 0:1], target[:, 0:1])
+
+
 def train_epoch(model, loader, optimizer, loss_fn, device, model_name, use_imu) -> dict[str, float]:
     model.train()
     total_loss = 0.0
@@ -140,6 +145,12 @@ def evaluate(model, loader, loss_fn, device, model_name, use_imu, task, trajecto
         }
     rmse = torch.sqrt(total_sq / denom)
     mae = total_abs / denom
+    if getattr(model, "steering_only", False):
+        return {
+            "loss": total_loss / denom,
+            "steering_mae": float(mae[0]),
+            "steering_rmse": float(rmse[0]),
+        }
     return {
         "loss": total_loss / denom,
         "steering_mae": float(mae[0]),
@@ -171,6 +182,8 @@ def train_stage(
         weight_decay=float(getattr(stage, "weight_decay", cfg.train.weight_decay)),
     )
     loss_fn = nn.SmoothL1Loss() if task == "trajectory" else nn.MSELoss()
+    if getattr(model, "steering_only", False):
+        loss_fn = SteeringLoss()
     best_metrics: dict[str, float] = {}
     for epoch in range(1, int(stage.epochs) + 1):
         train_metrics = train_epoch(
@@ -193,7 +206,8 @@ def train_stage(
         detail = (
             f"ADE={val_metrics['trajectory_ade_m']:.4f}m FDE={val_metrics['trajectory_fde_m']:.4f}m"
             if task == "trajectory"
-            else f"steer_mae={val_metrics['steering_mae']:.6f} throttle_mae={val_metrics['throttle_mae']:.6f}"
+            else f"steer_mae={val_metrics['steering_mae']:.6f}"
+            + (f" throttle_mae={val_metrics['throttle_mae']:.6f}" if "throttle_mae" in val_metrics else "")
         )
         print(
             f"[{stage.name}] epoch={epoch} train_loss={train_metrics['loss']:.6f} "

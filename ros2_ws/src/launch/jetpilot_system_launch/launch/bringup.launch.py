@@ -531,6 +531,9 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('sensor_kit_silky_evcam_raw_recording_basename', 'openeb', cli=True)
 
     args.add_arg('enable_e2e_inference', False, cli=True)
+    args.add_arg('teleop_fixed_throttle_mode', False, cli=True)
+    args.add_arg('e2e_fixed_throttle_mode', False, cli=True)
+    args.add_arg('fixed_throttle', '0.2', cli=True)
     args.add_arg('e2e_event_image_mode', False, cli=True)
     args.add_arg('e2e_image_topic', '/realsense/color/image_raw', cli=True)
     args.add_arg('e2e_camera_info_topic', '/realsense/color/camera_info', cli=True)
@@ -846,6 +849,8 @@ def generate_launch_description() -> lut.LaunchDescription:
             launch_arguments={
                 'bag_manager_param': args.bag_manager_param,
                 'teleop_cmd_param': args.teleop_cmd_param,
+                'teleop_fixed_throttle_mode': args.teleop_fixed_throttle_mode,
+                'fixed_throttle': args.fixed_throttle,
                 'teleop_button_mapping_param': args.teleop_button_mapping_param,
                 'speed_offset_inc_uses_localization_button':
                     args.speed_offset_inc_uses_localization_button,
@@ -978,6 +983,8 @@ def generate_launch_description() -> lut.LaunchDescription:
                 'image_topic': args.e2e_image_topic,
                 'camera_info_topic': args.e2e_camera_info_topic,
                 'control_cmd_topic': args.e2e_control_cmd_topic,
+                'fixed_throttle_mode': args.e2e_fixed_throttle_mode,
+                'fixed_throttle': args.fixed_throttle,
                 'event_image_mode': args.e2e_event_image_mode,
                 'model_root': args.e2e_model_root,
                 'input_image_width': args.e2e_input_image_width,

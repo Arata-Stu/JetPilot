@@ -111,6 +111,8 @@ offline-localization Rosbag replay + VGL/VSLAM localization + RViz (bag/map requ
 vehicle              Selected vehicle interface only
 teleop               Joy/teleop/operation + selected vehicle interface
 drive                Live sensor + joy/teleop/operation + selected vehicle interface
+e2e-collect          RGB steering data collection with fixed throttle
+e2e-steering         TensorRT steering inference with fixed throttle
 calibration          Live sensor + mapless VSLAM odometry + teleop + vehicle + bag recording
 e2e                  Live RealSense + E2E inference + joy/teleop/operation + vehicle
 runtime              Live sensor/localization/teleop + Foxglove pose fallback + vehicle (map required)
@@ -220,7 +222,7 @@ known_preset() {
   case "$1" in
     sensor|localization-only|localization|localize-live|replay-localization|\
       offline-vslam|offline-vslam-map|offline-localization|\
-      vehicle|teleop|drive|calibration|e2e|runtime|map-view|tuning|competition|\
+      vehicle|teleop|drive|calibration|e2e-collect|e2e-steering|e2e|runtime|map-view|tuning|competition|\
       vehicle-pca|vehicle-vesc|teleop-pca|teleop-vesc|\
       drive-pca|drive-vesc|runtime-pca|runtime-vesc|custom) return 0 ;;
     *) return 1 ;;
@@ -1034,6 +1036,23 @@ apply_preset() {
       set_arg publish_vehicle_description true
       REQUIRES_VEHICLE=true
       ;;
+    e2e-collect)
+      set_arg enable_sensor_kit true
+      enable_drive_stack
+      set_arg enable_bag_manager true
+      set_arg teleop_fixed_throttle_mode true
+      set_arg fixed_throttle 0.2
+      REQUIRES_VEHICLE=true
+      ;;
+    e2e-steering)
+      set_arg enable_sensor_kit true
+      enable_drive_stack
+      set_arg enable_e2e_inference true
+      set_arg e2e_fixed_throttle_mode true
+      set_arg fixed_throttle 0.2
+      set_arg e2e_model_root /workspaces/ros2_ws/models/e2e/camera_steering
+      REQUIRES_VEHICLE=true
+      ;;
     e2e)
       set_arg enable_sensor_kit true
       enable_drive_stack
@@ -1603,6 +1622,18 @@ choose_preset_interactively() {
   PRESET="${selection%%[[:space:]]*}"
 }
 
+configure_fixed_throttle_interactively() {
+  [[ "$PRESET" == 'e2e-collect' || "$PRESET" == 'e2e-steering' ]] || return 0
+  local override value
+  if ((${#EXTRA_LAUNCH_ARGS[@]} > 0)); then
+    for override in "${EXTRA_LAUNCH_ARGS[@]}"; do
+      [[ "$override" == fixed_throttle:=* ]] && return 0
+    done
+  fi
+  read -r -p "固定スロットル (0〜1) [$(get_arg fixed_throttle)]: " value
+  set_arg fixed_throttle "${value:-$(get_arg fixed_throttle)}"
+}
+
 configure_bag_manager_interactively() {
   local selection
   local current
@@ -1847,6 +1878,17 @@ normalize_rosbag_path() {
 }
 
 validate_configuration() {
+  if [[ "$PRESET" == 'e2e-collect' || "$PRESET" == 'e2e-steering' ]]; then
+    "$PYTHON_BIN" - "$(get_arg fixed_throttle)" <<'PYVALIDATE' || die 'fixed_throttle must be a number within [0, 1]'
+import math
+import sys
+try:
+    value = float(sys.argv[1])
+    assert math.isfinite(value) and 0.0 <= value <= 1.0
+except (ValueError, AssertionError):
+    sys.exit(1)
+PYVALIDATE
+  fi
   case "$(get_arg vslam_multicam_mode)" in
     0|1|2) ;;
     *) die 'vslam_multicam_mode must be 0 (Moderate), 1 (Performance), or 2 (Precision)' ;;
@@ -2204,6 +2246,9 @@ print_summary() {
   printf '  custom line  : %s\n' "${CUSTOM_LINE_CSV:-none}"
   printf '  control      : %s\n' "$(get_arg enable_control)"
   printf '  E2E inference: %s\n' "$(get_arg enable_e2e_inference)"
+  if [[ "$PRESET" == 'e2e-collect' || "$PRESET" == 'e2e-steering' ]]; then
+    printf '  固定スロットル: %s (R2・速度調整ボタンは不使用)\n' "$(get_arg fixed_throttle)"
+  fi
   printf '  map          : %s\n' "${MAP_DIR:-none}"
   printf '  rosbag       : %s\n' "${ROSBAG:-none}"
   if is_true "$(get_arg enable_rviz)"; then
@@ -2466,6 +2511,7 @@ if ((${#EXTRA_LAUNCH_ARGS[@]} > 0)); then
   done
 fi
 if [[ "$INTERACTIVE" == 'true' ]]; then
+  configure_fixed_throttle_interactively
   configure_realsense_fps_interactively
   configure_offline_origin_test_interactively
   configure_localization_init_interactively

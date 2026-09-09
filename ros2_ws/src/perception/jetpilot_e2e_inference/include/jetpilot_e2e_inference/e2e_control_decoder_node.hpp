@@ -35,6 +35,8 @@ private:
   double steering_max_{1.0};
   double throttle_min_{0.0};
   double throttle_max_{1.0};
+  bool fixed_throttle_mode_{false};
+  double fixed_throttle_{0.2};
   double stale_timeout_sec_{0.2};
   double deadline_ms_{33.3};
   std::uint64_t sequence_{0U};

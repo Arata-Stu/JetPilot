@@ -53,7 +53,11 @@ def build_model(config: Any) -> nn.Module:
     name = str(config.name)
     output_dim = int(getattr(config, "output_dim", 2))
     if name == "pilotnet":
-        return PilotNet(input_channels=int(getattr(config, "input_channels", 3)), output_dim=output_dim)
+        return PilotNet(
+            input_channels=int(getattr(config, "input_channels", 3)),
+            output_dim=output_dim,
+            steering_only=bool(getattr(config, "steering_only", False)),
+        )
     if name == "mobilenet_v3_small":
         return TorchvisionEncoderHead(
             backbone_name=name,

@@ -36,6 +36,8 @@ private:
   int reverse_axis_;
   int brake_button_;
   int deadman_button_;
+  bool fixed_throttle_mode_;
+  double fixed_throttle_;
   double steering_scale_;
   std::atomic<double> throttle_scale_;
   double throttle_scale_step_;

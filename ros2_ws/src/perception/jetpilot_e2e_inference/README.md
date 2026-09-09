@@ -216,6 +216,45 @@ C++ decoderをすべてそこへロードします。E2E側は`run_standalone:=f
 実行方法です。従来controllerとE2Eはどちらも`/auto/control_cmd`へpublishするため、
 `enable_control`と`enable_e2e_inference`の同時有効化は拒否されます。
 
+## RGB・固定スロットルで操舵のみ学習
+
+`bringup.sh`のTUIで`e2e-collect`を選ぶと、カメラ・手動操舵・vehicle・bag managerを
+起動し、固定スロットル値を入力できます。既定は正規化値0.2（0〜1）です。
+これは速度[m/s]ではなくスロットル指令値なので、実速度を一定に保つ制御ではありません。
+
+```bash
+/workspaces/scripts/bringup.sh e2e-collect --vehicle jpbb --sensor-kit realsense \
+  --set fixed_throttle:=0.2
+```
+
+初期モードは従来どおりSTOPです。MANUALへ切り替えると、R2やデッドマンボタンを
+押し続けずに固定スロットルで走行し、スティックで操舵できます。固定モードでは
+R2・後退トリガー・速度調整ボタンによってスロットル値は変わりません。
+STOPへ切り替えるとmuxの出力は停止指令になります。Joyの受信が途切れた場合も
+既存のcommand timeoutが働きます。bagの記録開始・停止は既存のボタン操作です。
+教師には`/teleop/control_cmd`を使い、MANUALで走行した区間を収集してください。
+
+ConsoleではLearning taskを`Control`、experimentを
+`Steering only · PilotNet (fixed throttle)`（`pilotnet_steering`）にして学習します。
+学習headは操舵の1出力だけで、損失と学習時validation指標も操舵のみです。
+ONNXは既存の`control`契約を保つため`[steering, 0]`を出力します。
+2番目の値は未学習の乱数ではなくゼロ定数で、推論ノードの固定モードで置き換えます。
+
+配備プリセットは`Camera Steering Only (fixed throttle)`です。ビルド後は次で起動します。
+
+```bash
+/workspaces/scripts/bringup.sh e2e-steering --vehicle jpbb --sensor-kit realsense \
+  --set fixed_throttle:=0.2
+```
+
+`e2e-steering`は`models/e2e/camera_steering`のモデルを使い、AUTOモードで予測操舵と
+固定スロットルを車両へ渡します。有効な推論結果を受信した時だけ指令をpublishするため、
+推論停止時に固定スロットルだけを配信し続ける動作にはなりません。
+通常の`e2e`は引き続きモデルの操舵・スロットル両方を使います。
+
+推論ノード単独の場合は`fixed_throttle_mode:=true fixed_throttle:=0.2`を
+`e2e_tensor_rt.launch.py`へ指定します。この操舵のみの経路はTensorRT用です。
+
 ## イベントカメラ単独のTensorRT制御
 
 SilkyEvCam/OpenEBの`/event_camera/event_image`（VGA 640×480、`bgr8`）を

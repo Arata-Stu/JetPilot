@@ -35,6 +35,13 @@ python -m e2e_learning.cli.preprocess_bag \
 
 ## モデル構成
 
+RGBで操舵だけを学習する場合は`experiment=pilotnet_steering`を使います。
+スロットルは損失に含めず、モデルは互換出力`[steering, 0]`を返します。
+Consoleにも`Steering only · PilotNet (fixed throttle)`として表示されます。
+実車では`bringup.sh e2e-collect`で固定スロットルの教師データを収集し、
+配備先`Camera Steering Only (fixed throttle)`へ転送した後、
+`bringup.sh e2e-steering --set fixed_throttle:=0.2`で推論します。
+
 | experiment | 画像時系列 | IMU | 出力 |
 |---|---:|---:|---|
 | `trajectory_pilotnet` | 1 frame | なし | trajectory |

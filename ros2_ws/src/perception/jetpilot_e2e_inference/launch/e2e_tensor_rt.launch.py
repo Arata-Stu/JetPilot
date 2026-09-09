@@ -105,6 +105,8 @@ def generate_launch_description():
         parameters=[
             param_file,
             {
+                "fixed_throttle_mode": ParameterValue(LaunchConfiguration("fixed_throttle_mode"), value_type=bool),
+                "fixed_throttle": ParameterValue(LaunchConfiguration("fixed_throttle"), value_type=float),
                 "use_sim_time": ParameterValue(
                     LaunchConfiguration("use_sim_time"), value_type=bool
                 ),
@@ -165,6 +167,8 @@ def generate_launch_description():
             DeclareLaunchArgument("target_speed_topic", default_value="/planning/target_speed"),
             DeclareLaunchArgument("planning_ready_topic", default_value="/planning/ready"),
             DeclareLaunchArgument("output_task", default_value="control"),
+            DeclareLaunchArgument("fixed_throttle_mode", default_value="false"),
+            DeclareLaunchArgument("fixed_throttle", default_value="0.2"),
             DeclareLaunchArgument("trajectory_points", default_value="10"),
             DeclareLaunchArgument("trajectory_scale_m", default_value="5.0"),
             DeclareLaunchArgument("trajectory_target_speed_mps", default_value="0.8"),
