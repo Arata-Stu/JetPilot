@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 from jetpilot_console.map_detail import (
     CUSTOM_LINE_MAX_POINTS,
+    _read_snapshot_odometry,
     _derive_custom_trajectory,
     _custom_line_geometry_validation,
     activate_custom_line,
@@ -392,6 +393,45 @@ junctions:
 
 
 class MapDetailOdometryOverlayTest(unittest.TestCase):
+    def test_last_tf_applies_to_raw_and_restored_odometry(self):
+        raw = {"position": {"x": 1, "y": 0, "z": 0}}
+        snapshot = {
+            "localization": {"map_frame": "map", "map_from_frame": {"odom": {
+                "translation": {"x": 10, "y": 20},
+                "rotation": {"z": 2**-0.5, "w": 2**-0.5}}}},
+            "odometry_samples": [
+                {"frame_id": "odom", "pose": raw},
+                {"frame_id": "map", "source_frame_id": "odom", "source_pose": raw,
+                 "pose": {"position": {"x": 100, "y": 200}}},
+            ]}
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'snapshot.json'
+            content = json.dumps(snapshot)
+            path.write_text(content)
+            result = _read_snapshot_odometry(path)
+            self.assertEqual(path.read_text(), content)
+        self.assertEqual(result['latest_tf_points'], 2)
+        self.assertEqual(result['frame_id'], 'map')
+        for point in result['points']:
+            self.assertAlmostEqual(point[0], 10)
+            self.assertAlmostEqual(point[1], 21)
+
+    def test_legacy_map_pose_is_not_transformed_twice(self):
+        from jetpilot_console.map_detail import _latest_tf_odom_point
+        sample = {"frame_id": "map", "source_frame_id": "odom",
+                  "pose": {"position": {"x": 4, "y": 5}}}
+        localization = {"map_from_frame": {"odom": {"translation": {"x": 100}}}}
+        point, applied = _latest_tf_odom_point(sample, localization)
+        self.assertEqual(point, [4, 5])
+        self.assertFalse(applied)
+
+    def test_missing_tf_keeps_original_pose(self):
+        from jetpilot_console.map_detail import _latest_tf_odom_point
+        point, applied = _latest_tf_odom_point(
+            {"frame_id": "odom", "pose": {"position": {"x": 4, "y": 5}}}, {})
+        self.assertEqual(point, [4, 5])
+        self.assertFalse(applied)
+
     def test_reads_odometry_samples_from_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             map_root = Path(temporary_directory)

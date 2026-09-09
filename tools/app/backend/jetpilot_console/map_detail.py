@@ -1270,6 +1270,45 @@ def _sample_pose_point(sample: Any) -> list[float] | None:
     return [x, y]
 
 
+def _latest_tf_odom_point(sample: dict, localization: dict) -> tuple[list | None, bool]:
+    """Display raw odometry using the last saved map TF, never twice."""
+    if not isinstance(sample, dict):
+        return None, False
+    map_frame = str(localization.get("map_frame") or "map").lstrip("/")
+    frame = str(sample.get("frame_id") or "").lstrip("/")
+    pose = sample.get("pose") or {}
+    # New snapshots retain the pose before the per-sample map conversion.
+    if isinstance(sample.get("source_pose"), dict) and sample.get("source_frame_id"):
+        pose = sample["source_pose"]
+        frame = str(sample["source_frame_id"]).lstrip("/")
+    transforms = localization.get("map_from_frame") or {}
+    if not isinstance(transforms, dict):
+        transforms = {}
+    transform = next((value for key, value in transforms.items()
+                      if str(key).lstrip("/") == frame), None)
+    if not frame or frame == map_frame or not isinstance(transform, dict):
+        return _sample_pose_point(sample), False
+    try:
+        position = pose["position"]
+        x, y, z = (float(position.get(axis, 0)) for axis in ("x", "y", "z"))
+        rotation = transform.get("rotation") or {}
+        qx, qy, qz, qw = (float(rotation.get(axis, 1 if axis == "w" else 0))
+                           for axis in ("x", "y", "z", "w"))
+        norm = math.sqrt(qx*qx + qy*qy + qz*qz + qw*qw)
+        if norm < 1e-12:
+            return _sample_pose_point(sample), False
+        qx, qy, qz, qw = (v / norm for v in (qx, qy, qz, qw))
+        tx, ty, tz = 2*(qy*z-qz*y), 2*(qz*x-qx*z), 2*(qx*y-qy*x)
+        translation = transform.get("translation") or {}
+        point = [x + qw*tx + qy*tz - qz*ty + float(translation.get("x", 0)),
+                 y + qw*ty + qz*tx - qx*tz + float(translation.get("y", 0))]
+        if all(math.isfinite(v) for v in point):
+            return point, True
+    except (KeyError, TypeError, ValueError, OverflowError):
+        pass
+    return _sample_pose_point(sample), False
+
+
 def _read_snapshot_odometry(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {"exists": False, "path": str(path), "points": [], "count": 0, "length_m": 0.0}
@@ -1286,13 +1325,15 @@ def _read_snapshot_odometry(path: Path) -> dict[str, Any]:
         source = "full_vslam_path"
     if not isinstance(samples, list):
         samples = []
+    localization = data.get("localization") if isinstance(data.get("localization"), dict) else {}
+    latest_tf_count = 0
     points = []
     if isinstance(samples, list):
         for sample in samples:
-            point = _sample_pose_point(sample)
+            point, applied = _latest_tf_odom_point(sample, localization)
+            latest_tf_count += int(applied)
             if point is not None:
                 points.append(point)
-    localization = data.get("localization") if isinstance(data.get("localization"), dict) else {}
     try:
         history_stride = int(localization.get("history_stride") or 1)
     except (TypeError, ValueError):
@@ -1301,7 +1342,11 @@ def _read_snapshot_odometry(path: Path) -> dict[str, Any]:
         "exists": True,
         "path": str(path),
         "source": source,
-        "frame_id": str((samples[-1].get("frame_id") if samples and isinstance(samples[-1], dict) else "") or localization.get("map_frame") or ""),
+        "latest_tf_points": latest_tf_count,
+        "alignment_note": ("最後のTFを適用" if latest_tf_count == len(points) and points else
+                           "一部に最後のTFを適用。残りは保存済み座標" if latest_tf_count else
+                           "保存済み座標（最後のTFで再変換できる元姿勢・TFがありません）"),
+        "frame_id": str(localization.get("map_frame") or "map") if latest_tf_count == len(points) and points else str((samples[-1].get("frame_id") if samples and isinstance(samples[-1], dict) else "") or localization.get("map_frame") or ""),
         "points": points,
         "count": len(points),
         "length_m": _polyline_length(points, False),

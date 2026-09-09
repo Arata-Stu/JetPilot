@@ -7562,6 +7562,7 @@ function renderLayerToggles() {
           </div>
         </div>`).join("")}
       <div class="layer-group">
+        <div class="field-hint">${esc(state.selectedMapDetail?.odometry?.alignment_note || "")}</div>
         <span>Odometry 表示区間 <strong id="odom-range-label">${odomRange.start}–${odomRange.end}%</strong></span>
         <label>開始 <input id="odom-range-start" type="range" min="0" max="100" step="1" value="${odomRange.start}" oninput="setMapOdomRange('start', this.value)" /></label>
         <label>終了 <input id="odom-range-end" type="range" min="0" max="100" step="1" value="${odomRange.end}" oninput="setMapOdomRange('end', this.value)" /></label>

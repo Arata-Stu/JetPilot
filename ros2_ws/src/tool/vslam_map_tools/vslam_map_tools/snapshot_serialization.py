@@ -185,6 +185,7 @@ def transform_odometry_sample(
             ))))
         ),
     }
+    result["source_pose"] = copy.deepcopy(sample.get("pose") or {})
     result["source_frame_id"] = str(sample.get("frame_id") or "")
     result["frame_id"] = parent_frame
     return result

@@ -2592,12 +2592,12 @@ tr:last-child td {
 }
 
 .editor-field-row {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 8rem), 1fr));
 }
 
 .editor-field-row button {
   min-height: 42px;
-  white-space: normal;
+  white-space: nowrap;
 }
 
 .editor-zoom-row {

@@ -92,6 +92,8 @@ class SnapshotSerializationTest(unittest.TestCase):
         self.assertAlmostEqual(transformed["pose"]["orientation"]["w"], half_sqrt)
         self.assertEqual(transformed["frame_id"], "map")
         self.assertEqual(transformed["source_frame_id"], "odom")
+        self.assertEqual(transformed["source_pose"], sample["pose"])
+        self.assertIsNot(transformed["source_pose"], sample["pose"])
 
     def test_inverse_transform_round_trip(self) -> None:
         sample = odometry_to_sample(odometry(sec=1, nanosec=0))
