@@ -18,6 +18,10 @@ source /workspaces/ros2_ws/install/setup.bash
 
 TUIで`tuning`を選ぶと、センサー・自己位置推定・操作系・車両・調整サービスとcontrollerを
 まとめて起動します。車両プロファイルの既定は`jpbb`です。ほかの車両はTUIまたは`--vehicle`で選べます。
+保存済みHD MapのpublisherとSection localizerも起動し、既存Foxglove Bridgeへ
+`/hd_map/lane_markers`・`/hd_map/section_markers`・`/hd_map/primary_centerline_path`を配信します。
+この表示はJetsonの保存済みYAMLに基づきます。メモリ上だけに適用した調整結果はNotebookの
+実車調整UIで確認してください。HD Map YAMLがない場合、起動ログにそのパスを表示して表示ノードを省略します。
 自己位置推定の初期化は既存TUIと同じ手順で行います。走行ラインはNotebookのUIから選ぶため、
 このpresetではTUIの走行ライン選択を省略します。通常走行用のplanning/controllerとの重複起動は拒否します。
 

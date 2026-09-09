@@ -1052,6 +1052,8 @@ apply_preset() {
       set_arg enable_sensor_kit true
       enable_live_localization_stack
       set_arg enable_live_tuning true
+      set_arg enable_hd_map_publisher true
+      set_arg enable_section_localizer true
       REQUIRES_VEHICLE=true
       REQUIRES_MAP=true
       ;;

@@ -28,7 +28,9 @@ class TuningBringupTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         for token in ('vehicle      : jpbb', 'enable_live_tuning:=true', 'enable_localization:=true',
                       'enable_sensor_kit:=true', 'enable_operation:=true', 'enable_control:=false',
-                      'enable_e2e_inference:=false', 'enable_planning:=false'):
+                      'enable_e2e_inference:=false', 'enable_planning:=false',
+                      'enable_hd_map_publisher:=true', 'enable_section_localizer:=true',
+                      'enable_foxglove:=true'):
             self.assertIn(token, result.stdout)
         self.assertIn(str(ROOT/'tools/app/runtime/tuning.launch.py'), result.stdout)
 
