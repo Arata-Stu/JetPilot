@@ -127,6 +127,20 @@ cp /path/to/checkpoints/best.pt \
 
 Jetson上でTensorRT engineを生成:
 
+実行用コンテナ内では、プロジェクト直下のスクリプトからもビルドできます。
+引数なしで`ros2_ws/models/e2e/latest/model.onnx`を使い、同じディレクトリへ
+`model.plan`と`build_engine.log`を出力します（既定FP16）。ROS 2の事前ビルドは不要です。
+
+```bash
+/workspaces/scripts/build_e2e.sh
+# モデルのディレクトリまたはONNXファイルを指定する場合
+/workspaces/scripts/build_e2e.sh /workspaces/ros2_ws/models/e2e/camera_control
+# FP32でビルドする場合
+/workspaces/scripts/build_e2e.sh --fp32
+```
+
+ROS 2から既存スクリプトを呼び出す場合:
+
 ```bash
 ros2 run jetpilot_e2e_inference build_tensorrt_engine.sh \
   /workspaces/ros2_ws/models/e2e/latest/model.onnx \

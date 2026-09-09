@@ -38,9 +38,9 @@ const state = {
     deployPresets: [],
     datasetRoot: "",
     runRoot: "",
-    datasetName: "e2e_dataset",
+    datasetName: "e2e_dataset_v1",
     datasetDir: "",
-    runName: "pilotnet_run",
+    runName: "pilotnet_run_v1",
     runDir: "",
     experiment: "pilotnet_scratch",
     datasetTask: "control",
@@ -89,7 +89,7 @@ const state = {
     datasetYaml: "",
     runDir: "",
     sourceRunDir: "",
-    runName: "yolov8n_224",
+    runName: "yolov8n_224_v1",
     trainingMode: "train",
     baseModel: "yolov8n.pt",
     epochs: 100,
@@ -1327,6 +1327,8 @@ async function refreshAll() {
   state.e2eModels = e2eModels.models || [];
   state.e2ePipeline.datasets = e2ePipeline.datasets || [];
   state.e2ePipeline.runs = e2ePipeline.runs || [];
+  state.e2ePipeline.occupiedDatasetNames = e2ePipeline.occupied_dataset_names || [];
+  state.e2ePipeline.occupiedRunNames = e2ePipeline.occupied_run_names || [];
   state.e2ePipeline.experiments = e2ePipeline.experiments || [];
   state.e2ePipeline.deployProfiles = e2ePipeline.deploy_profiles || [];
   state.e2ePipeline.deployPresets = e2ePipeline.deploy_presets || [];
@@ -1361,6 +1363,7 @@ async function refreshAll() {
   const detection = state.objectDetectionPipeline;
   detection.datasets = objectDetectionPipeline.datasets || [];
   detection.runs = objectDetectionPipeline.runs || [];
+  detection.occupiedRunNames = objectDetectionPipeline.occupied_run_names || [];
   detection.models = objectDetectionPipeline.models || [];
   detection.baseModels = objectDetectionPipeline.base_models?.length
     ? objectDetectionPipeline.base_models
@@ -1486,6 +1489,7 @@ function restoreRenderScrollPositions(root) {
 }
 
 function render() {
+  refreshSuggestedOutputNames();
   if (state.tab !== "maps" || !state.mapEditor.enabled || !state.mapEditor.drawingLane
       || state.mapEditor.mapPath !== state.selectedMapPath) state.mapEditor.placementPoint = null;
   if (tuning.enabled && tuning.mapPath !== state.selectedMapPath) endLiveTuning();
@@ -3074,6 +3078,49 @@ const E2E_PIPELINE_TASK_KINDS = [
 
 function isE2EPipelineTask(task) {
   return E2E_PIPELINE_TASK_KINDS.includes(task?.kind);
+}
+
+function nextAvailableOutputName(name, occupied) {
+  if (!name || !occupied.has(name)) return name;
+  const match = name.match(/^(.*)_v([0-9]+)$/);
+  const base = match ? match[1] : name;
+  let version = match ? Number(match[2]) + 1 : 1;
+  if (!Number.isSafeInteger(version)) version = 1;
+  let candidate;
+  do {
+    const suffix = `_v${version++}`;
+    candidate = `${base.slice(0, 64 - suffix.length)}${suffix}`;
+  } while (occupied.has(candidate));
+  return candidate;
+}
+
+function refreshSuggestedOutputNames() {
+  const e2e = state.e2ePipeline;
+  const detection = state.objectDetectionPipeline;
+  const fields = [
+    [e2e, "datasetName", "datasetRoot", "datasets", "occupiedDatasetNames", "e2e-preprocess"],
+    [e2e, "runName", "runRoot", "runs", "occupiedRunNames", "e2e-train"],
+    [detection, "runName", "runRoot", "runs", "occupiedRunNames", "object-detection-train"],
+  ];
+  for (const [pipeline, field, rootField, recordsField, namesField, taskKind] of fields) {
+    // Resume intentionally targets the existing training directory.
+    if (pipeline === detection && detection.trainingMode === "resume") continue;
+    const occupied = new Set([
+      ...(pipeline[namesField] || []),
+      ...pipeline[recordsField].map((item) => item.name),
+    ]);
+    const prefix = `${pipeline[rootField].replace(/\/$/, "")}/`;
+    for (const task of state.tasks) {
+      if (task.kind !== taskKind) continue;
+      for (const artifact of task.artifacts || []) {
+        const path = String(artifact.path || "");
+        if (pipeline[rootField] && path.startsWith(prefix)) {
+          occupied.add(path.slice(prefix.length).split("/")[0]);
+        }
+      }
+    }
+    pipeline[field] = nextAvailableOutputName(pipeline[field], occupied);
+  }
 }
 
 function updateE2EPipelineOption(key, value) {

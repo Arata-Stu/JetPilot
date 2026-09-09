@@ -7,7 +7,7 @@ import re
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from .e2e_pipeline import PipelineTaskSpec
+from .e2e_pipeline import PipelineTaskSpec, occupied_output_names
 from .map_detail import load_yaml
 from .object_detection_analysis import scan_object_detection_models
 from .security import (
@@ -566,6 +566,7 @@ def pipeline_snapshot(config: Any) -> dict[str, Any]:
         "training_root": str(training_root(config)),
         "dataset_root": str(dataset_root(config)),
         "run_root": str(run_root(config)),
+        "occupied_run_names": occupied_output_names(run_root(config)),
         "model_root": str(model_root(config)),
         "datasets": scan_datasets(config),
         "runs": scan_runs(config),

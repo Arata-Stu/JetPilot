@@ -217,6 +217,13 @@ def _load_collection(path: Path, key: str) -> tuple[str, list[dict[str, Any]]]:
     return str(payload.get("default") or ""), entries
 
 
+def occupied_output_names(root: Path) -> list[str]:
+    # Include incomplete outputs and files, even when the artifact scanner omits them.
+    if not root.is_dir() or root.is_symlink():
+        return []
+    return sorted(path.name for path in root.iterdir())
+
+
 def pipeline_catalog(config: Any) -> dict[str, Any]:
     root = training_root(config)
     profile_default, profiles = _load_collection(
@@ -228,6 +235,8 @@ def pipeline_catalog(config: Any) -> dict[str, Any]:
     return {
         "dataset_root": str(dataset_root(config)),
         "run_root": str(run_root(config)),
+        "occupied_dataset_names": occupied_output_names(dataset_root(config)),
+        "occupied_run_names": occupied_output_names(run_root(config)),
         "datasets": scan_datasets(config),
         "runs": scan_runs(config),
         "experiments": [
