@@ -24,6 +24,8 @@ def generate_launch_description():
         namespace="",
         parameters=[
             {
+                # RealSense publishes both Image and CameraInfo as Best Effort.
+                "input_qos": "SENSOR_DATA",
                 "input_image_width": ParameterValue(
                     LaunchConfiguration("input_image_width"), value_type=int
                 ),

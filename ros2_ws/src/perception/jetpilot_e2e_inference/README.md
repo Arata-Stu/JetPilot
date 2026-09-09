@@ -51,6 +51,12 @@ TensorRT control decoder、trajectory decoder、PyTorch経路の標準値は、�
 [`config/e2e_trajectory.param.yaml`](config/e2e_trajectory.param.yaml)、
 [`config/e2e_pytorch.param.yaml`](config/e2e_pytorch.param.yaml)を参照してください。
 
+TensorRT画像前処理の`input_qos`は`SENSOR_DATA`を指定し、RealSenseの
+Best Effort配信（ImageとCameraInfoの両方）を受信します。前処理の既定値
+`DEFAULT`ではReliable受信となり、RealSenseとのQoS不一致で推論が始まりません。
+起動ログに`RELIABILITY_QOS_POLICY`が出る場合は、インストール済みlaunchにも
+この設定が反映されているか確認してください。
+
 ## Assumptions / Known limits
 
 - online TensorRT trajectory経路は単一画像・IMUなしのmodelを前提とします。
