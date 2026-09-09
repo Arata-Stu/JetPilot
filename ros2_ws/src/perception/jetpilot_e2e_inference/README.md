@@ -131,6 +131,46 @@ cp /path/to/checkpoints/best.pt \
 
 ## How to launch
 
+### センサーとモデルの選択
+
+`bringup.sh`のTUIでは、センサーを選んだ後、学習センサーと制御方式が一致する
+配備済みモデルを選択します。モデル名・入力サイズ・TensorRT engineの有無を表示します。
+選択は起動時に行い、実行中のホットスワップではありません。
+RealSenseとEVSの両方を含むセンサー構成では、モデル選択の前に推論入力を
+RGB／EVSから選択できます。どちらか一方の入力で推論し、融合は行いません。
+
+非対話起動の既定モデルは次のとおりです。共通の`latest`には依存しません。
+
+| センサー | preset | モデルディレクトリ |
+| --- | --- | --- |
+| RealSense RGB | `e2e` | `models/e2e/camera_control` |
+| RealSense RGB | `e2e-steering` | `models/e2e/camera_steering` |
+| `event-camera` | `e2e` | `models/e2e/event_control` |
+| `event-camera` | `e2e-steering` | `models/e2e/event_steering` |
+
+Consoleの配備先も学習センサー・操舵のみ設定から同じ4種類へ自動選択されます。
+センサープロファイル自体はモデルの保存先を変更しません。
+
+```bash
+/workspaces/scripts/bringup.sh e2e-steering --vehicle jpbb --sensor-kit event-camera
+# 配備済みの別モデルを明示指定
+/workspaces/scripts/bringup.sh e2e-steering --vehicle jpbb --sensor-kit event-camera \
+  --e2e-model /workspaces/ros2_ws/models/e2e/my_event_steering
+```
+
+`metadata.json`を確認し、センサー・学習対象・単一画像入力が合わないモデルは拒否します。
+ネットワーク入力寸法はmetadataから設定します。旧モデルで学習画像トピックの情報が
+不足している場合は、正しい学習設定からONNXとmetadataを再出力してください。
+候補の検索先は`E2E_MODEL_BASE`（既定`$ROS2_WS/models/e2e`）で変更できます。
+実機にモデルが存在しない開発PCでの`--dry-run`では、存在しない既定モデルの検証は省略します。
+
+`e2e_trt.sh`単体の引数なし動作は従来どおり共通`latest`です。起動するモデルを
+確実にビルドするにはディレクトリを指定します。
+
+```bash
+/workspaces/scripts/e2e_trt.sh /workspaces/ros2_ws/models/e2e/event_steering
+```
+
 Jetson上でTensorRT engineを生成:
 
 実行用コンテナ内では、プロジェクト直下のスクリプトからもビルドできます。

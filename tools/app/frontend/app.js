@@ -3153,16 +3153,18 @@ function updateE2EPipelineOption(key, value) {
     }
   }
   if (key === "runDir") {
-    const run = selectedE2ERun();
-    if (run?.task === "trajectory") state.e2ePipeline.deployPreset = "camera_trajectory";
-    else if (run?.task === "control") {
-      const dataset = state.e2ePipeline.datasets.find((item) => item.path === run.dataset_dir);
-      const imageTopic = dataset?.image_topic || run.image_topic || "";
-      state.e2ePipeline.deployPreset = run.steering_only ? "camera_steering"
-        : imageTopic.endsWith("/event_image") ? "event_control" : "camera_control";
-    }
+    state.e2ePipeline.deployPreset = recommendedE2EDeployPreset(selectedE2ERun());
   }
   render();
+}
+
+function recommendedE2EDeployPreset(run) {
+  if (!run) return "";
+  const dataset = state.e2ePipeline.datasets.find((item) => item.path === run.dataset_dir);
+  const topic = dataset?.image_topic || run.image_topic || "";
+  const sensor = topic.endsWith("/event_image") ? "event" : "camera";
+  const target = run.task === "trajectory" ? "trajectory" : run.steering_only ? "steering" : "control";
+  return `${sensor}_${target}`;
 }
 
 function selectedE2EDataset() {
@@ -3313,6 +3315,9 @@ function renderE2EPipeline() {
   const pipeline = state.e2ePipeline;
   const dataset = selectedE2EDataset();
   const run = selectedE2ERun();
+  const recommendedPreset = recommendedE2EDeployPreset(run);
+  const deployment = pipeline.deployPresets.find((item) => item.id === recommendedPreset);
+  if (run) pipeline.deployPreset = recommendedPreset;
   const profile = selectedE2EDeployProfile();
   const hasTwoStages = pipeline.experiment === "mobilenet_head_then_finetune";
   const pipelineTasks = state.tasks.filter(isE2EPipelineTask).slice(0, 8);
@@ -3362,10 +3367,10 @@ function renderE2EPipeline() {
             <header><span>04</span><div><strong>Deploy to Jetson</strong><small>SCP + remote trtexec + model.plan</small></div></header>
             <div class="field"><label>Connection profile</label><select onchange="updateE2EPipelineOption('deployProfile', this.value)">${pipeline.deployProfiles.map((item) => `<option value="${esc(item.id)}" ${item.id === pipeline.deployProfile ? "selected" : ""}>${esc(item.label)} — ${esc(item.host === "__manual__" ? "manual" : item.host)}</option>`).join("")}</select></div>
             <div class="e2e-compact-fields"><label>SSH user<input value="${esc(pipeline.deployUser || profile?.user || "")}" onchange="updateE2EPipelineOption('deployUser', this.value)" /></label><label>Host<input value="${esc(pipeline.deployHost || (profile?.host === "__manual__" ? "" : profile?.host) || "")}" onchange="updateE2EPipelineOption('deployHost', this.value)" /></label></div>
-            <div class="field"><label>Model preset</label><select onchange="updateE2EPipelineOption('deployPreset', this.value)">${pipeline.deployPresets.map((item) => `<option value="${esc(item.id)}" ${item.id === pipeline.deployPreset ? "selected" : ""}>${esc(item.label)}</option>`).join("")}</select></div>
+            <div class="field"><label>Deploy destination (from model)</label><input readonly value="${esc(deployment?.label || (run ? "No compatible deployment preset" : "Select a training run"))}" /><div class="field-hint">${esc(deployment?.model_name || "")} · matched to the training sensor and learning target</div></div>
             <label class="check-row"><input type="checkbox" ${pipeline.buildEngine ? "checked" : ""} onchange="updateE2EPipelineOption('buildEngine', this.checked)" /><span>Build TensorRT engine on Jetson with trtexec (FP16)</span></label>
             <div class="field-hint">${esc(pipeline.remoteRoot || profile?.remote_root || "")}</div>
-            <button class="primary ${actionBusy("e2e-pipeline:deploy") ? "is-busy" : ""}" onclick="deployE2EModel()" ${run?.onnx_path ? "" : "disabled"} ${actionButtonAttrs("e2e-pipeline:deploy", "Deployment is starting...")}>${esc(actionButtonLabel("e2e-pipeline:deploy", "Transfer & deploy", "Starting..."))}</button>
+            <button class="primary ${actionBusy("e2e-pipeline:deploy") ? "is-busy" : ""}" onclick="deployE2EModel()" ${run?.onnx_path && deployment ? "" : "disabled"} ${actionButtonAttrs("e2e-pipeline:deploy", "Deployment is starting...")}>${esc(actionButtonLabel("e2e-pipeline:deploy", "Transfer & deploy", "Starting..."))}</button>
           </article>
         </div>
         <details class="e2e-pipeline-tasks" ${pipelineTasks.some(isActiveTask) ? "open" : ""}><summary>Pipeline tasks (${pipelineTasks.length})</summary>${renderTaskTable(pipelineTasks)}</details>

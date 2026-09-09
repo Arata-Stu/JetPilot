@@ -119,6 +119,8 @@ def main(cfg: DictConfig) -> None:
     metadata = {
         "format_version": 2,
         "model_name": str(run_cfg.run.name),
+        "image_topic": str(run_cfg.data.image_topic),
+        "modality": "event_image" if str(run_cfg.data.image_topic).endswith("/event_image") else "rgb",
         "model_kind": model_name,
         "task": task,
         "steering_only": bool(getattr(run_cfg.model, "steering_only", False)),

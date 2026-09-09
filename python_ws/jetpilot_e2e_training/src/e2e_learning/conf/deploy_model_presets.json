@@ -2,6 +2,15 @@
   "default": "camera_control",
   "presets": [
     {
+      "id": "event_steering",
+      "label": "Event Camera Steering Only (fixed throttle)",
+      "description": "EVS steering-only model; e2e-steering with event-camera sensor kit",
+      "model_name": "event_steering",
+      "model_kind": "e2e_control",
+      "modality": "event_image",
+      "metadata_filename": "metadata.json"
+    },
+    {
       "id": "camera_steering",
       "label": "Camera Steering Only (fixed throttle)",
       "description": "Steering-only PilotNet; run with bringup e2e-steering",

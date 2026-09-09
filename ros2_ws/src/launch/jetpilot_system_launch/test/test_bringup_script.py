@@ -102,14 +102,15 @@ def test_vehicle_and_sensor_profiles_are_listed_dynamically() -> None:
     assert "realsense" in sensor_kits
     assert "flir" in sensor_kits
     assert "realsense-silky" in sensor_kits
+    assert "event-camera" in sensor_kits
 
 
 def test_bringup_profiles_pass_schema_validation() -> None:
     output = run_launcher("--validate-profiles").stdout
 
     assert "vehicle: 3 profile(s)" in output
-    assert "sensor_kit: 4 profile(s)" in output
-    assert "validated: 7 profile(s)" in output
+    assert "sensor_kit: 5 profile(s)" in output
+    assert "validated: 8 profile(s)" in output
 
 
 def test_new_manifest_is_available_without_editing_launcher(tmp_path: Path) -> None:

@@ -456,16 +456,30 @@ def build_deploy_task(config: Any, body: dict[str, Any]) -> PipelineTaskSpec:
     if allowed is None or not allowed.is_file() or allowed.is_symlink():
         raise ValueError("model must be an exported model.onnx from an E2E training run")
 
+    metadata = _read_json(allowed.parent / "metadata.json")
+    image_topic = str(metadata.get("image_topic") or model.get("image_topic") or "")
+    model_config = metadata.get("config", {})
+    if not image_topic and isinstance(model_config, dict):
+        image_topic = str(model_config.get("data", {}).get("image_topic") or "")
+    is_event = metadata.get("modality") == "event_image" or image_topic.endswith("/event_image")
+    steering_only = bool(metadata.get("steering_only") or model.get("steering_only"))
+    task = str(metadata.get("task") or model.get("task") or "control")
+    recommended_preset = ("event" if is_event else "camera") + (
+        "_trajectory" if task == "trajectory" else "_steering" if steering_only else "_control"
+    )
+
     root = training_root(config)
     default_profile, profiles = _load_collection(root / "src/e2e_learning/conf/deploy_profiles.json", "profiles")
     default_preset, presets = _load_collection(root / "src/e2e_learning/conf/deploy_model_presets.json", "presets")
     profile_id = str(body.get("profile") or default_profile)
-    preset_id = str(body.get("preset") or default_preset)
+    preset_id = str(body.get("preset") or recommended_preset or default_preset)
     profile = next((item for item in profiles if str(item.get("id")) == profile_id), None)
     if profile is None:
         raise ValueError(f"unknown deploy profile: {profile_id}")
     if not any(str(item.get("id")) == preset_id for item in presets):
         raise ValueError(f"unknown model preset: {preset_id}")
+    if preset_id != recommended_preset:
+        raise ValueError(f"model does not match deploy preset {preset_id}; use {recommended_preset}")
     user = str(body.get("user") or profile.get("user") or config.jetson_user)
     host = str(body.get("host") or profile.get("host") or "")
     if host == "__manual__":

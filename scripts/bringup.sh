@@ -40,6 +40,7 @@ ASSUME_YES=false
 INTERACTIVE=false
 CLI_BAG_MANAGER=''
 CLI_SENSOR_KIT=''
+CLI_E2E_MODEL=''
 CLI_LOCALIZATION_INIT=''
 CLI_VSLAM_MODE=''
 FOXGLOVE_VSLAM_TEST=false
@@ -154,6 +155,7 @@ Options:
       --rate RATE      Rosbag replay rate (default: 1.0)
       --vehicle PROFILE
                         Select a discovered vehicle interface profile (default: jpbb for vehicle presets)
+      --e2e-model DIR  Select an E2E model directory (metadata is checked)
       --bag-manager    Enable bag manager recording control
       --no-bag-manager Disable bag manager recording control
       --sensor-kit NAME
@@ -1050,7 +1052,6 @@ apply_preset() {
       set_arg enable_e2e_inference true
       set_arg e2e_fixed_throttle_mode true
       set_arg fixed_throttle 0.2
-      set_arg e2e_model_root /workspaces/ros2_ws/models/e2e/camera_steering
       REQUIRES_VEHICLE=true
       ;;
     e2e)
@@ -1620,6 +1621,67 @@ choose_preset_interactively() {
   done < <(print_presets)
   selection="$(choose_one 'JetPilot bringup preset' "${options[@]}")" || exit $?
   PRESET="${selection%%[[:space:]]*}"
+}
+
+configure_e2e_model() {
+  is_true "$(get_arg enable_e2e_inference)" || return 0
+  local sensor=rgb base=camera target=control selected records line choice key value current
+  local model_root="${E2E_MODEL_BASE:-${ROS2_WS}/models/e2e}"
+  local helper="${SCRIPT_DIR}/e2e_models.py"
+  local options=() flags=() input_options=()
+  if [[ "$INTERACTIVE" == true && -z "$(get_arg e2e_image_topic 2>/dev/null || true)" ]]; then
+    if ((${#SENSOR_KIT_RTP_TOPICS[@]} > 0)); then
+      for line in "${SENSOR_KIT_RTP_TOPICS[@]}"; do
+        case "$line" in
+          */color/image_raw|*/event_image) input_options+=("$line") ;;
+        esac
+      done
+    fi
+    if ((${#input_options[@]} > 1)); then
+      choice="$(choose_one 'E2E input (RGB / EVS)' "${input_options[@]}")" || exit $?
+      set_arg e2e_image_topic "$choice"
+      if [[ "$choice" == */event_image ]]; then
+        set_arg e2e_event_image_mode true
+      else
+        set_arg e2e_event_image_mode false
+      fi
+    fi
+  fi
+  if is_true "$(get_arg e2e_event_image_mode 2>/dev/null || printf false)"; then
+    sensor=event
+    base=event
+  fi
+  flags=(--sensor "$sensor")
+  if is_true "$(get_arg e2e_fixed_throttle_mode 2>/dev/null || printf false)"; then
+    target=steering
+    flags+=(--steering-only)
+  fi
+  selected="${CLI_E2E_MODEL:-$(get_arg e2e_model_root 2>/dev/null || true)}"
+  if [[ -z "$selected" && "$INTERACTIVE" == true ]]; then
+    records="$("$PYTHON_BIN" "$helper" list "$model_root" "${flags[@]}")" || die 'could not list E2E models'
+    while IFS= read -r line; do
+      [[ -n "$line" ]] && options+=("$line")
+    done <<< "$records"
+    options+=('モデルのディレクトリを手入力...')
+    choice="$(choose_one "E2E model ($sensor / $target)" "${options[@]}")" || exit $?
+    if [[ "$choice" == 'モデルのディレクトリを手入力...' ]]; then
+      selected="$(prompt_path 'E2E model directory' "${model_root}/${base}_${target}")"
+    else
+      selected="${choice%%$'\t'*}"
+    fi
+  fi
+  selected="${selected:-${model_root}/${base}_${target}}"
+  set_arg e2e_model_root "$selected"
+  # Dry-run may be used on a workstation without the Jetson model directory.
+  if [[ "$DRY_RUN" == true && ! -d "$selected" ]]; then return 0; fi
+  records="$("$PYTHON_BIN" "$helper" validate "$selected" "${flags[@]}")" \
+    || die '選択したセンサー・制御方式にモデルが適合しません。モデルまたは配備先を確認してください。'
+  while IFS=$'\t' read -r key value; do
+    current="$(get_arg "$key" 2>/dev/null || true)"
+    [[ -z "$current" || "$current" == "$value" ]] \
+      || die "$key=$current does not match model metadata ($value)"
+    set_arg "$key" "$value"
+  done <<< "$records"
 }
 
 configure_fixed_throttle_interactively() {
@@ -2246,6 +2308,10 @@ print_summary() {
   printf '  custom line  : %s\n' "${CUSTOM_LINE_CSV:-none}"
   printf '  control      : %s\n' "$(get_arg enable_control)"
   printf '  E2E inference: %s\n' "$(get_arg enable_e2e_inference)"
+  if is_true "$(get_arg enable_e2e_inference)"; then
+    printf '  E2E input    : %s\n' "$(get_arg e2e_image_topic 2>/dev/null || printf /realsense/color/image_raw)"
+    printf '  E2E model    : %s\n' "$(get_arg e2e_model_root)"
+  fi
   if [[ "$PRESET" == 'e2e-collect' || "$PRESET" == 'e2e-steering' ]]; then
     printf '  固定スロットル: %s (R2・速度調整ボタンは不使用)\n' "$(get_arg fixed_throttle)"
   fi
@@ -2342,6 +2408,11 @@ while (($# > 0)); do
       shift 2
       ;;
     --vehicle=*) CLI_VEHICLE="${1#*=}"; shift ;;
+    --e2e-model)
+      (($# >= 2)) || die '--e2e-model requires a model directory'
+      CLI_E2E_MODEL="$2"
+      shift 2
+      ;;
     --bag-manager)
       CLI_BAG_MANAGER=true
       shift
@@ -2510,6 +2581,7 @@ if ((${#EXTRA_LAUNCH_ARGS[@]} > 0)); then
     parse_override "$override"
   done
 fi
+configure_e2e_model
 if [[ "$INTERACTIVE" == 'true' ]]; then
   configure_fixed_throttle_interactively
   configure_realsense_fps_interactively

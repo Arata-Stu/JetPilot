@@ -186,6 +186,21 @@ class E2EPipelineTests(unittest.TestCase):
         self.assertIn("model.trajectory_scale_m=7.5", train.command)
         self.assertIn("model.imu_samples=16", train.command)
 
+    def test_event_steering_deploy_is_selected_and_rgb_destination_rejected(self) -> None:
+        run = self._run(onnx=True)
+        (run / "metadata.json").write_text(json.dumps({
+            "task": "control", "steering_only": True,
+            "image_topic": "/event_camera/event_image", "modality": "event_image",
+        }))
+        presets_path = self.conf / "deploy_model_presets.json"
+        presets = json.loads(presets_path.read_text())
+        presets["presets"].append({"id": "event_steering", "model_name": "event_steering"})
+        presets_path.write_text(json.dumps(presets))
+        spec = build_deploy_task(self.config, {"model_path": str(run / "model.onnx")})
+        self.assertIn("event_steering", spec.command)
+        with self.assertRaisesRegex(ValueError, "does not match"):
+            build_deploy_task(self.config, {"model_path": str(run / "model.onnx"), "preset": "camera_control"})
+
     def test_catalog_and_deploy_task_only_accept_exported_runs(self) -> None:
         dataset = self._dataset()
         run = self._run(onnx=True)

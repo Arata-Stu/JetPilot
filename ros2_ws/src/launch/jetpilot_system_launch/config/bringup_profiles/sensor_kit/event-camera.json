@@ -15,8 +15,7 @@
     "sensor_kit_enable_flir": false,
     "publish_vehicle_evs_description": true,
     "e2e_event_image_mode": true,
-    "e2e_image_topic": "/event_camera/event_image",
-    "e2e_model_root": "/workspaces/ros2_ws/models/e2e/event_control"
+    "e2e_image_topic": "/event_camera/event_image"
   },
   "rtp_topics": []
 }
