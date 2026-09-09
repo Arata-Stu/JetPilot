@@ -178,11 +178,16 @@ function refreshTuningPanel() {
   const fresh=tuning.connected && Date.now()-tuning.receivedAt<3000;
   const mode={1:'AUTO',2:'MANUAL',3:'STOP',4:'PROPO'}[status?.mode] || '不明';
   const preview=tuning.previewDetail===state.selectedMapDetail ? tuning.preview : null;
+  const canvas=$('map-preview-canvas');
+  const position=fresh && status?.pose && canvas && state.selectedMapDetail
+    ? mapPointProjector(state.selectedMapDetail,canvas.width,canvas.height)([status.pose.x,status.pose.y]) : null;
+  const outside=position && (position[0]<0 || position[1]<0 || position[0]>canvas.width || position[1]>canvas.height);
   el.innerHTML=`<p>${fresh?'接続中':'未接続・受信停止'}${fresh && !status?.lease_live ? '（走行許可失効：STOPで停車してください）' : ''} · ${esc(fresh?status?.localization:'位置情報なし')} · ${esc(mode)} · ${fresh && status?.speed_mps!=null ? Number(status.speed_mps).toFixed(2)+' m/s':'速度不明'}</p>
     <p>実車：${esc(status?.line || '未適用')} / ${esc(status?.revision?.slice(0,12) || '—')}<br>プレビュー：${esc(preview?.line || '未作成')} / ${esc(preview?.revision?.slice(0,12) || '—')}${preview ? ` · ${preview.points.length}点 · 最大 ${Math.max(...preview.points.map(p=>p[5])).toFixed(2)} m/s` : ''}</p>
     ${fresh && !status?.pose ? `<p role="status">${esc(status?.pose_issue || '自己位置のTFを待っています。')}</p>` : ''}
     ${fresh && status?.localization!=='localized' ? `<p>自己位置推定の確定待ちです。センサー・localizationの起動と初期位置を確認してください。</p>` : ''}
     ${fresh && status?.pose ? `<p>実車位置：x=${Number(status.pose.x).toFixed(2)} m / y=${Number(status.pose.y).toFixed(2)} m</p>` : ''}
+    ${outside ? '<p>自己位置は地図の描画範囲外です。開いている地図と地図の原点・範囲を確認してください。</p>' : ''}
     ${fresh && status?.ros ? `<details id="tuning-ros-status" ${rosDetailsOpen?'open':''}><summary>ROS受信状況</summary><p>Domain ${esc(status.ros.domain_id)} · ${esc(status.ros.rmw)}<br>Map: ${esc(status.ros.map_dir)}</p>${Object.entries(status.ros.publishers || {}).map(([topic,count])=>`<p>${esc(topic)}：配信元 ${Number(count)}</p>`).join('')}</details>` : ''}
     <p>白：実車の適用ライン　青：プレビュー　橙：自己位置・走行軌跡</p>
     ${tuning.error?`<p role="alert">${esc(tuning.error)}</p>`:''}
@@ -200,7 +205,13 @@ function drawTuningOverlay(ctx,detail,width,height) {
   if(!tuning.connected || Date.now()-tuning.receivedAt>3000 || status?.localization!=='localized' || !status.pose)return;
   drawPolyline(ctx,tuning.trail.map(project),'#ffa94d',2,false,scale);
   const pose=status.pose;
-  drawCanvasArrow(ctx,project([pose.x,pose.y]),project([pose.x+0.35*Math.cos(pose.yaw),pose.y+0.35*Math.sin(pose.yaw)]),'#ffa94d','実車',scale);
+  const start=project([pose.x,pose.y]);
+  const heading=project([pose.x+Math.cos(pose.yaw),pose.y+Math.sin(pose.yaw)]);
+  const dx=heading[0]-start[0], dy=heading[1]-start[1], length=Math.hypot(dx,dy);
+  if(!start.every(Number.isFinite) || !Number.isFinite(length) || length===0)return;
+  // Keep the heading visible at every map zoom; its origin remains the measured position.
+  const end=[start[0]+dx/length*28*scale,start[1]+dy/length*28*scale];
+  drawCanvasArrow(ctx,start,end,'#ffa94d','実車',scale);
 }
 
 setInterval(() => {

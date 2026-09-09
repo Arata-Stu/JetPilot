@@ -123,3 +123,40 @@ test('manual mode can connect for telemetry while applying still requires STOP',
   assert.equal(ctx.t.status.pose.x,1);
   assert.match(ctx.tuningApplyIssue(),/STOP/);
 });
+
+test('vehicle heading stays visible on a zoomed-out rotated map with the real arrow renderer',()=>{
+  const ctx=context();
+  const app=fs.readFileSync(path.join(__dirname,'../app.js'),'utf8');
+  const begin=app.indexOf('function drawCanvasArrow(');
+  vm.runInContext(app.slice(begin,app.indexOf('\nfunction ',begin+1)),ctx);
+  let strokes=0,label='';const moves=[];
+  const canvas={save(){},restore(){},setLineDash(){},beginPath(){},
+    moveTo(x,y){moves.push([x,y]);},lineTo(){},stroke(){strokes++;},closePath(){},fill(){}};
+  ctx.drawLabel=(_ctx,text)=>{label=text;};
+  ctx.mapPointProjector=()=>p=>[50+p[1]*0.1,50-p[0]*0.1];
+  for(const scale of [0.5,1,3]) {
+    ctx.canvasCssPixelScale=()=>scale;
+    Object.assign(ctx.t,{enabled:true,mapPath:'/map',connected:true,receivedAt:Date.now(),
+      status:{localization:'localized',pose:{x:1,y:2,yaw:0}}});
+    moves.length=0;
+    ctx.drawTuningOverlay(canvas,ctx.state.selectedMapDetail,100,100);
+    assert.deepEqual(moves[0],[50.2,49.9]);
+    assert.ok(Math.abs(Math.hypot(moves[1][0]-moves[0][0],moves[1][1]-moves[0][1])-28*scale)<1e-10);
+    assert.ok(moves[1][1]<moves[0][1]);
+  }
+  assert.equal(strokes,3);assert.equal(label,'実車');
+});
+
+test('pose outside the map is explained without changing received coordinates',()=>{
+  const ctx=context(),panel={innerHTML:''},canvas={width:100,height:100};
+  ctx.$=id=>id==='tuning-status'?panel:id==='map-preview-canvas'?canvas:null;
+  Object.assign(ctx.t,{connected:true,receivedAt:Date.now(),
+    status:{localization:'localized',pose:{x:200,y:20,yaw:0}}});
+  ctx.refreshTuningPanel();
+  assert.match(panel.innerHTML,/描画範囲外/);
+  assert.match(panel.innerHTML,/x=200.00/);
+  ctx.t.status.pose.x=50;ctx.refreshTuningPanel();
+  assert.doesNotMatch(panel.innerHTML,/描画範囲外/);
+  ctx.t.receivedAt=0;ctx.refreshTuningPanel();
+  assert.doesNotMatch(panel.innerHTML,/描画範囲外/);
+});
