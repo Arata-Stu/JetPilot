@@ -142,3 +142,51 @@ test('initial Step waits for initialization then advances without starting playb
  assert.equal(vm.runInContext('state.simulation.playing',ctx),false);
  assert.ok(Math.abs(vm.runInContext('state.simulation.time',ctx)-.1)<1e-12);
 });
+
+test('controller-specific controls follow selection and expose both in comparison',()=>{
+ const {ctx}=ui();
+ assert.equal(ctx.renderSimulationControllerSettings(),'');
+ ctx.setSimulationController('map_pursuit');
+ assert.match(ctx.renderSimulationControllerSettings(),/simulation-mapLateralGain/);
+ assert.doesNotMatch(ctx.renderSimulationControllerSettings(),/simulation-mpcSteps/);
+ ctx.setSimulationController('kinematic_mpc');
+ assert.match(ctx.renderSimulationControllerSettings(),/simulation-mpcSteps/);
+ assert.doesNotMatch(ctx.renderSimulationControllerSettings(),/simulation-mapLateralGain/);
+ ctx.setSimulationController('all');
+ const html=ctx.renderSimulationControllerSettings();
+ assert.match(html,/simulation-mapScaleFactor/);assert.match(html,/simulation-mpcTerminalWeight/);
+ assert.match(ctx.simulationMpcHorizonText(),/0.6秒/);
+});
+
+test('parameter edits reset live state, reach the worker, and reset only their own controller',()=>{
+ const {ctx,Worker}=ui();ctx.requestAnimationFrame=()=>1;
+ ctx.setSimulationController('all');ctx.toggleSimulationPlayback();const previous=Worker.instances[0];
+ const input=value=>({value:String(value),min:'0',setCustomValidity:()=>{}});
+ ctx.updateSimulationSetting('mapLateralGain',input(.9));assert.ok(previous.terminated);
+ ctx.updateSimulationSetting('mpcSteps',input(20));
+ ctx.updateSimulationSetting('mpcDt',input(.1));
+ assert.match(ctx.simulationMpcHorizonText(),/2秒/);
+ ctx.toggleSimulationPlayback();const settings=Worker.instances.at(-1).input.input.settings;
+ assert.equal(settings.mapLateralGain,.9);assert.equal(settings.mpcSteps,20);assert.equal(settings.mpcDt,.1);
+ ctx.resetSimulationControllerParameters('kinematic_mpc');
+ const current=ctx.simulationComparisonInput().settings;
+ assert.equal(current.mpcSteps,12);assert.equal(current.mpcDt,.05);assert.equal(current.mapLateralGain,.9);
+ assert.equal(vm.runInContext('state.simulation.playing',ctx),false);
+});
+
+test('parameter inputs reject blank, fractional count, NaN and out-of-range values',()=>{
+ const {ctx}=ui();
+ for(const [key,value] of [['mpcSteps','1.5'],['mpcSteps','51'],['mpcSamples','2'],['mpcDt','0'],['mapScaleFactor','1.1'],['mapLateralGain',''],['mpcPathWeight','NaN']]){
+  const before=ctx.simulationComparisonInput().settings[key];let error='';
+  ctx.updateSimulationSetting(key,{value,min:'0',setCustomValidity:message=>error=message});
+  assert.ok(error,key);assert.equal(ctx.simulationComparisonInput().settings[key],before);
+ }
+});
+
+test('Map and MPC custom parameters actually change steering and defaults match the engine',()=>{
+ const {ctx}=ui();const settings=ctx.simulationComparisonInput().settings;
+ for(const [key] of vm.runInContext('Object.values(simulationControllerFields).flat()',ctx)) assert.equal(settings[key],api.defaults[key]);
+ const path=[{x:0,y:.3},{x:1,y:.3},{x:2,y:1},{x:3,y:2}];const car={x:0,y:0,yaw:0,speed:2};
+ assert.notEqual(api.control('map_pursuit',path,car,api.defaults,false),api.control('map_pursuit',path,car,{...api.defaults,mapLateralGain:2},false));
+ assert.notEqual(api.control('kinematic_mpc',path,car,api.defaults,false),api.control('kinematic_mpc',path,car,{...api.defaults,mpcSteeringWeight:10000},false));
+});

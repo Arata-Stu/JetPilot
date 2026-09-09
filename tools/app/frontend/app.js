@@ -255,6 +255,18 @@ const state = {
       maxDecelMps2: 2.3,
       dragPerS: 0.04,
       dtS: 0.02,
+      mapLateralGain: 0.4,
+      mapScaleStart: 1.5,
+      mapScaleEnd: 3.0,
+      mapScaleFactor: 0.25,
+      mpcSteps: 12,
+      mpcDt: 0.05,
+      mpcSamples: 15,
+      mpcMinSpeed: 0.2,
+      mpcPathWeight: 4.0,
+      mpcHeadingWeight: 0.8,
+      mpcSteeringWeight: 0.15,
+      mpcTerminalWeight: 2.0,
     },
   },
   selectedTaskId: null,
@@ -6676,6 +6688,7 @@ function setSimulationController(value) {
   if (!["pure_pursuit", "map_pursuit", "kinematic_mpc", "all"].includes(value)) return;
   state.simulation.controller = value;
   resetSimulation();
+  updateSimulationControllerSettings();
 }
 
 function startSimulationLiveComparison() {
@@ -6856,6 +6869,63 @@ function updateSimulationComparisonChrome() {
   if (cancel) cancel.hidden = !simulationComparison.worker;
 }
 
+const simulationControllerFields = {
+  map_pursuit: [
+    ["mapLateralGain", "横誤差補正ゲイン", 0, 10, 0.05, 0.4],
+    ["mapScaleStart", "操舵低減の開始速度 (m/s)", 0, 50, 0.1, 1.5],
+    ["mapScaleEnd", "操舵低減の終了速度 (m/s)", 0, 50, 0.1, 3.0],
+    ["mapScaleFactor", "最大操舵低減率 (0〜1)", 0, 1, 0.05, 0.25],
+  ],
+  kinematic_mpc: [
+    ["mpcSteps", "予測ステップ数", 1, 50, 1, 12],
+    ["mpcDt", "予測の時間刻み (s)", 0.01, 1, 0.01, 0.05],
+    ["mpcSamples", "操舵候補数", 3, 51, 1, 15],
+    ["mpcMinSpeed", "予測最低速度 (m/s)", 0, 20, 0.1, 0.2],
+    ["mpcPathWeight", "経路誤差の重み", 0, 10000, 0.1, 4],
+    ["mpcHeadingWeight", "向きの誤差の重み", 0, 10000, 0.1, 0.8],
+    ["mpcSteeringWeight", "操舵量の重み", 0, 10000, 0.05, 0.15],
+    ["mpcTerminalWeight", "予測終端の誤差の重み", 0, 10000, 0.1, 2],
+  ],
+};
+
+function renderSimulationControllerSettings() {
+  const mode = state.simulation.controller || "pure_pursuit";
+  return Object.entries(simulationControllerFields).filter(([id]) => id === mode || mode === "all").map(([id, fields]) => `
+    <fieldset class="simulation-controller-parameters">
+      <legend>${id === "map_pursuit" ? "Map Pursuit" : "Kinematic MPC"}</legend>
+      <div class="simulation-control-grid">${fields.map(([key, label, min, max, step]) => `
+        <div class="field"><label for="simulation-${key}">${label}</label>
+          <input id="simulation-${key}" type="number" min="${min}" max="${max}" step="${step}" value="${state.simulation.settings[key]}" oninput="updateSimulationSetting(${js(key)}, this)" />
+        </div>`).join("")}</div>
+      ${id === "map_pursuit" ? `<p class="field-hint">低減率0.25は最大25%低減。終了速度が開始速度以下なら速度による低減は無効です。</p>` : `<p class="field-hint" id="simulation-mpc-horizon">${simulationMpcHorizonText()}</p><p class="field-hint">候補数・ステップ数を増やすと計算が重くなります。奇数の候補数では直進の操舵0も評価します。</p>`}
+      <button type="button" onclick="resetSimulationControllerParameters(${js(id)})">この方式の標準値に戻す</button>
+    </fieldset>`).join("");
+}
+
+function simulationMpcHorizonText() {
+  const s = state.simulation.settings;
+  return `予測時間：${Number((s.mpcSteps * s.mpcDt).toFixed(3))}秒（ステップ数 × 時間刻み）`;
+}
+
+function updateSimulationControllerSettings() {
+  const container = $("simulation-controller-settings");
+  if (container) container.innerHTML = renderSimulationControllerSettings();
+  const pursuit = $("simulation-pursuit-settings");
+  if (pursuit) {
+    const hidden = state.simulation.controller === "kinematic_mpc";
+    pursuit.hidden = hidden;
+    pursuit.querySelectorAll('input').forEach(input => input.disabled = hidden);
+  }
+}
+
+function resetSimulationControllerParameters(id) {
+  const fields = simulationControllerFields[id];
+  if (!fields) return;
+  for (const [key, , , , , value] of fields) state.simulation.settings[key] = value;
+  resetSimulation();
+  updateSimulationControllerSettings();
+}
+
 function renderSimulationPanel(detail) {
   ensureSimulationState(detail);
   const sim = state.simulation;
@@ -6898,7 +6968,7 @@ function renderSimulationPanel(detail) {
             <div class="field"><label for="simulation-compare-duration">実行時間 (s)</label><input id="simulation-compare-duration" type="number" min="1" max="120" step="1" value="${simulationComparison.duration}" oninput="updateSimulationComparisonOption('duration', this)" /></div>
             <div class="field"><label for="simulation-compare-offset">初期横ずれ (m)</label><input id="simulation-compare-offset" type="number" min="-5" max="5" step="0.05" value="${simulationComparison.offset}" oninput="updateSimulationComparisonOption('offset', this)" /></div>
             <div class="field"><label for="simulation-compare-yaw">初期向きのずれ (°)</label><input id="simulation-compare-yaw" type="number" min="-180" max="180" step="1" value="${simulationComparison.yawDegrees}" oninput="updateSimulationComparisonOption('yawDegrees', this)" /></div>
-            <div class="field full"><details><summary>方式別の条件</summary><p class="field-hint">Map Pursuit：横誤差補正 0.4、1.5–3.0 m/sで操舵を最大25%低減。MPC：12ステップ × 0.05秒、操舵15候補、予測最低速度0.2 m/s。重みは経路4・向き0.8・操舵0.15・終端2。実車コードの標準値です。</p></details></div>
+
             <div class="field full">
               <label for="simulation-source">Path source</label>
               <select id="simulation-source" onchange="setSimulationSource(this.value)">
@@ -6921,13 +6991,20 @@ function renderSimulationPanel(detail) {
               ? `<div class="field"><label>Target speed</label><input value="Custom profile" disabled /><span class="field-hint">Uses speed_mps at the nearest custom point.</span></div>`
               : simulationNumberInput("targetSpeedMps", "Target speed (m/s)", 0, 0.1)}
             ${simulationNumberInput("wheelbaseM", "Wheelbase (m)", 0.01, 0.01)}
+            <div id="simulation-pursuit-settings" class="field full" ${sim.controller === "kinematic_mpc" ? "hidden" : ""}>
+              <span class="field-hint">Pure Pursuit / Map Pursuit 共通</span>
+              <div class="simulation-control-grid">
             ${simulationNumberInput("minLookaheadM", "Min lookahead (m)", 0.01, 0.05)}
             ${simulationNumberInput("maxLookaheadM", "Max lookahead (m)", 0.01, 0.05)}
             ${simulationNumberInput("lookaheadGainS", "Lookahead gain (s)", 0, 0.05)}
+              </div>
+            </div>
             ${simulationNumberInput("maxSteeringRad", "Max steering (rad)", 0.01, 0.01)}
             ${simulationNumberInput("maxAccelMps2", "Max accel (m/s^2)", 0.01, 0.1)}
             ${simulationNumberInput("maxDecelMps2", "Max decel (m/s^2)", 0.01, 0.1)}
           </div>
+          <div id="simulation-controller-settings">${renderSimulationControllerSettings()}</div>
+          <p class="field-hint">設定変更で再生をリセットします。調整値はこの画面のSimulation用です。</p>
           <div class="simulation-metrics" id="simulation-metrics">
             <span class="field-hint">選択方式の状態（3台時はPure Pursuit）</span>${renderSimulationMetrics()}
           </div>
@@ -13734,14 +13811,15 @@ function stepSimulationOnce() {
 
 function updateSimulationSetting(key, input) {
   if (!Object.prototype.hasOwnProperty.call(state.simulation.settings, key)) return;
-  const value = Number(String(input?.value ?? "").trim());
-  const valid = Number.isFinite(value) && value >= Number(input?.min || 0);
-  input?.setCustomValidity(valid ? "" : "Enter a finite value in range");
+  const raw = String(input?.value ?? "").trim();
+  const value = Number(raw);
+  const field = Object.values(simulationControllerFields).flat().find(row => row[0] === key);
+  const integer = key === "mpcSteps" || key === "mpcSamples";
+  const valid = raw !== "" && Number.isFinite(value) && value >= (field ? field[2] : Number(input?.min || 0)) &&
+    (!field || value <= field[3]) && (!integer || Number.isInteger(value));
+  input?.setCustomValidity(valid ? "" : "指定範囲の数値を入力してください。ステップ数・候補数は整数です。");
   if (!valid) return;
-  clearSimulationComparison();
   state.simulation.settings[key] = value;
-  updateSimulationComparisonChrome();
-  drawSimulationPreview();
   if (key === "minLookaheadM" && state.simulation.settings.maxLookaheadM < value) {
     state.simulation.settings.maxLookaheadM = value;
     const maxInput = $("simulation-maxLookaheadM");
@@ -13752,6 +13830,9 @@ function updateSimulationSetting(key, input) {
     const minInput = $("simulation-minLookaheadM");
     if (minInput) minInput.value = value;
   }
+  resetSimulation();
+  const horizon = $("simulation-mpc-horizon");
+  if (horizon) horizon.textContent = simulationMpcHorizonText();
 }
 
 function setSimulationSource(source) {
