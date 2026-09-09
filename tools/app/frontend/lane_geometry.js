@@ -49,6 +49,30 @@ const LaneGeometry = (() => {
     result.centerline = centers(result);
     return result;
   }
-  return { paired, centers, fromSpine, split, join };
+  function connector(a, b, id, mode = "curve") {
+    if (a.closed_loop || b.closed_loop || a.id === b.id) throw new Error("接続元と接続先には異なる開いたLaneを選んでください。");
+    const start = a.centerline.at(-1), end = b.centerline[0];
+    if (!start || !end || a.centerline.length < 2 || b.centerline.length < 2) throw new Error("両LaneにCenterlineが必要です。");
+    const gap = distance(start, end);
+    if (gap < .001) throw new Error("端点が一致しています。「端点を直接接続」を使用してください。");
+    const unit = (p, q) => { const d = distance(p,q); if (d < 1e-6) throw new Error("端点の向きが定まりません。"); return [(q[0]-p[0])/d,(q[1]-p[1])/d]; };
+    const u = unit(a.centerline.at(-2), start), v = unit(end, b.centerline[1]);
+    const count = Math.max(12, Math.ceil(gap/.1));
+    if (count > 2000) throw new Error("接続区間が長すぎます。");
+    const curve = (p,q) => Array.from({length:count+1}, (_,i) => {
+      const t=i/count, h=1-t;
+      return [0,1].map(k => mode === "straight" ? p[k]*h+q[k]*t
+        : h*h*h*p[k]+3*h*h*t*(p[k]+u[k]*gap/3)+3*h*t*t*(q[k]-v[k]*gap/3)+t*t*t*q[k]);
+    });
+    const lane = {id, primary:false, closed_loop:false, boundary_mode:"paired", centerline_mode:"manual",
+      successor_ids:[b.id], default_successor_id:b.id,
+      centerline:curve(start,end)};
+    for (const key of ["left_bound","right_bound","drivable_left_bound","drivable_right_bound"]) {
+      const fallback = key.replace("drivable_", "");
+      lane[key] = curve((a[key] || a[fallback]).at(-1),(b[key] || b[fallback])[0]);
+    }
+    return lane;
+  }
+  return { paired, centers, fromSpine, split, join, connector };
 })();
 if (typeof module !== "undefined") module.exports = LaneGeometry;

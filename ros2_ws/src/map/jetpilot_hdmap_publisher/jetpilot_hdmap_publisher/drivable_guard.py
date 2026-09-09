@@ -1,9 +1,8 @@
 """Dependency-free, conservative planar safety geometry.
 
 A disk enclosing the complete body is swept continuously along each segment.
-Lane membership is conservative: each short sweep must fit one physical lane.
-This can block a narrow seam between non-overlapping lanes, but never treats
-an internal lane seam as free space without proving footprint containment.
+Only exposed edges of the physical lane union constrain the swept disk.
+Internal seams and overlaps do not create fictitious walls; obstacles remain holes.
 """
 from dataclasses import dataclass
 import math
@@ -79,6 +78,21 @@ def polygon(raw):
     return p
 
 
+def split_parameters(a, b, c, d):
+    """Split intersections and collinear overlap endpoints without geometry packages."""
+    u = (b[0]-a[0], b[1]-a[1]); v = (d[0]-c[0], d[1]-c[1])
+    denom = u[0]*v[1]-u[1]*v[0]
+    w = (c[0]-a[0], c[1]-a[1])
+    if abs(denom) > EPS:
+        t = (w[0]*v[1]-w[1]*v[0])/denom
+        q = (w[0]*u[1]-w[1]*u[0])/denom
+        return [max(0., min(1.,t))] if -EPS <= t <= 1+EPS and -EPS <= q <= 1+EPS else []
+    if abs(w[0]*u[1]-w[1]*u[0]) > EPS:
+        return []
+    length2 = u[0]**2+u[1]**2
+    return [max(0.,min(1.,sum((p[k]-a[k])*u[k] for k in (0,1))/length2)) for p in (c,d)]
+
+
 class Environment:
     def __init__(self, lanes, obstacles):
         self.lanes = []
@@ -95,6 +109,39 @@ class Environment:
                 self.lanes.append((polygon(list(left)+list(reversed(right))), None))
         if not self.lanes:
             raise ValueError("no physical drivable bounds")
+        self.boundary = []
+        all_edges = [edge for outer,other in self.lanes
+                     for poly in (outer,other) if poly is not None for edge in edges(poly)]
+        for a,b in all_edges:
+            cuts = sorted(set([0.,1.] + [t for c,d in all_edges for t in split_parameters(a,b,c,d)]))
+            length = math.dist(a,b)
+            for lo,hi in zip(cuts,cuts[1:]):
+                if (hi-lo)*length <= EPS:
+                    continue
+                start = tuple(a[k]+lo*(b[k]-a[k]) for k in (0,1))
+                end = tuple(a[k]+hi*(b[k]-a[k]) for k in (0,1))
+                mid = tuple((start[k]+end[k])/2 for k in (0,1))
+                plus = minus = False
+                for outer,other in self.lanes:
+                    rings = [outer] if other is None else [outer,other]
+                    touching = [(ring,c,d) for ring in rings for c,d in edges(ring)
+                                if distance(mid,c,d) <= EPS]
+                    if not touching:
+                        member = inside(mid,outer) if other is None else inside(mid,outer) != inside(mid,other)
+                        plus = plus or member
+                        minus = minus or member
+                    else:
+                        for ring,c,d in touching:
+                            # Signed orientation determines the material side exactly;
+                            # no finite probe can accidentally bridge a narrow gap.
+                            area = sum(u[0]*v[1]-v[0]*u[1] for u,v in edges(ring))
+                            inner = other is not None and inside(ring[0], other if ring is outer else outer)
+                            alignment = (b[0]-a[0])*(d[0]-c[0])+(b[1]-a[1])*(d[1]-c[1])
+                            side = area*alignment*(-1 if inner else 1)
+                            plus = plus or side > 0
+                            minus = minus or side < 0
+                if not (plus and minus):
+                    self.boundary.append((start,end))
         for name, raw, margin in obstacles:
             if not math.isfinite(margin) or margin < 0:
                 raise ValueError("invalid obstacle margin")
@@ -106,12 +153,16 @@ class Environment:
                 near(a,b,c,d,radius+margin+EPS) for c,d in edges(poly)
             ):
                 return "static obstacle: " + name
-        for outer, other in self.lanes:
-            member = inside(a,outer) if other is None else inside(a,outer) != inside(a,other)
-            boundaries = list(edges(outer)) + ([] if other is None else list(edges(other)))
-            if member and all(not near(a,b,c,d,radius+EPS) for c,d in boundaries):
-                return ""
+        if self.contains(a) and self.contains(b) and all(
+            not near(a,b,c,d,radius+EPS) for c,d in self.boundary
+        ):
+            return ""
         return "outside physical drivable bounds"
+
+    def contains(self, p):
+        return any(inside(p,outer) if other is None else inside(p,outer) != inside(p,other)
+                   for outer,other in self.lanes)
+
 
 
 @dataclass(frozen=True)

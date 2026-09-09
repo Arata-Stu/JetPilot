@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import math
+import time
 from pathlib import Path
 from typing import Optional, Sequence, Tuple
 
@@ -102,6 +103,9 @@ class HdMapSectionLocalizerNode(Node):
         )
 
         qos = transient_local_qos()
+        self.current_lane_id = ""
+        self.current_lane_received = None
+        self.create_subscription(String, "/planning/current_lane", self.receive_current_lane, qos)
         self.section_pub = self.create_publisher(String, self.current_section_topic, qos)
         self.marker_pub = self.create_publisher(Marker, self.current_marker_topic, qos)
         self.tf_buffer = tf2_ros.Buffer(cache_time=Duration(seconds=20.0))
@@ -200,15 +204,26 @@ class HdMapSectionLocalizerNode(Node):
         t = tf_msg.transform.translation
         return (float(t.x), float(t.y), float(t.z))
 
+    def receive_current_lane(self, message):
+        self.current_lane_id = message.data
+        self.current_lane_received = time.monotonic()
+
     def resolve_section(self, pose: Point3) -> str:
         if self.hd_map is None or not self.hd_map.sections:
             return "unknown"
 
+        network = any(getattr(lane, "successor_ids", []) for lane in self.hd_map.lanes)
+        if network and (getattr(self, "current_lane_received", None) is None
+                        or time.monotonic()-self.current_lane_received > .5
+                        or not self.current_lane_id):
+            return "unknown"
         best_lane: Optional[Lane] = None
         best_s = 0.0
         best_distance = float("inf")
         section_lane_ids = {section.lane_id for section in self.hd_map.sections}
         for lane in self.hd_map.lanes:
+            if network and lane.lane_id != self.current_lane_id:
+                continue
             if lane.lane_id not in section_lane_ids or len(lane.centerline) < 2:
                 continue
             s_value, distance = project_point_to_lane_s(pose, lane)

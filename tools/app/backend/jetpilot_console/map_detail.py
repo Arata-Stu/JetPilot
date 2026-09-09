@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
+from .network_geometry import network, geometry
 from .map_environment import normalize_obstacles, obstacle_path_issue
 from .config import ConsoleConfig
 from .indexes import _artifact, _dir_size, _iso_mtime
@@ -526,6 +527,7 @@ def _write_hd_map_yaml(
     centerline_csv_path: Path,
     previous_data: dict[str, Any],
 ) -> None:
+    network.validate(lanes)
     _require_primary_sections(previous_data, lanes, primary_lane_id)
     output_mode = output_path.stat().st_mode & 0o777 if output_path.exists() else 0o644
     origin = raster.get("origin_xy_yaw") or [0.0, 0.0, 0.0]
@@ -549,6 +551,7 @@ def _write_hd_map_yaml(
         f"  primary_centerline_csv: {_quote_yaml_string(str(centerline_csv_path))}",
         "lanes:",
     ]
+    network_fingerprint = network.source_hash(lanes, previous_data.get("obstacles", []))
     for lane in lanes:
         lane_id = str(lane["id"])
         lines.extend(
@@ -563,6 +566,11 @@ def _write_hd_map_yaml(
         _append_world_points(lines, "left_bound", lane["left_bound"])
         _append_world_points(lines, "right_bound", lane["right_bound"])
         _append_world_points(lines, "centerline", lane["centerline"])
+        lines.append("    successor_ids: " + json.dumps(lane.get("successor_ids", [])))
+        lines.append("    default_successor_id: " + _quote_yaml_string(lane.get("default_successor_id", "")))
+        if lane.get("network_raceline") and lane.get("network_source_hash") == network_fingerprint:
+            _append_world_points(lines, "network_raceline", lane["network_raceline"])
+            lines.append("    network_source_hash: " + _quote_yaml_string(lane["network_source_hash"]))
         for key, points in _lane_drivable_bounds(lane).items():
             _append_world_points(lines, key, points)
     obstacles = normalize_obstacles(previous_data.get("obstacles", []))
@@ -623,7 +631,7 @@ def _write_centerline_csv(path: Path, lane: dict[str, Any]) -> None:
             )
 
 
-def _lane_editor_metadata(lane: dict[str, Any]) -> dict[str, str]:
+def _lane_editor_metadata(lane: dict[str, Any]) -> dict[str, Any]:
     boundary_mode = lane.get("boundary_mode", "independent")
     centerline_mode = lane.get("centerline_mode", "auto")
     if boundary_mode not in ("independent", "paired"):
@@ -632,7 +640,11 @@ def _lane_editor_metadata(lane: dict[str, Any]) -> dict[str, str]:
         raise ValueError("centerline_mode must be auto or manual")
     if boundary_mode == "paired" and len(lane.get("left_bound") or []) != len(lane.get("right_bound") or []):
         raise ValueError("paired boundaries must have the same number of points")
-    return {"boundary_mode": boundary_mode, "centerline_mode": centerline_mode}
+    return {"boundary_mode": boundary_mode, "centerline_mode": centerline_mode,
+            "successor_ids": lane.get("successor_ids", []),
+            "default_successor_id": lane.get("default_successor_id", ""),
+            "network_raceline": lane.get("network_raceline", []),
+            "network_source_hash": lane.get("network_source_hash", "")}
 
 
 def _lanes_from_hd_data(data: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1126,6 +1138,13 @@ def _read_hd_map(path: Path) -> tuple[dict[str, Any], dict[str, Any] | None]:
                 "centerline_length_m": _polyline_length(centerline, closed_loop),
             }
         )
+
+    network_fingerprint = (network.source_hash(data.get("lanes", []), data.get("obstacles", []) or [])
+                           if any(lane.get("network_raceline") for lane in lanes) else "")
+    for lane in lanes:
+        if lane.get("network_raceline") and lane.get("network_source_hash") != network_fingerprint:
+            lane["network_raceline"] = []
+            lane["network_source_hash"] = ""
 
     gates = []
     for raw_gate in data.get("section_gates", []) or []:
@@ -4025,7 +4044,7 @@ def save_hd_map(config: ConsoleConfig, payload: dict[str, Any]) -> dict[str, Any
         lanes.append(
             {
                 "id": lane_id,
-                **_lane_editor_metadata(raw_lane),
+                **_lane_editor_metadata(environment_lane),
                 **_lane_drivable_bounds(environment_lane),
                 "closed_loop": bool(raw_lane.get("closed_loop", True)),
                 "left_bound": _payload_points(raw_lane.get("left_bound")),
@@ -4069,6 +4088,28 @@ def save_hd_map(config: ConsoleConfig, payload: dict[str, Any]) -> dict[str, Any
             )
             if not validation["valid"]:
                 raise ValueError(f"{lane['id']} {field}: generation bounds must stay inside drivable bounds. {validation['issue']}")
+    network.validate(lanes)
+    if any(lane.get("successor_ids") for lane in lanes):
+        geometry.Environment([(*_lane_drivable_bounds(lane).values(), lane["closed_loop"]) for lane in lanes], [])
+    if payload.get("generate_network_racelines"):
+        obstacles = [(o["id"], o["polygon"], o["margin_m"]) for o in previous_data["obstacles"]]
+        physical = geometry.Environment([
+            (*_lane_drivable_bounds(lane).values(), lane["closed_loop"]) for lane in lanes
+        ], obstacles)
+        clearance = geometry.Settings().radius  # Same default swept-body envelope as runtime.
+        for lane in lanes:
+            if lane.get("closed_loop", True):
+                raise ValueError("Network generation requires open lanes; use the existing generator for a closed single lane.")
+            # Extend only the end caps for footprint clearance across shared seams.
+            # Physical clearance is always checked against the complete map union.
+            generation = network.generation_environment(lane, geometry)
+            class Both:
+                def issue(self, a, b, radius):
+                    return generation.issue(a,b,0.) or physical.issue(a,b,radius)
+            lane["network_raceline"] = network.smooth_candidate(lane, Both(), clearance)
+        fingerprint = network.source_hash(lanes, previous_data["obstacles"])
+        for lane in lanes:
+            lane["network_source_hash"] = fingerprint
     validated_previous_data = _validated_hd_topology(map_dir, previous_data, lanes)
     hd_map_path.parent.mkdir(parents=True, exist_ok=True)
     _write_hd_map_yaml(

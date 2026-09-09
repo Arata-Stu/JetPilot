@@ -291,6 +291,8 @@ def write_hd_map_yaml(
 ) -> None:
     previous = load_yaml(output_path, allow_flat_fallback=False) if output_path.exists() else {}
     old_lanes = {lane.get("id"): lane for lane in previous.get("lanes", [])}
+    if any(lane.get("successor_ids") for lane in previous.get("lanes", [])):
+        raise ValueError("分岐・合流のあるHD mapはMap UIで編集してください。旧エディタでは接続情報を更新できません。")
     lines = [
         "format: tamiya_local_hd_map_v1",
         "frame_id: map",

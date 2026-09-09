@@ -34,6 +34,7 @@ class Lane:
     centerline: List[Point3]
     drivable_left_bound: List[Point3] = field(default_factory=list)
     drivable_right_bound: List[Point3] = field(default_factory=list)
+    successor_ids: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -166,6 +167,7 @@ def load_hd_map(path: Path, frame_override: str) -> HdMap:
         lanes.append(
             Lane(
                 lane_id=str(raw_lane.get("id") or f"lane_{lane_index:03d}"),
+                successor_ids=list(raw_lane.get("successor_ids", [])),
                 closed_loop=bool(raw_lane.get("closed_loop", True)),
                 left_bound=read_points(raw_lane.get("left_bound", [])),
                 right_bound=read_points(raw_lane.get("right_bound", [])),

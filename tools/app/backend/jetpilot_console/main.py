@@ -116,7 +116,7 @@ TASK_STREAM_CHUNK_BYTES = 256 * 1024
 
 def _frontend_asset_version(frontend_root: Path) -> str:
     mtimes = []
-    for name in ("index.html", "app.js", "lane_geometry.js", "camera_projection.js", "camera_overlay_ui.js", "point_cloud_ui.js", "live_tuning.js", "simulation_compare.js", "styles.css"):
+    for name in ("index.html", "app.js", "lane_geometry.js", "camera_projection.js", "camera_overlay_ui.js", "point_cloud_ui.js", "live_tuning.js", "simulation_compare.js", "network_simulation.js", "styles.css"):
         path = frontend_root / name
         if path.exists():
             mtimes.append(path.stat().st_mtime_ns)
@@ -2102,6 +2102,11 @@ find {shlex.quote(record_root)} -name metadata.yaml -printf '%TY-%Tm-%Td %TH:%TM
                 return
             title = "Prepare HD map raster"
         elif stage == "generate-raceline":
+            from .map_detail import load_yaml
+            network_path = Path(map_dir) / f"{Path(map_dir).name}_hd_map.yaml"
+            if network_path.exists() and any(lane.get("successor_ids") for lane in load_yaml(network_path).get("lanes", [])):
+                self._json({"error": "分岐・合流のある地図は、Lane編集の『保存して各LaneのRaceline候補を生成』を使用してください。"}, HTTPStatus.BAD_REQUEST)
+                return
             direction = body.get("direction", DEFAULT_RACELINE_DIRECTION)
             vehicle_width_m = body.get(
                 "vehicle_width_m",

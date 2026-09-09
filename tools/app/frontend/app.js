@@ -6734,6 +6734,7 @@ async function startSimulationOptimization() {
   }
   const o = simulationOptimization;
   const input = JSON.parse(simulationOptimizationSignature());
+  if (input.network) { o.error = "手動信号を使うネットワークSimulationでは自動調整を無効にしています。"; updateSimulationOptimizationChrome(); return; }
   if (input.controller === "all") { o.error = "自動調整はControllerを1方式選択してください。"; updateSimulationOptimizationChrome(); return; }
   if (input.path.length < 2) { o.error = "評価する経路が必要です。"; updateSimulationOptimizationChrome(); return; }
   o.active = true;
@@ -6786,6 +6787,7 @@ function applySimulationOptimization() {
 }
 
 function renderSimulationOptimization() {
+  if (state.simulation.source?.startsWith("network_")) return `<p class="field-hint">手動信号付きネットワークではOptunaの自動調整は利用できません。単一ラインのSimulationで利用できます。</p>`;
   const o = simulationOptimization;
   const result = o.result;
   const format = value => value == null ? "—" : Number(value).toFixed(4);
@@ -6797,7 +6799,7 @@ function renderSimulationOptimization() {
     <p class="field-hint">PPはLookahead、Map PursuitはLookaheadと補正・操舵低減、MPCは予測ステップ数と評価の重みを探索します。MPCの時間刻み・候補数は固定です。</p>
     <label for="simulation-optuna-trials">候補数（現在値の評価を除く）</label>
     <select id="simulation-optuna-trials" ${o.active ? "disabled" : ""} onchange="simulationOptimization.trials=Number(this.value)">${[5,10,20,30,50].map(n=>`<option value="${n}" ${o.trials===n?'selected':''}>${n}</option>`).join("")}</select>
-    <button onclick="startSimulationOptimization()" ${o.active || state.simulation.controller==='all' ? "disabled" : ""}>自動調整を開始</button>
+    <button onclick="startSimulationOptimization()" ${o.active || state.simulation.controller==='all' || state.simulation.source?.startsWith('network_') ? "disabled" : ""}>自動調整を開始</button>
     ${o.active ? '<button onclick="stopSimulationOptimization()">中止</button>' : ''}
     <p role="status">${esc(text)}</p>${o.error ? `<p class="warn" role="alert">${esc(o.error)}</p>` : ''}
     ${result ? `<p>現在値 RMS：${format(result.baseline?.score)} m ／ 最良 RMS：${format(result.best?.score)} m</p>
@@ -6809,6 +6811,52 @@ function renderSimulationOptimization() {
 function updateSimulationOptimizationChrome() {
   const el = $("simulation-optimization");
   if (el) el.innerHTML = renderSimulationOptimization();
+}
+
+const simulationNetwork = { mapPath: "", topologyKey: "", signals: {}, initialLaneId: "" };
+
+function simulationNetworkInput(detail = state.selectedMapDetail) {
+  if (!state.simulation.source?.startsWith("network_")) return null;
+  const topologyKey = JSON.stringify([(detail?.hd_map?.lanes || []).map(l=>[l.id,l.successor_ids,l.default_successor_id]),detail?.hd_map?.sections,detail?.hd_map?.junctions]);
+  if (simulationNetwork.mapPath !== detail?.map?.path || simulationNetwork.topologyKey !== topologyKey) {
+    Object.assign(simulationNetwork, { mapPath: detail?.map?.path || "", topologyKey, signals: {}, initialLaneId: "" });
+  }
+  return { lanes: detail?.hd_map?.lanes || [], sections: detail?.hd_map?.sections || [],
+    junctions: detail?.hd_map?.junctions || [],
+    initialLaneId: simulationNetwork.initialLaneId || primaryLane(detail)?.id,
+    mode: state.simulation.source === "network_raceline" ? "raceline" : "centerline" };
+}
+
+function setSimulationNetworkSignal(laneId, value) {
+  const network = simulationNetworkInput();
+  if (!network) return;
+  try {
+    const signals = {...simulationNetwork.signals, [laneId]: value};
+    NetworkSimulation.create(network).setSignals(signals);
+    simulationNetwork.signals = signals;
+    simulationLive.worker?.postMessage({type:"signals", signals});
+    // Signal changes are live input, not geometry/parameter edits; keep every car running.
+    stopSimulationOptimization(true);
+  } catch (error) { toast(error.message,"error"); }
+}
+
+function setSimulationNetworkInitialLane(id) {
+  simulationNetwork.initialLaneId = id;
+  resetSimulation(); render();
+}
+
+function renderSimulationNetworkControls(detail) {
+  const input = simulationNetworkInput(detail);
+  if (!input) return "";
+  try {
+    const controls = NetworkSimulation.create(input).controls;
+    return `<fieldset class="field full"><legend>Simulationの信号</legend>
+      <label>開始Lane<select onchange="setSimulationNetworkInitialLane(this.value)">${input.lanes.map(l=>`<option value="${esc(l.id)}" ${l.id===input.initialLaneId?'selected':''}>${esc(l.id)}</option>`).join('')}</select></label>
+      <p class="field-hint">通常は保存したデフォルト分岐を選びます。実行中・Pause中も信号を変更できます。分岐の1m手前で方向を確定し、確定後の方向変更は次回の進入から反映します。停止は停止線を通過するまで有効です。</p>
+      ${controls.map(c=>`<label>${esc(c.laneId)}${c.signalId?` ／ 信号 ${esc(c.signalId)}`:''}<select onchange="setSimulationNetworkSignal('${esc(c.laneId)}',this.value)">${[['default',`通常 → ${c.defaultLaneId}`],['stop','停止'],...c.options.map(o=>[o.value,`${o.label} → ${o.laneId}`])].map(([value,label])=>`<option value="${esc(value)}" ${(simulationNetwork.signals[c.laneId] || 'default')===value?'selected':''}>${esc(label)}</option>`).join('')}</select></label>`).join('')}
+      <p class="field-hint">JunctionがあるLaneはActivation Sectionから信号を評価し、区間終端の手前で停止します。未接続の方向は表示しません。Junctionがない分岐は接続先を直接指定できます。</p>
+    </fieldset>`;
+  } catch(error) { return `<p class="warn" role="alert">${esc(error.message)}</p>`; }
 }
 
 const simulationLive = { worker: null, frames: null, pending: false, done: false, stepRequested: 0 };
@@ -6883,7 +6931,7 @@ function ensureSimulationLive() {
       simulationComparison.error = "Simulationの計算に失敗しました。再読み込みしてください。";
       updateSimulationChrome();
     };
-    worker.postMessage({type:"start", input});
+    worker.postMessage({type:"start", input: {...input, signals: simulationNetwork.signals}});
     return true;
   } catch (error) {
     stopSimulationLive();
@@ -6904,7 +6952,8 @@ const simulationComparison = { worker: null, results: null, signature: "", progr
 
 function simulationComparisonInput() {
   const path = simulationPathPoints();
-  return { path, closed: simulationPathClosed(path), profile: state.simulation.source === "custom",
+  const network = simulationNetworkInput();
+  return { ...(network ? {network} : {}), path, closed: network ? false : simulationPathClosed(path), profile: state.simulation.source === "custom",
     settings: { ...state.simulation.settings }, duration: simulationComparison.duration,
     offset: simulationComparison.offset, yawOffset: simulationComparison.yawDegrees * Math.PI / 180 };
 }
@@ -6992,8 +7041,8 @@ function renderSimulationComparisonResults() {
   const number = value => value === null ? "—" : Number(value).toFixed(3);
   return `<div class="simulation-comparison-table"><table>
     <caption>${state.simulation.time.toFixed(2)} / ${c.duration}秒・初期横ずれ ${c.offset} m・初期向き ${c.yawDegrees}° ／ 共通の速度・車両条件</caption>
-    <thead><tr><th>方式</th><th>追従誤差 RMS (m)</th><th>最大誤差 (m)</th><th>操舵変化 (rad/s)</th><th>走行距離 (m)</th><th>経過 (s)</th><th>結果</th></tr></thead>
-    <tbody>${c.results.map(r => `<tr><th><span style="color:${r.color}">●</span> ${esc(r.name)}</th><td>${number(r.rmsError)}</td><td>${number(r.maxError)}</td><td>${number(r.steeringRate)}</td><td>${r.distance.toFixed(2)}</td><td>${r.time.toFixed(2)}</td><td>${esc(r.status === "実行中" && !state.simulation.playing ? "一時停止" : r.status)}</td></tr>`).join("")}</tbody>
+    <thead><tr><th>方式</th><th>追従誤差 RMS (m)</th><th>最大誤差 (m)</th><th>操舵変化 (rad/s)</th><th>走行距離 (m)</th><th>経過 (s)</th><th>結果</th><th>現在Lane → 次のLane</th></tr></thead>
+    <tbody>${c.results.map(r => `<tr><th><span style="color:${r.color}">●</span> ${esc(r.name)}</th><td>${number(r.rmsError)}</td><td>${number(r.maxError)}</td><td>${number(r.steeringRate)}</td><td>${r.distance.toFixed(2)}</td><td>${r.time.toFixed(2)}</td><td>${esc(r.status === "実行中" && !state.simulation.playing ? "一時停止" : r.status)}</td><td>${esc(r.car?.laneId || "—")} ${r.car?.nextLaneId ? `→ ${esc(r.car.nextLaneId)}${r.car.branchCommitted ? "（確定）" : "（候補）"}` : ""}</td></tr>`).join("")}</tbody>
   </table></div><p class="field-hint">誤差は車両位置から経路の線分までの距離です。操舵変化は単位時間あたりの変化量。途中終了した方式は経過時間と結果も確認してください。</p>`;
 }
 
@@ -7073,6 +7122,8 @@ function renderSimulationPanel(detail) {
   const sourceOptions = [
     ["raceline", "Raceline"],
     ["centerline", "Centerline"],
+    ["network_centerline", "Laneネットワーク · Centerline", !detail.hd_map?.lanes?.some(l=>l.successor_ids?.length)],
+    ["network_raceline", "Laneネットワーク · Raceline候補", !detail.hd_map?.lanes?.some(l=>l.successor_ids?.length)],
     ["custom", customLine ? `Custom: ${customLine.name}` : "Custom line", !customLine],
   ];
   return `
@@ -7112,6 +7163,7 @@ function renderSimulationPanel(detail) {
                 ${sourceOptions.map(([value, label, disabled]) => `<option value="${value}" ${sim.source === value ? "selected" : ""} ${disabled ? "disabled" : ""}>${esc(label)}</option>`).join("")}
               </select>
             </div>
+            ${renderSimulationNetworkControls(detail)}
             <div class="field full">
               <label for="simulation-centerline-direction">Centerline direction</label>
               <select
@@ -7481,7 +7533,8 @@ function renderLayerToggles() {
 function mapEditorSaveState(detail) {
   const editor = state.mapEditor;
   const lane = sectionEditorLane(detail);
-  const geometryIssue = mapEditorCollectionIssue(editor);
+  const missingDefault = editor.lanes.find(l=>l.successor_ids?.length>1 && !l.successor_ids.includes(l.default_successor_id));
+  const geometryIssue = missingDefault ? `${missingDefault.id}: デフォルト分岐を指定してください。` : mapEditorCollectionIssue(editor);
   const sectionIssue = sectionDefinitionIssue(detail);
   const dirty = editor.dirty || (state.sectionEditor.mapPath === detail?.map?.path && state.sectionEditor.dirty);
   const issue = !mapEditorRasterReady(detail) ? "Rasterを生成してください"
@@ -7550,6 +7603,23 @@ function renderHdMapEditor(detail) {
         <button onclick="joinEditorLane()" ${editor.enabled && editor.lanes.length > 1 ? "" : "disabled"}>終点→始点を結合</button>
       </div>
       <div class="field-hint">${editor.drawingLane ? "カーソルを動かすと、次のクリックで配置される左右境界と中心線を破線で表示します。クリックで確定、2点以上で描画完了。最初の点は仮の向きで、次の点から進行方向が決まります。" : "ペアレーンは左右の同じ番号の点からcenterlineを生成します。境界の点追加・削除は反対側にも反映されます。分割はLeft / Rightを選び、端点以外をクリック。"}</div>
+      <div class="inspector-block">
+        <h4>分岐・合流の接続</h4>
+        <div class="field-hint">現在編集中のLaneの終端から接続します。重なっているだけでは接続されません。途中から分岐する場合は、その位置でLaneを分割してください。</div>
+        <select id="network-target" aria-label="接続先Lane">${editor.lanes.filter(l => l.id !== lane.id && !l.closed_loop).map(l => `<option value="${esc(l.id)}">${esc(l.id)}</option>`).join("")}</select>
+        <div class="editor-actions">
+          <button onclick="connectEditorLane('direct')" ${editor.enabled && !lane.closed_loop ? "" : "disabled"}>端点を直接接続</button>
+          <button onclick="connectEditorLane('straight')" ${editor.enabled && !lane.closed_loop ? "" : "disabled"}>直線Laneで接続</button>
+          <button onclick="connectEditorLane('curve')" ${editor.enabled && !lane.closed_loop ? "" : "disabled"}>カーブLaneで接続</button>
+        </div>
+        ${(lane.successor_ids || []).map(id => `<div>${esc(lane.id)} → ${esc(id)} <button onclick="disconnectEditorLane('${esc(id)}')" ${editor.enabled ? "" : "disabled"}>接続解除</button></div>`).join("")}
+        <label>通常選ぶ接続先 <select onchange="setEditorDefaultSuccessor(this.value)" ${editor.enabled ? "" : "disabled"}>
+          ${(lane.successor_ids || []).length > 1 ? '<option value="" disabled>デフォルト分岐を指定（必須）</option>' : '<option value="">接続先が1つなら自動</option>'}
+          ${(lane.successor_ids || []).map(id => `<option value="${esc(id)}" ${lane.default_successor_id === id ? "selected" : ""}>${esc(id)}</option>`).join("")}
+        </select></label>
+        <button onclick="saveHdMapFromEditor(true)" ${editor.enabled && editor.lanes.some(l => l.successor_ids?.length) ? "" : "disabled"}>保存して各LaneのRaceline候補を生成</button>
+        <div class="field-hint">Centerlineは各Laneと接続Laneに保持します。Raceline候補は端点・向きを固定して曲がり方を滑らかにします。全周最速の最適化ではありません。車体用の余裕は標準の安全判定と同じ約32cmです。橙線で候補を表示します。</div>
+      </div>
       <label class="layer-toggle"><input id="lane-manual-center" type="checkbox" ${lane.centerline_mode === "manual" ? "checked" : ""} onchange="setManualCenterline(this.checked)" ${editor.enabled ? "" : "disabled"} />Centerlineの手修正を保持</label>
       <div class="field-hint">Centerlineも下のモードで追加・移動できます。手修正後は境界を動かしても保持されます。Auto Centerで自動生成に戻ります。</div>
       <div class="editor-field-row">
@@ -10055,6 +10125,9 @@ function splitEditorLane() {
     if (issue) throw new Error(issue);
     if (!selected || !["left_bound", "right_bound"].includes(selected.field)) throw new Error("Left / Rightを選び、分割する境界点をクリックしてください。");
     const parts = LaneGeometry.split(lane, selected.index, nextEditorLaneId());
+    parts[0].successor_ids = [parts[1].id]; parts[0].default_successor_id = parts[1].id;
+    parts[1].successor_ids = lane.closed_loop ? [parts[0].id] : [...(lane.successor_ids || [])];
+    parts[1].default_successor_id = lane.closed_loop ? parts[0].id : lane.default_successor_id || "";
     for (const part of parts) { part.drivable_left_bound = cloneMapPolyline(part.left_bound); part.drivable_right_bound = cloneMapPolyline(part.right_bound); }
     rememberMapEditorState();
     state.mapEditor.lanes.splice(state.mapEditor.lanes.indexOf(lane), 1, ...parts);
@@ -10072,6 +10145,7 @@ function joinEditorLane() {
   try {
     const issue = laneTopologyEditIssue(lane) || laneTopologyEditIssue(target);
     if (issue) throw new Error(issue);
+    if (state.mapEditor.lanes.some(l => l.successor_ids?.length && [l.id,...l.successor_ids].some(id => id === lane.id || id === target.id))) throw new Error("接続のあるLaneは1本に統合できません。接続解除してから操作してください。");
     const joined = LaneGeometry.join(lane, target);
     joined.drivable_left_bound = cloneMapPolyline(joined.left_bound); joined.drivable_right_bound = cloneMapPolyline(joined.right_bound);
     rememberMapEditorState();
@@ -10084,9 +10158,47 @@ function joinEditorLane() {
   } catch (error) { toast(error.message, "error"); }
 }
 
+function connectEditorLane(mode) {
+  if (!state.mapEditor.enabled) return;
+  const lane = activeEditorLane(), target = state.mapEditor.lanes.find(l => l.id === $("network-target")?.value);
+  if (!target) return toast("接続先Laneを選んでください。", "error");
+  try {
+    let connection;
+    if (mode === "direct") {
+      if (lane.closed_loop || target.closed_loop || pointDistance(lane.centerline.at(-1),target.centerline[0]) > .001) throw new Error("端点が一致する開いたLane同士を指定してください。離れている場合は直線／カーブで接続できます。");
+      if (lane.successor_ids?.includes(target.id)) return;
+    } else connection = LaneGeometry.connector(lane,target,nextEditorLaneId(),mode);
+    rememberMapEditorState();
+    if (connection) state.mapEditor.lanes.push(connection);
+    lane.successor_ids = [...(lane.successor_ids || []), connection?.id || target.id];
+    if (!lane.successor_ids.includes(lane.default_successor_id)) lane.default_successor_id = lane.successor_ids[0];
+    if (connection) state.mapEditor.activeLaneId = connection.id;
+    markMapEditorDirty(); render();
+  } catch (error) { toast(error.message,"error"); }
+}
+
+function disconnectEditorLane(id) {
+  if (!state.mapEditor.enabled) return;
+  rememberMapEditorState();
+  const lane = activeEditorLane();
+  lane.successor_ids = (lane.successor_ids || []).filter(v => v !== id);
+  if (lane.default_successor_id === id) lane.default_successor_id = lane.successor_ids[0] || "";
+  markMapEditorDirty(); render();
+}
+
+function setEditorDefaultSuccessor(id) {
+  if (!state.mapEditor.enabled) return;
+  rememberMapEditorState(); activeEditorLane().default_successor_id = id;
+  markMapEditorDirty(); render();
+}
+
 function cloneEditorLane(lane = defaultEditorLane()) {
   return {
     id: lane.id || "lane_001",
+    successor_ids: [...(lane.successor_ids || [])],
+    default_successor_id: lane.default_successor_id || "",
+    network_raceline: cloneMapPolyline(lane.network_raceline || []),
+    network_source_hash: lane.network_source_hash || "",
     primary: lane.primary !== false,
     closed_loop: lane.closed_loop !== false,
     boundary_mode: lane.boundary_mode === "paired" ? "paired" : "independent",
@@ -11935,6 +12047,7 @@ function reverseDirectionPolyline(points, closedLoop) {
 }
 
 function mapEditorDirectionReverseIssue(detail, lane = activeEditorLane()) {
+  if (state.mapEditor.lanes.some(l => l.successor_ids?.length && [l.id,...l.successor_ids].includes(lane.id))) return "接続のあるLaneは方向反転できません。先に接続を解除してください。";
   if (!lane) return "No lane selected";
   if ((lane.centerline || []).length < 2) return "Centerline needs at least two points";
   const mapPath = detail?.map?.path || "";
@@ -13058,7 +13171,7 @@ function handleMapEditorContextMenu(event) {
   // Keep canvas gestures limited to the selected add/move mode.
 }
 
-async function saveHdMapFromEditor() {
+async function saveHdMapFromEditor(generateNetworkRacelines = false) {
   const detail = state.selectedMapDetail;
   if (!detail) return;
   ensureMapEditor(detail);
@@ -13088,6 +13201,7 @@ async function saveHdMapFromEditor() {
       body: JSON.stringify({
         map_dir: mapPath,
         primary_lane_id: state.mapEditor.primaryLaneId,
+        generate_network_racelines: generateNetworkRacelines === true,
         lanes: state.mapEditor.lanes,
         obstacles: state.mapEditor.obstacles,
         section_gates: state.sectionEditor.gates,
@@ -13432,6 +13546,7 @@ function drawMapLayers(ctx, detail, width, height) {
     if (state.mapLayers.left_bound) drawPolyline(ctx, (lane.left_bound || []).map(toPixel), active ? "#45c478" : "rgba(69, 196, 120, 0.20)", active ? 3 : 1.5, lane.closed_loop, uiScale);
     if (state.mapLayers.right_bound) drawPolyline(ctx, (lane.right_bound || []).map(toPixel), active ? "#d878d8" : "rgba(216, 120, 216, 0.20)", active ? 3 : 1.5, lane.closed_loop, uiScale);
     if (showCenterline) drawPolyline(ctx, (lane.centerline || []).map(toPixel), active ? "#e7c84b" : "rgba(231, 200, 75, 0.22)", active ? (lane.primary ? 4 : 3) : 1.5, lane.closed_loop, uiScale);
+    if (state.mapLayers.raceline && lane.network_raceline?.length && !state.mapEditor.dirty) drawPolyline(ctx, lane.network_raceline.map(toPixel), "#ffb347", 3, false, uiScale);
   }
   if (editorLanes) {
     drawEditorPointHandles(ctx, detail, toPixel, uiScale);
@@ -13911,6 +14026,13 @@ function primaryLane(detail) {
 
 function simulationPathPoints(detail = state.selectedMapDetail) {
   if (!detail) return [];
+  const network = simulationNetworkInput(detail);
+  if (network) {
+    const lane = network.lanes.find(l=>l.id===network.initialLaneId);
+    const points = normalizePoints((network.mode==='raceline' ? lane?.network_raceline : lane?.centerline) || []);
+    points.closedLoop = false;
+    return points;
+  }
   if (state.simulation.source === "custom") {
     const line = selectedCustomLine(detail);
     if (!line || line.valid === false) return [];
@@ -14063,10 +14185,11 @@ function updateSimulationSetting(key, input) {
 }
 
 function setSimulationSource(source) {
-  state.simulation.source = ["centerline", "raceline", "custom"].includes(source) ? source : "raceline";
+  state.simulation.source = ["centerline", "raceline", "custom", "network_centerline", "network_raceline"].includes(source) ? source : "raceline";
   const directionInput = $("simulation-centerline-direction");
   if (directionInput) directionInput.disabled = state.simulation.source !== "centerline";
   resetSimulation();
+  render();
 }
 
 function setSimulationCenterlineDirection(direction) {

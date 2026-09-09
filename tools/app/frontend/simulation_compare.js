@@ -4,6 +4,8 @@
  */
 (function (root) {
   'use strict';
+  const Network = typeof module!=='undefined' && module.exports ? require('./network_simulation.js')
+    : (typeof importScripts==='function' ? (importScripts('/network_simulation.js'),root.NetworkSimulation) : root.NetworkSimulation);
   const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
   const angle = v => Math.atan2(Math.sin(v), Math.cos(v));
   const defaults = Object.freeze({
@@ -21,7 +23,7 @@
   ];
   function project(path, x, y, closed) {
     let best = null;
-    const n = closed ? path.length : path.length - 1;
+    const n = Math.min(closed ? path.length : path.length - 1, path.nearestLimit ? path.nearestLimit-1 : Infinity);
     for (let i=0; i<n; i++) {
       const a=path[i], b=path[(i+1)%path.length], dx=b.x-a.x, dy=b.y-a.y;
       const l2=dx*dx+dy*dy;
@@ -53,7 +55,7 @@
       return steering;
     }
     let nearest=0, dist=Infinity;
-    for (let i=0;i<path.length;i++) {
+    for (let i=0;i<Math.min(path.length,path.nearestLimit || Infinity);i++) {
       const d=(path[i].x-car.x)**2+(path[i].y-car.y)**2;
       if(d<dist) {dist=d; nearest=i;}
     }
@@ -98,18 +100,28 @@
     if(!next) throw new Error('長さのある経路が必要です。');
     const heading=Math.atan2(next.y-path[0].y,next.x-path[0].x);
     const start={x:path[0].x-Math.sin(heading)*offset,y:path[0].y+Math.cos(heading)*offset,yaw:heading+yawOffset,speed:0};
+    const network=input.network ? Network.create(input.network) : null;
+    network?.setSignals(input.signals || {});
     const steps=Math.ceil(duration/s.dtS);
     function* simulate(method) {
+      let path=input.path;
+      const tracker=network?.tracker();
       const car={...start,targetSpeed:input.profile?path[0].speed_mps:s.targetSpeedMps}, trace=[{x:car.x,y:car.y}], initial=project(path,car.x,car.y,input.closed);
       let squaredError=0, maxError=Math.sqrt(initial.d2), time=0, distance=0, steeringChange=0, previous=0, samples=0;
-      let status='実行中';
-      const snapshot=()=>({...method,trace,time,distance,status,samples,maxError,rmsError:time?Math.sqrt(squaredError/time):null,steeringRate:time?steeringChange/time:null,car:{...car,steering:previous,error:Math.sqrt(project(path,car.x,car.y,input.closed).d2)}});
+      let status='実行中', networkState=tracker?.update(car);
+      const snapshot=()=>({...method,trace,time,distance,status,samples,maxError,rmsError:time?Math.sqrt(squaredError/time):null,steeringRate:time?steeringChange/time:null,car:{...car,steering:previous,error:networkState?.error ?? Math.sqrt(project(path,car.x,car.y,input.closed).d2),laneId:networkState?.laneId,nextLaneId:networkState?.nextLaneId,branchCommitted:networkState?.committed},laneHistory:networkState?.history});
       yield snapshot();
       for(let i=0;i<steps;i++) {
         const dt=Math.min(s.dtS,duration-time);
+        if(tracker) {
+          try { networkState=tracker.update(car); } catch(error) {status=error.message;break;}
+          path=networkState.path;
+          status=networkState.waiting && car.speed<.05 ? '信号待ち' : '実行中';
+          if(networkState.ended && car.speed<.1) {status='終点到達';break;}
+        }
         const p=project(path,car.x,car.y,input.closed);
-        if(!input.closed && p.index===path.length-2 && Math.hypot(car.x-path.at(-1).x,car.y-path.at(-1).y)<=.15) {status='終点到達'; break;}
-        const delta=control(method.id,path,car,s,input.closed);
+        if(!tracker && !input.closed && p.index===path.length-2 && Math.hypot(car.x-path.at(-1).x,car.y-path.at(-1).y)<=.15) {status='終点到達'; break;}
+        const delta=networkState?.remainingToStop<.02 && car.speed<.05 ? 0 : control(method.id,path,car,s,input.closed);
         if(delta===null || !Number.isFinite(delta)) {status='追従不能';break;}
         // All methods use the same speed target, nearest station convention and vehicle model.
         let target=s.targetSpeedMps;
@@ -118,28 +130,32 @@
           for(let j=0;j<path.length;j++) {const q=(path[j].x-car.x)**2+(path[j].y-car.y)**2;if(q<d){d=q;nearest=j;}}
           target=path[nearest].speed_mps;
         }
+        if(networkState) target=Math.min(target, .7*Math.sqrt(2*s.maxDecelMps2*networkState.remainingToStop));
         car.targetSpeed=target;
         const error=target-car.speed;
-        const accel=error>=0?Math.min(s.maxAccelMps2,error*1.8):Math.max(-s.maxDecelMps2,error*2.4);
+        const accel=networkState && Number.isFinite(networkState.remainingToStop) && error<0
+          ? Math.max(-s.maxDecelMps2,error/dt)
+          : error>=0?Math.min(s.maxAccelMps2,error*1.8):Math.max(-s.maxDecelMps2,error*2.4);
         const previousSpeed=car.speed;
         car.speed=Math.max(0,car.speed+(accel-s.dragPerS*car.speed)*dt);
         const average=(previousSpeed+car.speed)/2;
         car.x+=average*Math.cos(car.yaw)*dt;car.y+=average*Math.sin(car.yaw)*dt;
         car.yaw=angle(car.yaw+average/s.wheelbaseM*Math.tan(delta)*dt);
-        const e=Math.sqrt(project(path,car.x,car.y,input.closed).d2);
+        if(tracker) {try {networkState=tracker.update(car);} catch(error) {status=error.message;break;}}
+        const e=networkState?.error ?? Math.sqrt(project(path,car.x,car.y,input.closed).d2);
         squaredError+=e*e*dt;maxError=Math.max(maxError,e);
         steeringChange+=Math.abs(delta-previous);previous=delta;
         time+=dt;distance+=average*dt;samples++;
         trace.push({x:car.x,y:car.y});
         yield snapshot();
       }
-      if(status==='実行中') status='時間終了';
+      if(status==='実行中' || status==='信号待ち') status='時間終了';
       return snapshot();
     }
     const selected=input.controller && input.controller!=='all' ? methods.filter(m=>m.id===input.controller) : methods;
     if(!selected.length) throw new Error('未対応のcontrollerです。');
     const runners=selected.map(method=>{const generator=simulate(method);return {generator,last:generator.next()};});
-    return {advance(count=1) {
+    return {setSignals(value) { if(!network) throw new Error("ネットワークSimulationではありません。"); network.setSignals(value); }, advance(count=1) {
       for(let i=0;i<count;i++) for(const r of runners) if(!r.last.done) r.last=r.generator.next();
       return {frames:runners.map(r=>r.last.value),done:runners.every(r=>r.last.done)};
     }};
@@ -164,6 +180,9 @@
         if(event.data.type==='start') {
           session=createSession(event.data.input);
           root.postMessage({...session.advance(0),live:true});
+        } else if(event.data.type==='signals') {
+          if(!session) throw new Error('Simulationが開始されていません。');
+          session.setSignals(event.data.signals);
         } else if(event.data.type==='step') {
           if(!session) throw new Error('Simulationが開始されていません。');
           root.postMessage({...session.advance(Math.max(1,Math.min(10,event.data.count || 1))),live:true});

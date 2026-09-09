@@ -45,6 +45,9 @@ _REPLAY_ISOLATED_TOPICS = (
     '/planning/trajectory_profile',
     '/planning/target_speed',
     '/planning/selected_lane',
+    '/planning/current_lane',
+    '/planning/network_branch_choices',
+    '/planning/network_status',
     '/planning/ready',
     '/planning/safety_status',
     '/tuning/safety_status',
@@ -204,6 +207,10 @@ def _validate_autonomous_command_source(context):
     controller_enabled = _launch_bool(context, 'enable_control')
     e2e_enabled = _launch_bool(context, 'enable_e2e_inference')
     planning_enabled = _launch_bool(context, 'enable_planning')
+    if _launch_bool(context, 'enable_lane_network') and (
+        not planning_enabled or _launch_bool(context, 'enable_competition_planning')
+    ):
+        raise RuntimeError('Lane network requires enable_planning=true and enable_competition_planning=false')
     competition_planning_enabled = _launch_bool(
         context, 'enable_competition_planning')
 
@@ -390,6 +397,9 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('controller_diagnostics_topic', '/controller/diagnostics', cli=True)
 
     args.add_arg('enable_planning', False, cli=True)
+    args.add_arg('enable_lane_network', False, cli=True)
+    args.add_arg('network_initial_lane_id', '', cli=True)
+    args.add_arg('network_line_mode', 'centerline', cli=True)
     args.add_arg(
         'planning_param',
         lu.get_path('jetpilot_planning', 'config/route_lane_selector.param.yaml'),
@@ -736,6 +746,10 @@ def generate_launch_description() -> lut.LaunchDescription:
             'launch/jetpilot_planning.launch.xml',
             launch_arguments={
                 'config_file': args.planning_param,
+                'enable_lane_network': args.enable_lane_network,
+                'hd_map_yaml_path': args.hd_map_yaml_path,
+                'network_initial_lane_id': args.network_initial_lane_id,
+                'network_line_mode': args.network_line_mode,
                 'enable_raceline_publisher': args.enable_raceline_publisher,
                 'raceline_config_file': args.raceline_config_file,
                 'raceline_root': args.raceline_root,

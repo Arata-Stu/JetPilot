@@ -342,3 +342,39 @@ test('combined save sends generated centerline and sections, then clears the sav
   assert.equal(vm.runInContext('state.mapEditor.dirty || state.sectionEditor.dirty', c), false);
   assert.equal(vm.runInContext('state.selectedMapDetail.map.artifacts.centerline_csv.exists', c), true);
 });
+
+test('curve connector preserves lane identities, endpoint geometry and successor', () => {
+  const a=lane([[0,0],[1,0]]), b={...lane([[3,2],[3,3]]),id:'b'};
+  const before=JSON.stringify([a,b]);
+  const c=G.connector(a,b,'turn','curve');
+  assert.equal(JSON.stringify([a,b]),before);
+  assert.deepEqual(c.successor_ids,['b']);
+  assert.deepEqual(c.centerline[0],[1,0]);
+  assert.deepEqual(c.centerline.at(-1),[3,2]);
+  assert.deepEqual(c.left_bound[0],a.left_bound.at(-1));
+  assert.deepEqual(c.right_bound.at(-1),b.right_bound[0]);
+  assert.ok(c.centerline[1][0]>1);
+  assert.ok(c.centerline.at(-2)[1]<2);
+});
+
+test('straight connector and invalid closed/zero-gap connection', () => {
+  const a=lane([[0,0],[1,0]]), b={...lane([[3,0],[4,0]]),id:'b'};
+  const c=G.connector(a,b,'connector','straight');
+  assert.ok(c.centerline.every(p=>p[1]===0));
+  assert.throws(()=>G.connector({...a,closed_loop:true},b,'bad'));
+  assert.throws(()=>G.connector(a,{...b,centerline:[[1,0],[2,0]]},'bad'));
+});
+
+test('editor connection survives undo/redo', () => {
+  const c=editorContext();
+  vm.runInContext(`
+    state.mapEditor.lanes.push({id:'b',closed_loop:false,centerline:[[4,0],[5,0]],left_bound:[[4,1],[5,1]],right_bound:[[4,-1],[5,-1]]});
+    document = {getElementById: id => id === 'network-target' ? {value:'b'} : null};
+    connectEditorLane('direct');
+  `,c);
+  assert.deepEqual(Array.from(vm.runInContext('activeEditorLane().successor_ids',c)),['b']);
+  vm.runInContext('undoMapEditor()',c);
+  assert.equal(vm.runInContext('(activeEditorLane().successor_ids || []).length',c),0);
+  vm.runInContext('redoMapEditor()',c);
+  assert.deepEqual(Array.from(vm.runInContext('activeEditorLane().successor_ids',c)),['b']);
+});

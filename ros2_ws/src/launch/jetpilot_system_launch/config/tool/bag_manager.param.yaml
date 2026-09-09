@@ -22,6 +22,9 @@ bag_manager_node:
       - /planning/trajectory
       - /planning/target_speed
       - /planning/selected_lane
+      - /planning/current_lane
+      - /planning/network_branch_choices
+      - /planning/network_status
       - /planning/ready
       - /planning/safety_status
       - /hd_map/drivable_area

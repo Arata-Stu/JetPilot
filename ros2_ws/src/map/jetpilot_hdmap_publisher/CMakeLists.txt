@@ -9,6 +9,7 @@ ament_auto_find_build_dependencies()
 ament_python_install_package(${PROJECT_NAME})
 
 install(PROGRAMS
+  jetpilot_hdmap_publisher/lane_network_planner_node.py
   jetpilot_hdmap_publisher/drivable_guard_node.py
   jetpilot_hdmap_publisher/hd_map_publisher_node.py
   jetpilot_hdmap_publisher/hd_map_section_localizer_node.py

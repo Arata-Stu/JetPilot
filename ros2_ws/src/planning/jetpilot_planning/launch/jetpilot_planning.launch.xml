@@ -1,4 +1,8 @@
 <launch>
+  <arg name="enable_lane_network" default="false"/>
+  <arg name="hd_map_yaml_path" default=""/>
+  <arg name="network_initial_lane_id" default=""/>
+  <arg name="network_line_mode" default="centerline"/>
   <arg name="config_file" default="$(find-pkg-share jetpilot_planning)/config/route_lane_selector.param.yaml"/>
   <arg name="raceline_config_file" default="$(find-pkg-share jetpilot_planning)/config/raceline_path_publisher.param.yaml"/>
   <arg name="use_sim_time" default="false"/>
@@ -23,6 +27,14 @@
   <arg name="custom_closed" default="true"/>
   <arg name="diagnostics_topic" default="/planning/diagnostics"/>
   <arg name="primary_trajectory_topic" default=""/>
+
+  <node pkg="jetpilot_hdmap_publisher" exec="lane_network_planner_node.py"
+        name="lane_network_planner" output="screen" if="$(var enable_lane_network)">
+    <param name="hd_map_yaml_path" value="$(var hd_map_yaml_path)"/>
+    <param name="initial_lane_id" value="$(var network_initial_lane_id)"/>
+    <param name="line_mode" value="$(var network_line_mode)"/>
+    <param name="use_sim_time" value="$(var use_sim_time)"/>
+  </node>
 
   <node pkg="jetpilot_planning" exec="raceline_path_publisher_node"
         name="raceline_path_publisher" output="screen"
@@ -55,7 +67,7 @@
   </node>
 
   <node pkg="jetpilot_planning" exec="route_lane_selector_node"
-        name="route_lane_selector" output="screen">
+        name="route_lane_selector" output="screen" unless="$(var enable_lane_network)">
     <param from="$(var config_file)"/>
     <param name="primary_trajectory_topic" value="$(var primary_trajectory_topic)"/>
     <param name="diagnostics_topic" value="$(var diagnostics_topic)"/>
