@@ -132,11 +132,11 @@ Jetson上でTensorRT engineを生成:
 `model.plan`と`build_engine.log`を出力します（既定FP16）。ROS 2の事前ビルドは不要です。
 
 ```bash
-/workspaces/scripts/build_e2e.sh
+/workspaces/scripts/e2e_trt.sh
 # モデルのディレクトリまたはONNXファイルを指定する場合
-/workspaces/scripts/build_e2e.sh /workspaces/ros2_ws/models/e2e/camera_control
+/workspaces/scripts/e2e_trt.sh /workspaces/ros2_ws/models/e2e/camera_control
 # FP32でビルドする場合
-/workspaces/scripts/build_e2e.sh --fp32
+/workspaces/scripts/e2e_trt.sh --fp32
 ```
 
 ROS 2から既存スクリプトを呼び出す場合:

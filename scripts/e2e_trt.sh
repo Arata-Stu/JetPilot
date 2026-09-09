@@ -10,16 +10,16 @@ MODEL_SPECIFIED=false
 
 usage() {
   cat <<'EOF'
-Usage: scripts/build_e2e.sh [MODEL_DIR | MODEL.onnx] [--fp16 | --fp32]
+Usage: scripts/e2e_trt.sh [MODEL_DIR | MODEL.onnx] [--fp16 | --fp32]
 
 Build an E2E TensorRT engine inside the Jetson runtime container.
 Defaults to ros2_ws/models/e2e/latest and FP16.
 Writes model.plan and build_engine.log beside the input ONNX file.
 
 Examples:
-  scripts/build_e2e.sh
-  scripts/build_e2e.sh /workspaces/ros2_ws/models/e2e/camera_control
-  scripts/build_e2e.sh /path/to/model.onnx --fp32
+  scripts/e2e_trt.sh
+  scripts/e2e_trt.sh /workspaces/ros2_ws/models/e2e/camera_control
+  scripts/e2e_trt.sh /path/to/model.onnx --fp32
 
 Environment: ROS2_WS, E2E_MODEL_ROOT, TRTEXEC, E2E_TRT_FP16
 EOF
