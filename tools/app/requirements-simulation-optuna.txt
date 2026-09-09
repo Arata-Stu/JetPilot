@@ -1,0 +1,2 @@
+# Optional: install only in the Python environment running the Console backend.
+optuna>=4.0,<6.0

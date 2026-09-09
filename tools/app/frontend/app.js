@@ -6676,6 +6676,139 @@ function hdRasterGenerationPayload() {
   };
 }
 
+const simulationOptimization = { active: false, token: 0, worker: null, reject: null, sessionId: "", signature: "", result: null, error: "", trials: 20, progress: 0 };
+
+function simulationOptimizationSignature() {
+  return JSON.stringify({ ...simulationComparisonInput(), controller: state.simulation.controller || "pure_pursuit" });
+}
+
+function stopSimulationOptimization(clear = false) {
+  const o = simulationOptimization;
+  o.token++;
+  o.active = false;
+  o.worker?.terminate();
+  o.worker = null;
+  o.reject?.(new Error("自動調整を中止しました。"));
+  o.reject = null;
+  if (o.sessionId) api("/api/simulation/optimization/stop", {method:"POST", body:JSON.stringify({session_id:o.sessionId})}).catch(()=>{});
+  o.sessionId = "";
+  if (clear) { o.result = null; o.signature = ""; o.error = ""; }
+  updateSimulationOptimizationChrome();
+}
+
+function evaluateSimulationOptimization(input, token) {
+  return new Promise((resolve, reject) => {
+    const o = simulationOptimization;
+    const worker = new Worker('/simulation_compare.js');
+    o.worker = worker;
+    let timer;
+    const finish = (error, result) => {
+      clearTimeout(timer);
+      worker.terminate();
+      if (o.worker === worker) { o.worker = null; o.reject = null; }
+      if (error) reject(error); else resolve(result);
+    };
+    o.reject = error => finish(error);
+    timer = setTimeout(()=>finish(new Error("1候補の評価が60秒を超えました。実行時間やMPCの計算量を減らしてください。")),60000);
+    worker.onmessage = ({data}) => {
+      if (o.token !== token) return;
+      if (data.error) finish(new Error(data.error));
+      else if (data.results) finish(null,data.results[0]);
+      else { o.progress = Number(data.progress || 0); updateSimulationOptimizationChrome(); }
+    };
+    worker.onerror = () => finish(new Error("Simulationの評価に失敗しました。"));
+    try { worker.postMessage(input); } catch (error) { finish(error); }
+  });
+}
+
+async function startSimulationOptimization() {
+  clearSimulationComparison();
+  if (!Array.from(document.querySelectorAll('.simulation-controls input')).filter(el => !el.disabled).every(el =>
+    el.value.trim() !== '' && Number.isFinite(Number(el.value)) && !el.validity.badInput && !el.validity.customError &&
+    (el.min === '' || Number(el.value) >= Number(el.min)) && (el.max === '' || Number(el.value) <= Number(el.max)))) {
+    simulationOptimization.error = "入力値を確認してください。";
+    updateSimulationOptimizationChrome();
+    return;
+  }
+  const o = simulationOptimization;
+  const input = JSON.parse(simulationOptimizationSignature());
+  if (input.controller === "all") { o.error = "自動調整はControllerを1方式選択してください。"; updateSimulationOptimizationChrome(); return; }
+  if (input.path.length < 2) { o.error = "評価する経路が必要です。"; updateSimulationOptimizationChrome(); return; }
+  o.active = true;
+  o.signature = simulationOptimizationSignature();
+  const token = ++o.token;
+  updateSimulationChrome();
+  updateSimulationOptimizationChrome();
+  try {
+    let response = await api("/api/simulation/optimization/start", {method:"POST", body:JSON.stringify({controller:input.controller, settings:input.settings, duration:input.duration, trials:o.trials})});
+    if (o.token !== token) {
+      api("/api/simulation/optimization/stop",{method:"POST",body:JSON.stringify({session_id:response.session_id})}).catch(()=>{});
+      return;
+    }
+    o.sessionId = response.session_id;
+    o.result = response;
+    while (!response.done && o.token === token) {
+      if (o.signature !== simulationOptimizationSignature()) { stopSimulationOptimization(true); return; }
+      o.progress = 0;
+      updateSimulationOptimizationChrome();
+      const frame = await evaluateSimulationOptimization({...input,settings:response.settings},token);
+      if (o.token !== token) return;
+      if (o.signature !== simulationOptimizationSignature()) { stopSimulationOptimization(true); return; }
+      const metrics = Object.fromEntries(["rmsError","maxError","steeringRate","distance","time","status"].map(key=>[key,frame[key]]));
+      response = await api("/api/simulation/optimization/tell", {method:"POST",body:JSON.stringify({session_id:o.sessionId,sequence:response.sequence,metrics})});
+      if (o.token !== token) return;
+      o.result = response;
+      updateSimulationOptimizationChrome();
+    }
+    if (o.token === token) stopSimulationOptimization(false);
+  } catch (error) {
+    if (o.token !== token) return;
+    stopSimulationOptimization(false);
+    o.error = error.message;
+    updateSimulationOptimizationChrome();
+  }
+}
+
+function applySimulationOptimization() {
+  const o = simulationOptimization;
+  if (o.active || !o.result?.best || o.result.best.sequence === 0) return;
+  if (o.signature !== simulationOptimizationSignature()) { stopSimulationOptimization(true); return; }
+  const settings = {...o.result.best.settings};
+  Object.assign(state.simulation.settings,settings);
+  resetSimulation();
+  updateSimulationControllerSettings();
+  for (const [key,value] of Object.entries(settings)) {
+    const field = $(`simulation-${key}`);
+    if (field) field.value = value;
+  }
+}
+
+function renderSimulationOptimization() {
+  const o = simulationOptimization;
+  const result = o.result;
+  const format = value => value == null ? "—" : Number(value).toFixed(4);
+  const text = o.active ? result?.is_baseline ? `現在値を評価中… ${Math.round(o.progress*100)}%` : `候補 ${Math.min((result?.completed || 0)+1,o.trials)} / ${o.trials} を評価中… ${Math.round(o.progress*100)}%` : result ? (result.done ? "探索完了" : "探索中止") : "現在値を基準に、選択した1方式の追従誤差RMSを最小化します。";
+  const improved = result?.best && result.best.sequence > 0;
+  const changes = improved ? Object.entries(result.best.settings).filter(([key,value]) => value !== JSON.parse(o.signature).settings[key]) : [];
+  return `<fieldset class="simulation-controller-parameters"><legend>Optunaで軽く自動調整</legend>
+    <p class="field-hint">速度・車体寸法・経路は固定。候補の提案はConsole側、評価はこのブラウザーで行います。停止・追従不能は除外します。走行領域の安全判定は含みません。</p>
+    <p class="field-hint">PPはLookahead、Map PursuitはLookaheadと補正・操舵低減、MPCは予測ステップ数と評価の重みを探索します。MPCの時間刻み・候補数は固定です。</p>
+    <label for="simulation-optuna-trials">候補数（現在値の評価を除く）</label>
+    <select id="simulation-optuna-trials" ${o.active ? "disabled" : ""} onchange="simulationOptimization.trials=Number(this.value)">${[5,10,20,30,50].map(n=>`<option value="${n}" ${o.trials===n?'selected':''}>${n}</option>`).join("")}</select>
+    <button onclick="startSimulationOptimization()" ${o.active || state.simulation.controller==='all' ? "disabled" : ""}>自動調整を開始</button>
+    ${o.active ? '<button onclick="stopSimulationOptimization()">中止</button>' : ''}
+    <p role="status">${esc(text)}</p>${o.error ? `<p class="warn" role="alert">${esc(o.error)}</p>` : ''}
+    ${result ? `<p>現在値 RMS：${format(result.baseline?.score)} m ／ 最良 RMS：${format(result.best?.score)} m</p>
+      ${improved ? `<details><summary>候補の変更値</summary><ul>${changes.map(([key,value])=>`<li>${esc(Object.values(simulationControllerFields).flat().find(row=>row[0]===key)?.[1] || ({minLookaheadM:"最小Lookahead",maxLookaheadM:"最大Lookahead",lookaheadGainS:"Lookahead速度ゲイン"})[key] || key)}：${format(JSON.parse(o.signature).settings[key])} → ${format(value)}</li>`).join('')}</ul></details><button onclick="applySimulationOptimization()" ${o.active ? 'disabled' : ''}>候補をSimulationに適用</button>` : '<p class="field-hint">現在値より良い有効な候補はまだありません。</p>'}` : ''}
+    <p class="field-hint">候補は自動適用しません。適用後にRunで確認してください。OptunaはConsoleのPython環境に別途必要です。</p>
+  </fieldset>`;
+}
+
+function updateSimulationOptimizationChrome() {
+  const el = $("simulation-optimization");
+  if (el) el.innerHTML = renderSimulationOptimization();
+}
+
 const simulationLive = { worker: null, frames: null, pending: false, done: false, stepRequested: 0 };
 
 function stopSimulationLive() {
@@ -6689,6 +6822,7 @@ function setSimulationController(value) {
   state.simulation.controller = value;
   resetSimulation();
   updateSimulationControllerSettings();
+  updateSimulationOptimizationChrome();
 }
 
 function startSimulationLiveComparison() {
@@ -6774,6 +6908,7 @@ function simulationComparisonInput() {
 }
 
 function clearSimulationComparison() {
+  stopSimulationOptimization(true);
   stopSimulationLive();
   simulationComparison.worker?.terminate();
   Object.assign(simulationComparison, { worker: null, results: null, signature: "", progress: 0, error: "" });
@@ -7011,6 +7146,7 @@ function renderSimulationPanel(detail) {
         </aside>
       </div>
       <div id="simulation-comparison-results" aria-live="polite">${renderSimulationComparisonResults()}</div>
+      <div id="simulation-optimization">${renderSimulationOptimization()}</div>
     </section>
   `;
 }

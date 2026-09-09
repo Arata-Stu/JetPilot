@@ -101,6 +101,7 @@ from .security import (
     validate_json_request_headers,
 )
 from .tasks import TaskManager, TaskResourceConflict
+from .simulation_optuna import SimulationOptimizer
 
 
 JS_EVENT_BUTTON = 0x01
@@ -246,6 +247,7 @@ class ConsoleState:
         self.joy_only = joy_only
         self.loopback_only = loopback_only
         self.tasks = None if joy_only else TaskManager(config.state_dir, config.repo_root)
+        self.simulation_optimizer = None if joy_only else SimulationOptimizer()
         self.analyses = None if joy_only else AnalysisRepository(config.analysis_root)
         self.fpv_stream = (
             None
@@ -468,6 +470,20 @@ class Handler(BaseHTTPRequestHandler):
             self._json(
                 {"ok": True, "stopped": stopped, "fpv": self.server.state.fpv_stream.status()},  # type: ignore[union-attr]
             )
+            return
+
+        if path.startswith("/api/simulation/optimization/"):
+            action = path.rsplit("/", 1)[-1]
+            optimizer = self.server.state.simulation_optimizer
+            if optimizer is None or action not in ("start", "tell", "stop"):
+                self._json({"error": "自動調整は利用できません。"}, HTTPStatus.NOT_FOUND)
+                return
+            try:
+                self._json(getattr(optimizer, action)(body))
+            except RuntimeError as exc:
+                self._json({"error": str(exc)}, HTTPStatus.SERVICE_UNAVAILABLE)
+            except (ValueError, TypeError, KeyError) as exc:
+                self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
             return
 
         if path == "/api/tasks/run":

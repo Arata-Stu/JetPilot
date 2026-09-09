@@ -56,7 +56,7 @@ test('browser equations match the actual C++ controllers',t=>{
 function ui(){
  class Worker {constructor(){this.terminated=false;this.messages=[];Worker.instances.push(this);}postMessage(x){this.input=x;this.messages.push(x);}terminate(){this.terminated=true;}}
  Worker.instances=[];
- const ctx=vm.createContext({Worker,window:{},localStorage:{getItem:()=>null},document:{querySelectorAll:()=>[],getElementById:()=>null},console,cancelAnimationFrame:()=>{}});
+ const ctx=vm.createContext({setTimeout,clearTimeout,Worker,window:{},localStorage:{getItem:()=>null},document:{querySelectorAll:()=>[],getElementById:()=>null},console,cancelAnimationFrame:()=>{}});
  const source=fs.readFileSync(path.join(__dirname,'../app.js'),'utf8');vm.runInContext(source.slice(0,source.indexOf('\nwindow.')),ctx);
  vm.runInContext(`drawSimulationPreview=()=>{};updateSimulationChrome=()=>{};updateSimulationComparisonChrome=()=>{};simulationPathPoints=()=>[{x:0,y:0},{x:10,y:0}];`,ctx);
  return {ctx,Worker};
@@ -189,4 +189,41 @@ test('Map and MPC custom parameters actually change steering and defaults match 
  const path=[{x:0,y:.3},{x:1,y:.3},{x:2,y:1},{x:3,y:2}];const car={x:0,y:0,yaw:0,speed:2};
  assert.notEqual(api.control('map_pursuit',path,car,api.defaults,false),api.control('map_pursuit',path,car,{...api.defaults,mapLateralGain:2},false));
  assert.notEqual(api.control('kinematic_mpc',path,car,api.defaults,false),api.control('kinematic_mpc',path,car,{...api.defaults,mpcSteeringWeight:10000},false));
+});
+
+const turn=()=>new Promise(resolve=>setImmediate(resolve));
+test('Optuna UI evaluates candidates without changing current settings and applies only on request',async()=>{
+ const {ctx,Worker}=ui();
+ const settings={...ctx.simulationComparisonInput().settings};let calls=0;
+ ctx.api=async(url,options)=>{
+  const body=JSON.parse(options.body);
+  if(url.endsWith('/stop'))return {};
+  if(url.endsWith('/start'))return {session_id:'study',sequence:0,settings,completed:0,trials:5,is_baseline:true};
+  if(calls++===0)return {session_id:'study',sequence:1,settings:{...settings,minLookaheadM:.8},completed:0,trials:5,baseline:{score:.2},is_baseline:false};
+  return {session_id:'study',sequence:1,completed:5,trials:5,done:true,baseline:{score:.2},best:{sequence:1,score:.1,settings:{...settings,minLookaheadM:.8}}};
+ };
+ const run=ctx.startSimulationOptimization();await turn();
+ assert.equal(Worker.instances.length,1);
+ const frame={rmsError:.2,maxError:.3,steeringRate:.1,distance:10,time:20,status:'時間終了'};
+ Worker.instances[0].onmessage({data:{results:[frame]}});await turn();
+ assert.equal(Worker.instances[1].input.settings.minLookaheadM,.8);
+ assert.equal(ctx.simulationComparisonInput().settings.minLookaheadM,settings.minLookaheadM);
+ Worker.instances[1].onmessage({data:{results:[{...frame,rmsError:.1}]}});await run;
+ assert.match(ctx.renderSimulationOptimization(),/探索完了/);
+ ctx.applySimulationOptimization();assert.equal(ctx.simulationComparisonInput().settings.minLookaheadM,.8);
+});
+
+test('late Optuna start responses are discarded and sessions released after cancellation',async()=>{
+ const {ctx}=ui();let release;let stopped='';
+ ctx.api=(url,options)=>url.endsWith('/start')?new Promise(resolve=>release=resolve):(stopped=JSON.parse(options.body).session_id,Promise.resolve({}));
+ const pending=ctx.startSimulationOptimization();ctx.stopSimulationOptimization(true);
+ release({session_id:'late'});await pending;
+ assert.equal(stopped,'late');assert.equal(vm.runInContext('simulationOptimization.result',ctx),null);
+});
+
+test('missing Optuna dependency is shown without changing simulation parameters',async()=>{
+ const {ctx}=ui();ctx.api=async()=>{throw new Error('Optunaがありません');};
+ await ctx.startSimulationOptimization();
+ assert.match(ctx.renderSimulationOptimization(),/Optunaがありません/);
+ assert.equal(vm.runInContext('simulationOptimization.active',ctx),false);
 });
