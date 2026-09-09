@@ -35,6 +35,11 @@ Mapは`cuvgl_map/`または`cuvslam_map/`が直接入っているフォルダー
 
 ## 自己位置が表示されない場合
 
+XYが届いているのに「自己位置推定の確定待ち」が出て、状態欄にJSON全体が表示される場合は、
+Jetson側の古い調整bridgeが状態通知を解析していません。`tuning_bridge.py`と
+`backend/jetpilot_console/tuning_state.py`を更新し、STOP・停車状態で調整launchを再起動してください。
+状態通知は`/localization/pose_hint_state`のJSON内の`state`で判定します。
+
 HTTP/SSHの「接続中」と、自己位置を取得できていることは別です。UIにTFの取得失敗理由、
 TF座標、ROS_DOMAIN_ID、各topicの配信元数を表示します。`localized`なのに位置がない場合は
 `map → base_link`のTFと時刻差を確認してください。TFは0.5秒以内のものだけ採用します。

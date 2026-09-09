@@ -56,7 +56,7 @@ def main():
             self.state.mode, self.state.mode_at = msg.mode, self.state.clock()
 
         def localized(self, msg):
-            self.state.localization, self.state.localization_at = msg.data, self.state.clock()
+            self.state.update_localization(msg.data)
 
         def odometry(self, msg):
             age = (self.get_clock().now() - Time.from_msg(msg.header.stamp)).nanoseconds / 1e9

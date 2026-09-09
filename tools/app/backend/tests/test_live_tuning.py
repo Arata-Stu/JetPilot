@@ -1,4 +1,5 @@
 import hashlib
+import json
 import os
 from pathlib import Path
 import tempfile
@@ -32,6 +33,33 @@ class StateTests(unittest.TestCase):
         self.state.mode_at=self.now
         self.state.update_speed(0.)
         self.state.stopped_since=self.now-2
+
+    def test_localization_manager_json_drives_status_and_readiness(self):
+        self.stopped();self.state.touch_lease()
+        self.state.active=sample()
+        self.state.pose={'x':1,'y':2,'yaw':0}
+        self.state.update_localization(json.dumps({
+            'state':'localized','pose_hint_required':False,'reason':'tracking confirmed',
+        }))
+        self.assertEqual(self.state.status()['localization'],'localized')
+        self.assertEqual(self.state.status()['pose']['x'],1)
+        self.assertTrue(self.state.ready())
+        self.now+=1.5
+        self.assertEqual(self.state.status()['localization'],'stale')
+        self.assertFalse(self.state.ready())
+
+    def test_unconfirmed_or_invalid_localization_never_keeps_previous_confirmation(self):
+        self.stopped();self.state.touch_lease()
+        self.state.active=sample();self.state.pose={'x':1,'y':2,'yaw':0}
+        for message in ['{"state":"localized_unconfirmed"}', '{"state":"unlocalized"}',
+                        '{"state":null}', '{"state":{}}', '{}', '[]', 'null',
+                        'localized', '{broken', None]:
+            with self.subTest(message=message):
+                self.state.update_localization('{"state":"localized"}')
+                self.assertTrue(self.state.ready())
+                self.state.update_localization(message)
+                self.assertNotEqual(self.state.status()['localization'],'localized')
+                self.assertFalse(self.state.ready())
 
     def test_apply_only_after_fresh_confirmed_stop(self):
         request={'snapshot':sample(),'expected_revision':''}

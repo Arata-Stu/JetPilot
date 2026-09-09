@@ -1,6 +1,7 @@
 """Pure state machine shared with the Jetson ROS adapter."""
 from __future__ import annotations
 import time
+import json
 from .live_tuning import validate_snapshot
 
 
@@ -21,6 +22,16 @@ class TuningState:
         self.pose_issue = "map → base_link のTFをまだ受信していません。"
         self.lease_at = float('-inf')
         self.conflict = False
+
+    def update_localization(self, message):
+        # pose_hint_state is a JSON object carried by std_msgs/String.
+        try:
+            payload = json.loads(message)
+            value = payload.get('state') if isinstance(payload, dict) else None
+            self.localization = value if isinstance(value, str) and value else 'invalid'
+        except (TypeError, ValueError):
+            self.localization = 'invalid'
+        self.localization_at = self.clock()
 
     def update_speed(self, value):
         if self.clock() - self.speed_at > 0.5:
