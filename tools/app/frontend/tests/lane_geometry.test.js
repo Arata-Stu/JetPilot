@@ -1,6 +1,39 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const G = require('../lane_geometry.js');
+test('rounded hairpins retain endpoints, positive inside radius and separate physical margins', () => {
+  for (const sign of [1,-1]) {
+    const points = [[0,0],[4,0],[4,4*sign],[0,4*sign]];
+    const result = G.drawnLane(points,1,.1);
+    assert.deepEqual(result.centerline[0],points[0]);
+    assert.deepEqual(result.centerline.at(-1),points.at(-1));
+    for (let i=0;i<result.centerline.length;i++) {
+      assert.ok(Math.abs(Math.hypot(...result.left_bound[i].map((v,k)=>v-result.right_bound[i][k]))-1)<1e-9);
+      assert.ok(Math.abs(Math.hypot(...result.drivable_left_bound[i].map((v,k)=>v-result.left_bound[i][k]))-.1)<1e-9);
+      if (i) for (const field of ['left_bound','right_bound']) {
+        assert.ok(Math.hypot(...result[field][i].map((v,k)=>v-result[field][i-1][k]))>.02);
+      }
+    }
+    const a = {id:'a',closed_loop:false,boundary_mode:'paired',centerline_mode:'auto',...result};
+    const [b,c] = G.split(a,Math.floor(a.centerline.length/2),'b');
+    assert.deepEqual(b.drivable_left_bound.at(-1),c.drivable_left_bound[0]);
+    const joined = G.join(b,c);
+    for (const field of ['left_bound','right_bound','drivable_left_bound','drivable_right_bound']) assert.deepEqual(joined[field],a[field]);
+    joined.centerline.forEach((p,i) => assert.ok(Math.hypot(...p.map((v,k)=>v-a.centerline[i][k]))<1e-9));
+  }
+  assert.throws(()=>G.drawnLane([[0,0],[.5,0],[.5,.5]],1,.1),/描画点\[1\]/);
+  assert.throws(()=>G.drawnLane([[0,0],[2,0],[0,0]],1,.1),/曲がり/);
+  const zero = G.drawnLane([[0,0],[4,0]],1,0);
+  assert.deepEqual(zero.drivable_left_bound,zero.left_bound);
+});
+
+test('save diagnostics locate only named lane fields and include closed seam endpoints', () => {
+  const lanes = [{id:'a',closed_loop:true,left_bound:[[0,0],[1,0],[1,1]]}];
+  assert.deepEqual(G.validationLocation('a left_bound: generation bounds must stay inside drivable bounds. points[1] is outside',lanes),{laneId:'a',field:'left_bound',indices:[1]});
+  assert.deepEqual(G.validationLocation('a left_bound: segment[2] sample[3] is outside',lanes),{laneId:'a',field:'left_bound',indices:[2,0]});
+  assert.equal(G.validationLocation('points[1] is outside',lanes),null);
+  assert.equal(G.validationLocation('a left_bound: points[38] is outside',lanes),null);
+});
 const lane = (points, closed = false) => ({ id: 'a', boundary_mode: 'paired', centerline_mode: 'auto', closed_loop: closed, ...G.fromSpine(points, 2) });
 test('paired lane keeps requested width and center at every station', () => {
   const points = [[0, 0], [2, 0], [3, 2], [4, 3]];
@@ -114,7 +147,7 @@ test('lane placement hover previews the exact committed geometry without changin
   `, c);
   assert.equal(vm.runInContext('JSON.stringify(captureMapEditorSnapshot()) === before', c), true);
   assert.equal(vm.runInContext('state.mapEditor.undoStack.length', c), 0);
-  assert.equal(vm.runInContext('preview.centerline.length', c), 4);
+  assert.ok(vm.runInContext('preview.centerline.length', c) > 4);
   assert.notEqual(vm.runInContext('preview.left_bound[2][0]', c), 4);
   vm.runInContext('down([5, 3])', c);
   for (const field of ['left_bound', 'right_bound', 'centerline']) {
@@ -341,6 +374,65 @@ test('combined save sends generated centerline and sections, then clears the sav
   assert.equal(c.savedPayload.section_gates.length, 2);
   assert.equal(vm.runInContext('state.mapEditor.dirty || state.sectionEditor.dirty', c), false);
   assert.equal(vm.runInContext('state.selectedMapDetail.map.artifacts.centerline_csv.exists', c), true);
+});
+
+test('failed save selects the offending boundary and editing clears stale red markers', async () => {
+  const c = sectionEditorContext();
+  vm.runInContext(`
+    defineWholeCourseSection();
+    confirmAction = () => true; beginAction = () => true; endAction = () => {};
+    api = async () => {throw new Error('a right_bound: generation bounds must stay inside drivable bounds. points[1] is outside the drivable lane bounds');};
+  `,c);
+  await vm.runInContext('saveHdMapFromEditor()',c);
+  assert.equal(vm.runInContext('state.mapEditor.validationMarker.field',c),'right_bound');
+  assert.equal(vm.runInContext('state.mapEditor.selected.index',c),1);
+  assert.match(vm.runInContext('renderHdMapEditor(state.selectedMapDetail)',c),/対象を赤色/);
+  vm.runInContext('markMapEditorDirty()',c);
+  assert.equal(vm.runInContext('state.mapEditor.validationMarker',c),null);
+  assert.equal(vm.runInContext('state.mapEditor.saveError',c),'');
+});
+
+test('HD-only delete confirms scope and resets editors only for the same selected map', async () => {
+  for (const cancelled of [true,false]) {
+    const c = sectionEditorContext();
+    c.cancelled = cancelled;
+    vm.runInContext(`
+      globalThis.calls=[];
+      confirmAction = spec => { globalThis.confirmSpec=spec; return !cancelled; };
+      beginAction = () => true; endAction = () => {};
+      api = async (url,options) => {calls.push([url,JSON.parse(options.body)]);return {map:{path:'/maps/new'}};};
+      commitSelectedMapDetail = () => true;
+      ensureMapEditor = (r,o) => calls.push(['map',o.force]);
+      ensureSectionEditor = (r,o) => calls.push(['section',o.force]);
+      ensureJunctionEditor = (r,o) => calls.push(['junction',o.force]);
+      ensureCustomLineEditor = (r,o) => calls.push(['custom',o.force]);
+      invalidateMapPreflights = () => {};
+    `,c);
+    await vm.runInContext('deleteHdMapOnly()',c);
+    assert.match(c.confirmSpec.detail,/点群・Raster/);
+    assert.equal(c.calls.length,cancelled ? 0 : 5);
+    if (!cancelled) {
+      assert.equal(c.calls[0][0],'/api/maps/delete-hd-map');
+      assert.equal(c.calls[0][1].map_dir,'/maps/new');
+      assert.equal(vm.runInContext('state.mapEditor.enabled',c),false);
+      vm.runInContext('calls=[]; commitSelectedMapDetail = () => false;',c);
+      await vm.runInContext('deleteHdMapOnly()',c);
+      assert.equal(c.calls.length,1);
+    }
+  }
+});
+
+test('invalid tight turn cannot alter the drawn lane and undo restores authored clicks', () => {
+  const c = pointerEditorContext();
+  vm.runInContext(`
+    state.mapEditor.drawingLane=true; state.mapEditor.drawSpine=[]; state.mapEditor.laneWidth=1;
+    down([0,0]); down([.5,0]);
+    globalThis.beforeInvalid=JSON.stringify(captureMapEditorSnapshot());
+    down([.5,.5]);
+  `,c);
+  assert.equal(vm.runInContext('JSON.stringify(captureMapEditorSnapshot())===beforeInvalid',c),true);
+  vm.runInContext('undoMapEditor()',c);
+  assert.equal(vm.runInContext('state.mapEditor.drawSpine.length',c),1);
 });
 
 test('curve connector preserves lane identities, endpoint geometry and successor', () => {

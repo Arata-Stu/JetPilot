@@ -51,6 +51,7 @@ from .map_detail import (
     build_map_detail,
     create_custom_line,
     delete_custom_line,
+    delete_hd_map,
     directory_fingerprint,
     resolve_allowed_path,
     save_competition_routes,
@@ -603,6 +604,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/maps/save-hd-map":
             self._save_hd_map(body)
             return
+        if path == "/api/maps/delete-hd-map":
+            self._save_hd_map(body, delete=True)
+            return
         if path == "/api/maps/save-hd-map-version":
             self._save_hd_map_version(body)
             return
@@ -1129,13 +1133,14 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as exc:
             self._json({"error": f"failed to read map detail: {exc}"}, HTTPStatus.INTERNAL_SERVER_ERROR)
 
-    def _save_hd_map(self, body: dict[str, Any]) -> None:
+    def _save_hd_map(self, body: dict[str, Any], *, delete: bool = False) -> None:
         try:
             map_dir = resolve_allowed_path(
                 self.server.state.config, str(body.get("map_dir") or "")
             )
             with self.server.state.tasks.guard_resources([f"map-dir:{map_dir}"]):
-                result = save_hd_map(self.server.state.config, body)
+                operation = delete_hd_map if delete else save_hd_map
+                result = operation(self.server.state.config, body)
             self._json(result)
         except TaskResourceConflict as exc:
             self._json(
@@ -1150,7 +1155,7 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError as exc:
             self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
         except Exception as exc:
-            self._json({"error": f"failed to save HD map: {exc}"}, HTTPStatus.INTERNAL_SERVER_ERROR)
+            self._json({"error": f"failed to {'delete' if delete else 'save'} HD map: {exc}"}, HTTPStatus.INTERNAL_SERVER_ERROR)
 
     def _save_hd_map_version(self, body: dict[str, Any]) -> None:
         try:

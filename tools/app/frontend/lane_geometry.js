@@ -20,12 +20,73 @@ const LaneGeometry = (() => {
     });
     return { left_bound, right_bound, centerline: points.map(p => [...p]) };
   }
+  // Circular fillets keep the offset radius positive on the inside of a turn.
+  function roundedSpine(points, width, margin = 0) {
+    if (points.length < 3) return points.map(p => [...p]);
+    const result = [[...points[0]]];
+    for (let i = 1; i < points.length - 1; i++) {
+      const a = points[i-1], p = points[i], b = points[i+1];
+      const before = distance(a,p), after = distance(p,b);
+      const u = p.map((v,k) => (v-a[k])/before), v = b.map((x,k) => (x-p[k])/after);
+      const turn = Math.acos(Math.max(-1, Math.min(1, u[0]*v[0]+u[1]*v[1])));
+      if (turn < .02) { result.push([...p]); continue; }
+      const tangent = Math.tan(turn/2);
+      const trim = Math.min(before*.45, after*.45, Math.max(width, .3)*tangent);
+      const radius = trim/tangent;
+      if (!Number.isFinite(radius) || radius <= width/2 + margin + .02) {
+        const error = new Error(`描画点[${i}]の曲がりが幅に対して急すぎます。前後の点の間隔を広げるか、レーン幅・余裕を小さくしてください。`);
+        error.pointIndex = i;
+        throw error;
+      }
+      const sign = Math.sign(u[0]*v[1]-u[1]*v[0]);
+      const start = p.map((x,k) => x-u[k]*trim);
+      const center = [start[0]-u[1]*radius*sign, start[1]+u[0]*radius*sign];
+      const angle = Math.atan2(start[1]-center[1], start[0]-center[0]);
+      const count = Math.max(2, Math.ceil(turn/(Math.PI/18)), Math.ceil(radius*turn/.2));
+      for (let j=0; j<=count; j++) {
+        const t = angle + sign*turn*j/count;
+        result.push([center[0]+radius*Math.cos(t), center[1]+radius*Math.sin(t)]);
+      }
+    }
+    result.push([...points.at(-1)]);
+    return result;
+  }
+  function drawnLane(points, width, margin = 0) {
+    const spine = roundedSpine(points, width, margin);
+    const result = fromSpine(spine, width);
+    const physical = fromSpine(spine, width + 2*margin);
+    result.drivable_left_bound = physical.left_bound;
+    result.drivable_right_bound = physical.right_bound;
+    return result;
+  }
+  function validationLocation(message, lanes) {
+    // Only resolve an explicitly named Lane and field; points[] alone is ambiguous.
+    for (const lane of lanes) {
+      for (const field of ['drivable_left_bound', 'drivable_right_bound', 'left_bound', 'right_bound', 'centerline']) {
+        const prefix = `${lane.id} ${field}:`;
+        if (!message.startsWith(prefix)) continue;
+        const match = message.slice(prefix.length).match(/\b(points?|segment)\[(\d+)\]/);
+        if (!match) return null;
+        const index = Number(match[2]), points = lane[field] || [];
+        if (!points[index]) return null;
+        const indices = [index];
+        if (match[1] === 'segment') {
+          const next = (index+1)%points.length;
+          if (next === 0 && !lane.closed_loop) return null;
+          indices.push(next);
+        }
+        return {laneId:lane.id, field, indices};
+      }
+    }
+    return null;
+  }
   function split(lane, index, id) {
     if (!paired(lane) || lane.centerline_mode === "manual") throw new Error("分割にはペア境界と自動centerlineが必要です。");
     const n = lane.left_bound.length;
     if (!Number.isInteger(index) || index < 1 || index >= n - 1) throw new Error("端点以外の境界点を選択してください。");
     const a = { ...lane, closed_loop: false }, b = { ...lane, id, primary: false, closed_loop: false };
-    for (const field of ["left_bound", "right_bound"]) {
+    for (const field of ["left_bound", "right_bound", "drivable_left_bound", "drivable_right_bound"].filter(f => lane[f]?.length)) {
+      if (lane[field].length !== n) throw new Error("分割には走行可能境界と経路生成境界の点数の一致が必要です。");
       a[field] = lane[field].slice(0, index + 1).map(p => [...p]);
       b[field] = lane[field].slice(index).map(p => [...p]);
       if (lane.closed_loop) b[field].push([...lane[field][0]]);
@@ -40,12 +101,14 @@ const LaneGeometry = (() => {
     }
     if (a.left_bound.length < 2 || b.left_bound.length < 2) throw new Error("各レーンに2組以上の点が必要です。");
     const result = { ...a };
-    for (const field of ["left_bound", "right_bound"]) {
+    const fields = ["left_bound", "right_bound", "drivable_left_bound", "drivable_right_bound"].filter(f => a[f]?.length || b[f]?.length);
+    for (const field of fields) {
+      if (!a[field]?.length || !b[field]?.length) throw new Error("結合する両Laneの境界を揃えてください。");
       if (distance(a[field].at(-1), b[field][0]) > 0.25) throw new Error("現在レーンの終点と結合先の始点を25cm以内に合わせてください。");
       result[field] = [...a[field].slice(0, -1), midpoint(a[field].at(-1), b[field][0]), ...b[field].slice(1)].map(p => [...p]);
     }
     result.closed_loop = ["left_bound", "right_bound"].every(f => distance(result[f][0], result[f].at(-1)) < 1e-6);
-    if (result.closed_loop) for (const f of ["left_bound", "right_bound"]) result[f].pop();
+    if (result.closed_loop) for (const f of fields) result[f].pop();
     result.centerline = centers(result);
     return result;
   }
@@ -73,6 +136,6 @@ const LaneGeometry = (() => {
     }
     return lane;
   }
-  return { paired, centers, fromSpine, split, join, connector };
+  return { paired, centers, fromSpine, roundedSpine, drawnLane, validationLocation, split, join, connector };
 })();
 if (typeof module !== "undefined") module.exports = LaneGeometry;

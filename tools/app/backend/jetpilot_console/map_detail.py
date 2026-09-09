@@ -4048,6 +4048,47 @@ def build_map_detail(config: ConsoleConfig, map_dir_value: str) -> dict[str, Any
     }
 
 
+def delete_hd_map(config: ConsoleConfig, payload: dict[str, Any]) -> dict[str, Any]:
+    raw = str(payload.get("map_dir") or "")
+    if not raw:
+        raise ValueError("map_dir is required")
+    map_dir = resolve_allowed_path(config, raw)
+    if map_dir == config.map_root.resolve():
+        raise ValueError("refusing to reset the map root")
+    if not map_dir.is_dir():
+        raise FileNotFoundError("map folder not found")
+    paths = list(_active_hd_artifact_paths(map_dir).values())
+    paths += list(_canonical_custom_line_paths(map_dir).values())
+    paths += [map_dir / HD_MAP_VERSION_DIR / HD_MAP_VERSION_ACTIVE_FILE,
+              map_dir / CUSTOM_LINE_DIR / CUSTOM_LINE_ACTIVE_FILE]
+    # Never follow metadata paths from YAML, directory links, or arbitrary globs.
+    for path in paths:
+        if path.parent.is_symlink() or path.is_symlink():
+            raise ValueError("HD map reset does not accept symbolic links")
+        if path.exists() and not path.is_file():
+            raise ValueError(f"expected an HD map file: {path.name}")
+    existing = [path for path in paths if path.is_file()]
+    backup = None
+    moved = []
+    try:
+        if existing:
+            backup = Path(tempfile.mkdtemp(prefix=".deleted-hd-map-", dir=map_dir))
+            for source in existing:
+                target = backup / source.relative_to(map_dir)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                source.rename(target)
+                moved.append((source, target))
+        result = build_map_detail(config, str(map_dir))
+    except Exception:
+        for source, target in reversed(moved):
+            target.rename(source)
+        if backup is not None:
+            shutil.rmtree(backup)
+        raise
+    result["deleted_hd_map_backup"] = str(backup) if backup else ""
+    return result
+
+
 def save_hd_map(config: ConsoleConfig, payload: dict[str, Any]) -> dict[str, Any]:
     map_dir_value = str(payload.get("map_dir") or "")
     if not map_dir_value:

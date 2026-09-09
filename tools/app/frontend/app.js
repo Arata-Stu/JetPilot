@@ -1067,7 +1067,7 @@ function actionButtonLabel(key, label, busyLabel = "Working...") {
 }
 
 function mapEditorInteractionLocked() {
-  return tuningVisible() || actionBusy("hd-map-version:activate");
+  return tuningVisible() || actionBusy("hd-map-version:activate") || actionBusy("hd-map:delete");
 }
 
 function beginAction(key, message = "") {
@@ -7616,9 +7616,10 @@ function renderHdMapEditor(detail) {
         <button id="map-editor-undo" onclick="undoMapEditor()" ${editor.enabled && editor.undoStack.length ? "" : "disabled"}>Undo</button>
         <button id="map-editor-redo" onclick="redoMapEditor()" ${editor.enabled && editor.redoStack.length ? "" : "disabled"}>Redo</button>
         <button id="map-editor-save" class="${canSave && saveState.dirty ? "primary" : ""} ${actionBusy("hd-map:save") ? "is-busy" : ""}" onclick="saveHdMapFromEditor()" ${canSave ? "" : "disabled"} ${actionButtonAttrs("hd-map:save", "HD map is saving...")}>${esc(actionButtonLabel("hd-map:save", "Save", "Saving..."))}</button>
+        <button class="danger" onclick="deleteHdMapOnly()" ${mapEditorInteractionLocked() || actionBusy("hd-map:save") || !(detail.hd_map?.exists || editor.dirty) ? "disabled" : ""}>HD Mapのみ削除</button>
       </div>
       <div id="map-editor-save-reason" class="field-hint" role="status">${esc(saveState.issue || "境界・障害物・Centerline・Sectionをまとめて保存します")}</div>
-      ${editor.saveError ? `<div class="field-hint warn-text" role="alert">${esc(editor.saveError)}</div>` : ""}
+      ${editor.saveError ? `<div id="map-editor-save-error" class="field-hint warn-text" role="alert">${esc(editor.saveError)}${editor.validationMarker ? " 対象を赤色で表示しています（番号は0始まり）。" : ""}</div>` : ""}
       <div id="map-editor-centerline-state" class="field-hint">${esc(saveState.centerline)}</div>
       <button id="map-editor-define-section" onclick="defineWholeCourseSection()" ${saveState.canDefine ? "" : "hidden"}>全コースを1 Sectionにする</button>
       </div>
@@ -7638,6 +7639,7 @@ function renderHdMapEditor(detail) {
       </label>
       <div class="editor-actions">
         <label>レーン幅 (m) <input id="lane-draw-width" type="number" min="0.1" max="20" step="0.1" value="${editor.laneWidth || 1}" ${editor.drawingLane ? "disabled" : ""} /></label>
+        <label>走行可能の余裕／片側 (m) <input id="lane-draw-margin" type="number" min="0" max="2" step="0.05" value="${editor.laneMargin ?? 0.1}" ${editor.drawingLane ? "disabled" : ""} /></label>
         <button onclick="startPairedLane()" ${editor.enabled && !editor.drawingLane ? "" : "disabled"}>新規レーンを描く</button>
         <button onclick="useEditorLaneAsPrimary()" ${editor.enabled && lane.id !== editor.primaryLaneId ? "" : "disabled"}>このレーンを走行出力に使用</button>
         <button onclick="finishPairedLane()" ${editor.drawingLane ? "" : "disabled"}>描画完了</button>
@@ -7645,6 +7647,7 @@ function renderHdMapEditor(detail) {
         <select id="lane-join-target" aria-label="結合先レーン">${editor.lanes.filter(l => l.id !== lane.id).map(l => `<option value="${esc(l.id)}">${esc(l.id)}</option>`).join("")}</select>
         <button onclick="joinEditorLane()" ${editor.enabled && editor.lanes.length > 1 ? "" : "disabled"}>終点→始点を結合</button>
       </div>
+      <div class="field-hint">新規描画は角を丸め、走行可能境界を片側10cm（変更可能）広げます。青い境界は実際の壁の位置に合わせて確認してください。</div>
       <div class="field-hint">${editor.drawingLane ? "カーソルを動かすと、次のクリックで配置される左右境界と中心線を破線で表示します。クリックで確定、2点以上で描画完了。最初の点は仮の向きで、次の点から進行方向が決まります。" : "ペアレーンは左右の同じ番号の点からcenterlineを生成します。境界の点追加・削除は反対側にも反映されます。分割はLeft / Rightを選び、端点以外をクリック。"}</div>
       <div class="inspector-block">
         <h4>分岐・合流の接続</h4>
@@ -10121,6 +10124,8 @@ function startPairedLane() {
   if (!state.mapEditor.enabled || state.mapEditor.drawingLane) return;
   const width = Number($("lane-draw-width")?.value);
   if (!Number.isFinite(width) || width < 0.1 || width > 20) return toast("レーン幅は0.1〜20mで指定してください。", "error");
+  const margin = Number($("lane-draw-margin")?.value ?? 0.1);
+  if (!Number.isFinite(margin) || margin < 0 || margin > 2) return toast("走行可能の余裕は0〜2mで指定してください。", "error");
   rememberMapEditorState();
   state.mapEditor.obstacleId = ""; state.mapEditor.obstacleDrag = null;
   const empty = activeEditorLane();
@@ -10132,6 +10137,8 @@ function startPairedLane() {
   lane.primary = lane.id === state.mapEditor.primaryLaneId;
   state.mapEditor.activeLaneId = lane.id;
   state.mapEditor.laneWidth = width;
+  state.mapEditor.laneMargin = margin;
+  state.mapEditor.drawSpine = [];
   state.mapEditor.drawingLane = true;
   state.mapEditor.placementPoint = null;
   state.mapEditor.selected = null;
@@ -10146,8 +10153,8 @@ function finishPairedLane() {
   rememberMapEditorState();
   state.mapEditor.drawingLane = false;
   const lane = activeEditorLane();
-  lane.drivable_left_bound = cloneMapPolyline(lane.left_bound);
-  lane.drivable_right_bound = cloneMapPolyline(lane.right_bound);
+  if (!lane.drivable_left_bound?.length) lane.drivable_left_bound = cloneMapPolyline(lane.left_bound);
+  if (!lane.drivable_right_bound?.length) lane.drivable_right_bound = cloneMapPolyline(lane.right_bound);
   state.mapEditor.placementPoint = null;
   state.mapEditor.pointMode = "move";
   state.mapEditor.activeField = "left_bound";
@@ -10156,7 +10163,7 @@ function finishPairedLane() {
 }
 
 function laneTopologyEditIssue(lane) {
-  if (["left", "right"].some(side => (lane[`drivable_${side}_bound`] || []).length && JSON.stringify(lane[`drivable_${side}_bound`]) !== JSON.stringify(lane[`${side}_bound`]))) return "走行可能境界を持つレーンの分割・結合は未対応です。新規レーンとして描いてください。";
+  if (["left", "right"].some(side => lane[`drivable_${side}_bound`]?.length && lane[`drivable_${side}_bound`].length !== lane[`${side}_bound`].length)) return "分割・結合には走行可能境界と経路生成境界の対応点数を揃えてください。";
   return mapEditorDirectionReverseIssue(state.selectedMapDetail, lane);
 }
 
@@ -10171,7 +10178,10 @@ function splitEditorLane() {
     parts[0].successor_ids = [parts[1].id]; parts[0].default_successor_id = parts[1].id;
     parts[1].successor_ids = lane.closed_loop ? [parts[0].id] : [...(lane.successor_ids || [])];
     parts[1].default_successor_id = lane.closed_loop ? parts[0].id : lane.default_successor_id || "";
-    for (const part of parts) { part.drivable_left_bound = cloneMapPolyline(part.left_bound); part.drivable_right_bound = cloneMapPolyline(part.right_bound); }
+    for (const part of parts) {
+      part.drivable_left_bound ||= cloneMapPolyline(part.left_bound);
+      part.drivable_right_bound ||= cloneMapPolyline(part.right_bound);
+    }
     rememberMapEditorState();
     state.mapEditor.lanes.splice(state.mapEditor.lanes.indexOf(lane), 1, ...parts);
     state.mapEditor.selected = null;
@@ -10190,7 +10200,8 @@ function joinEditorLane() {
     if (issue) throw new Error(issue);
     if (state.mapEditor.lanes.some(l => l.successor_ids?.length && [l.id,...l.successor_ids].some(id => id === lane.id || id === target.id))) throw new Error("接続のあるLaneは1本に統合できません。接続解除してから操作してください。");
     const joined = LaneGeometry.join(lane, target);
-    joined.drivable_left_bound = cloneMapPolyline(joined.left_bound); joined.drivable_right_bound = cloneMapPolyline(joined.right_bound);
+    joined.drivable_left_bound ||= cloneMapPolyline(joined.left_bound);
+    joined.drivable_right_bound ||= cloneMapPolyline(joined.right_bound);
     rememberMapEditorState();
     state.mapEditor.lanes = state.mapEditor.lanes.filter(l => l.id !== target.id).map(l => l.id === lane.id ? joined : l);
     if (state.mapEditor.primaryLaneId === target.id) state.mapEditor.primaryLaneId = lane.id;
@@ -10288,6 +10299,8 @@ function ensureMapEditor(detail, options = {}) {
       ...state.mapEditor,
       mapPath,
       saveError: "",
+      validationMarker: null,
+      drawSpine: undefined,
       dirty: false,
       revision,
       selected: null,
@@ -10325,6 +10338,7 @@ function captureMapEditorSnapshot() {
     selected: state.mapEditor.selected ? { ...state.mapEditor.selected } : null,
     dirty: state.mapEditor.dirty,
     drawingLane: Boolean(state.mapEditor.drawingLane),
+    drawSpine: state.mapEditor.drawSpine?.map(p => [...p]),
   };
 }
 
@@ -10347,6 +10361,9 @@ function restoreMapEditorSnapshot(snapshot) {
   state.mapEditor.dragSnapshot = null;
   state.mapEditor.dirty = Boolean(snapshot.dirty);
   state.mapEditor.drawingLane = Boolean(snapshot.drawingLane);
+  state.mapEditor.drawSpine = snapshot.drawSpine?.map(p => [...p]);
+  state.mapEditor.validationMarker = null;
+  state.mapEditor.saveError = "";
   state.mapEditor.revision = Number(state.mapEditor.revision || 0) + 1;
 }
 
@@ -12147,6 +12164,8 @@ function reverseActiveMapEditorLaneDirection() {
 }
 
 function markMapEditorDirty() {
+  state.mapEditor.validationMarker = null;
+  state.mapEditor.saveError = "";
   state.mapEditor.dirty = true;
   state.mapEditor.revision = Number(state.mapEditor.revision || 0) + 1;
   updateMapEditorChrome();
@@ -12158,6 +12177,8 @@ function updateMapEditorChrome() {
   const lane = activeEditorLane();
   const selected = Boolean(state.mapEditor.selected);
   const saveState = mapEditorSaveState(detail);
+  const errorLabel = $("map-editor-save-error");
+  if (errorLabel && !state.mapEditor.saveError) errorLabel.hidden = true;
   const status = $("map-editor-status");
   if (status) {
     status.textContent = saveState.status;
@@ -12921,9 +12942,13 @@ function deleteNearestCustomLinePoint(event) {
 function pairedLanePlacement(world) {
   const editor = state.mapEditor;
   if (!editor.enabled || !editor.drawingLane || !world || !world.every(Number.isFinite)) return null;
-  const spine = LaneGeometry.centers(activeEditorLane());
+  const spine = editor.drawSpine || LaneGeometry.centers(activeEditorLane());
   if (spine.length && pointDistance(spine.at(-1), world) < 0.02) return null;
-  return LaneGeometry.fromSpine([...spine, world], editor.laneWidth || 1);
+  try {
+    return LaneGeometry.drawnLane([...spine, world], editor.laneWidth || 1, editor.laneMargin ?? 0.1);
+  } catch (error) {
+    return { issue: error.message, point: spine[error.pointIndex] || world };
+  }
 }
 
 function handleMapEditorPointerDown(event) {
@@ -12947,7 +12972,9 @@ function handleMapEditorPointerDown(event) {
     const world = mapPixelToWorld(detail, canvas.width, canvas.height, point);
     const placement = pairedLanePlacement(world);
     if (!placement) return;
+    if (placement.issue) { toast(placement.issue, "error"); return; }
     rememberMapEditorState();
+    state.mapEditor.drawSpine = [...(state.mapEditor.drawSpine || LaneGeometry.centers(lane)), world];
     Object.assign(lane, placement);
     state.mapEditor.placementPoint = null;
     markMapEditorDirty();
@@ -13214,6 +13241,32 @@ function handleMapEditorContextMenu(event) {
   // Keep canvas gestures limited to the selected add/move mode.
 }
 
+async function deleteHdMapOnly() {
+  const detail = state.selectedMapDetail;
+  if (!detail || mapEditorInteractionLocked() || actionBusy("hd-map:save")) return;
+  const mapPath = detail.map.path;
+  if (!confirmAction({title:"HD Mapのみ削除しますか？", target:mapPath,
+    detail:"現在のLane・境界・障害物・Section・Junction、Centerline・Raceline・走行用Custom lineと未保存の編集をリセットします。\n点群・Raster・自己位置推定用地図、保存済みバージョンとCustom lineの原本は残します。削除ファイルは地図フォルダ内に復旧用として退避します。",
+    destructive:true})) return;
+  const context = captureSelectedMapContext(mapPath);
+  if (!beginAction("hd-map:delete", "HD Mapを削除中")) return;
+  try {
+    const result = await api("/api/maps/delete-hd-map", {method:"POST",body:JSON.stringify({map_dir:mapPath})});
+    if (commitSelectedMapDetail(context, result)) {
+      ensureMapEditor(result, {force:true});
+      ensureSectionEditor(result, {force:true});
+      ensureJunctionEditor(result, {force:true});
+      ensureCustomLineEditor(result, {force:true});
+      state.mapEditor.enabled = false;
+      state.sectionEditor.enabled = false;
+      state.junctionEditor.enabled = false;
+      invalidateMapPreflights(mapPath);
+    }
+    toast("HD Mapを削除しました。元の地図は保持しています。");
+  } catch (error) { toast(`HD Mapを削除できませんでした: ${error.message}`, "error"); }
+  finally { endAction("hd-map:delete"); }
+}
+
 async function saveHdMapFromEditor(generateNetworkRacelines = false) {
   const detail = state.selectedMapDetail;
   if (!detail) return;
@@ -13278,7 +13331,17 @@ async function saveHdMapFromEditor(generateNetworkRacelines = false) {
     toast(hasNewerEdits || newerSections ? "HD map snapshot saved; newer edits remain unsaved." : "HD map saved");
     render();
   } catch (error) {
-    if (state.mapEditor.mapPath === mapPath) state.mapEditor.saveError = `保存できませんでした: ${error.message}`;
+    if (state.mapEditor.mapPath === mapPath && Number(state.mapEditor.revision || 0) === editorRevision) {
+      state.mapEditor.saveError = `保存できませんでした: ${error.message}`;
+      const marker = LaneGeometry.validationLocation(error.message, state.mapEditor.lanes);
+      state.mapEditor.validationMarker = marker;
+      if (marker) {
+        state.mapEditor.activeLaneId = marker.laneId;
+        state.mapEditor.activeField = marker.field;
+        state.mapEditor.enabled = true;
+        state.mapEditor.selected = {field:marker.field, index:marker.indices[0]};
+      }
+    }
   } finally {
     endAction("hd-map:save", { renderAfter: state.tab === "maps" });
   }
@@ -13639,6 +13702,11 @@ function drawLanePlacementPreview(ctx, detail, toPixel, uiScale) {
   if (mapEditorInteractionLocked() || state.mapEditor.mapPath !== detail.map?.path) return;
   const placement = pairedLanePlacement(state.mapEditor.placementPoint);
   if (!placement) return;
+  if (placement.issue) {
+    const [x, y] = toPixel(placement.point);
+    drawLabel(ctx, "曲がりが急すぎます：点の間隔・幅を調整", x, y, uiScale);
+    return;
+  }
   const left = placement.left_bound.map(toPixel);
   const right = placement.right_bound.map(toPixel);
   const center = placement.centerline.map(toPixel);
@@ -13653,6 +13721,8 @@ function drawLanePlacementPreview(ctx, detail, toPixel, uiScale) {
   drawPolyline(ctx, left, "#45c478", 2, false, uiScale);
   drawPolyline(ctx, right, "#d878d8", 2, false, uiScale);
   drawPolyline(ctx, center, "#e7c84b", 2, false, uiScale);
+  drawPolyline(ctx, placement.drivable_left_bound.map(toPixel), "#62b6ff", 1.5, false, uiScale);
+  drawPolyline(ctx, placement.drivable_right_bound.map(toPixel), "#62b6ff", 1.5, false, uiScale);
   drawPolyline(ctx, [left.at(-1), right.at(-1)], "#57c7c2", 2, false, uiScale);
   ctx.setLineDash([]);
   const [x, y] = center.at(-1);
@@ -13938,6 +14008,7 @@ function drawEditorPointHandles(ctx, detail, toPixel, uiScale = 1) {
   if (!state.mapEditor.enabled || state.mapEditor.mapPath !== detail?.map?.path) return;
   const lane = activeEditorLane();
   const selected = state.mapEditor.selected;
+  const marker = state.mapEditor.validationMarker;
   const fields = [
     ["left_bound", "#45c478"],
     ["right_bound", "#d878d8"],
@@ -13956,14 +14027,19 @@ function drawEditorPointHandles(ctx, detail, toPixel, uiScale = 1) {
       const [x, y] = toPixel(points[index]);
       if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
       const isSelected = selected?.field === field && selected?.index === index;
+      const invalid = marker?.laneId === lane.id && marker.field === field && marker.indices.includes(index);
       ctx.beginPath();
-      ctx.fillStyle = color;
+      ctx.fillStyle = invalid ? "#ff4545" : color;
       ctx.strokeStyle = isSelected ? "#ffffff" : "rgba(8, 10, 12, 0.86)";
       ctx.lineWidth = (isSelected ? 3 : 2) * uiScale;
-      ctx.arc(x, y, (isSelected ? 6 : 4.5) * uiScale, 0, Math.PI * 2);
+      ctx.arc(x, y, (invalid ? 9 : isSelected ? 6 : 4.5) * uiScale, 0, Math.PI * 2);
       ctx.fill();
       ctx.stroke();
+      if (invalid) drawLabel(ctx, `${field}[${index}]`, x + 12*uiScale, y - 12*uiScale, uiScale);
     }
+  }
+  if (marker?.laneId === lane.id && marker.indices.length === 2) {
+    drawPolyline(ctx, marker.indices.map(i => toPixel(lane[marker.field][i])), "#ff4545", 5, false, uiScale);
   }
   ctx.restore();
 }
