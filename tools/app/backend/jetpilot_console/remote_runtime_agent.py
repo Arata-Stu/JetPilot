@@ -31,17 +31,50 @@ def execute(s):
 
 
 def execute_locked(s, directory):
-    container = s['container']
+    configured_container = s['container']
+    container = configured_container
     session = s['session']
     screen = s['screen']
+
+    def inspect_container(name):
+        response = run(['docker', 'inspect', '-f', '{{.State.Running}}', name], False)
+        return response.returncode == 0 and response.stdout.strip() == 'true', response
+
+    alive, inspect_response = inspect_container(container)
+    if not alive:
+        listing = run(['docker', 'ps', '--format', '{{.Names}}'], False)
+        if listing.returncode:
+            detail = (listing.stderr or listing.stdout or 'docker ps failed')[-1500:]
+            raise RuntimeError('Jetson上のDocker一覧を確認できません: ' + detail)
+        candidates = []
+        for name in listing.stdout.splitlines():
+            name = name.strip()
+            if not name:
+                continue
+            probe = run(['docker', 'exec', name, 'test', '-f', s['bringup']], False)
+            if probe.returncode == 0:
+                candidates.append(name)
+        if len(candidates) == 1:
+            container = candidates[0]
+            alive = True
+        elif len(candidates) > 1:
+            raise RuntimeError(
+                'JetPilot候補のDockerコンテナが複数あります。詳細設定で名前を選択してください: '
+                + ', '.join(candidates)
+            )
+        elif inspect_response.returncode and inspect_response.stderr.strip() and 'No such object' not in inspect_response.stderr:
+            raise RuntimeError(
+                'Dockerコンテナの状態確認に失敗しました: '
+                + inspect_response.stderr.strip()[-1500:]
+            )
+
     base = ['docker', 'exec', '-u', s['container_user'], container]
 
     def tmux(*args, check=True):
         return run(base + ['tmux', *args], check)
 
     def running_container():
-        p = run(['docker', 'inspect', '-f', '{{.State.Running}}', container], False)
-        return p.returncode == 0 and p.stdout.strip() == 'true'
+        return inspect_container(container)[0]
 
     def screen_exists():
         p = run(['screen', '-ls'], False)
@@ -112,7 +145,12 @@ def execute_locked(s, directory):
         ros = ['timeout', '10', 'ros2', 'topic', 'pub', '--once', '/bag/request', 'jetpilot_msgs/msg/BagRequest', '{command: ' + str(command) + ', label: web}']
         run(base + ['bash', '-lc', 'source ' + shlex.quote(setup) + ' && ' + shlex.join(ros)])
         message = '記録操作を送信しました。実際の記録状態はbag managerのログで確認してください。'
-    result = {'container_running': running_container(), 'screen_running': screen_exists(), 'message': message,
+    detected_message = ''
+    if container != configured_container:
+        detected_message = f'Dockerコンテナ「{container}」を自動検出しました。'
+    result = {'container': container, 'container_running': running_container(),
+              'screen_running': screen_exists(),
+              'message': '\n'.join(part for part in (detected_message, message) if part),
               'state': 'not_started', 'log': ''}
     screen_log = directory / (screen + '.log')
     if screen_log.is_file():

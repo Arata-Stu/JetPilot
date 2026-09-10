@@ -109,6 +109,31 @@ class RuntimeTests(unittest.TestCase):
         _, calls = self.fake_remote('prepare', alive=True, screen=True)
         self.assertFalse(any('-dmS' in c for c in calls))
 
+    def test_status_autodetects_the_only_jetpilot_container(self):
+        calls = []
+        def fake(args, check=True):
+            calls.append(args)
+            if args[:3] == ['docker', 'inspect', '-f']:
+                if args[-1] == 'actual_isaac_container':
+                    return subprocess.CompletedProcess(args, 0, 'true\n', '')
+                return subprocess.CompletedProcess(args, 1, '', 'Error: No such object')
+            if args[:3] == ['docker', 'ps', '--format']:
+                return subprocess.CompletedProcess(args, 0, 'actual_isaac_container\n', '')
+            if args[:3] == ['docker', 'exec', 'actual_isaac_container'] and 'test' in args:
+                return subprocess.CompletedProcess(args, 0, '', '')
+            if args[:2] == ['screen', '-ls']:
+                return subprocess.CompletedProcess(args, 0, '', '')
+            if 'tmux' in args:
+                return subprocess.CompletedProcess(args, 1, '', 'no server running')
+            return subprocess.CompletedProcess(args, 0, '', '')
+        with tempfile.TemporaryDirectory() as tmp, patch.object(agent.Path, 'home', return_value=Path(tmp)), patch.object(agent, 'run', side_effect=fake):
+            settings = self.settings(container='old_saved_name', host_workspace=tmp)
+            settings['action'] = 'status'
+            result = agent.execute(settings)
+        self.assertTrue(result['container_running'])
+        self.assertEqual(result['container'], 'actual_isaac_container')
+        self.assertIn('自動検出', result['message'])
+
     def test_start_does_not_duplicate_or_take_manual_session(self):
         for owned in (True, False):
             with self.assertRaises(RuntimeError):

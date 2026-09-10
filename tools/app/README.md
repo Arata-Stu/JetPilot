@@ -1161,6 +1161,8 @@ SSH鍵認証とknown_hostsの登録は、Webバックエンドを実行するNot
    `tamiya@192.168.11.190`、`/home/tamiya/workspaces/JetPilot` です。
    `10.42.0.1`、`192.168.55.1` と `/home/tamiya` も画面からワンクリックで選択できます。
    Dockerコンテナ名は通常 `isaac_ros_dev_container` のままでよく、詳細設定内にあります。
+   指定名で見つからない場合は、`/workspaces/scripts/bringup.sh` を持つ起動中コンテナが
+   1件だけなら自動検出し、実際のコンテナ名をブラウザ設定へ保存します。
 2. 「環境を準備」で管理用screen内から `isaac-ros activate` を実行します。Dockerが存在する場合の接続もこのコマンドに任せます。既存の管理用screenは再利用します。
 3. 準備開始後は約30秒間、Dockerの起動を自動確認します。「SSH接続済み」「Docker起動待ち」
    「接続済み」を分けて表示します。必要に応じて「状態・ログ更新」で再確認でき、環境準備ログも表示できます。

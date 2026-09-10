@@ -135,7 +135,7 @@ function renderRuntime() {
   <section class="runtime-result ${runtimeError ? 'bad' : runtimeResult ? 'visible' : ''}">
     <div class="runtime-result-summary" role="status" aria-live="polite"><strong>${runtimeBusy?'操作中…':esc(runtimeResult?.message || '接続または起動操作を行うと、ここに状態とログが表示されます。')}</strong>${runtimeLastUpdate ? `<span>最終確認 ${esc(runtimeLastUpdate)}</span>` : ''}</div>
     ${runtimeError ? `<div class="runtime-error" role="alert">${esc(runtimeError)}</div>`:''}
-    ${runtimeResult ? `<div class="runtime-state-chips"><span class="${runtimeResult.screen_running?'ok':''}">screen ${runtimeResult.screen_running ? '起動済み':'未起動'}</span><span class="${runtimeResult.container_running?'ok':''}">Docker ${runtimeResult.container_running ? '起動済み':'未起動'}</span><span>${esc(states[runtimeResult.state] || '')}${runtimeResult.exit_code != null ? ' · code '+esc(runtimeResult.exit_code):''}</span></div>${runtimeResult.command ? `<details><summary>実行コマンド</summary><pre>${esc(runtimeResult.command)}</pre></details>`:''}<details open><summary>bringupログ</summary><pre class="runtime-log">${esc(runtimeResult.log || 'ログはまだありません')}</pre></details><details><summary>環境準備ログ</summary><pre class="runtime-log">${esc(runtimeResult.environment_log || 'ログはまだありません')}</pre></details>`:''}
+    ${runtimeResult ? `<div class="runtime-state-chips"><span class="${runtimeResult.screen_running?'ok':''}">screen ${runtimeResult.screen_running ? '起動済み':'未起動'}</span><span class="${runtimeResult.container_running?'ok':''}">Docker ${runtimeResult.container_running ? '起動済み':'未起動'}${runtimeResult.container ? ' · '+esc(runtimeResult.container) : ''}</span><span>${esc(states[runtimeResult.state] || '')}${runtimeResult.exit_code != null ? ' · code '+esc(runtimeResult.exit_code):''}</span></div>${runtimeResult.command ? `<details><summary>実行コマンド</summary><pre>${esc(runtimeResult.command)}</pre></details>`:''}<details open><summary>bringupログ</summary><pre class="runtime-log">${esc(runtimeResult.log || 'ログはまだありません')}</pre></details><details><summary>環境準備ログ</summary><pre class="runtime-log">${esc(runtimeResult.environment_log || 'ログはまだありません')}</pre></details>`:''}
   </section>
   </section>`;
 }
@@ -144,6 +144,10 @@ async function runtimeAction(action) {
   runtimeBusy = true; runtimeError = ''; render();
   try {
     runtimeResult = await api('/api/runtime/'+action, {method:'POST',body:JSON.stringify(runtimeConfig)});
+    if (runtimeResult.container && runtimeResult.container !== runtimeConfig.container) {
+      runtimeConfig.container = runtimeResult.container;
+      localStorage.setItem('jetpilot-runtime-v1', JSON.stringify(runtimeConfig));
+    }
     if (action === 'prepare') runtimePreparePollRemaining = runtimeResult.container_running ? 0 : 10;
     if (runtimeResult.container_running) runtimePreparePollRemaining = 0;
     runtimeLastUpdate = new Date().toLocaleTimeString();
