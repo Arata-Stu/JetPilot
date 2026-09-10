@@ -13,6 +13,9 @@ data:
 model:
   weights_path: ${oc.env:EVENTSTATE_DINOV3_VITS16_WEIGHTS,"weights/eventstate/eventstate_dinov3_vits16.pth"}
   require_weights: true
+  # This project-owned EventState training checkpoint contains config/RNG
+  # objects in addition to tensors and therefore requires pickle loading.
+  trusted_checkpoint: true
 
 run:
   name: dinov3_vits16_eventstate_frozen_head

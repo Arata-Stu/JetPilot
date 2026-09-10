@@ -19,7 +19,8 @@ def _checkpoint(path: Path) -> dict[str, Any]:
     resolved = path.expanduser().resolve()
     if not resolved.is_file():
         raise FileNotFoundError(f"checkpoint not found: {resolved}")
-    value = torch.load(resolved, map_location="cpu")
+    # Both inputs are project-generated training checkpoints with config state.
+    value = torch.load(resolved, map_location="cpu", weights_only=False)
     if not isinstance(value, dict):
         raise ValueError(f"checkpoint must be a mapping: {resolved}")
     return value

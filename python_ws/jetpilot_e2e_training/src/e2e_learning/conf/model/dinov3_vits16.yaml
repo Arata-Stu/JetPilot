@@ -20,3 +20,4 @@ rope_base: 100.0
 rope_rescale_coords: 2.0
 weights_path: ""
 require_weights: false
+trusted_checkpoint: false

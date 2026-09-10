@@ -370,9 +370,23 @@ class DinoV3ViTSmallControl(nn.Module):
         return torch.cat((steering, throttle), dim=1)
 
 
-def load_dinov3_backbone_weights(path: str | Path, backbone: nn.Module) -> tuple[int, int]:
-    """Load a raw DINOv3 or GEP event-encoder checkpoint into the compatible backbone."""
-    checkpoint = torch.load(path, map_location="cpu")
+def load_dinov3_backbone_weights(
+    path: str | Path,
+    backbone: nn.Module,
+    *,
+    trusted_checkpoint: bool = False,
+) -> tuple[int, int]:
+    """Load a raw DINOv3 or GEP event-encoder checkpoint into the compatible backbone.
+
+    Official weight-only files stay on PyTorch's restricted loader. EventState
+    training checkpoints also contain optimizer/config/RNG objects, so they may
+    opt into pickle loading only when the checkpoint source is trusted.
+    """
+    checkpoint = torch.load(
+        path,
+        map_location="cpu",
+        weights_only=not trusted_checkpoint,
+    )
     state: Any = checkpoint
     if isinstance(checkpoint, dict):
         for key in ("event_encoder", "teacher", "backbone", "model_state", "model"):

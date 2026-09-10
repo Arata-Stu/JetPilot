@@ -30,7 +30,7 @@ class TorchvisionEncoderHead(nn.Module):
         weights = models.MobileNet_V3_Small_Weights.DEFAULT if pretrained and not weights_path else None
         backbone = models.mobilenet_v3_small(weights=weights)
         if weights_path:
-            state = torch.load(weights_path, map_location="cpu")
+            state = torch.load(weights_path, map_location="cpu", weights_only=True)
             backbone.load_state_dict(state)
 
         self.encoder = backbone.features
@@ -92,7 +92,11 @@ def build_model(config: Any) -> nn.Module:
         )
         weights_path = str(getattr(config, "weights_path", ""))
         if weights_path:
-            load_dinov3_backbone_weights(weights_path, model.backbone)
+            load_dinov3_backbone_weights(
+                weights_path,
+                model.backbone,
+                trusted_checkpoint=bool(getattr(config, "trusted_checkpoint", False)),
+            )
         elif bool(getattr(config, "require_weights", False)):
             raise RuntimeError(
                 "model.weights_path is required for this DINOv3 fine-tuning preset"
@@ -104,7 +108,9 @@ def build_model(config: Any) -> nn.Module:
 
 
 def load_checkpoint(path: str | Path, model: nn.Module) -> dict[str, Any]:
-    checkpoint = torch.load(path, map_location="cpu")
+    # Training checkpoints are produced by this project and include more than
+    # tensors (resolved config and optimizer/runtime state).
+    checkpoint = torch.load(path, map_location="cpu", weights_only=False)
     state = checkpoint["model_state"] if "model_state" in checkpoint else checkpoint
     model.load_state_dict(state)
     return checkpoint

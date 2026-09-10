@@ -22,7 +22,8 @@ def main(cfg: DictConfig) -> None:
     if not checkpoint_path.exists():
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
 
-    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    # This is a JetPilot-generated training checkpoint containing its config.
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     if not isinstance(checkpoint, dict):
         checkpoint = {"model_state": checkpoint}
     run_cfg = _stored_config(checkpoint, cfg)
