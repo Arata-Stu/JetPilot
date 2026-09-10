@@ -1157,7 +1157,10 @@ Centerline/Racelineとも、現在Lane内で進行位置を追跡します。別
 「Jetsonに接続 → 起動・運転」で接続先を設定します。設定は現在のブラウザに保存されます。
 SSH鍵認証とknown_hostsの登録は、Webバックエンドを実行するNotebook側で済ませてください。
 
-1. Jetsonホスト名、SSHユーザー、Dockerコンテナ名、コンテナ内ユーザー、ホスト作業ディレクトリを入力。
+1. Jetsonホスト名とホスト作業ディレクトリを確認。初期値は
+   `tamiya@192.168.11.190`、`/home/tamiya/workspaces/JetPilot` です。
+   `10.42.0.1`、`192.168.55.1` と `/home/tamiya` も画面からワンクリックで選択できます。
+   Dockerコンテナ名は通常 `isaac_ros_dev_container` のままでよく、詳細設定内にあります。
 2. 「環境を準備」で管理用screen内から `isaac-ros activate` を実行します。Dockerが存在する場合の接続もこのコマンドに任せます。既存の管理用screenは再利用します。
 3. 「状態・ログ更新」でDockerの起動を確認します。準備は非同期です。環境準備ログも表示できます。
 4. 用途・センサー・モデル等を選び、「起動内容を確認」「bringupを起動」を実行。

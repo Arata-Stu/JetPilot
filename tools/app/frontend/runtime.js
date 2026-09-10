@@ -1,7 +1,12 @@
 /* SSH operations are explicit. Opening this page never starts a remote process. */
-const runtimeDefaults = {host: '', user: '', container: '', container_user: 'admin', host_workspace: '', screen: 'jetpilot-web', session: 'jetpilot-web', bringup: '/workspaces/scripts/bringup.sh', preset: 'record', sensor: 'realsense', vehicle: 'jpbb', rgb_fps: 30, infra_fps: 60, evs_window_ms: 50, evs_stride_ms: 10, fixed: false, throttle: 0.2, model: '', map: '', bag: ''};
+const runtimeDefaults = {host: '192.168.11.190', user: 'tamiya', container: 'isaac_ros_dev_container', container_user: 'admin', host_workspace: '/home/tamiya/workspaces/JetPilot', screen: 'jetpilot-web', session: 'jetpilot-web', bringup: '/workspaces/scripts/bringup.sh', preset: 'record', sensor: 'realsense', vehicle: 'jpbb', rgb_fps: 30, infra_fps: 60, evs_window_ms: 50, evs_stride_ms: 10, fixed: false, throttle: 0.2, model: '', map: '', bag: ''};
+const runtimeHostChoices = ['192.168.11.190', '10.42.0.1', '192.168.55.1'];
+const runtimeWorkspaceChoices = ['/home/tamiya/workspaces/JetPilot', '/home/tamiya'];
 let runtimeConfig = {...runtimeDefaults};
 try { Object.assign(runtimeConfig, JSON.parse(localStorage.getItem('jetpilot-runtime-v1') || '{}')); } catch (_) {}
+for (const key of ['host', 'user', 'container', 'container_user', 'host_workspace']) {
+  if (!String(runtimeConfig[key] || '').trim()) runtimeConfig[key] = runtimeDefaults[key];
+}
 let runtimeBusy = false;
 let runtimeResult = null;
 let runtimeError = '';
@@ -19,6 +24,17 @@ function runtimeChange(key, value, redraw = false) {
   runtimeLastUpdate = '';
   runtimeBag = {state:'unknown'}; runtimeBagTime = '';
   runtimeTuneMessage = '';
+  render();
+}
+function runtimeResetConnectionDefaults() {
+  for (const key of ['host', 'user', 'container', 'container_user', 'host_workspace']) {
+    runtimeConfig[key] = runtimeDefaults[key];
+  }
+  localStorage.setItem('jetpilot-runtime-v1', JSON.stringify(runtimeConfig));
+  runtimeResult = null;
+  runtimeError = '';
+  runtimeLastUpdate = '';
+  runtimeBag = {state:'unknown'}; runtimeBagTime = '';
   render();
 }
 const runtimeControllerFields = [
@@ -58,10 +74,12 @@ function renderRuntime() {
   <section class="runtime-card runtime-connect-card">
     <header><span class="runtime-step">01</span><div><h2>Jetsonへ接続</h2><p>SSHとIsaac ROSコンテナを準備</p></div></header>
     <fieldset ${runtimeBusy ? 'disabled' : ''}><div class="runtime-grid runtime-grid-compact">
-      ${field('host','Jetsonホスト','192.168.…')}${field('user','SSHユーザー')}${field('container','Dockerコンテナ名')}${field('container_user','コンテナ内ユーザー')}
+      ${field('host','Jetsonホスト','192.168.…')}${field('user','SSHユーザー')}
+      <div class="runtime-wide runtime-quick-values"><span>よく使う接続先</span>${runtimeHostChoices.map(host => `<button type="button" class="ghost ${runtimeConfig.host === host ? 'active' : ''}" onclick="runtimeChange('host','${host}')">${host}</button>`).join('')}</div>
       <div class="runtime-wide">${field('host_workspace','Jetson側の作業ディレクトリ','isaac-ros activateを実行する場所')}</div>
-    </div><details><summary>詳細なセッション・パス設定</summary><div class="runtime-grid runtime-grid-compact">${field('screen','screen名')}${field('session','tmux名')}<div class="runtime-wide">${field('bringup','コンテナ内bringupパス')}</div></div></details></fieldset>
-    <div class="runtime-actions">${button('prepare','1. 環境を準備','primary')} ${button('status','状態・ログ更新')}</div>
+      <div class="runtime-wide runtime-quick-values"><span>よく使う作業場所</span>${runtimeWorkspaceChoices.map(path => `<button type="button" class="ghost ${runtimeConfig.host_workspace === path ? 'active' : ''}" onclick="runtimeChange('host_workspace','${path}')">${path}</button>`).join('')}</div>
+    </div><details><summary>詳細なDocker・セッション設定</summary><div class="runtime-grid runtime-grid-compact">${field('container','Dockerコンテナ名')}${field('container_user','コンテナ内ユーザー')}${field('screen','screen名')}${field('session','tmux名')}<div class="runtime-wide">${field('bringup','コンテナ内bringupパス')}</div></div></details></fieldset>
+    <div class="runtime-actions">${button('prepare','1. 環境を準備','primary')} ${button('status','状態・ログ更新')} <button type="button" ${runtimeBusy ? 'disabled' : ''} onclick="runtimeResetConnectionDefaults()">接続設定を既定値へ</button></div>
     <p class="runtime-hint">screen内で<code>isaac-ros activate</code>を実行します。SSH鍵認証を使用します。</p>
   </section>
 

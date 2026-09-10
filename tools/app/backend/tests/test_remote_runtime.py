@@ -29,6 +29,13 @@ class RuntimeTests(unittest.TestCase):
         self.assertIn('sensor_kit_silky_evcam_event_image_stride_ms:=10.0', evs)
         self.assertIn('sensor_kit_silky_evcam_event_image_fps:=100.0', evs)
 
+    def test_jetson_connection_defaults(self):
+        settings = transport.settings({'host': '192.168.11.190'})
+        self.assertEqual(settings['target'], 'tamiya@192.168.11.190')
+        self.assertEqual(settings['container'], 'isaac_ros_dev_container')
+        self.assertEqual(settings['container_user'], 'admin')
+        self.assertEqual(settings['host_workspace'], '/home/tamiya/workspaces/JetPilot')
+
     def test_rejects_invalid_input_and_required_paths(self):
         for kw in ({'host': '-bad'}, {'session': '; ls'}, {'container': '../x'}, {'throttle': 'nan'}, {'rgb_fps': 29}, {'bringup': 'relative'}, {'evs_window_ms': 0}, {'evs_window_ms': 10, 'evs_stride_ms': 20}):
             with self.assertRaises(ValueError):
@@ -88,7 +95,7 @@ class RuntimeTests(unittest.TestCase):
                 if command == 'capture-pane': out = 'example log'
             return subprocess.CompletedProcess(args, code, out, '')
         with tempfile.TemporaryDirectory() as tmp, patch.object(agent.Path, 'home', return_value=Path(tmp)), patch.object(agent, 'run', side_effect=fake):
-            s = self.settings()
+            s = self.settings(host_workspace=tmp)
             s['action'] = action
             s['command'] = transport.bringup_args(s)
             result = agent.execute(s)

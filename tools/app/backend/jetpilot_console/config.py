@@ -114,7 +114,7 @@ class ConsoleConfig:
             )
         ).expanduser().resolve(strict=False)
         jetson_ips = os.environ.get(
-            "JETSON_REMOTE_IPS", "10.42.0.1 192.168.55.1 192.168.11.190"
+            "JETSON_REMOTE_IPS", "192.168.11.190 10.42.0.1 192.168.55.1"
         ).split()
 
         return cls(

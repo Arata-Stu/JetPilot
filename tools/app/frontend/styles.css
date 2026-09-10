@@ -4382,6 +4382,10 @@ tr:last-child td {
 .runtime-grid-compact { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .runtime-grid label { display: flex; min-width: 0; flex-direction: column; gap: 5px; color: var(--soft); font-size: 12px; }
 .runtime-grid input, .runtime-grid select { min-width: 0; padding: 7px 9px; }
+.runtime-quick-values { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
+.runtime-quick-values > span { margin-right: 2px; color: var(--muted); font-size: 11px; }
+.runtime-quick-values button { padding: 5px 9px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 11px; }
+.runtime-quick-values button.active { border-color: var(--blue); color: #b9dcff; background: rgba(90,168,255,.14); }
 .runtime-wide { grid-column: 1 / -1; }
 .runtime-panel fieldset { min-width: 0; border: 0; margin: 0; padding: 0; }
 .runtime-panel details { margin-top: 11px; }

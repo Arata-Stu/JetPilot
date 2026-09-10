@@ -17,6 +17,16 @@ assert.match(vm.runInContext('renderRuntime()',context), /runtime-connect-card/)
 assert.match(vm.runInContext('renderRuntime()',context), /runtime-launch-card/);
 assert.match(vm.runInContext('renderRuntime()',context), /runtime-record-card/);
 assert.match(vm.runInContext('renderRuntime()',context), /runtime-tune-card/);
+assert.equal(vm.runInContext('runtimeConfig.host',context),'192.168.11.190');
+assert.equal(vm.runInContext('runtimeConfig.user',context),'tamiya');
+assert.equal(vm.runInContext('runtimeConfig.container',context),'isaac_ros_dev_container');
+assert.equal(vm.runInContext('runtimeConfig.host_workspace',context),'/home/tamiya/workspaces/JetPilot');
+assert.match(vm.runInContext('renderRuntime()',context), /10\.42\.0\.1/);
+assert.match(vm.runInContext('renderRuntime()',context), /192\.168\.55\.1/);
+assert.match(vm.runInContext('renderRuntime()',context), /\/home\/tamiya/);
+vm.runInContext("runtimeChange('host','10.42.0.1')",context);
+vm.runInContext('runtimeResetConnectionDefaults()',context);
+assert.equal(vm.runInContext('runtimeConfig.host',context),'192.168.11.190');
 assert.equal(calls.length,0,'render must not access the Jetson');
 vm.runInContext("runtimeChange('preset','e2e',true)",context);
 assert.match(vm.runInContext('renderRuntime()',context), /モデルディレクトリ/);

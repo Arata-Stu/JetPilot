@@ -15,15 +15,15 @@ CONTROLLER_PARAMETERS = ('algorithm', 'min_lookahead_m', 'max_lookahead_m', 'loo
 
 def settings(body):
     result = {}
-    result['target'] = validate_ssh_target(str(body.get('user', '')), str(body.get('host', '')))
-    for key, default in (('container', ''), ('container_user', ''), ('screen', 'jetpilot-web'), ('session', 'jetpilot-web')):
-        value = str(body.get(key, default))
+    result['target'] = validate_ssh_target(str(body.get('user') or 'tamiya'), str(body.get('host', '')))
+    for key, default in (('container', 'isaac_ros_dev_container'), ('container_user', 'admin'), ('screen', 'jetpilot-web'), ('session', 'jetpilot-web')):
+        value = str(body.get(key) or default)
         pattern = r'[A-Za-z0-9_][A-Za-z0-9_-]{0,63}' if key in ('screen', 'session') else r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}'
         if not re.fullmatch(pattern, value):
             raise ValueError(f'{key}: 名前に使えない文字が含まれています（screen/tmuxは英数字・_・-）')
         result[key] = value
-    for key, default in (('bringup', '/workspaces/scripts/bringup.sh'), ('host_workspace', ''), ('model', ''), ('map', ''), ('bag', '')):
-        value = str(body.get(key, default)).strip()
+    for key, default in (('bringup', '/workspaces/scripts/bringup.sh'), ('host_workspace', '/home/tamiya/workspaces/JetPilot'), ('model', ''), ('map', ''), ('bag', '')):
+        value = str(body.get(key) or default).strip()
         result[key] = validate_remote_absolute_path(value, label=key) if value else ''
     if not result['bringup']:
         raise ValueError('bringupのパスが必要です')
