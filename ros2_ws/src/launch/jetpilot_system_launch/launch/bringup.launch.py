@@ -528,6 +528,8 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('sensor_kit_silky_evcam_bias_file', '', cli=True)
     args.add_arg('sensor_kit_silky_evcam_debug', False, cli=True)
     args.add_arg('sensor_kit_silky_evcam_event_image_fps', '25.0', cli=True)
+    args.add_arg('sensor_kit_silky_evcam_event_image_window_ms', '0.0', cli=True)
+    args.add_arg('sensor_kit_silky_evcam_event_image_stride_ms', '0.0', cli=True)
     args.add_arg('sensor_kit_silky_evcam_event_image_encoding', 'bgr8', cli=True)
     args.add_arg('sensor_kit_silky_evcam_event_image_style', 'dark', cli=True)
     args.add_arg('sensor_kit_silky_evcam_event_image_percentile', '90.0', cli=True)
@@ -983,6 +985,10 @@ def generate_launch_description() -> lut.LaunchDescription:
                 'silky_evcam_debug': args.sensor_kit_silky_evcam_debug,
                 'silky_evcam_event_image_fps':
                     args.sensor_kit_silky_evcam_event_image_fps,
+                'silky_evcam_event_image_window_ms':
+                    args.sensor_kit_silky_evcam_event_image_window_ms,
+                'silky_evcam_event_image_stride_ms':
+                    args.sensor_kit_silky_evcam_event_image_stride_ms,
                 'silky_evcam_event_image_encoding':
                     args.sensor_kit_silky_evcam_event_image_encoding,
                 'silky_evcam_event_image_style':

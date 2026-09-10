@@ -26,7 +26,9 @@
     "sensor_kit_flir_image_height": 512,
     "sensor_kit_flir_framerate": 60.0,
     "sensor_kit_flir_io_method": "mmap",
-    "sensor_kit_silky_evcam_event_image_fps": 20.0,
+    "sensor_kit_silky_evcam_event_image_fps": 100.0,
+    "sensor_kit_silky_evcam_event_image_window_ms": 50.0,
+    "sensor_kit_silky_evcam_event_image_stride_ms": 10.0,
     "sensor_kit_silky_evcam_event_image_style": "gep",
     "sensor_kit_silky_evcam_event_image_percentile": 90.0,
     "publish_vehicle_evs_description": true

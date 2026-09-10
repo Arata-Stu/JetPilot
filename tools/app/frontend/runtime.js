@@ -1,5 +1,5 @@
 /* SSH operations are explicit. Opening this page never starts a remote process. */
-const runtimeDefaults = {host: '', user: '', container: '', container_user: 'admin', host_workspace: '', screen: 'jetpilot-web', session: 'jetpilot-web', bringup: '/workspaces/scripts/bringup.sh', preset: 'record', sensor: 'realsense', vehicle: 'jpbb', rgb_fps: 30, infra_fps: 60, fixed: false, throttle: 0.2, model: '', map: '', bag: ''};
+const runtimeDefaults = {host: '', user: '', container: '', container_user: 'admin', host_workspace: '', screen: 'jetpilot-web', session: 'jetpilot-web', bringup: '/workspaces/scripts/bringup.sh', preset: 'record', sensor: 'realsense', vehicle: 'jpbb', rgb_fps: 30, infra_fps: 60, evs_window_ms: 50, evs_stride_ms: 10, fixed: false, throttle: 0.2, model: '', map: '', bag: ''};
 let runtimeConfig = {...runtimeDefaults};
 try { Object.assign(runtimeConfig, JSON.parse(localStorage.getItem('jetpilot-runtime-v1') || '{}')); } catch (_) {}
 let runtimeBusy = false;
@@ -9,7 +9,7 @@ let runtimeLastUpdate = '';
 let runtimeBag = {state:'unknown'};
 let runtimeBagTime = '';
 let runtimeBagBusy = false;
-let runtimeTune = {node:'/e2e_control_decoder', parameter:'fixed_throttle', value:0.2, stream:'rgb', fps:30};
+let runtimeTune = {node:'/e2e_control_decoder', parameter:'fixed_throttle', value:0.2, sensor:'realsense', stream:'rgb', fps:30, evs_window_ms:50, evs_stride_ms:10};
 let runtimeTuneMessage = '';
 
 function runtimeChange(key, value, redraw = false) {
@@ -44,6 +44,8 @@ function renderRuntime() {
   const select = (key, label, choices) => `<label>${esc(label)}<select onchange="runtimeChange('${key}',this.value,true)">${choices.map(([value, text]) => `<option value="${esc(value)}" ${String(runtimeConfig[key]) === String(value) ? 'selected' : ''}>${esc(text)}</option>`).join('')}</select></label>`;
   const button = (action, label, tone = '') => `<button class="${tone}" ${runtimeBusy ? 'disabled' : ''} onclick="runtimeAction('${action}')">${label}</button>`;
   const offline = runtimeConfig.preset.startsWith('offline-');
+  const hasEvs = runtimeConfig.sensor.includes('event') || runtimeConfig.sensor.includes('silky');
+  const evsHz = 1000 / Math.max(0.001, Number(runtimeConfig.evs_stride_ms) || 10);
   const states = {running: 'プロセス実行中（ROSの正常稼働はログで確認）', exited: '終了', not_started: '未起動'};
   const connectionState = runtimeBusy ? ['checking','接続確認中'] : runtimeError ? ['bad','接続エラー'] : runtimeResult?.container_running ? ['ok','接続済み'] : ['idle','未確認'];
   const bagState = {unknown:'未確認', recording:'● 記録中', idle:'停止中'}[runtimeBag.state] || '未確認';
@@ -67,7 +69,7 @@ function renderRuntime() {
     <header><span class="runtime-step">02</span><div><h2>車両を起動</h2><p>用途・センサー・モデルを選択</p></div></header>
     <fieldset ${runtimeBusy ? 'disabled' : ''}><div class="runtime-grid runtime-grid-compact">
   ${select('preset','用途', [['record','データ収集'],['e2e','E2E走行'],['drive','通常走行：手動'],['runtime','通常走行：自己位置推定付き手動'],['competition','通常走行：ルールベース自動'],['tuning','通常走行：地図・ライン実車調整'],['offline-vslam','オフライン：地図なしVSLAM'],['offline-vslam-map','オフライン：保存地図VSLAM'],['offline-localization','オフライン：VGL・VSLAM']])}
-  ${offline ? field('bag','bagのパス（コンテナ内）') : `${field('vehicle','車両プロファイル')}${select('sensor','センサー', [['realsense','RealSense'],['event-camera','EVS単独'],['realsense-silky','RealSense＋EVS'],['realsense-silky-flir','RealSense＋EVS＋FLIR']])}${runtimeConfig.sensor === 'event-camera' ? '' : ['rgb','infra'].map(stream => select(stream+'_fps',stream.toUpperCase()+' Hz',[[0,'OFF'],[30,'30 Hz'],[60,'60 Hz'],[90,'90 Hz']])).join('')}`}
+  ${offline ? field('bag','bagのパス（コンテナ内）') : `${field('vehicle','車両プロファイル')}${select('sensor','センサー', [['realsense','RealSense'],['event-camera','EVS単独'],['realsense-silky','RealSense＋EVS'],['realsense-silky-flir','RealSense＋EVS＋FLIR']])}${runtimeConfig.sensor === 'event-camera' ? '' : ['rgb','infra'].map(stream => select(stream+'_fps',stream.toUpperCase()+' Hz',[[0,'OFF'],[30,'30 Hz'],[60,'60 Hz'],[90,'90 Hz']])).join('')}${hasEvs ? `<label>EVS蓄積窓（ms）<input type="number" min="1" max="1000" step="1" value="${esc(runtimeConfig.evs_window_ms)}" onchange="runtimeChange('evs_window_ms',this.value)"></label><label>EVSスライド幅（ms）<input type="number" min="1" max="1000" step="1" value="${esc(runtimeConfig.evs_stride_ms)}" onchange="runtimeChange('evs_stride_ms',this.value)"></label><div class="runtime-wide runtime-hint">直近${esc(runtimeConfig.evs_window_ms)} msのイベントから、${esc(runtimeConfig.evs_stride_ms)} msごと（約${evsHz.toFixed(1)} Hz）に画像を生成します。</div>` : ''}`}
   ${runtimeConfig.preset === 'record' ? `<label>操作方式<select onchange="runtimeChange('fixed',this.value==='fixed',true)"><option value="joy" ${!runtimeConfig.fixed?'selected':''}>Joy</option><option value="fixed" ${runtimeConfig.fixed?'selected':''}>固定スロットル（L2で停止）</option></select></label>`:''}
   ${runtimeConfig.preset === 'e2e' ? `<div class="runtime-wide">${field('model','モデルディレクトリ（コンテナ内）','/workspaces/ros2_ws/models/e2e/camera_steering')}</div>`:''}
   ${(runtimeConfig.preset === 'record' && runtimeConfig.fixed) || runtimeConfig.preset === 'e2e' ? field('throttle','固定モードで使うスロットル（0〜1）'):''}
@@ -93,9 +95,9 @@ function renderRuntime() {
   ${runtimeTune.parameter==='algorithm'?`<label>制御方式<select onchange="runtimeTune.value=this.value">${['pure_pursuit','map_pursuit','kinematic_mpc'].map(name=>`<option ${runtimeTune.value===name?'selected':''}>${name}</option>`).join('')}</select></label>`:`<label>値<input type="number" step="0.01" value="${esc(runtimeTune.value)}" onchange="runtimeTune.value=Number(this.value)"></label>`}
   </div><div class="runtime-actions"><button onclick="runtimeTuningAction('param-get')">現在値を取得</button><button class="primary" onclick="runtimeTuningAction('param-set')">値を適用</button></div>
   <p class="runtime-hint">${runtimeTune.node==='/path_tracking_controller_node'?'方式変更は制御器を入れ替えます。速度PID変更時は積分状態をリセットします。lookaheadはPure／Map Pursuitで使用します。':'ステア出力＝入力 × scale ＋ offset。固定スロットル値は固定モード時に使用します。'}</p>
-  <div class="runtime-grid runtime-grid-compact"><label>RealSense<select onchange="runtimeTune.stream=this.value"><option value="rgb" ${runtimeTune.stream==='rgb'?'selected':''}>RGB</option><option value="infra" ${runtimeTune.stream==='infra'?'selected':''}>Infra</option></select></label>
-  <label>Hz<select onchange="runtimeTune.fps=Number(this.value)">${[30,60,90].map(fps=>`<option ${runtimeTune.fps===fps?'selected':''}>${fps}</option>`).join('')}</select></label></div>
-  <div class="runtime-actions"><button onclick="runtimeTuningAction('camera-get')">カメラ設定を取得</button><button onclick="runtimeTuningAction('camera-set')">Hzを適用</button></div>
+  <div class="runtime-grid runtime-grid-compact"><label>センサー調整<select onchange="runtimeTune.sensor=this.value;runtimeTuneMessage='';render()"><option value="realsense" ${runtimeTune.sensor==='realsense'?'selected':''}>RealSense</option><option value="evs" ${runtimeTune.sensor==='evs'?'selected':''}>EVS蓄積</option></select></label>
+  ${runtimeTune.sensor==='realsense'?`<label>ストリーム<select onchange="runtimeTune.stream=this.value"><option value="rgb" ${runtimeTune.stream==='rgb'?'selected':''}>RGB</option><option value="infra" ${runtimeTune.stream==='infra'?'selected':''}>Infra</option></select></label><label>Hz<select onchange="runtimeTune.fps=Number(this.value)">${[30,60,90].map(fps=>`<option ${runtimeTune.fps===fps?'selected':''}>${fps}</option>`).join('')}</select></label>`:`<label>蓄積窓（ms）<input type="number" min="1" max="1000" step="1" value="${esc(runtimeTune.evs_window_ms)}" onchange="runtimeTune.evs_window_ms=Number(this.value)"></label><label>スライド幅（ms）<input type="number" min="1" max="1000" step="1" value="${esc(runtimeTune.evs_stride_ms)}" onchange="runtimeTune.evs_stride_ms=Number(this.value)"></label>`}</div>
+  <div class="runtime-actions">${runtimeTune.sensor==='realsense'?`<button onclick="runtimeTuningAction('camera-get')">カメラ設定を取得</button><button onclick="runtimeTuningAction('camera-set')">Hzを適用</button>`:`<button onclick="runtimeTuningAction('evs-get')">EVS設定を取得</button><button onclick="runtimeTuningAction('evs-set')">蓄積設定を適用</button>`}</div>
   </fieldset><div class="runtime-inline-message" role="status">${esc(runtimeTuneMessage || '変更は現在のノードだけに適用され、次回起動設定は変わりません。')}</div>
   <button onclick="setTab('maps')">地図・ライン・区間速度の実車調整を開く</button>
   </section>
@@ -142,7 +144,11 @@ async function runtimeTuningAction(action) {
   try {
     const result = await api('/api/runtime/'+action, {method:'POST',body:JSON.stringify({...runtimeConfig,...runtimeTune})});
     if (result.value != null) runtimeTune.value = result.value;
-    runtimeTuneMessage = result.message + (result.camera ? '：'+result.camera.profile+(result.camera.enabled?'（ON）':'（OFF）') : '：'+result.value);
+    if (result.evs) {
+      runtimeTune.evs_window_ms = result.evs.window_ms;
+      runtimeTune.evs_stride_ms = result.evs.stride_ms;
+    }
+    runtimeTuneMessage = result.message + (result.camera ? '：'+result.camera.profile+(result.camera.enabled?'（ON）':'（OFF）') : result.evs ? `：${result.evs.window_ms} ms窓 / ${result.evs.stride_ms} msスライド（${result.evs.hz.toFixed(1)} Hz）` : '：'+result.value);
   } catch(error) { runtimeTuneMessage = error.message; }
   finally {runtimeBusy=false;if(state.tab==='runtime')render();}
 }

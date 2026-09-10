@@ -61,13 +61,13 @@ def execute_locked(s, directory):
                  '-dmS', screen, 'bash', '-lc', command])
             message = 'screenで環境の準備を開始しました。状態を更新してください。'
     alive = running_container()
-    if action in ('bag-status', 'param-get', 'param-set', 'camera-get', 'camera-set'):
+    if action in ('bag-status', 'param-get', 'param-set', 'camera-get', 'camera-set', 'evs-get', 'evs-set'):
         if not alive:
             if action == 'bag-status':
                 return {'bag': {'state': 'unknown', 'message': 'コンテナが起動していません'}}
             raise RuntimeError('コンテナが起動していません')
         setup = str(Path(s['bringup']).parent.parent / 'ros2_ws/install/setup.bash')
-        payload = {key: s[key] for key in ('action', 'node', 'parameter', 'value', 'stream', 'fps') if key in s}
+        payload = {key: s[key] for key in ('action', 'node', 'parameter', 'value', 'stream', 'fps', 'evs_window_ms', 'evs_stride_ms') if key in s}
         command = ['timeout', '12', 'python3', '-c', s['ros_script'], json.dumps(payload)]
         response = run(base + ['bash', '-lc', 'source ' + shlex.quote(setup) + ' && ' + shlex.join(command)])
         return json.loads(response.stdout)

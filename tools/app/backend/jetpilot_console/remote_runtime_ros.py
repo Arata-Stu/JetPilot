@@ -76,6 +76,32 @@ def execute(request):
                                 'enabled': any(value.bool_value for value in values[1:])},
                     'message': 'カメラ設定を取得しました' if request['action'] == 'camera-get' else 'カメラのHz変更を受理しました。映像の再開を確認してください。'}
 
+        if request['action'] in ('evs-get', 'evs-set'):
+            names = ['event_image_window_ms', 'event_image_stride_ms']
+            if request['action'] == 'evs-set':
+                msg = SetParametersAtomically.Request()
+                msg.parameters = [
+                    Parameter('event_image_window_ms', value=float(request['evs_window_ms'])).to_parameter_msg(),
+                    Parameter('event_image_stride_ms', value=float(request['evs_stride_ms'])).to_parameter_msg(),
+                ]
+                result = call(SetParametersAtomically, 'set_parameters_atomically', msg).result
+                if not result.successful:
+                    raise RuntimeError(result.reason)
+            msg = GetParameters.Request()
+            msg.names = names
+            values = call(GetParameters, 'get_parameters', msg).values
+            if len(values) != 2 or any(value.type != 3 for value in values):
+                raise RuntimeError('EVSの蓄積設定を取得できません。openeb_ros2の再ビルドが必要です')
+            window_ms, stride_ms = (value.double_value for value in values)
+            return {
+                'evs': {
+                    'window_ms': window_ms,
+                    'stride_ms': stride_ms,
+                    'hz': 1000.0 / stride_ms,
+                },
+                'message': 'EVS設定を取得しました' if request['action'] == 'evs-get' else 'EVS蓄積設定を適用しました',
+            }
+
         capability = GetParameters.Request()
         capability.names = ['dynamic_tuning_parameters']
         supported = call(GetParameters, 'get_parameters', capability).values[0]

@@ -325,7 +325,8 @@ ConsoleのOffline teacher comparisonも`metadata.json`の`steering_only`を読�
 
 SilkyEvCam/OpenEBの`/event_camera/event_image`（VGA 640×480、`bgr8`）を
 使う単一フレームの操舵・スロットル予測に対応します。生イベントを直接入力する
-モデルではなく、ドライバーが25 Hzで生成する蓄積画像を使います。
+モデルではなく、ドライバーが直近50 msを蓄積し、10 msスライド（100 Hz）で生成する
+GEP画像を使います。
 `event-camera`センサー設定はRealSenseを起動しません。
 
 1. データ収集時は`bringup.sh teleop --vehicle jpbb --sensor-kit event-camera --bag-manager`

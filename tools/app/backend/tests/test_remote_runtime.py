@@ -23,9 +23,14 @@ class RuntimeTests(unittest.TestCase):
         self.assertNotIn('e2e_fixed_throttle_mode:=true', args)
         args = transport.bringup_args(self.settings(fixed=True))
         self.assertIn('teleop_fixed_throttle_mode:=true', args)
+        evs = transport.bringup_args(self.settings(
+            sensor='event-camera', evs_window_ms=50, evs_stride_ms=10))
+        self.assertIn('sensor_kit_silky_evcam_event_image_window_ms:=50.0', evs)
+        self.assertIn('sensor_kit_silky_evcam_event_image_stride_ms:=10.0', evs)
+        self.assertIn('sensor_kit_silky_evcam_event_image_fps:=100.0', evs)
 
     def test_rejects_invalid_input_and_required_paths(self):
-        for kw in ({'host': '-bad'}, {'session': '; ls'}, {'container': '../x'}, {'throttle': 'nan'}, {'rgb_fps': 29}, {'bringup': 'relative'}):
+        for kw in ({'host': '-bad'}, {'session': '; ls'}, {'container': '../x'}, {'throttle': 'nan'}, {'rgb_fps': 29}, {'bringup': 'relative'}, {'evs_window_ms': 0}, {'evs_window_ms': 10, 'evs_stride_ms': 20}):
             with self.assertRaises(ValueError):
                 self.settings(**kw)
         for preset in ('e2e', 'offline-vslam', 'competition'):

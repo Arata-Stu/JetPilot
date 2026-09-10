@@ -81,5 +81,18 @@ class RosRequestTests(unittest.TestCase):
               {'rgb_camera.color_profile':'424x240x30','enable_color':True},
               reject=lambda change:change.get('rgb_camera.color_profile')=='424x240x90')
 
+    def test_evs_sliding_window_round_trip(self):
+        result, writes, _ = self.run_request(
+            {'action':'evs-set','node':'/event_camera/event_preprocessor',
+             'evs_window_ms':50.0,'evs_stride_ms':10.0},
+            {'event_image_window_ms':40.0,'event_image_stride_ms':40.0})
+        self.assertEqual(writes, [{
+            'event_image_window_ms':50.0,
+            'event_image_stride_ms':10.0,
+        }])
+        self.assertEqual(result['evs']['window_ms'], 50.0)
+        self.assertEqual(result['evs']['stride_ms'], 10.0)
+        self.assertEqual(result['evs']['hz'], 100.0)
+
 
 if __name__=='__main__':unittest.main()

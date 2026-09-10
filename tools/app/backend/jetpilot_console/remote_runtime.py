@@ -41,6 +41,13 @@ def settings(body):
         if value not in (0, 30, 60, 90):
             raise ValueError('HzはOFF / 30 / 60 / 90から選んでください')
         result[key] = value
+    for key, default in (('evs_window_ms', 50.0), ('evs_stride_ms', 10.0)):
+        value = float(body.get(key, default))
+        if not math.isfinite(value) or not 1.0 <= value <= 1000.0:
+            raise ValueError('EVSの蓄積窓とスライド幅は1〜1000 msで指定してください')
+        result[key] = value
+    if result['evs_stride_ms'] > result['evs_window_ms']:
+        raise ValueError('EVSのスライド幅は蓄積窓以下にしてください')
     value = float(body.get('throttle', 0.2))
     if not math.isfinite(value) or not 0 <= value <= 1:
         raise ValueError('固定スロットルは0〜1で指定してください')
@@ -59,6 +66,12 @@ def bringup_args(s):
         args += ['--vehicle', s['vehicle'], '--sensor-kit', s['sensor']]
         for key in ('rgb_fps', 'infra_fps'):
             args += ['--set', f'sensor_kit_{key}:={s[key]}']
+        if 'event' in s['sensor'] or 'silky' in s['sensor']:
+            args += [
+                '--set', f'sensor_kit_silky_evcam_event_image_fps:={1000.0 / s["evs_stride_ms"]}',
+                '--set', f'sensor_kit_silky_evcam_event_image_window_ms:={s["evs_window_ms"]}',
+                '--set', f'sensor_kit_silky_evcam_event_image_stride_ms:={s["evs_stride_ms"]}',
+            ]
     if s['preset'] in ('runtime', 'competition', 'tuning', 'offline-vslam-map', 'offline-localization') and not s['map']:
         raise ValueError('この用途には地図の絶対パスが必要です')
     if s['map']:
@@ -75,7 +88,7 @@ def bringup_args(s):
 
 
 def request(body, action):
-    if action not in ('status', 'prepare', 'start', 'stop', 'record-start', 'record-stop', 'preview', 'bag-status', 'param-get', 'param-set', 'camera-get', 'camera-set'):
+    if action not in ('status', 'prepare', 'start', 'stop', 'record-start', 'record-stop', 'preview', 'bag-status', 'param-get', 'param-set', 'camera-get', 'camera-set', 'evs-get', 'evs-set'):
         raise ValueError('未対応の操作です')
     s = settings(body)
     if action in ('start', 'preview'):
@@ -113,7 +126,9 @@ def request(body, action):
             if fps not in (30, 60, 90):
                 raise ValueError('Hzは30 / 60 / 90で指定してください')
             s['fps'] = fps
-    if action in ('bag-status', 'param-get', 'param-set', 'camera-get', 'camera-set'):
+    if action in ('evs-get', 'evs-set'):
+        s['node'] = '/event_camera/event_preprocessor'
+    if action in ('bag-status', 'param-get', 'param-set', 'camera-get', 'camera-set', 'evs-get', 'evs-set'):
         s['ros_script'] = Path(__file__).with_name('remote_runtime_ros.py').read_text()
     s['action'] = action
     agent = Path(__file__).with_name('remote_runtime_agent.py').read_text()
