@@ -25,10 +25,11 @@ test('every existing page belongs to a purpose and internal navigation selects i
   }
 });
 
-test('E2E evaluation excludes training forms and switching preserves selected model', () => {
+test('E2E evaluation, training, and shared ViT workspaces stay separate', () => {
   const ctx = context();
   vm.runInContext(`
     renderE2EPipeline = () => 'TRAINING_FORM';
+    renderSharedVitPipeline = () => 'SHARED_VIT_FORM';
     renderE2EAnalysisForm = () => 'EVALUATION_FORM';
     renderAnalysisList = () => ''; renderAnalysisViewer = () => '';
     pauseAnalysisPlayback = () => { state.analysis.playing = false; };
@@ -40,6 +41,9 @@ test('E2E evaluation excludes training forms and switching preserves selected mo
   assert.match(ctx.renderE2EAnalysis(), /TRAINING_FORM/);
   assert.doesNotMatch(ctx.renderE2EAnalysis(), /EVALUATION_FORM/);
   assert.equal(vm.runInContext('state.analysis.playing', ctx), false);
+  ctx.setE2EWorkspace('shared-vit');
+  assert.match(ctx.renderE2EAnalysis(), /SHARED_VIT_FORM/);
+  assert.doesNotMatch(ctx.renderE2EAnalysis(), /TRAINING_FORM|EVALUATION_FORM/);
   ctx.setE2EWorkspace('evaluate');
   assert.equal(vm.runInContext('state.analysis.e2eModelPath', ctx), '/model.onnx');
 });

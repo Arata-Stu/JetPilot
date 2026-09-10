@@ -87,8 +87,6 @@ const state = {
     datasetRoot: "",
     runRoot: "",
     modelRoot: "",
-    occupiedDetectionNames: [],
-    occupiedModelNames: [],
     datasetYaml: "",
     runDir: "",
     sourceRunDir: "",
@@ -121,6 +119,8 @@ const state = {
     weightRoot: "",
     detectionRunRoot: "",
     modelRoot: "",
+    occupiedDetectionNames: [],
+    occupiedModelNames: [],
     backboneWeights: "",
     datasetYaml: "",
     controlRunDir: "",
@@ -3509,6 +3509,237 @@ function renderE2EPipeline() {
     </section>`;
 }
 
+const SHARED_VIT_TASK_KINDS = [
+  "shared-vit-detection-train",
+  "shared-vit-export",
+  "shared-vit-deploy",
+];
+
+function isSharedVitTask(task) {
+  return SHARED_VIT_TASK_KINDS.includes(task?.kind);
+}
+
+function selectedSharedVitControlRun() {
+  return state.sharedVitPipeline.controlRuns.find(
+    (item) => item.path === state.sharedVitPipeline.controlRunDir,
+  ) || null;
+}
+
+function selectedSharedVitDetectionRun() {
+  return state.sharedVitPipeline.detectionRuns.find(
+    (item) => item.path === state.sharedVitPipeline.detectionRunDir,
+  ) || null;
+}
+
+function selectedSharedVitModel() {
+  return state.sharedVitPipeline.models.find(
+    (item) => item.path === state.sharedVitPipeline.modelDir,
+  ) || null;
+}
+
+function selectedSharedVitProfile() {
+  return state.sharedVitPipeline.deployProfiles.find(
+    (item) => item.id === state.sharedVitPipeline.deployProfile,
+  ) || null;
+}
+
+function sharedVitControlModality(run) {
+  return String(run?.image_topic || "").endsWith("/event_image") ? "event_image" : "rgb";
+}
+
+function sharedVitName(kind, modality = state.sharedVitPipeline.modality) {
+  const sensor = modality === "event_image" ? "evs" : "rgb";
+  const role = kind === "detection" ? "det-head" : "shared";
+  return `vit-dinov3-vits16-${sensor}-${role}_${compactLocalDateTime()}`.slice(0, 64);
+}
+
+function updateSharedVitOption(key, value) {
+  const pipeline = state.sharedVitPipeline;
+  if (!(key in pipeline)) return;
+  const booleanKeys = ["buildEngine"];
+  const numberKeys = ["epochs", "batch", "workers", "learningRate", "weightDecay", "opset"];
+  if (booleanKeys.includes(key)) pipeline[key] = Boolean(value);
+  else if (numberKeys.includes(key)) pipeline[key] = Number(value);
+  else pipeline[key] = String(value ?? "");
+  if (key === "backboneWeights") {
+    const weight = pipeline.weights.find((item) => item.path === pipeline.backboneWeights);
+    if (weight?.modality) {
+      pipeline.modality = weight.modality;
+      pipeline.detectionRunName = sharedVitName("detection", weight.modality);
+      pipeline.modelName = sharedVitName("model", weight.modality);
+    }
+  }
+  if (key === "modality") {
+    pipeline.detectionRunName = sharedVitName("detection", pipeline.modality);
+    pipeline.modelName = sharedVitName("model", pipeline.modality);
+  }
+  if (key === "detectionRunDir") {
+    const run = selectedSharedVitDetectionRun();
+    if (run?.modality) pipeline.modality = run.modality;
+    if (run?.mean?.length === 3) pipeline.mean = run.mean.join(",");
+    if (run?.std?.length === 3) pipeline.std = run.std.join(",");
+  }
+  if (key === "modelDir") {
+    const model = selectedSharedVitModel();
+    if (model?.name) pipeline.deployName = model.name;
+  }
+  if (key === "deployProfile") {
+    const profile = selectedSharedVitProfile();
+    if (profile) {
+      pipeline.deployUser = profile.user || "";
+      pipeline.deployHost = profile.host === "__manual__" ? "" : (profile.host || "");
+      const root = String(profile.remote_root || "").replace(/\/$/, "");
+      pipeline.remoteRoot = root.endsWith("/shared_vit") ? root : `${root}/shared_vit`;
+    }
+  }
+  render();
+}
+
+function prepareSharedVitControlTraining(modality) {
+  const pipeline = state.e2ePipeline;
+  pipeline.experiment = modality === "event_image"
+    ? "dinov3_vits16_eventstate_frozen_head"
+    : "dinov3_vits16_frozen_head";
+  pipeline.runName = suggestedE2ERunName();
+  state.e2eWorkspace = "train";
+  render();
+  toast(`${modality === "event_image" ? "EVS" : "RGB"} frozen-backbone preset selected.`);
+}
+
+function trainSharedVitDetection() {
+  const pipeline = state.sharedVitPipeline;
+  return startE2EPipelineTask(
+    "shared-vit:train-detection",
+    "/api/shared-vit/detection-training/start",
+    "Train shared ViT detection head",
+    pipeline.detectionRunName,
+    {
+      dataset_yaml: pipeline.datasetYaml,
+      backbone_weights: pipeline.backboneWeights,
+      run_name: pipeline.detectionRunName,
+      modality: pipeline.modality,
+      mean: pipeline.mean,
+      std: pipeline.std,
+      epochs: pipeline.epochs,
+      batch: pipeline.batch,
+      workers: pipeline.workers,
+      device: pipeline.device,
+      learning_rate: pipeline.learningRate,
+      weight_decay: pipeline.weightDecay,
+    },
+  );
+}
+
+function exportSharedVitModel() {
+  const pipeline = state.sharedVitPipeline;
+  const control = selectedSharedVitControlRun();
+  const detection = selectedSharedVitDetectionRun();
+  return startE2EPipelineTask(
+    "shared-vit:export",
+    "/api/shared-vit/export-onnx",
+    "Assemble shared ViT ONNX",
+    pipeline.modelName,
+    {
+      control_checkpoint: control?.best_checkpoint || "",
+      detection_checkpoint: detection?.best_checkpoint || "",
+      model_name: pipeline.modelName,
+      opset: pipeline.opset,
+    },
+  );
+}
+
+function deploySharedVitModel() {
+  const pipeline = state.sharedVitPipeline;
+  const model = selectedSharedVitModel();
+  const profile = selectedSharedVitProfile();
+  const user = pipeline.deployUser || profile?.user || "";
+  const host = pipeline.deployHost || (profile?.host === "__manual__" ? "" : profile?.host) || "";
+  return startE2EPipelineTask(
+    "shared-vit:deploy",
+    "/api/shared-vit/deploy",
+    "Deploy shared ViT to Jetson",
+    `${user}@${host}`,
+    {
+      model_path: model?.onnx_path || "",
+      profile: pipeline.deployProfile,
+      user,
+      host,
+      remote_root: pipeline.remoteRoot,
+      deploy_name: pipeline.deployName,
+      build_engine: pipeline.buildEngine,
+    },
+  );
+}
+
+function renderSharedVitPipeline() {
+  const pipeline = state.sharedVitPipeline;
+  const control = selectedSharedVitControlRun();
+  const detection = selectedSharedVitDetectionRun();
+  const model = selectedSharedVitModel();
+  const profile = selectedSharedVitProfile();
+  const controlModality = sharedVitControlModality(control);
+  const compatibleModality = !control || !detection?.modality || controlModality === detection.modality;
+  const tasks = state.tasks.filter(isSharedVitTask).slice(0, 10);
+  const user = pipeline.deployUser || profile?.user || "";
+  const host = pipeline.deployHost || (profile?.host === "__manual__" ? "" : profile?.host) || "";
+  return `
+    <section class="panel e2e-pipeline-panel">
+      <div class="panel-header"><h2>Shared ViT · Control + Detection</h2><span class="spacer"></span><button onclick="refreshAll()">Refresh artifacts</button></div>
+      <div class="panel-body">
+        <div class="notice compact">DINOv3 ViT-S/16 backboneを1回だけ推論し、Control headとYOLO互換Detection headへ同じ特徴を渡します。入力は固定212 × 120、backboneは学習しません。</div>
+        <div class="e2e-pipeline-progress">
+          ${[
+            ["Backbone", pipeline.weights.length ? `${pipeline.weights.length} weight(s)` : "weight required", Boolean(pipeline.weights.length)],
+            ["Control", pipeline.controlRuns.some((item) => item.best_checkpoint) ? "head ready" : "not trained", pipeline.controlRuns.some((item) => item.best_checkpoint)],
+            ["Detection", pipeline.detectionRuns.some((item) => item.best_checkpoint) ? "head ready" : "not trained", pipeline.detectionRuns.some((item) => item.best_checkpoint)],
+            ["Shared ONNX", pipeline.models.length ? "exported" : "not exported", Boolean(pipeline.models.length)],
+            ["Jetson", state.tasks.some((item) => item.kind === "shared-vit-deploy" && item.status === "success") ? "deployed" : "not deployed", state.tasks.some((item) => item.kind === "shared-vit-deploy" && item.status === "success")],
+          ].map(([label, detail, done], index) => `<div class="${done ? "done" : ""}"><span>${index + 1}</span><strong>${esc(label)}</strong><small>${esc(detail)}</small></div>`).join("")}
+        </div>
+        <div class="e2e-pipeline-grid">
+          <article class="e2e-pipeline-stage">
+            <header><span>01</span><div><strong>Backbone + Control head</strong><small>DINOv3 / EventState weight and frozen training</small></div></header>
+            <div class="field"><label>Backbone weights</label><select onchange="updateSharedVitOption('backboneWeights', this.value)"><option value="">No weights installed</option>${pipeline.weights.map((item) => `<option value="${esc(item.path)}" ${item.path === pipeline.backboneWeights ? "selected" : ""}>${esc(item.modality === "event_image" ? "EVS" : "RGB")} · ${esc(item.name)}</option>`).join("")}</select><div class="field-hint">配置先: ${esc(pipeline.weightRoot)}</div></div>
+            <div class="e2e-compact-fields"><label>Modality<select onchange="updateSharedVitOption('modality', this.value)">${[["rgb","RGB"],["event_image","EVS / EventState"]].map(([value,label]) => `<option value="${value}" ${pipeline.modality === value ? "selected" : ""}>${label}</option>`).join("")}</select></label><label>Input<input value="212 × 120" disabled /></label></div>
+            <div class="button-stack"><button onclick="prepareSharedVitControlTraining('rgb')">Open RGB control training</button><button onclick="prepareSharedVitControlTraining('event_image')">Open EVS control training</button></div>
+            <div class="field"><label>Control run for assembly</label><select onchange="updateSharedVitOption('controlRunDir', this.value)"><option value="">Select frozen ViT run</option>${pipeline.controlRuns.map((item) => `<option value="${esc(item.path)}" ${item.path === pipeline.controlRunDir ? "selected" : ""}>${esc(sharedVitControlModality(item) === "event_image" ? "EVS" : "RGB")} · ${esc(item.name)} — ${item.best_checkpoint ? "best.pt" : "incomplete"}</option>`).join("")}</select></div>
+          </article>
+
+          <article class="e2e-pipeline-stage">
+            <header><span>02</span><div><strong>Train Detection head</strong><small>Separate dataset; frozen shared backbone</small></div></header>
+            <div class="field"><label>Detection dataset</label><select onchange="updateSharedVitOption('datasetYaml', this.value)"><option value="">No dataset found</option>${pipeline.datasets.map((item) => { const path = objectDetectionDatasetPath(item); return `<option value="${esc(path)}" ${path === pipeline.datasetYaml ? "selected" : ""}>${esc(item.name || shortName(path))}${item.valid === false ? " — invalid" : ""}</option>`; }).join("")}</select></div>
+            <div class="field"><label>Run name</label><input value="${esc(pipeline.detectionRunName)}" onchange="updateSharedVitOption('detectionRunName', this.value)" /><div class="field-hint">${esc(pipeline.detectionRunRoot)}</div></div>
+            <div class="e2e-compact-fields"><label>Epochs<input type="number" min="1" value="${esc(pipeline.epochs)}" onchange="updateSharedVitOption('epochs', this.value)" /></label><label>Batch<input type="number" min="1" value="${esc(pipeline.batch)}" onchange="updateSharedVitOption('batch', this.value)" /></label><label>Device<select onchange="updateSharedVitOption('device', this.value)">${[["cuda","CUDA"],["mps","Apple MPS"],["cpu","CPU"]].map(([value,label]) => `<option value="${value}" ${pipeline.device === value ? "selected" : ""}>${label}</option>`).join("")}</select></label></div>
+            <details><summary>Normalization & optimizer</summary><div class="field"><label>Mean (RGB order)</label><input value="${esc(pipeline.mean)}" onchange="updateSharedVitOption('mean', this.value)" /></div><div class="field"><label>Std (RGB order)</label><input value="${esc(pipeline.std)}" onchange="updateSharedVitOption('std', this.value)" /></div><div class="e2e-compact-fields"><label>LR<input type="number" min="0.00000001" step="0.0001" value="${esc(pipeline.learningRate)}" onchange="updateSharedVitOption('learningRate', this.value)" /></label><label>Weight decay<input type="number" min="0" step="0.0001" value="${esc(pipeline.weightDecay)}" onchange="updateSharedVitOption('weightDecay', this.value)" /></label><label>Workers<input type="number" min="0" value="${esc(pipeline.workers)}" onchange="updateSharedVitOption('workers', this.value)" /></label></div></details>
+            <button class="primary ${actionBusy("shared-vit:train-detection") ? "is-busy" : ""}" onclick="trainSharedVitDetection()" ${pipeline.backboneWeights && pipeline.datasetYaml && pipeline.detectionRunName ? "" : "disabled"} ${actionButtonAttrs("shared-vit:train-detection", "Detection training is starting...")}>${esc(actionButtonLabel("shared-vit:train-detection", "Start head-only training", "Starting..."))}</button>
+          </article>
+
+          <article class="e2e-pipeline-stage">
+            <header><span>03</span><div><strong>Assemble one ONNX</strong><small>One backbone pass; two TensorRT outputs</small></div></header>
+            <div class="field"><label>Detection run</label><select onchange="updateSharedVitOption('detectionRunDir', this.value)"><option value="">Select detection run</option>${pipeline.detectionRuns.map((item) => `<option value="${esc(item.path)}" ${item.path === pipeline.detectionRunDir ? "selected" : ""}>${esc(item.modality === "event_image" ? "EVS" : "RGB")} · ${esc(item.name)} — ${item.best_checkpoint ? "best.pt" : "incomplete"}</option>`).join("")}</select></div>
+            ${control && detection ? `<div class="notice ${compatibleModality ? "compact" : "error compact"}">${compatibleModality ? `Compatible modality: ${esc(controlModality)}` : `Modality mismatch: Control=${esc(controlModality)}, Detection=${esc(detection.modality)}`}. Export時にbackbone fingerprintとmean/stdも検証します。</div>` : ""}
+            <div class="field"><label>Shared model name</label><input value="${esc(pipeline.modelName)}" onchange="updateSharedVitOption('modelName', this.value)" /><div class="field-hint">${esc(pipeline.modelRoot)}</div></div>
+            <div class="e2e-compact-fields"><label>ONNX opset<input type="number" min="11" max="20" value="${esc(pipeline.opset)}" onchange="updateSharedVitOption('opset', this.value)" /></label><label>Outputs<input value="control, detections" disabled /></label></div>
+            <button class="primary ${actionBusy("shared-vit:export") ? "is-busy" : ""}" onclick="exportSharedVitModel()" ${control?.best_checkpoint && detection?.best_checkpoint && compatibleModality ? "" : "disabled"} ${actionButtonAttrs("shared-vit:export", "Assembly is starting...")}>${esc(actionButtonLabel("shared-vit:export", "Assemble & export ONNX", "Starting..."))}</button>
+          </article>
+
+          <article class="e2e-pipeline-stage">
+            <header><span>04</span><div><strong>Deploy shared model</strong><small>One TensorRT engine + two ROS 2 decoders</small></div></header>
+            <div class="field"><label>Assembled model</label><select onchange="updateSharedVitOption('modelDir', this.value)"><option value="">Select shared model</option>${pipeline.models.map((item) => `<option value="${esc(item.path)}" ${item.path === pipeline.modelDir ? "selected" : ""}>${esc(item.modality || "unknown")} · ${esc(item.name)}</option>`).join("")}</select></div>
+            <div class="field"><label>Connection profile</label><select onchange="updateSharedVitOption('deployProfile', this.value)"><option value="">Select profile</option>${pipeline.deployProfiles.map((item) => `<option value="${esc(item.id)}" ${item.id === pipeline.deployProfile ? "selected" : ""}>${esc(item.label || item.id)} — ${esc(item.host === "__manual__" ? "manual" : item.host)}</option>`).join("")}</select></div>
+            <div class="e2e-compact-fields"><label>SSH user<input value="${esc(user)}" onchange="updateSharedVitOption('deployUser', this.value)" /></label><label>Host<input value="${esc(host)}" onchange="updateSharedVitOption('deployHost', this.value)" /></label></div>
+            <div class="field"><label>Remote model root</label><input value="${esc(pipeline.remoteRoot)}" onchange="updateSharedVitOption('remoteRoot', this.value)" /></div>
+            <div class="field"><label>Deploy name</label><input value="${esc(pipeline.deployName)}" onchange="updateSharedVitOption('deployName', this.value)" /></div>
+            <label class="check-row"><input type="checkbox" ${pipeline.buildEngine ? "checked" : ""} onchange="updateSharedVitOption('buildEngine', this.checked)" /><span>Build TensorRT model.plan on Jetson (FP16)</span></label>
+            <button class="primary ${actionBusy("shared-vit:deploy") ? "is-busy" : ""}" onclick="deploySharedVitModel()" ${model?.onnx_path && user && host ? "" : "disabled"} ${actionButtonAttrs("shared-vit:deploy", "Deployment is starting...")}>${esc(actionButtonLabel("shared-vit:deploy", "Transfer & build shared engine", "Starting..."))}</button>
+            <div class="field-hint">ROS 2: <code>enable_shared_vit_inference:=true</code>. E2E/YOLO単独推論とは同時に有効化しません。</div>
+          </article>
+        </div>
+        <details class="e2e-pipeline-tasks" ${tasks.some(isActiveTask) ? "open" : ""}><summary>Shared ViT tasks (${tasks.length})</summary>${renderTaskTable(tasks)}</details>
+      </div>
+    </section>`;
+}
+
 const OBJECT_DETECTION_PIPELINE_TASK_KINDS = [
   "object-detection-validate-dataset",
   "object-detection-validate",
@@ -3821,8 +4052,8 @@ function renderObjectDetectionPipeline() {
 }
 
 function setE2EWorkspace(workspace) {
-  if (!["train", "evaluate"].includes(workspace)) return;
-  if (workspace === "train") pauseAnalysisPlayback();
+  if (!["train", "evaluate", "shared-vit"].includes(workspace)) return;
+  if (workspace !== "evaluate") pauseAnalysisPlayback();
   state.e2eWorkspace = workspace;
   render();
 }
@@ -3833,8 +4064,9 @@ function renderE2EAnalysis() {
       <nav class="workspace-subnav" aria-label="E2Eモデルの作業">
         <button class="${state.e2eWorkspace === "evaluate" ? "active" : ""}" aria-pressed="${state.e2eWorkspace === "evaluate"}" onclick="setE2EWorkspace('evaluate')">評価・走行結果</button>
         <button class="${state.e2eWorkspace === "train" ? "active" : ""}" aria-pressed="${state.e2eWorkspace === "train"}" onclick="setE2EWorkspace('train')">学習・配備</button>
+        <button class="${state.e2eWorkspace === "shared-vit" ? "active" : ""}" aria-pressed="${state.e2eWorkspace === "shared-vit"}" onclick="setE2EWorkspace('shared-vit')">共有ViT</button>
       </nav>
-      ${state.e2eWorkspace === "train" ? renderE2EPipeline() : `
+      ${state.e2eWorkspace === "train" ? renderE2EPipeline() : state.e2eWorkspace === "shared-vit" ? renderSharedVitPipeline() : `
       <div class="analysis-create-layout">
         <section class="panel analysis-create-panel" id="e2e-offline-eval">
           <div class="panel-header"><h2>New E2E Analysis</h2><span class="spacer"></span><button onclick="refreshAnalysisData()">Refresh</button></div>
