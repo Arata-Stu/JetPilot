@@ -11,6 +11,7 @@ let runtimeBusy = false;
 let runtimeResult = null;
 let runtimeError = '';
 let runtimeLastUpdate = '';
+let runtimePreparePollRemaining = 0;
 let runtimeBag = {state:'unknown'};
 let runtimeBagTime = '';
 let runtimeBagBusy = false;
@@ -24,6 +25,7 @@ function runtimeChange(key, value, redraw = false) {
   runtimeLastUpdate = '';
   runtimeBag = {state:'unknown'}; runtimeBagTime = '';
   runtimeTuneMessage = '';
+  runtimePreparePollRemaining = 0;
   render();
 }
 function runtimeResetConnectionDefaults() {
@@ -35,7 +37,16 @@ function runtimeResetConnectionDefaults() {
   runtimeError = '';
   runtimeLastUpdate = '';
   runtimeBag = {state:'unknown'}; runtimeBagTime = '';
+  runtimePreparePollRemaining = 0;
   render();
+}
+function runtimeConnectionState() {
+  if (runtimeBusy) return ['checking','接続確認中'];
+  if (runtimeError) return ['bad','接続エラー'];
+  if (runtimeResult?.container_running) return ['ok','接続済み'];
+  if (runtimeResult?.screen_running) return ['checking','Docker起動待ち'];
+  if (runtimeResult) return ['idle','SSH接続済み'];
+  return ['idle','未確認'];
 }
 const runtimeControllerFields = [
  ['algorithm','制御方式'],['min_lookahead_m','最小lookahead（m）'],['max_lookahead_m','最大lookahead（m）'],
@@ -63,7 +74,7 @@ function renderRuntime() {
   const hasEvs = runtimeConfig.sensor.includes('event') || runtimeConfig.sensor.includes('silky');
   const evsHz = 1000 / Math.max(0.001, Number(runtimeConfig.evs_stride_ms) || 10);
   const states = {running: 'プロセス実行中（ROSの正常稼働はログで確認）', exited: '終了', not_started: '未起動'};
-  const connectionState = runtimeBusy ? ['checking','接続確認中'] : runtimeError ? ['bad','接続エラー'] : runtimeResult?.container_running ? ['ok','接続済み'] : ['idle','未確認'];
+  const connectionState = runtimeConnectionState();
   const bagState = {unknown:'未確認', recording:'● 記録中', idle:'停止中'}[runtimeBag.state] || '未確認';
   return `<section class="runtime-panel">
   <div class="runtime-hero">
@@ -133,9 +144,11 @@ async function runtimeAction(action) {
   runtimeBusy = true; runtimeError = ''; render();
   try {
     runtimeResult = await api('/api/runtime/'+action, {method:'POST',body:JSON.stringify(runtimeConfig)});
+    if (action === 'prepare') runtimePreparePollRemaining = runtimeResult.container_running ? 0 : 10;
+    if (runtimeResult.container_running) runtimePreparePollRemaining = 0;
     runtimeLastUpdate = new Date().toLocaleTimeString();
     runtimeRefreshBag();
-  } catch (error) { runtimeError = error.message; }
+  } catch (error) { runtimeError = error.message; runtimePreparePollRemaining = 0; }
   finally { runtimeBusy = false; if (state.tab === 'runtime') render(); }
 }
 
@@ -173,3 +186,9 @@ async function runtimeTuningAction(action) {
 setInterval(()=>{
   if (state.tab === 'runtime' && runtimeResult?.container_running && !runtimeBusy) runtimeRefreshBag();
 },5000);
+setInterval(()=>{
+  if (state.tab !== 'runtime' || runtimeBusy || runtimePreparePollRemaining <= 0) return;
+  if (runtimeResult?.container_running) { runtimePreparePollRemaining = 0; return; }
+  runtimePreparePollRemaining -= 1;
+  runtimeAction('status');
+},3000);

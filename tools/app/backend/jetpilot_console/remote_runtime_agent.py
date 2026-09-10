@@ -59,7 +59,7 @@ def execute_locked(s, directory):
             command = 'cd ' + shlex.quote(workspace) + ' && isaac-ros activate; printf "\\nDocker起動処理が終了しました\\n"; exec bash'
             run(['screen', '-L', '-Logfile', str(directory / (screen + '.log')),
                  '-dmS', screen, 'bash', '-lc', command])
-            message = 'screenで環境の準備を開始しました。状態を更新してください。'
+            message = 'screenで環境の準備を開始しました。Dockerの起動完了まで自動で再確認します。'
     alive = running_container()
     if action in ('bag-status', 'param-get', 'param-set', 'camera-get', 'camera-set', 'evs-get', 'evs-set'):
         if not alive:
