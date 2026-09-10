@@ -76,7 +76,7 @@ class RuntimeTests(unittest.TestCase):
         self.assertIn('tuning',args)
         self.assertIn('/maps/test',args)
 
-    def fake_remote(self, action, alive=True, screen=False, exists=False, owned=True, dead=False, current_command='bash'):
+    def fake_remote(self, action, alive=True, screen=False, exists=False, owned=True, dead=False, current_command='bash', start_command='bash'):
         calls = []
         created = False
         def fake(args, check=True):
@@ -98,7 +98,8 @@ class RuntimeTests(unittest.TestCase):
                     if active and args[-1] == '#{pane_id}': out = '%1\n'
                     elif active: out = f'%1 {int(dead)} 0\n' if 'pane_dead_status' in args[-1] else f'%1 {int(dead)}\n'
                 if command == 'capture-pane': out = 'example log'
-                if command == 'display-message': out = current_command + '\n'
+                if command == 'display-message':
+                    out = (start_command if args[-1] == '#{pane_start_command}' else current_command) + '\n'
             return subprocess.CompletedProcess(args, code, out, '')
         with tempfile.TemporaryDirectory() as tmp, patch.object(agent.Path, 'home', return_value=Path(tmp)), patch.object(agent, 'run', side_effect=fake):
             (Path(tmp) / 'ros2_ws').mkdir()
@@ -192,7 +193,10 @@ class RuntimeTests(unittest.TestCase):
                 self.fake_remote('start', exists=True, owned=owned)
 
     def test_start_replaces_a_legacy_wait_gate_and_respawns_bringup(self):
-        result, calls = self.fake_remote('start', exists=True, owned=True, current_command='tmux')
+        result, calls = self.fake_remote(
+            'start', exists=True, owned=True, current_command='bash',
+            start_command="tmux wait-for jetpilot-web-old; exec bash -lc 'bash /workspaces/scripts/bringup.sh'",
+        )
         commands = [call[call.index('tmux') + 1] for call in calls if 'tmux' in call]
         self.assertIn('kill-session', commands)
         self.assertIn('respawn-pane', commands)

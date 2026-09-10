@@ -2176,6 +2176,7 @@ def run_bias_tui(
     tmp_path: Path,
     sensor: str = "realsense-silky",
     choice: str = "E522.bias",
+    evs_hz: str = "current",
     overrides: tuple[str, ...] = (),
     manual_input: str = "",
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
@@ -2198,6 +2199,10 @@ def run_bias_tui(
         "    print(next(o for o in options if o.split()[0] == 'sensor'))\n"
         "elif 'Sensor kit launch' in prompt:\n"
         "    print(next(o for o in options if o.split()[0] == os.environ['TEST_SENSOR']))\n"
+        "elif 'SilkyEvCam event image Hz' in prompt:\n"
+        "    print('EVS_HZ_MENU_SHOWN', file=sys.stderr)\n"
+        "    choice = os.environ['TEST_EVS_HZ']\n"
+        "    print(options[0] if choice == 'current' else next(o for o in options if o.startswith(choice + ' Hz')))\n"
         "elif 'SilkyEvCam bias file' in prompt:\n"
         "    print('BIAS_MENU_SHOWN', file=sys.stderr)\n"
         "    assert not any(o.endswith('.json') for o in options)\n"
@@ -2216,6 +2221,7 @@ def run_bias_tui(
         BRINGUP_PROFILE_ROOT=str(PROFILE_ROOT),
         TEST_SENSOR=sensor,
         TEST_BIAS_CHOICE=choice,
+        TEST_EVS_HZ=evs_hz,
     )
     command = shlex.join([
         "bash", str(LAUNCHER), "--dry-run", "--no-bag-manager", *overrides
@@ -2225,6 +2231,44 @@ def run_bias_tui(
         input=manual_input, capture_output=True, text=True, env=env, timeout=15,
     )
     return result, bias_file
+
+
+def test_evs_hz_tui_sets_matching_fps_and_stride(tmp_path: Path) -> None:
+    for sensor in ("event-camera", "realsense-silky", "realsense-silky-flir"):
+        result, _ = run_bias_tui(tmp_path / sensor, sensor=sensor, evs_hz="50")
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert "EVS_HZ_MENU_SHOWN" in result.stdout
+        command = shlex.split(result.stdout.split("Command:", 1)[1].split("Dry-run:", 1)[0])
+        assert "sensor_kit_silky_evcam_event_image_fps:=50.0" in command
+        assert "sensor_kit_silky_evcam_event_image_stride_ms:=20.0" in command
+        assert "EVS image Hz : 50.0 (window 50.0 ms / stride 20.0 ms)" in result.stdout
+
+
+def test_evs_hz_tui_skips_non_evs_sensor_and_explicit_override(tmp_path: Path) -> None:
+    result, _ = run_bias_tui(tmp_path / "realsense", sensor="realsense")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "EVS_HZ_MENU_SHOWN" not in result.stdout
+
+    result, _ = run_bias_tui(
+        tmp_path / "override",
+        overrides=("sensor_kit_silky_evcam_event_image_fps:=25.0",),
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "EVS_HZ_MENU_SHOWN" not in result.stdout
+
+
+def test_event_camera_wrapper_forwards_event_image_timing() -> None:
+    source = (
+        PROJECT_ROOT
+        / "ros2_ws/src/launch/jetpilot_system_launch/launch/sensors/event_camera.launch.py"
+    ).read_text()
+    for name in (
+        "silky_evcam_event_image_fps",
+        "silky_evcam_event_image_window_ms",
+        "silky_evcam_event_image_stride_ms",
+    ):
+        assert f'DeclareLaunchArgument("{name}"' in source
+        assert f'LaunchConfiguration("{name}")' in source
 
 
 def test_bias_tui_selects_file_for_both_silky_sensor_kits(tmp_path: Path) -> None:

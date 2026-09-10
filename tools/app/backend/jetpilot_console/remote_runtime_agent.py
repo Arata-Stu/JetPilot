@@ -154,7 +154,11 @@ def execute_locked(s, directory):
             current_command = tmux(
                 'display-message', '-p', '-t', pane, '#{pane_current_command}', check=False
             ).stdout.strip()
-            if owned and current_command == 'tmux':
+            start_command = tmux(
+                'display-message', '-p', '-t', pane, '#{pane_start_command}', check=False
+            ).stdout.strip()
+            legacy_wait_gate = 'tmux wait-for jetpilot-web-' in start_command
+            if owned and (current_command == 'tmux' or legacy_wait_gate):
                 tmux('kill-session', '-t', '=' + session)
                 exists = False
             else:

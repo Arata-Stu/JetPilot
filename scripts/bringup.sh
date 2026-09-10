@@ -1856,6 +1856,47 @@ configure_realsense_fps_interactively() {
   done
 }
 
+configure_silky_evcam_fps_interactively() {
+  is_true "$(get_arg enable_sensor_kit)" || return 0
+  [[ "$(get_arg sensor_kit_interface_pkg 2>/dev/null || true)" == 'jetpilot_system_launch' ]] \
+    || return 0
+  case "$(get_arg sensor_kit_interface_launch 2>/dev/null || true)" in
+    launch/sensors/event_camera.launch.py|launch/sensors/realsense_silky_evcam.launch.py|launch/sensors/realsense_silky_flir.launch.py) ;;
+    *) return 0 ;;
+  esac
+
+  local override
+  # FPS and stride describe the same output period. If either was explicitly set,
+  # preserve the CLI configuration and skip this selector.
+  if ((${#EXTRA_LAUNCH_ARGS[@]} > 0)); then
+    for override in "${EXTRA_LAUNCH_ARGS[@]}"; do
+      case "$override" in
+        sensor_kit_silky_evcam_event_image_fps:=*|sensor_kit_silky_evcam_event_image_stride_ms:=*)
+          return 0
+          ;;
+      esac
+    done
+  fi
+
+  local current selection fps stride
+  local options=()
+  current="$(get_arg sensor_kit_silky_evcam_event_image_fps)"
+  options=("${current%.*} Hz（現在値）")
+  for fps in 25 50 100; do
+    [[ "$fps" == "${current%.*}" ]] || options+=("$fps Hz")
+  done
+  selection="$(choose_one 'SilkyEvCam event image Hz' "${options[@]}")" || exit $?
+  fps="${selection%%[[:space:]]*}"
+  case "$fps" in
+    25) stride=40.0 ;;
+    50) stride=20.0 ;;
+    100) stride=10.0 ;;
+    *) die "unknown SilkyEvCam event image Hz: $fps" ;;
+  esac
+  set_arg sensor_kit_silky_evcam_event_image_fps "${fps}.0"
+  set_arg sensor_kit_silky_evcam_event_image_stride_ms "$stride"
+}
+
 configure_sensor_kit_interactively() {
   local selection
   local profile_id
@@ -1887,9 +1928,11 @@ configure_silky_evcam_bias_interactively() {
 
   local override
   # An explicit CLI value, including an empty value, takes precedence over the TUI.
-  for override in "${EXTRA_LAUNCH_ARGS[@]}"; do
-    [[ "$override" == sensor_kit_silky_evcam_bias_file:=* ]] && return 0
-  done
+  if ((${#EXTRA_LAUNCH_ARGS[@]} > 0)); then
+    for override in "${EXTRA_LAUNCH_ARGS[@]}"; do
+      [[ "$override" == sensor_kit_silky_evcam_bias_file:=* ]] && return 0
+    done
+  fi
 
   local bias_dir="${PROJECT_ROOT}/ros2_ws/src/launch/jetpilot_system_launch/config/sensing/silkyevcam"
   local selected
@@ -2284,6 +2327,12 @@ print_summary() {
     if [[ -n "$(get_arg sensor_kit_silky_evcam_bias_file 2>/dev/null || true)" ]]; then
       printf '  Silky bias   : %s\n' "$(get_arg sensor_kit_silky_evcam_bias_file)"
     fi
+    if [[ -n "$(get_arg sensor_kit_silky_evcam_event_image_fps 2>/dev/null || true)" ]]; then
+      printf '  EVS image Hz : %s (window %s ms / stride %s ms)\n' \
+        "$(get_arg sensor_kit_silky_evcam_event_image_fps)" \
+        "$(get_arg sensor_kit_silky_evcam_event_image_window_ms)" \
+        "$(get_arg sensor_kit_silky_evcam_event_image_stride_ms)"
+    fi
     if is_true "$(get_arg sensor_kit_enable_rtp_stream 2>/dev/null || true)"; then
       printf '  RTP topic    : %s\n' \
         "$(get_arg sensor_kit_rtp_image_topic 2>/dev/null || printf '/realsense/color/image_raw')"
@@ -2633,6 +2682,7 @@ if [[ "$INTERACTIVE" == 'true' ]]; then
   configure_recording_interactively
   configure_fixed_throttle_interactively
   configure_realsense_fps_interactively
+  configure_silky_evcam_fps_interactively
   configure_offline_origin_test_interactively
   configure_localization_init_interactively
   configure_vslam_interactively

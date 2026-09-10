@@ -23,6 +23,10 @@ snapshot再生ではodometryとSLAM両方の地面制約を明示します。
 
 RealSenseの既定値はRGB 424×240 / 30 Hz、赤外424×240 / 60 Hzです。
 TUIではOFF / 30 / 60 / 90 Hzを選べます。記録済みbagのFPSは変わりません。
+SilkyEvCamを含む構成では、イベント画像の生成周期も25 / 50 / 100 Hzから選べます。
+選択したHzに合わせてスライド幅を40 / 20 / 10 msへ設定し、蓄積窓はプロファイルの
+設定（現在は50 ms）を維持します。生イベントは非同期であり、このHzは
+`/event_camera/event_image`の生成周期です。
 
 `multicam_mode`はIsaac ROSでは0=Moderate、1=Performance、2=Precisionです。
 TUIの「VSLAM 処理モード」で選択できます。既定値は1です。
@@ -348,6 +352,7 @@ rosbag managerが有効でも起動直後に自動記録が始まるわけでは
 
 RealSenseのRGB・InfraはそれぞれOFF / 30 / 60 / 90 Hzを選べます。
 InfraのOFFはinfra1・infra2の両方に適用します。EVS単独の場合、この選択は表示しません。
+SilkyEvCamを使用する場合は、EVSイベント画像を25 / 50 / 100 Hzから選べます。
 記録用TUIではbag managerのON/OFFとRTP設定の質問を省略します。
 
 ```bash

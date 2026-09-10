@@ -15,6 +15,9 @@ def generate_launch_description():
         DeclareLaunchArgument("container_name", default_value="multi_sensor_container"),
         DeclareLaunchArgument("run_standalone", default_value="true"),
         DeclareLaunchArgument("silky_evcam_debug", default_value="false"),
+        DeclareLaunchArgument("silky_evcam_event_image_fps", default_value="100.0"),
+        DeclareLaunchArgument("silky_evcam_event_image_window_ms", default_value="50.0"),
+        DeclareLaunchArgument("silky_evcam_event_image_stride_ms", default_value="10.0"),
         ComposableNodeContainer(
             name=LaunchConfiguration("container_name"),
             namespace="",
@@ -37,9 +40,12 @@ def generate_launch_description():
                 "silky_evcam_event_image_encoding": "bgr8",
                 "silky_evcam_event_image_style": "gep",
                 "silky_evcam_event_image_percentile": "90.0",
-                "silky_evcam_event_image_fps": "100.0",
-                "silky_evcam_event_image_window_ms": "50.0",
-                "silky_evcam_event_image_stride_ms": "10.0",
+                "silky_evcam_event_image_fps":
+                    LaunchConfiguration("silky_evcam_event_image_fps"),
+                "silky_evcam_event_image_window_ms":
+                    LaunchConfiguration("silky_evcam_event_image_window_ms"),
+                "silky_evcam_event_image_stride_ms":
+                    LaunchConfiguration("silky_evcam_event_image_stride_ms"),
                 "silky_evcam_event_image_publish_empty": "true",
                 "silky_evcam_debug": LaunchConfiguration("silky_evcam_debug"),
             }.items(),
