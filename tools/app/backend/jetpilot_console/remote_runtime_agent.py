@@ -40,7 +40,7 @@ def execute_locked(s, directory):
         response = run(['docker', 'inspect', '-f', '{{.State.Running}}', name], False)
         return response.returncode == 0 and response.stdout.strip() == 'true', response
 
-    alive, inspect_response = inspect_container(container)
+    alive, _ = inspect_container(container)
     if not alive:
         listing = run(['docker', 'ps', '--format', '{{.Names}}'], False)
         if listing.returncode:
@@ -61,11 +61,6 @@ def execute_locked(s, directory):
             raise RuntimeError(
                 'JetPilot候補のDockerコンテナが複数あります。詳細設定で名前を選択してください: '
                 + ', '.join(candidates)
-            )
-        elif inspect_response.returncode and inspect_response.stderr.strip() and 'No such object' not in inspect_response.stderr:
-            raise RuntimeError(
-                'Dockerコンテナの状態確認に失敗しました: '
-                + inspect_response.stderr.strip()[-1500:]
             )
 
     base = ['docker', 'exec', '-u', s['container_user'], container]

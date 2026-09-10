@@ -134,6 +134,22 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(result['container'], 'actual_isaac_container')
         self.assertIn('自動検出', result['message'])
 
+    def test_missing_container_is_a_normal_disconnected_state(self):
+        def fake(args, check=True):
+            if args[:3] == ['docker', 'inspect', '-f']:
+                return subprocess.CompletedProcess(args, 1, '', 'Error: No such container: isaac_ros_dev_container')
+            if args[:3] == ['docker', 'ps', '--format']:
+                return subprocess.CompletedProcess(args, 0, '', '')
+            if args[:2] == ['screen', '-ls']:
+                return subprocess.CompletedProcess(args, 0, '', '')
+            return subprocess.CompletedProcess(args, 0, '', '')
+        with tempfile.TemporaryDirectory() as tmp, patch.object(agent.Path, 'home', return_value=Path(tmp)), patch.object(agent, 'run', side_effect=fake):
+            settings = self.settings(host_workspace=tmp)
+            settings['action'] = 'status'
+            result = agent.execute(settings)
+        self.assertFalse(result['container_running'])
+        self.assertFalse(result['screen_running'])
+
     def test_start_does_not_duplicate_or_take_manual_session(self):
         for owned in (True, False):
             with self.assertRaises(RuntimeError):
