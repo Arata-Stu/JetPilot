@@ -207,6 +207,7 @@ def _validate_replay_vehicle_safety(context):
 def _validate_autonomous_command_source(context):
     controller_enabled = _launch_bool(context, 'enable_control')
     e2e_enabled = _launch_bool(context, 'enable_e2e_inference')
+    shared_vit_enabled = _launch_bool(context, 'enable_shared_vit_inference')
     planning_enabled = _launch_bool(context, 'enable_planning')
     if _launch_bool(context, 'enable_lane_network') and (
         not planning_enabled or _launch_bool(context, 'enable_competition_planning')
@@ -215,11 +216,17 @@ def _validate_autonomous_command_source(context):
     competition_planning_enabled = _launch_bool(
         context, 'enable_competition_planning')
 
-    if controller_enabled and e2e_enabled:
+    if sum((controller_enabled, e2e_enabled, shared_vit_enabled)) > 1:
         raise RuntimeError(
-            'Unsafe launch configuration rejected: enable_control and '
-            'enable_e2e_inference cannot both be true because both publish '
+            'Unsafe launch configuration rejected: enable_control, '
+            'enable_e2e_inference and enable_shared_vit_inference are mutually '
+            'exclusive because they publish '
             '/auto/control_cmd. Select exactly one autonomous command source.'
+        )
+    if shared_vit_enabled and _launch_bool(context, 'enable_object_detection'):
+        raise RuntimeError(
+            'enable_shared_vit_inference already publishes object detections; '
+            'disable the standalone enable_object_detection pipeline.'
         )
     if planning_enabled and competition_planning_enabled:
         raise RuntimeError(
@@ -234,7 +241,7 @@ def _validate_autonomous_command_source(context):
 def _include_live_tuning(context):
     if not _launch_bool(context, 'enable_live_tuning'):
         return []
-    for name in ('enable_control', 'enable_e2e_inference', 'enable_planning',
+    for name in ('enable_control', 'enable_e2e_inference', 'enable_shared_vit_inference', 'enable_planning',
                  'enable_competition_planning', 'enable_raceline_publisher',
                  'enable_custom_trajectory_publisher', 'enable_rosbag_replay', 'use_sim_time'):
         if _launch_bool(context, name):
@@ -258,12 +265,13 @@ def _include_live_tuning(context):
 def _create_processing_component_container(context):
     sensor_enabled = _launch_bool(context, 'enable_sensor_kit')
     e2e_enabled = _launch_bool(context, 'enable_e2e_inference')
+    shared_vit_enabled = _launch_bool(context, 'enable_shared_vit_inference')
     object_detection_enabled = _launch_bool(context, 'enable_object_detection')
     reid_enabled = _launch_bool(context, 'enable_reid')
     localization_enabled = _launch_bool(context, 'enable_localization')
 
     sensor_processing_enabled = (
-        sensor_enabled or e2e_enabled or object_detection_enabled or reid_enabled)
+        sensor_enabled or e2e_enabled or shared_vit_enabled or object_detection_enabled or reid_enabled)
     if not sensor_processing_enabled and not localization_enabled:
         return []
 
@@ -518,6 +526,11 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('sensor_kit_flir_framerate', '60.0', cli=True)
     args.add_arg('sensor_kit_flir_io_method', 'mmap', cli=True)
     args.add_arg('sensor_kit_silky_evcam_bias_file', '', cli=True)
+    args.add_arg('sensor_kit_silky_evcam_debug', False, cli=True)
+    args.add_arg('sensor_kit_silky_evcam_event_image_fps', '25.0', cli=True)
+    args.add_arg('sensor_kit_silky_evcam_event_image_encoding', 'bgr8', cli=True)
+    args.add_arg('sensor_kit_silky_evcam_event_image_style', 'dark', cli=True)
+    args.add_arg('sensor_kit_silky_evcam_event_image_percentile', '90.0', cli=True)
     args.add_arg('sensor_kit_silky_evcam_raw_recording_enabled', True, cli=True)
     args.add_arg(
         'sensor_kit_silky_evcam_raw_recording_request_topic',
@@ -531,6 +544,11 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('sensor_kit_silky_evcam_raw_recording_basename', 'openeb', cli=True)
 
     args.add_arg('enable_e2e_inference', False, cli=True)
+    args.add_arg('enable_shared_vit_inference', False, cli=True)
+    args.add_arg(
+        'shared_vit_model_root',
+        '/workspaces/ros2_ws/models/e2e/shared_vit',
+        cli=True)
     args.add_arg('teleop_fixed_throttle_mode', False, cli=True)
     args.add_arg('e2e_fixed_throttle_mode', False, cli=True)
     args.add_arg('fixed_throttle', '0.2', cli=True)
@@ -543,6 +561,10 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('e2e_input_image_height', '240', cli=True)
     args.add_arg('e2e_network_image_width', '212', cli=True)
     args.add_arg('e2e_network_image_height', '120', cli=True)
+    args.add_arg(
+        'e2e_event_image_mean', '[0.8993729785, 0.7969581015, 0.8928228776]', cli=True)
+    args.add_arg(
+        'e2e_event_image_stddev', '[0.2204336077, 0.2921656668, 0.2204992771]', cli=True)
 
     args.add_arg('enable_object_detection', False, cli=True)
     args.add_arg('enable_reid', False, cli=True)
@@ -958,6 +980,15 @@ def generate_launch_description() -> lut.LaunchDescription:
                 'flir_framerate': args.sensor_kit_flir_framerate,
                 'flir_io_method': args.sensor_kit_flir_io_method,
                 'silky_evcam_bias_file': args.sensor_kit_silky_evcam_bias_file,
+                'silky_evcam_debug': args.sensor_kit_silky_evcam_debug,
+                'silky_evcam_event_image_fps':
+                    args.sensor_kit_silky_evcam_event_image_fps,
+                'silky_evcam_event_image_encoding':
+                    args.sensor_kit_silky_evcam_event_image_encoding,
+                'silky_evcam_event_image_style':
+                    args.sensor_kit_silky_evcam_event_image_style,
+                'silky_evcam_event_image_percentile':
+                    args.sensor_kit_silky_evcam_event_image_percentile,
                 'silky_evcam_raw_recording_enabled':
                     args.sensor_kit_silky_evcam_raw_recording_enabled,
                 'silky_evcam_raw_recording_request_topic':
@@ -991,9 +1022,35 @@ def generate_launch_description() -> lut.LaunchDescription:
                 'input_image_height': args.e2e_input_image_height,
                 'network_image_width': args.e2e_network_image_width,
                 'network_image_height': args.e2e_network_image_height,
+                'event_image_mean': args.e2e_event_image_mean,
+                'event_image_stddev': args.e2e_event_image_stddev,
                 'use_sim_time': args.use_sim_time,
             },
             condition=IfCondition(args.enable_e2e_inference),
+        ))
+
+    actions.append(
+        lu.include(
+            'jetpilot_e2e_inference',
+            'launch/shared_vit_tensor_rt.launch.py',
+            launch_arguments={
+                'container_name': args.sensor_kit_container_name,
+                'run_standalone': False,
+                'image_topic': args.e2e_image_topic,
+                'camera_info_topic': args.e2e_camera_info_topic,
+                'control_cmd_topic': args.e2e_control_cmd_topic,
+                'detections_topic': args.object_detection_detections_topic,
+                'event_image_mode': args.e2e_event_image_mode,
+                'model_root': args.shared_vit_model_root,
+                'source_width': args.e2e_input_image_width,
+                'source_height': args.e2e_input_image_height,
+                'network_width': args.e2e_network_image_width,
+                'network_height': args.e2e_network_image_height,
+                'event_image_mean': args.e2e_event_image_mean,
+                'event_image_stddev': args.e2e_event_image_stddev,
+                'use_sim_time': args.use_sim_time,
+            },
+            condition=IfCondition(args.enable_shared_vit_inference),
         ))
 
     actions.append(lu.include(

@@ -115,6 +115,18 @@ TensorRT topicの既定tensor名:
 - モデル入力: 212 × 120、NCHW RGB float32
 - 正規化: ImageNet mean/std
 
+`event_image_mode:=true`では、EventState既定のDSEC 3ch GEP frame統計
+（mean `[0.8993729785, 0.7969581015, 0.8928228776]`、std
+`[0.2204336077, 0.2921656668, 0.2204992771]`）へ自動で切り替えます。
+別datasetで蒸留したcheckpointでは`event_image_mean`と`event_image_stddev`を
+server側checkpointの埋め込みconfigに合わせて上書きしてください。
+
+OpenEBの通常`dark` event imageは黒背景かつ重なった極性をmagentaで描画するため、
+GEP frameで学習したmodelとは互換ではありません。`event-camera` sensor profileは
+生event countから白背景・赤/青・90 percentileのGEP frameを生成します。既に記録済みの
+dark画像だけからcountや優勢極性を完全復元することはできないため、GEP modeでbagを
+取り直す必要があります。
+
 PyTorchノードは、学習が出力する`checkpoints/best.pt`または`last.pt`を直接
 読み込めます。checkpoint内の`cfg`からモデル種別、入力寸法、mean/stdを取得します。
 配備先ではcheckpointを`model.pt`という名前で配置してください。
@@ -128,6 +140,12 @@ cp /path/to/checkpoints/best.pt \
 `pilotnet`はPyTorchだけで動作します。`mobilenet_v3_small` checkpointを使う場合は
 追加で`torchvision`が必要です。TorchScriptファイルも`model_format:=auto`または
 `model_format:=torchscript`で読み込めます。
+
+`dinov3_vits16`は学習workspaceから固定212×120 ONNXへexportし、通常の
+`e2e_trt.sh`でJetson上のFP16 `model.plan`へ変換します。ネットワーク入力寸法は
+`metadata.json`から212×120へ設定されます。patch境界へのpaddingはONNX内部に含まれます。
+PyTorchノードでraw checkpointを直接読む経路は対象外で、比較にはONNX、
+実車にはTensorRTを使用します。
 
 ## How to launch
 
@@ -347,6 +365,23 @@ ros2 launch jetpilot_e2e_inference e2e_tensor_rt.launch.py \
   event_image_mode:=true image_topic:=/event_camera/event_image \
   model_root:=/workspaces/ros2_ws/models/e2e/event_control
 ```
+
+## ViT backbone共有Control・物体検出
+
+`shared_vit_tensor_rt.launch.py`は1つの212x120入力tensorを1つのTensorRT engineへ渡し、
+同じ推論結果のTensorListをControl decoderとYOLOv8互換decoderへ分岐します。backboneは
+engine内で1回だけ実行されます。
+
+```bash
+ros2 launch jetpilot_e2e_inference shared_vit_tensor_rt.launch.py \
+  model_root:=/workspaces/ros2_ws/models/e2e/shared_vit
+```
+
+ONNX/TensorRT bindingは`image -> control, detections`、ROS tensor名は
+`input_tensor -> control_output, detection_output`です。Control decoderとDetection decoderは
+別componentですが、image encoderとTensorRT nodeは共有されます。EventStateのEVS重みを使う
+場合は`event_image_mode:=true`とevent topicを指定し、Detection headも同じEVS表現で学習した
+checkpointを統合してください。
 
 ## PyTorch推論（起動例）
 

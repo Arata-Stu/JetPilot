@@ -5,6 +5,7 @@ import json
 import os
 import re
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -18,21 +19,82 @@ from .security import (
 
 NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 EXPERIMENTS = {
-    "pilotnet_steering": {"label": "Steering only · PilotNet (fixed throttle)", "stages": 1, "task": "control"},
-    "pilotnet_scratch": {"label": "Control · PilotNet", "stages": 1, "task": "control"},
-    "control_pilotnet_fusion": {"label": "Control · PilotNet (fusion baseline)", "stages": 1, "task": "control", "model": "fusion"},
-    "control_pilotnet_gru": {"label": "Control · PilotNet + GRU", "stages": 1, "task": "control", "model": "fusion"},
-    "control_pilotnet_imu": {"label": "Control · PilotNet + IMU", "stages": 1, "task": "control", "model": "fusion"},
-    "control_pilotnet_gru_imu": {"label": "Control · PilotNet + GRU + IMU", "stages": 1, "task": "control", "model": "fusion"},
-    "trajectory_pilotnet": {"label": "Trajectory · PilotNet", "stages": 1, "task": "trajectory", "model": "fusion"},
-    "trajectory_pilotnet_gru": {"label": "Trajectory · PilotNet + GRU", "stages": 1, "task": "trajectory", "model": "fusion"},
-    "trajectory_pilotnet_imu": {"label": "Trajectory · PilotNet + IMU", "stages": 1, "task": "trajectory", "model": "fusion"},
-    "trajectory_pilotnet_gru_imu": {"label": "Trajectory · PilotNet + GRU + IMU", "stages": 1, "task": "trajectory", "model": "fusion"},
-    "mobilenet_frozen_head": {"label": "Control · MobileNetV3 / frozen head", "stages": 1, "task": "control"},
+    "pilotnet_steering": {
+        "label": "Steering only · PilotNet (fixed throttle)", "stages": 1,
+        "task": "control", "family": "cnn", "target": "steer",
+        "name_prefix": "cnn-pilotnet-steer-only",
+    },
+    "pilotnet_scratch": {
+        "label": "Control · PilotNet", "stages": 1, "task": "control",
+        "family": "cnn", "target": "control",
+        "name_prefix": "cnn-pilotnet-control",
+    },
+    "dinov3_vits16_scratch": {
+        "label": "Control · DINOv3 ViT-S/16 / scratch",
+        "stages": 1,
+        "task": "control",
+        "family": "vit",
+        "target": "control",
+        "name_prefix": "vit-dinov3-vits16-control-scratch",
+        "input_width": 212,
+        "input_height": 120,
+    },
+    "dinov3_vits16_finetune": {
+        "label": "Control · DINOv3 ViT-S/16 / pretrained fine-tune",
+        "stages": 2,
+        "task": "control",
+        "family": "vit",
+        "target": "control",
+        "name_prefix": "vit-dinov3-vits16-control-finetune",
+        "input_width": 212,
+        "input_height": 120,
+    },
+    "dinov3_vits16_frozen_head": {
+        "label": "Control · DINOv3 ViT-S/16 / frozen backbone head",
+        "stages": 1,
+        "task": "control",
+        "family": "vit",
+        "target": "control",
+        "name_prefix": "vit-dinov3-vits16-control-frozen",
+        "input_width": 212,
+        "input_height": 120,
+    },
+    "dinov3_vits16_eventstate": {
+        "label": "Control · DINOv3 ViT-S/16 / EventState EVS",
+        "stages": 2,
+        "task": "control",
+        "family": "vit",
+        "target": "control",
+        "name_prefix": "vit-dinov3-vits16-evs-control",
+        "input_width": 212,
+        "input_height": 120,
+    },
+    "dinov3_vits16_eventstate_frozen_head": {
+        "label": "Control · DINOv3 ViT-S/16 / EventState EVS frozen",
+        "stages": 1,
+        "task": "control",
+        "family": "vit",
+        "target": "control",
+        "name_prefix": "vit-dinov3-vits16-evs-control-frozen",
+        "input_width": 212,
+        "input_height": 120,
+    },
+    "control_pilotnet_fusion": {"label": "Control · PilotNet (fusion baseline)", "stages": 1, "task": "control", "model": "fusion", "family": "cnn", "target": "control", "name_prefix": "cnn-pilotnet-control-fusion"},
+    "control_pilotnet_gru": {"label": "Control · PilotNet + GRU", "stages": 1, "task": "control", "model": "fusion", "family": "cnn", "target": "control", "name_prefix": "cnn-pilotnet-gru-control"},
+    "control_pilotnet_imu": {"label": "Control · PilotNet + IMU", "stages": 1, "task": "control", "model": "fusion", "family": "cnn", "target": "control", "name_prefix": "cnn-pilotnet-imu-control"},
+    "control_pilotnet_gru_imu": {"label": "Control · PilotNet + GRU + IMU", "stages": 1, "task": "control", "model": "fusion", "family": "cnn", "target": "control", "name_prefix": "cnn-pilotnet-gru-imu-control"},
+    "trajectory_pilotnet": {"label": "Trajectory · PilotNet", "stages": 1, "task": "trajectory", "model": "fusion", "family": "cnn", "target": "trajectory", "name_prefix": "cnn-pilotnet-trajectory"},
+    "trajectory_pilotnet_gru": {"label": "Trajectory · PilotNet + GRU", "stages": 1, "task": "trajectory", "model": "fusion", "family": "cnn", "target": "trajectory", "name_prefix": "cnn-pilotnet-gru-trajectory"},
+    "trajectory_pilotnet_imu": {"label": "Trajectory · PilotNet + IMU", "stages": 1, "task": "trajectory", "model": "fusion", "family": "cnn", "target": "trajectory", "name_prefix": "cnn-pilotnet-imu-trajectory"},
+    "trajectory_pilotnet_gru_imu": {"label": "Trajectory · PilotNet + GRU + IMU", "stages": 1, "task": "trajectory", "model": "fusion", "family": "cnn", "target": "trajectory", "name_prefix": "cnn-pilotnet-gru-imu-trajectory"},
+    "mobilenet_frozen_head": {"label": "Control · MobileNetV3 / frozen head", "stages": 1, "task": "control", "family": "cnn", "target": "control", "name_prefix": "cnn-mobilenetv3-control-frozen"},
     "mobilenet_head_then_finetune": {
         "label": "Control · MobileNetV3 / head then fine-tune",
         "stages": 2,
         "task": "control",
+        "family": "cnn",
+        "target": "control",
+        "name_prefix": "cnn-mobilenetv3-control-finetune",
     },
 }
 
@@ -66,6 +128,33 @@ def _name(value: object, *, label: str) -> str:
     if not NAME_PATTERN.fullmatch(normalized):
         raise ValueError(f"{label} must use 1-64 letters, numbers, '.', '_' or '-'")
     return normalized
+
+
+def _date_time_suffix(now: datetime | None = None) -> str:
+    local_time = now or datetime.now().astimezone()
+    return local_time.strftime("%m%d-%H%M")
+
+
+def suggest_dataset_name(now: datetime | None = None) -> str:
+    return f"e2e_dataset_{_date_time_suffix(now)}"
+
+
+def suggest_run_name(experiment: str, now: datetime | None = None) -> str:
+    definition = EXPERIMENTS.get(experiment) or EXPERIMENTS["pilotnet_scratch"]
+    prefix = str(definition.get("name_prefix") or experiment)
+    return f"{prefix}_{_date_time_suffix(now)}"[:64]
+
+
+def _available_output_name(name: str, root: Path) -> str:
+    if not (root / name).exists():
+        return name
+    version = 1
+    while True:
+        suffix = f"_v{version}"
+        candidate = f"{name[:64 - len(suffix)]}{suffix}"
+        if not (root / candidate).exists():
+            return candidate
+        version += 1
 
 
 def _integer(value: object, *, label: str, minimum: int, maximum: int) -> int:
@@ -235,15 +324,25 @@ def pipeline_catalog(config: Any) -> dict[str, Any]:
     preset_default, presets = _load_collection(
         root / "src/e2e_learning/conf/deploy_model_presets.json", "presets"
     )
+    suggestion_time = datetime.now().astimezone()
+    dataset_base = suggest_dataset_name(suggestion_time)
     return {
         "dataset_root": str(dataset_root(config)),
         "run_root": str(run_root(config)),
         "occupied_dataset_names": occupied_output_names(dataset_root(config)),
         "occupied_run_names": occupied_output_names(run_root(config)),
+        "suggested_dataset_name": _available_output_name(dataset_base, dataset_root(config)),
         "datasets": scan_datasets(config),
         "runs": scan_runs(config),
         "experiments": [
-            {"id": key, **value} for key, value in EXPERIMENTS.items()
+            {
+                "id": key,
+                **value,
+                "suggested_run_name": _available_output_name(
+                    suggest_run_name(key, suggestion_time), run_root(config)
+                ),
+            }
+            for key, value in EXPERIMENTS.items()
         ],
         "deploy_profiles": profiles,
         "default_deploy_profile": profile_default,
@@ -260,7 +359,11 @@ def build_preprocess_task(config: Any, body: dict[str, Any]) -> PipelineTaskSpec
         require_exists=True,
         require_directory=True,
     )
-    name = _name(body.get("dataset_name"), label="dataset name")
+    requested_name = str(body.get("dataset_name") or "").strip()
+    name = _name(
+        requested_name or _available_output_name(suggest_dataset_name(), dataset_root(config)),
+        label="dataset name",
+    )
     output = resolve_under_root(name, dataset_root(config), label="dataset output")
     if output.exists() and any(output.iterdir()):
         raise ValueError(f"dataset output already exists and is not empty: {output}")
@@ -328,10 +431,14 @@ def build_train_task(config: Any, body: dict[str, Any]) -> PipelineTaskSpec:
     )
     if not (dataset / "samples.csv").is_file():
         raise ValueError(f"dataset has no samples.csv: {dataset}")
-    run_name = _name(body.get("run_name"), label="run name")
     experiment = str(body.get("experiment") or "pilotnet_scratch")
     if experiment not in EXPERIMENTS:
         raise ValueError(f"unsupported experiment: {experiment}")
+    requested_name = str(body.get("run_name") or "").strip()
+    run_name = _name(
+        requested_name or _available_output_name(suggest_run_name(experiment), run_root(config)),
+        label="run name",
+    )
     output = resolve_under_root(run_name, run_root(config), label="training output")
     if output.exists() and any(output.iterdir()):
         raise ValueError(f"training output already exists and is not empty: {output}")
@@ -354,8 +461,20 @@ def build_train_task(config: Any, body: dict[str, Any]) -> PipelineTaskSpec:
         raise ValueError(
             f"{experiment} requires a {experiment_task} dataset, but {dataset.name} is {dataset_task}"
         )
-    width = int(dataset_metadata.get("input_width") or body.get("input_width") or 212)
-    height = int(dataset_metadata.get("input_height") or body.get("input_height") or 120)
+    fixed_input_width = EXPERIMENTS[experiment].get("input_width")
+    fixed_input_height = EXPERIMENTS[experiment].get("input_height")
+    width = int(
+        fixed_input_width
+        or dataset_metadata.get("input_width")
+        or body.get("input_width")
+        or 212
+    )
+    height = int(
+        fixed_input_height
+        or dataset_metadata.get("input_height")
+        or body.get("input_height")
+        or 120
+    )
     overrides = [
         f"experiment={experiment}",
         f"data.dataset_dir={dataset}",

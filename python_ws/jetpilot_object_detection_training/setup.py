@@ -22,6 +22,7 @@ setup(
             "jetpilot-yolo-validate-dataset=object_detection_learning.cli.validate_dataset:main",
             "jetpilot-yolo-train=object_detection_learning.cli.train:main",
             "jetpilot-yolo-export-onnx=object_detection_learning.cli.export_onnx:main",
+            "jetpilot-shared-vit-train-detection=object_detection_learning.cli.train_shared_vit_head:main",
         ],
     },
 )

@@ -55,6 +55,8 @@ Consoleにも`Steering only · PilotNet (fixed throttle)`として表示され�
 
 | experiment | 画像時系列 | IMU | 出力 |
 |---|---:|---:|---|
+| `dinov3_vits16_scratch` | 1 frame (212×120) | なし | control |
+| `dinov3_vits16_finetune` | 1 frame (212×120) | なし | control |
 | `trajectory_pilotnet` | 1 frame | なし | trajectory |
 | `trajectory_pilotnet_gru` | 4 frames + GRU | なし | trajectory |
 | `trajectory_pilotnet_imu` | 1 frame | GRU encoder | trajectory |
@@ -63,6 +65,81 @@ Consoleにも`Steering only · PilotNet (fixed throttle)`として表示され�
 | `control_pilotnet_gru` | 4 frames + GRU | なし | control |
 | `control_pilotnet_imu` | 1 frame | GRU encoder | control |
 | `control_pilotnet_gru_imu` | 4 frames + GRU | GRU encoder | control |
+
+### DINOv3互換ViT-S/16
+
+`dinov3_vits16`は、将来のRGB→event知識蒸留とGEP（Generative Event
+Pretraining）checkpoint利用を想定した約22M parameterのbackboneです。公開DINOv3
+ViT-S/16と同じpatch 16、384次元、12 block、6 head、MLP比4、4 storage token、
+axial 2-D RoPE、LayerScale、key-bias maskingを使用します。蒸留側からCLS、storage、
+patch tokenとblock 2/5/8/11の中間特徴を取得できます。運転用headはCLS tokenから
+`[steering, throttle]`を生成します。
+
+scratch学習:
+
+```bash
+python -m e2e_learning.cli.train \
+  experiment=dinov3_vits16_scratch \
+  data.dataset_dir=datasets/control_run_001 \
+  run.name=dinov3_vits16_scratch_001
+```
+
+DINOv3 ViT-S/16またはGEPのDINOv3 event-encoder checkpointからfine-tuneする場合は、
+公式RGB重みの既定配置先は
+`weights/dinov3/dinov3_vits16_pretrain_lvd1689m-08c60483.pth`です。別の
+checkpoint pathは環境変数へ指定します。GEP checkpointの`event_encoder`形式と、
+DINOv3のraw state dict形式を認識します。入力channel数が異なるGEP checkpointでは、
+shapeが一致しないpatch projectionだけを読み飛ばし、残りのbackboneを利用します。
+
+```bash
+export DINOV3_VITS16_WEIGHTS=/path/to/dinov3_or_gep_event_encoder.pt
+python -m e2e_learning.cli.train \
+  experiment=dinov3_vits16_finetune \
+  data.dataset_dir=datasets/control_run_001 \
+  run.name=dinov3_vits16_finetune_001
+```
+
+GEPのevent encoderは`weights/gep/`へ配置し、`model.weights_path`でファイルを明示します。
+論文とともに公開されたSmall/Base重みはDINOv2初期化版なので、このDINOv3互換modelには
+読み込めません。DINOv3 teacherでGEP stage 1を学習した重み、または今後明示的に公開される
+DINOv3版checkpointだけを配置してください。loaderもRoPEとstorage tokenを検査し、DINOv2
+checkpointを拒否します。
+配置規則は[`weights/README.md`](weights/README.md)にまとめています。
+
+EventStateで学習済みのDINOv3 EVS encoderを使う場合は、complete checkpointを
+`weights/eventstate/eventstate_dinov3_vits16.pth`へ配置し、
+`experiment=dinov3_vits16_eventstate`を指定します。checkpoint内の
+`model.event_encoder.backbone.*`だけを抽出し、運転用headはJetPilot側で新規学習します。
+このpresetはEventState既定の3ch `gep_rgb`表現とDSEC event mean/stdを前提とします。
+server側runの埋め込みconfigが異なる場合は、その`representation`、時間window、mean/stdを
+必ず優先してください。
+
+外部入力はPilotNetと同じ212×120です。patch 16で割り切れないため、正規化後にモデル内部で
+左右6px、上下4pxをゼロpaddingして224×128とし、14×8 patchへ変換します。ゼロは正規化前の
+ImageNet mean相当で、入力画像のアスペクト比を変更しません。TensorRT向けONNXは固定batch 1、
+NCHW RGB float32で出力され、paddingとRoPE定数もgraphに含まれます。
+
+設計参照: [DINOv3公式実装](https://github.com/facebookresearch/dinov3)、
+[Generative Event Pretraining公式実装](https://github.com/uzh-rpg/generative_event_pretraining)。
+外部実装のソースは同梱せず、checkpointとtoken境界だけを互換にしています。
+
+### Controlと物体検出でbackboneを共有する
+
+実機でViT backboneを1回だけ実行する共有モデルでは、Control headを次のpresetで学習します。
+このpresetは全epochでbackboneを`requires_grad=False`かつ`eval()`に固定します。
+
+```bash
+export DINOV3_VITS16_WEIGHTS=/path/to/dinov3_or_eventstate_backbone.pth
+python -m e2e_learning.cli.train \
+  experiment=dinov3_vits16_frozen_head \
+  data.dataset_dir=datasets/control_run_001 \
+  run.name=vit-dinov3-vits16-control-frozen_0910-1800
+```
+
+物体検出headは`jetpilot_object_detection_training`側で別datasetを使って学習します。
+最後に`e2e_learning.cli.export_multitask_onnx`で両checkpointを統合します。export時には
+backbone tensorのfingerprintを比較するため、異なるDINOv3/GEP重みを使ったheadは統合されません。
+統合modelは固定212x120入力、`control`と`detections`の2出力です。
 
 例:
 

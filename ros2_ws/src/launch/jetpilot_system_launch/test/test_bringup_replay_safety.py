@@ -139,20 +139,24 @@ class ReplaySafetyTest(unittest.TestCase):
         self.assertEqual(BRINGUP._validate_replay_vehicle_safety(context), [])
 
     def test_autonomous_command_sources_are_mutually_exclusive(self) -> None:
-        for controller_enabled, e2e_enabled in (
-            ("false", "false"),
-            ("true", "false"),
-            ("false", "true"),
+        for controller_enabled, e2e_enabled, shared_enabled in (
+            ("false", "false", "false"),
+            ("true", "false", "false"),
+            ("false", "true", "false"),
+            ("false", "false", "true"),
         ):
             with self.subTest(
                 controller=controller_enabled,
                 e2e=e2e_enabled,
+                shared=shared_enabled,
             ):
                 context = LaunchContext()
                 context.launch_configurations.update(
                     {
                         "enable_control": controller_enabled,
                         "enable_e2e_inference": e2e_enabled,
+                        "enable_shared_vit_inference": shared_enabled,
+                        "enable_object_detection": "false",
                     }
                 )
                 self.assertEqual(
@@ -164,9 +168,23 @@ class ReplaySafetyTest(unittest.TestCase):
             {
                 "enable_control": "true",
                 "enable_e2e_inference": "true",
+                "enable_shared_vit_inference": "false",
+                "enable_object_detection": "false",
             }
         )
         with self.assertRaisesRegex(RuntimeError, "/auto/control_cmd"):
+            BRINGUP._validate_autonomous_command_source(context)
+
+        context = LaunchContext()
+        context.launch_configurations.update(
+            {
+                "enable_control": "false",
+                "enable_e2e_inference": "false",
+                "enable_shared_vit_inference": "true",
+                "enable_object_detection": "true",
+            }
+        )
+        with self.assertRaisesRegex(RuntimeError, "standalone"):
             BRINGUP._validate_autonomous_command_source(context)
 
 

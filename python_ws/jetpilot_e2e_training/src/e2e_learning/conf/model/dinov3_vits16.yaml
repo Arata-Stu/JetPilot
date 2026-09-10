@@ -1,0 +1,22 @@
+name: dinov3_vits16
+task: control
+output_dim: 2
+outputs: [steering, throttle]
+steering_only: false
+
+# Matches the public DINOv3 ViT-S/16 backbone so an RGB or GEP event-encoder
+# checkpoint can initialize the student before driving-task fine-tuning.
+input_width: 212
+input_height: 120
+input_channels: 3
+patch_size: 16
+embed_dim: 384
+depth: 12
+num_heads: 6
+ffn_ratio: 4.0
+storage_tokens: 4
+layer_scale: 0.00001
+rope_base: 100.0
+rope_rescale_coords: 2.0
+weights_path: ""
+require_weights: false

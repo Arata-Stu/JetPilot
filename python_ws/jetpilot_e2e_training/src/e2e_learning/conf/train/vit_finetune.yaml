@@ -1,0 +1,16 @@
+device: ""
+seed: 42
+batch_size: 16
+num_workers: 4
+val_fraction: 0.2
+weight_decay: 0.05
+
+stages:
+  - name: head
+    freeze_encoder: true
+    epochs: 10
+    lr: 0.001
+  - name: finetune
+    freeze_encoder: false
+    epochs: 20
+    lr: 0.00001

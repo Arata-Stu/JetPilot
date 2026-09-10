@@ -48,8 +48,12 @@ def generate_launch_description():
                 "enable_padding": ParameterValue(
                     LaunchConfiguration("enable_padding"), value_type=bool
                 ),
-                "image_mean": LaunchConfiguration("image_mean"),
-                "image_stddev": LaunchConfiguration("image_stddev"),
+                "image_mean": event_value(
+                    LaunchConfiguration("event_image_mean"), LaunchConfiguration("image_mean")
+                ),
+                "image_stddev": event_value(
+                    LaunchConfiguration("event_image_stddev"), LaunchConfiguration("image_stddev")
+                ),
                 "tensor_name": LaunchConfiguration("input_tensor_name"),
                 "use_sim_time": ParameterValue(
                     LaunchConfiguration("use_sim_time"), value_type=bool
@@ -185,6 +189,14 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "image_stddev", default_value="[0.229, 0.224, 0.225]"
+            ),
+            DeclareLaunchArgument(
+                "event_image_mean",
+                default_value="[0.8993729785, 0.7969581015, 0.8928228776]",
+            ),
+            DeclareLaunchArgument(
+                "event_image_stddev",
+                default_value="[0.2204336077, 0.2921656668, 0.2204992771]",
             ),
             DeclareLaunchArgument("input_tensor_name", default_value="input_tensor"),
             DeclareLaunchArgument(

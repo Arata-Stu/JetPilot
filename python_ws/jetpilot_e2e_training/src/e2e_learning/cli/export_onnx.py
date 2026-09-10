@@ -26,7 +26,16 @@ def main(cfg: DictConfig) -> None:
     if not isinstance(checkpoint, dict):
         checkpoint = {"model_state": checkpoint}
     run_cfg = _stored_config(checkpoint, cfg)
-    model = build_model(run_cfg.model)
+    # The trained checkpoint already contains the complete model. Do not require
+    # the original foundation-model file (or download weights) during export.
+    export_model_cfg = OmegaConf.create(OmegaConf.to_container(run_cfg.model, resolve=True))
+    if "weights_path" in export_model_cfg:
+        export_model_cfg.weights_path = ""
+    if "require_weights" in export_model_cfg:
+        export_model_cfg.require_weights = False
+    if "pretrained" in export_model_cfg:
+        export_model_cfg.pretrained = False
+    model = build_model(export_model_cfg)
     model.load_state_dict(checkpoint.get("model_state", checkpoint))
     model.eval()
 

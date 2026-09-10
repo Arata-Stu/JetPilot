@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -12,6 +13,8 @@ from jetpilot_console.e2e_pipeline import (
     build_preprocess_task,
     build_train_task,
     pipeline_catalog,
+    suggest_dataset_name,
+    suggest_run_name,
 )
 
 
@@ -124,6 +127,19 @@ class E2EPipelineTests(unittest.TestCase):
                 },
             )
 
+    def test_suggested_names_include_time_architecture_and_target(self) -> None:
+        now = datetime(2026, 9, 10, 18, 0)
+
+        self.assertEqual(suggest_dataset_name(now), "e2e_dataset_0910-1800")
+        self.assertEqual(
+            suggest_run_name("pilotnet_steering", now),
+            "cnn-pilotnet-steer-only_0910-1800",
+        )
+        self.assertEqual(
+            suggest_run_name("dinov3_vits16_scratch", now),
+            "vit-dinov3-vits16-control-scratch_0910-1800",
+        )
+
     def test_preprocess_timestamp_source_override_and_validation(self) -> None:
         body = {"rosbag": str(self.bag), "dataset_name": "clock-test", "image_topic": "/event_camera/event_image"}
         spec = build_preprocess_task(self.config, {**body, "timestamp_source": "header"})
@@ -154,6 +170,20 @@ class E2EPipelineTests(unittest.TestCase):
         export = build_export_task(self.config, {"run_dir": str(run)})
         self.assertEqual(export.kind, "e2e-export-onnx")
         self.assertIn(f"checkpoint={run.resolve() / 'checkpoints/best.pt'}", export.command)
+
+    def test_dinov3_vits16_training_uses_cnn_input_geometry(self) -> None:
+        dataset = self._dataset()
+        train = build_train_task(
+            self.config,
+            {
+                "dataset_dir": str(dataset),
+                "run_name": "vit-run",
+                "experiment": "dinov3_vits16_scratch",
+            },
+        )
+
+        self.assertIn("data.input_width=212", train.command)
+        self.assertIn("data.input_height=120", train.command)
 
     def test_trajectory_training_uses_dataset_geometry(self) -> None:
         dataset = self.training / "datasets" / "trajectory-a"

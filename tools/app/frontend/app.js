@@ -38,9 +38,9 @@ const state = {
     deployPresets: [],
     datasetRoot: "",
     runRoot: "",
-    datasetName: "e2e_dataset_v1",
+    datasetName: "",
     datasetDir: "",
-    runName: "pilotnet_run_v1",
+    runName: "",
     runDir: "",
     experiment: "pilotnet_scratch",
     datasetTask: "control",
@@ -1300,6 +1300,10 @@ function sh(value) {
 }
 
 async function refreshAll() {
+  const needsDatasetNameSuggestion = !state.e2ePipeline.datasetName
+    || state.e2ePipeline.datasetName === "e2e_dataset_v1";
+  const needsRunNameSuggestion = !state.e2ePipeline.runName
+    || state.e2ePipeline.runName === "pilotnet_run_v1";
   const previousFpvSession = state.fpv.browserStatus?.session_id || "";
   const [config, tasks, rosbags, rosbagTrash, maps, cameraTopicConfigs, vglModels, localIps, analyses, e2eModels, e2ePipeline, objectDetectionPipeline, fpvStatus] = await Promise.all([
     api("/api/config"),
@@ -1348,6 +1352,17 @@ async function refreshAll() {
     state.e2ePipeline.experiment = state.e2ePipeline.experiments.find(
       (item) => item.task === activeDataset.task,
     )?.id || "";
+  }
+  if (needsDatasetNameSuggestion) {
+    state.e2ePipeline.datasetName = e2ePipeline.suggested_dataset_name
+      || suggestedE2EDatasetName();
+  }
+  if (needsRunNameSuggestion) {
+    const selectedExperiment = state.e2ePipeline.experiments.find(
+      (item) => item.id === state.e2ePipeline.experiment,
+    );
+    state.e2ePipeline.runName = selectedExperiment?.suggested_run_name
+      || suggestedE2ERunName(selectedExperiment);
   }
   if (!state.e2ePipeline.runDir && state.e2ePipeline.runs[0]) {
     state.e2ePipeline.runDir = state.e2ePipeline.runs[0].path || "";
@@ -3096,6 +3111,40 @@ function nextAvailableOutputName(name, occupied) {
   return candidate;
 }
 
+function compactLocalDateTime(date = new Date()) {
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${pad(date.getMonth() + 1)}${pad(date.getDate())}-${pad(date.getHours())}${pad(date.getMinutes())}`;
+}
+
+function suggestedE2EDatasetName() {
+  return `e2e_dataset_${compactLocalDateTime()}`;
+}
+
+function suggestedE2ERunName(experiment) {
+  const selected = experiment || state.e2ePipeline.experiments.find(
+    (item) => item.id === state.e2ePipeline.experiment,
+  );
+  const prefix = selected?.name_prefix || selected?.id || "model";
+  return `${prefix}_${compactLocalDateTime()}`.slice(0, 64);
+}
+
+function applyE2ENameSuggestion(kind) {
+  if (kind === "dataset") {
+    state.e2ePipeline.datasetName = suggestedE2EDatasetName();
+  } else if (kind === "run") {
+    state.e2ePipeline.runName = suggestedE2ERunName();
+  }
+  render();
+}
+
+function e2eExperimentOptionLabel(experiment) {
+  const family = String(experiment?.family || "model").toUpperCase();
+  const target = experiment?.target === "steer"
+    ? "STEER ONLY"
+    : String(experiment?.target || experiment?.task || "").toUpperCase();
+  return `[${family}] [${target}] ${experiment?.label || experiment?.id || ""}`;
+}
+
 function refreshSuggestedOutputNames() {
   const e2e = state.e2ePipeline;
   const detection = state.objectDetectionPipeline;
@@ -3151,8 +3200,10 @@ function updateE2EPipelineOption(key, value) {
     const current = state.e2ePipeline.experiments.find((item) => item.id === state.e2ePipeline.experiment);
     if (dataset && current?.task !== dataset.task) {
       state.e2ePipeline.experiment = state.e2ePipeline.experiments.find((item) => item.task === dataset.task)?.id || "";
+      state.e2ePipeline.runName = suggestedE2ERunName();
     }
   }
+  if (key === "experiment") state.e2ePipeline.runName = suggestedE2ERunName();
   if (key === "runDir") {
     state.e2ePipeline.deployPreset = recommendedE2EDeployPreset(selectedE2ERun());
   }
@@ -3320,7 +3371,8 @@ function renderE2EPipeline() {
   const deployment = pipeline.deployPresets.find((item) => item.id === recommendedPreset);
   if (run) pipeline.deployPreset = recommendedPreset;
   const profile = selectedE2EDeployProfile();
-  const hasTwoStages = pipeline.experiment === "mobilenet_head_then_finetune";
+  const selectedExperiment = pipeline.experiments.find((item) => item.id === pipeline.experiment);
+  const hasTwoStages = selectedExperiment?.stages === 2;
   const pipelineTasks = state.tasks.filter(isE2EPipelineTask).slice(0, 8);
   const imageTopic = pipeline.imageTopic || state.analysis.imageTopic;
   const experiments = dataset
@@ -3337,7 +3389,7 @@ function renderE2EPipeline() {
           <article class="e2e-pipeline-stage">
             <header><span>01</span><div><strong>Create dataset</strong><small>Images + control / future trajectory + causal IMU</small></div></header>
             <div class="field"><label>Rosbag</label><select onchange="selectAnalysisBag(this.value)"><option value="">Select rosbag</option>${state.rosbags.map((item) => `<option value="${esc(item.path)}" ${item.path === state.analysis.selectedBagPath ? "selected" : ""}>${esc(item.display_name || item.name)}</option>`).join("")}</select></div>
-            <div class="field"><label>Dataset name</label><input value="${esc(pipeline.datasetName)}" onchange="updateE2EPipelineOption('datasetName', this.value)" /><div class="field-hint">${esc(pipeline.datasetRoot)}</div></div>
+            <div class="field"><label>Dataset name</label><input value="${esc(pipeline.datasetName)}" onchange="updateE2EPipelineOption('datasetName', this.value)" /><div class="field-hint">${esc(pipeline.datasetRoot)} · <button type="button" class="link-button" onclick="applyE2ENameSuggestion('dataset')">現在日時で再提案</button></div></div>
             <div class="field"><label>Learning task</label><select onchange="updateE2EPipelineOption('datasetTask', this.value)">${[["control","Control (steering + throttle)"],["trajectory","Trajectory (future odometry)"]].map(([value,label]) => `<option value="${value}" ${pipeline.datasetTask === value ? "selected" : ""}>${label}</option>`).join("")}</select></div>
             <div class="field"><label>Image topic</label><select onchange="updateE2EPipelineOption('imageTopic', this.value)">${analysisTopicOptions("image", imageTopic)}</select></div>
             <div class="field"><label>Teacher control</label><select onchange="updateE2EPipelineOption('controlTopic', this.value)">${analysisTopicOptions("control", pipeline.controlTopic)}</select></div>
@@ -3351,8 +3403,8 @@ function renderE2EPipeline() {
           <article class="e2e-pipeline-stage">
             <header><span>02</span><div><strong>Train model</strong><small>Adjust repeatable training parameters</small></div></header>
             <div class="field"><label>Dataset</label><select onchange="updateE2EPipelineOption('datasetDir', this.value)"><option value="">Select dataset</option>${pipeline.datasets.map((item) => `<option value="${esc(item.path)}" ${item.path === pipeline.datasetDir ? "selected" : ""}>${esc(item.task)} · ${esc(item.name)} — ${esc(item.sample_count)} samples</option>`).join("")}</select></div>
-            <div class="field"><label>Run name</label><input value="${esc(pipeline.runName)}" onchange="updateE2EPipelineOption('runName', this.value)" /><div class="field-hint">${esc(pipeline.runRoot)}</div></div>
-            <div class="field"><label>Experiment</label><select onchange="updateE2EPipelineOption('experiment', this.value)">${experiments.map((item) => `<option value="${esc(item.id)}" ${item.id === pipeline.experiment ? "selected" : ""}>${esc(item.label)}</option>`).join("")}</select></div>
+            <div class="field"><label>Model architecture / target</label><select onchange="updateE2EPipelineOption('experiment', this.value)">${experiments.map((item) => `<option value="${esc(item.id)}" ${item.id === pipeline.experiment ? "selected" : ""}>${esc(e2eExperimentOptionLabel(item))}</option>`).join("")}</select></div>
+            <div class="field"><label>Model / run name</label><input value="${esc(pipeline.runName)}" onchange="updateE2EPipelineOption('runName', this.value)" /><div class="field-hint">${esc(pipeline.runRoot)} · architecture変更時に自動更新 · <button type="button" class="link-button" onclick="applyE2ENameSuggestion('run')">現在日時で再提案</button></div></div>
             <div class="e2e-compact-fields"><label>Epochs<input type="number" min="1" value="${esc(pipeline.epochs)}" onchange="updateE2EPipelineOption('epochs', this.value)" /></label><label>Learning rate<input type="number" min="0.00000001" step="0.0001" value="${esc(pipeline.learningRate)}" onchange="updateE2EPipelineOption('learningRate', this.value)" /></label><label>Batch<input type="number" min="1" value="${esc(pipeline.batchSize)}" onchange="updateE2EPipelineOption('batchSize', this.value)" /></label></div>
             ${hasTwoStages ? `<div class="e2e-compact-fields"><label>Fine-tune epochs<input type="number" min="1" value="${esc(pipeline.finetuneEpochs)}" onchange="updateE2EPipelineOption('finetuneEpochs', this.value)" /></label><label>Fine-tune LR<input type="number" min="0.00000001" step="0.0001" value="${esc(pipeline.finetuneLearningRate)}" onchange="updateE2EPipelineOption('finetuneLearningRate', this.value)" /></label></div>` : ""}
             <details><summary>Advanced parameters</summary><div class="e2e-compact-fields"><label>Data fraction<input type="number" min="0.001" max="1" step="0.05" value="${esc(pipeline.fraction)}" onchange="updateE2EPipelineOption('fraction', this.value)" /></label><label>Validation<input type="number" min="0.01" max="0.9" step="0.05" value="${esc(pipeline.valFraction)}" onchange="updateE2EPipelineOption('valFraction', this.value)" /></label><label>Workers<input type="number" min="0" value="${esc(pipeline.numWorkers)}" onchange="updateE2EPipelineOption('numWorkers', this.value)" /></label><label>Weight decay<input type="number" min="0" max="1" step="0.0001" value="${esc(pipeline.weightDecay)}" onchange="updateE2EPipelineOption('weightDecay', this.value)" /></label><label>Seed<input type="number" min="0" value="${esc(pipeline.seed)}" onchange="updateE2EPipelineOption('seed', this.value)" /></label><label>Device<select onchange="updateE2EPipelineOption('device', this.value)">${[["","Auto"],["cuda","CUDA"],["mps","Apple MPS"],["cpu","CPU"]].map(([value,label]) => `<option value="${value}" ${pipeline.device === value ? "selected" : ""}>${label}</option>`).join("")}</select></label></div></details>

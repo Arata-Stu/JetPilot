@@ -1,0 +1,16 @@
+# @package _global_
+
+defaults:
+  - override /model: dinov3_vits16
+  - override /train: vit_frozen_head
+
+data:
+  input_width: 212
+  input_height: 120
+
+model:
+  weights_path: ${oc.env:DINOV3_VITS16_WEIGHTS,"weights/dinov3/dinov3_vits16_pretrain_lvd1689m-08c60483.pth"}
+  require_weights: true
+
+run:
+  name: dinov3_vits16_frozen_head

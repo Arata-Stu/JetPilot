@@ -1,0 +1,12 @@
+# @package _global_
+
+defaults:
+  - override /model: dinov3_vits16
+  - override /train: vit_scratch
+
+data:
+  input_width: 212
+  input_height: 120
+
+run:
+  name: dinov3_vits16_scratch

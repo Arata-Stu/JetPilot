@@ -13,6 +13,9 @@
     "sensor_kit_camera_name": "event_camera",
     "sensor_kit_rtp_image_topic": "/event_camera/event_image",
     "sensor_kit_enable_flir": false,
+    "sensor_kit_silky_evcam_event_image_fps": 20.0,
+    "sensor_kit_silky_evcam_event_image_style": "gep",
+    "sensor_kit_silky_evcam_event_image_percentile": 90.0,
     "publish_vehicle_evs_description": true,
     "e2e_event_image_mode": true,
     "e2e_image_topic": "/event_camera/event_image"

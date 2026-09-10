@@ -70,6 +70,8 @@ def launch_sensor_kit(args: lu.ArgumentContainer) -> list[lut.Action]:
                         lu.is_true(args.silky_evcam_event_image_enabled)).lower(),
                     'event_image_fps': args.silky_evcam_event_image_fps,
                     'event_image_encoding': args.silky_evcam_event_image_encoding,
+                    'event_image_style': args.silky_evcam_event_image_style,
+                    'event_image_percentile': args.silky_evcam_event_image_percentile,
                     'event_image_publish_empty': str(
                         lu.is_true(args.silky_evcam_event_image_publish_empty)).lower(),
                     'event_image_publisher_depth': args.silky_evcam_event_image_publisher_depth,
@@ -156,6 +158,8 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('silky_evcam_event_image_enabled', True)
     args.add_arg('silky_evcam_event_image_fps', '25.0')
     args.add_arg('silky_evcam_event_image_encoding', 'bgr8')
+    args.add_arg('silky_evcam_event_image_style', 'dark')
+    args.add_arg('silky_evcam_event_image_percentile', '90.0')
     args.add_arg('silky_evcam_event_image_publish_empty', True)
     args.add_arg('silky_evcam_event_image_publisher_depth', '2')
 

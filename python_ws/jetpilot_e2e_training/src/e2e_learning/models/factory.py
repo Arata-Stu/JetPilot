@@ -7,6 +7,10 @@ from torchvision import models
 
 from e2e_learning.models.pilotnet import PilotNet
 from e2e_learning.models.fusion import FusionE2EModel
+from e2e_learning.models.dinov3_vit import (
+    DinoV3ViTSmallControl,
+    load_dinov3_backbone_weights,
+)
 
 
 class TorchvisionEncoderHead(nn.Module):
@@ -65,6 +69,32 @@ def build_model(config: Any) -> nn.Module:
             pretrained=bool(getattr(config, "pretrained", False)),
             weights_path=str(getattr(config, "weights_path", "")),
         )
+    if name == "dinov3_vits16":
+        model = DinoV3ViTSmallControl(
+            image_size=int(getattr(config, "image_size", 224)),
+            input_height=int(getattr(config, "input_height", 120)),
+            input_width=int(getattr(config, "input_width", 212)),
+            output_dim=output_dim,
+            steering_only=bool(getattr(config, "steering_only", False)),
+            in_channels=int(getattr(config, "input_channels", 3)),
+            patch_size=int(getattr(config, "patch_size", 16)),
+            embed_dim=int(getattr(config, "embed_dim", 384)),
+            depth=int(getattr(config, "depth", 12)),
+            num_heads=int(getattr(config, "num_heads", 6)),
+            ffn_ratio=float(getattr(config, "ffn_ratio", 4.0)),
+            storage_tokens=int(getattr(config, "storage_tokens", 4)),
+            layer_scale=float(getattr(config, "layer_scale", 1e-5)),
+            rope_base=float(getattr(config, "rope_base", 100.0)),
+            rope_rescale_coords=float(getattr(config, "rope_rescale_coords", 2.0)),
+        )
+        weights_path = str(getattr(config, "weights_path", ""))
+        if weights_path:
+            load_dinov3_backbone_weights(weights_path, model.backbone)
+        elif bool(getattr(config, "require_weights", False)):
+            raise RuntimeError(
+                "model.weights_path is required for this DINOv3 fine-tuning preset"
+            )
+        return model
     if name == "fusion":
         return FusionE2EModel(config)
     raise ValueError(f"Unsupported model: {name}")

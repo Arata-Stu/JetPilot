@@ -55,6 +55,11 @@ run_name="${run_name:-pilotnet_$(date +%Y%m%d_%H%M%S)}"
 echo "学習presetを選択してください:" >&2
 select experiment in \
   "pilotnet_scratch" \
+  "dinov3_vits16_scratch" \
+  "dinov3_vits16_finetune" \
+  "dinov3_vits16_frozen_head" \
+  "dinov3_vits16_eventstate" \
+  "dinov3_vits16_eventstate_frozen_head" \
   "mobilenet_frozen_head" \
   "mobilenet_head_then_finetune"; do
   [[ -n "${experiment:-}" ]] && break

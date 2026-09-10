@@ -39,6 +39,9 @@ def apply_dataset_metadata(cfg: DictConfig) -> None:
         raise RuntimeError(
             f"Dataset task is {dataset_task}, but model task is {model_task}: {metadata_path}"
         )
+    fixed_input_width = getattr(cfg.model, "input_width", None)
+    fixed_input_height = getattr(cfg.model, "input_height", None)
+    has_fixed_geometry = fixed_input_width is not None and fixed_input_height is not None
     for key in (
         "image_topic",
         "input_width",
@@ -50,8 +53,13 @@ def apply_dataset_metadata(cfg: DictConfig) -> None:
         "imu_samples",
     ):
         value = getattr(metadata, key, None)
-        if value is not None:
+        if value is not None and not (
+            has_fixed_geometry and key in {"input_width", "input_height"}
+        ):
             cfg.data[key] = value
+    if has_fixed_geometry:
+        cfg.data.input_width = int(fixed_input_width)
+        cfg.data.input_height = int(fixed_input_height)
     if str(cfg.model.name) == "fusion":
         if getattr(metadata, "trajectory_points", None) is not None:
             cfg.model.trajectory_points = int(metadata.trajectory_points)

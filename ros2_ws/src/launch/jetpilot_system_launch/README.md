@@ -7,6 +7,10 @@ SilkyEvCam の保存済み `.bias` は bringup 引数
 調整・保存手順は [SilkyEvCam Bias Tuner](../../../../../tools/silkyevcam_bias_tuner/README.md)
 を参照してください。
 
+OpenEBの周期performance logは既定で無効です。bringup全体から確認する場合は
+`sensor_kit_silky_evcam_debug:=true`を指定します。構造化された計測値はdebug設定に
+かかわらず`/event_camera/diagnostics`へ出力されます。
+
 ## Purpose
 
 JetPilot 全体の bringup をまとめる launch package です。tool、operation、planning、control、E2E inference、sensor、localization、vehicle interface を個別に有効化し、topic 名と安全条件を1箇所で揃えます。
@@ -147,6 +151,19 @@ ros2 launch jetpilot_system_launch bringup.launch.py \
   enable_sensor_kit:=true enable_localization:=true \
   enable_object_detection:=true
 ```
+
+ViT backbone共有モデルでは、standaloneのE2EとYOLOを両方OFFにし、統合経路だけを有効にします。
+
+```bash
+ros2 launch jetpilot_system_launch bringup.launch.py \
+  enable_sensor_kit:=true enable_localization:=true \
+  enable_shared_vit_inference:=true \
+  shared_vit_model_root:=/workspaces/ros2_ws/models/e2e/shared_vit
+```
+
+この経路は212x120の画像前処理とTensorRT engineを1つだけ起動し、同じTensorListから
+Control decoderとYOLOv8互換decoderを別componentとして動かします。
+`enable_e2e_inference`または`enable_object_detection`との同時指定は起動前に拒否されます。
 
 ## VSLAM初期位置モード
 

@@ -119,6 +119,49 @@ python -m object_detection_learning.cli.export_onnx \
 `metadata.json`にはクラス順、binding名、入力shape、RGB/NCHW、letterbox、NMSなし、
 checkpoint/ONNX SHA-256を保存します。
 
+## DINOv3 backbone共有モデル
+
+Controlと物体検出を1つのTensorRT engineへまとめる場合は、DINOv3 ViT-S/16 backboneを
+完全にfreezeし、detection neck/headだけをこのworkspaceで学習します。共有model定義を
+利用するため、同じPython環境へE2E workspaceもinstallしてください。
+
+```bash
+pip install -e ../jetpilot_e2e_training -e .
+
+python -m object_detection_learning.cli.train_shared_vit_head \
+  --data datasets/jetpilot_objects_v1/data.yaml \
+  --backbone-weights ../jetpilot_e2e_training/weights/dinov3/dinov3_vits16_pretrain_lvd1689m-08c60483.pth \
+  --name vit-dinov3-vits16-det-head_0910-1800
+```
+
+EventState EVS encoderの場合は、Control datasetと同じ生成表現・mean/stdを指定します。
+
+```bash
+python -m object_detection_learning.cli.train_shared_vit_head \
+  --data datasets/jetpilot_event_objects/data.yaml \
+  --backbone-weights /path/to/eventstate_dinov3_vits16.pth \
+  --modality event_image \
+  --mean 0.8993729785 0.7969581015 0.8928228776 \
+  --std 0.2204336077 0.2921656668 0.2204992771
+```
+
+学習対象はViT feature pyramidとYOLO互換のanchor-free detection headだけです。
+backboneは`requires_grad=False`かつ`eval()`固定です。出力checkpointにはbackbone tensorの
+fingerprintを保存し、Control側と異なるbackboneを誤って統合できないようにしています。
+
+Control headはE2E workspaceの`dinov3_vits16_frozen_head` experimentで別に学習します。
+両checkpointを1つの固定212x120 ONNXへ統合します。
+
+```bash
+python -m e2e_learning.cli.export_multitask_onnx \
+  --control-checkpoint ../jetpilot_e2e_training/outputs/e2e/<control-run>/checkpoints/best.pt \
+  --detection-checkpoint outputs/shared_vit_detection/<detection-run>/weights/best.pt \
+  --output-dir ../jetpilot_e2e_training/outputs/e2e/<shared-run>
+```
+
+統合ONNXのbindingは`image`、`control`、`detections`です。TensorRTでは1回のbackbone
+推論から`control_output`と`detection_output`を同時に生成します。
+
 ## Jetsonへの配備とTensorRT engine生成
 
 TensorRT `.plan`はGPU、JetPack、CUDA、TensorRT、Isaac ROS containerに依存します。

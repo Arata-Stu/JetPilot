@@ -34,6 +34,7 @@ setup(
             "jetpilot-e2e-preprocess=e2e_learning.cli.preprocess_bag:main",
             "jetpilot-e2e-train=e2e_learning.cli.train:main",
             "jetpilot-e2e-export-onnx=e2e_learning.cli.export_onnx:main",
+            "jetpilot-e2e-export-multitask=e2e_learning.cli.export_multitask_onnx:main",
             "jetpilot-e2e-validate-onnx=e2e_learning.cli.validate_onnx:main",
             "jetpilot-e2e-compare-runs=e2e_learning.cli.compare_runs:main",
         ],

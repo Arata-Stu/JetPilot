@@ -495,6 +495,22 @@ textarea {
   white-space: nowrap;
 }
 
+.field-hint .link-button {
+  min-height: 0;
+  border: 0;
+  background: transparent;
+  color: var(--blue);
+  padding: 0;
+  font-family: inherit;
+  font-size: inherit;
+  text-decoration: underline;
+}
+
+.field-hint .link-button:hover {
+  background: transparent;
+  color: var(--text);
+}
+
 .raceline-envelope-hint {
   white-space: normal;
 }

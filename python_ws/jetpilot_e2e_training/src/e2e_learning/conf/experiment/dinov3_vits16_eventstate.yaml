@@ -1,0 +1,20 @@
+# @package _global_
+
+defaults:
+  - override /model: dinov3_vits16
+  - override /train: vit_finetune
+
+data:
+  input_width: 212
+  input_height: 120
+  # EventState's default DSEC GEP-frame training statistics. Override these
+  # with the values embedded in the imported checkpoint when they differ.
+  mean: [0.8993729785, 0.7969581015, 0.8928228776]
+  std: [0.2204336077, 0.2921656668, 0.2204992771]
+
+model:
+  weights_path: ${oc.env:EVENTSTATE_DINOV3_VITS16_WEIGHTS,"weights/eventstate/eventstate_dinov3_vits16.pth"}
+  require_weights: true
+
+run:
+  name: dinov3_vits16_eventstate

@@ -23,6 +23,7 @@ fi
 OUTPUT_ROOT="${PROJECT_ROOT}/outputs/e2e_experiments/${EXPERIMENT_NAME}/runs"
 EXPERIMENTS=(
   pilotnet_scratch
+  dinov3_vits16_scratch
   mobilenet_frozen_head
   mobilenet_head_then_finetune
 )

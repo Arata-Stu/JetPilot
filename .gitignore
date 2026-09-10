@@ -36,6 +36,18 @@ python_ws/jetpilot_e2e_training/outputs/*
 !python_ws/jetpilot_e2e_training/outputs/e2e/
 python_ws/jetpilot_e2e_training/outputs/e2e/*
 !python_ws/jetpilot_e2e_training/outputs/e2e/.gitkeep
+!python_ws/jetpilot_e2e_training/weights/
+python_ws/jetpilot_e2e_training/weights/*
+!python_ws/jetpilot_e2e_training/weights/README.md
+!python_ws/jetpilot_e2e_training/weights/dinov3/
+python_ws/jetpilot_e2e_training/weights/dinov3/*
+!python_ws/jetpilot_e2e_training/weights/dinov3/.gitkeep
+!python_ws/jetpilot_e2e_training/weights/gep/
+python_ws/jetpilot_e2e_training/weights/gep/*
+!python_ws/jetpilot_e2e_training/weights/gep/.gitkeep
+!python_ws/jetpilot_e2e_training/weights/eventstate/
+python_ws/jetpilot_e2e_training/weights/eventstate/*
+!python_ws/jetpilot_e2e_training/weights/eventstate/.gitkeep
 
 # Keep the YOLOv8 training workspace roots, but not datasets, checkpoints,
 # exported ONNX files, or other generated training artifacts.

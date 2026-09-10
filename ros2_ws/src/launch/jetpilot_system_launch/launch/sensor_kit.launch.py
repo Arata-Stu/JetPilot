@@ -41,6 +41,11 @@ def add_sensor_interface(args: lu.ArgumentContainer):
         'flir_io_method': args.flir_io_method,
         'silky_evcam_frame_id': args.silky_evcam_frame_id,
         'silky_evcam_bias_file': args.silky_evcam_bias_file,
+        'silky_evcam_debug': str(lu.is_true(args.silky_evcam_debug)).lower(),
+        'silky_evcam_event_image_fps': args.silky_evcam_event_image_fps,
+        'silky_evcam_event_image_encoding': args.silky_evcam_event_image_encoding,
+        'silky_evcam_event_image_style': args.silky_evcam_event_image_style,
+        'silky_evcam_event_image_percentile': args.silky_evcam_event_image_percentile,
         'silky_evcam_raw_recording_enabled': str(
             lu.is_true(args.silky_evcam_raw_recording_enabled)).lower(),
         'silky_evcam_raw_recording_request_topic':
@@ -108,6 +113,11 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('flir_io_method', 'mmap', cli=True)
     args.add_arg('silky_evcam_frame_id', 'event_camera', cli=True)
     args.add_arg('silky_evcam_bias_file', '', cli=True)
+    args.add_arg('silky_evcam_debug', False, cli=True)
+    args.add_arg('silky_evcam_event_image_fps', '25.0', cli=True)
+    args.add_arg('silky_evcam_event_image_encoding', 'bgr8', cli=True)
+    args.add_arg('silky_evcam_event_image_style', 'dark', cli=True)
+    args.add_arg('silky_evcam_event_image_percentile', '90.0', cli=True)
     args.add_arg('silky_evcam_raw_recording_enabled', True, cli=True)
     args.add_arg(
         'silky_evcam_raw_recording_request_topic',

@@ -25,6 +25,7 @@
 
   <exec_depend>isaac_ros_dnn_image_encoder</exec_depend>
   <exec_depend>isaac_ros_tensor_rt</exec_depend>
+  <exec_depend>jetpilot_object_detection</exec_depend>
   <exec_depend>ament_index_python</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
