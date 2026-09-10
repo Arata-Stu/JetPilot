@@ -30,16 +30,28 @@ The first implementation is intentionally dependency-light:
 - Static HTML/CSS/JS frontend.
 - No npm install, no FastAPI install, and no build step required.
 
-Start it from the repository root:
+Isaac ROS Docker starts in `/workspaces/ros2_ws`, so the usual command is:
+
+```bash
+./webui
+```
+
+This uses the safe defaults `127.0.0.1:8765`. Options can still be passed when
+needed:
+
+```bash
+./webui --host 127.0.0.1 --port 8765
+```
+
+The launcher resolves the project root from its own location, so it does not
+depend on the shell's current path beyond invoking `./webui`. It is bind-mounted
+with the repository, and therefore does not require rebuilding the Docker image.
+
+From the repository root outside Docker, the original launcher remains
+available:
 
 ```bash
 tools/app/scripts/start.sh --host 127.0.0.1 --port 8765
-```
-
-When running inside the JetPilot Docker environment, use the project-root mount:
-
-```bash
-/workspaces/tools/app/scripts/start.sh --host 127.0.0.1 --port 8765
 ```
 
 The Docker launcher mounts the complete JetPilot project root at `/workspaces`,
