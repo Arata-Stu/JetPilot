@@ -95,6 +95,7 @@ class RuntimeTests(unittest.TestCase):
                 if command == 'capture-pane': out = 'example log'
             return subprocess.CompletedProcess(args, code, out, '')
         with tempfile.TemporaryDirectory() as tmp, patch.object(agent.Path, 'home', return_value=Path(tmp)), patch.object(agent, 'run', side_effect=fake):
+            (Path(tmp) / 'ros2_ws').mkdir()
             s = self.settings(host_workspace=tmp)
             s['action'] = action
             s['command'] = transport.bringup_args(s)
@@ -105,9 +106,38 @@ class RuntimeTests(unittest.TestCase):
         _, calls = self.fake_remote('prepare', alive=True)
         launch = next(c for c in calls if c[0] == 'screen' and '-dmS' in c)
         self.assertIn('isaac-ros activate', launch[-1])
+        self.assertIn('export ISAAC_ROS_WS=', launch[-1])
+        self.assertIn('ISAAC_DIR=', launch[-1])
         self.assertIn('bash', launch)
         _, calls = self.fake_remote('prepare', alive=True, screen=True)
         self.assertFalse(any('-dmS' in c for c in calls))
+
+    def test_prepare_replaces_screen_after_missing_environment_failure(self):
+        calls = []
+        def fake(args, check=True):
+            calls.append(args)
+            if args[:3] == ['docker', 'inspect', '-f']:
+                return subprocess.CompletedProcess(args, 1, '', 'Error: No such container')
+            if args[:3] == ['docker', 'ps', '--format']:
+                return subprocess.CompletedProcess(args, 0, '', '')
+            if args[:2] == ['screen', '-ls']:
+                return subprocess.CompletedProcess(args, 0, '  123.jetpilot-web (Detached)\n', '')
+            return subprocess.CompletedProcess(args, 0, '', '')
+        with tempfile.TemporaryDirectory() as tmp, patch.object(agent.Path, 'home', return_value=Path(tmp)), patch.object(agent, 'run', side_effect=fake):
+            ros_ws = Path(tmp) / 'ros2_ws'
+            ros_ws.mkdir()
+            state_dir = Path(tmp) / '.local/state/jetpilot-web'
+            state_dir.mkdir(parents=True)
+            (state_dir / 'jetpilot-web.log').write_text(
+                'ValueError: ISAAC_ROS_WS or ISAAC_DIR environment variable is not set\n'
+            )
+            settings = self.settings(host_workspace=tmp)
+            settings['action'] = 'prepare'
+            result = agent.execute(settings)
+        self.assertTrue(any(c[:5] == ['screen', '-S', 'jetpilot-web', '-X', 'quit'] for c in calls))
+        launch = next(c for c in calls if c[0] == 'screen' and '-dmS' in c)
+        self.assertIn(str(ros_ws), launch[-1])
+        self.assertIn('再実行', result['message'])
 
     def test_status_autodetects_the_only_jetpilot_container(self):
         calls = []

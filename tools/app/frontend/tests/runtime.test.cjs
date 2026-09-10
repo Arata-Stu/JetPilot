@@ -17,6 +17,7 @@ assert.match(vm.runInContext('renderRuntime()',context), /runtime-connect-card/)
 assert.match(vm.runInContext('renderRuntime()',context), /runtime-launch-card/);
 assert.match(vm.runInContext('renderRuntime()',context), /runtime-record-card/);
 assert.match(vm.runInContext('renderRuntime()',context), /runtime-tune-card/);
+assert.match(vm.runInContext('renderRuntime()',context), /開いている間は自動更新を停止/);
 assert.equal(vm.runInContext('runtimeConnectionState()[1]',context),'未確認');
 assert.equal(vm.runInContext('runtimeConfig.host',context),'192.168.11.190');
 assert.equal(vm.runInContext('runtimeConfig.user',context),'tamiya');

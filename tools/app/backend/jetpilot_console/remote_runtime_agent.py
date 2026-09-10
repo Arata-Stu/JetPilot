@@ -75,19 +75,54 @@ def execute_locked(s, directory):
         p = run(['screen', '-ls'], False)
         return bool(re.search(r'\d+\.' + re.escape(screen) + r'\s', p.stdout))
 
+    def activation_command():
+        workspace = Path(s['host_workspace'] or Path.home())
+        if not workspace.is_dir():
+            raise RuntimeError('Jetsonホスト上の作業ディレクトリが存在しません。')
+        ros_ws_candidates = [workspace / 'ros2_ws']
+        if workspace.name == 'ros2_ws':
+            ros_ws_candidates.insert(0, workspace)
+        ros_ws_candidates.append(Path.home() / 'workspaces' / 'JetPilot' / 'ros2_ws')
+        ros_ws = next((path for path in ros_ws_candidates if path.is_dir()), None)
+        if ros_ws is None:
+            raise RuntimeError(
+                'Jetsonホスト上のROS 2ワークスペースを特定できません。'
+                '作業ディレクトリにJetPilotのproject rootを指定してください。'
+            )
+        return (
+            'cd ' + shlex.quote(str(workspace))
+            + ' && export ISAAC_ROS_WS=' + shlex.quote(str(ros_ws))
+            + ' ISAAC_DIR=' + shlex.quote(str(ros_ws))
+            + ' && isaac-ros activate; printf "\\nDocker起動処理が終了しました\\n"; exec bash'
+        )
+
     message = ''
     action = s['action']
+    screen_log = directory / (screen + '.log')
     if action == 'prepare':
-        if screen_exists():
+        existing_screen = screen_exists()
+        previous_log = ''
+        if screen_log.is_file():
+            previous_log = screen_log.read_text(errors='replace')[-16000:]
+        retry_missing_environment = (
+            existing_screen
+            and not alive
+            and 'ISAAC_ROS_WS or ISAAC_DIR environment variable is not set' in previous_log
+        )
+        if retry_missing_environment:
+            run(['screen', '-S', screen, '-X', 'quit'])
+            existing_screen = False
+        if existing_screen:
             message = '既存のscreenを再利用します。コンテナの状態と環境準備ログを確認してください。'
         else:
-            workspace = s['host_workspace'] or str(Path.home())
-            if not Path(workspace).is_dir():
-                raise RuntimeError('Jetsonホスト上の作業ディレクトリが存在しません。')
-            command = 'cd ' + shlex.quote(workspace) + ' && isaac-ros activate; printf "\\nDocker起動処理が終了しました\\n"; exec bash'
+            command = activation_command()
             run(['screen', '-L', '-Logfile', str(directory / (screen + '.log')),
                  '-dmS', screen, 'bash', '-lc', command])
-            message = 'screenで環境の準備を開始しました。Dockerの起動完了まで自動で再確認します。'
+            message = (
+                '環境変数不足で失敗したscreenを再作成し、Dockerの準備を再実行しました。'
+                if retry_missing_environment else
+                'screenで環境の準備を開始しました。Dockerの起動完了まで自動で再確認します。'
+            )
     alive = running_container()
     if action in ('bag-status', 'param-get', 'param-set', 'camera-get', 'camera-set', 'evs-get', 'evs-set'):
         if not alive:
@@ -117,17 +152,26 @@ def execute_locked(s, directory):
         raise RuntimeError('同名の手動tmuxセッションがあります。実機画面専用の名前を指定してください。')
     if action == 'start':
         if exists and not dead:
-            raise RuntimeError('bringupセッションは実行中です。先に停止してください。')
+            current_command = tmux(
+                'display-message', '-p', '-t', pane, '#{pane_current_command}', check=False
+            ).stdout.strip()
+            if owned and current_command == 'tmux':
+                tmux('kill-session', '-t', '=' + session)
+                exists = False
+            else:
+                raise RuntimeError('bringupセッションは実行中です。先に停止してください。')
         # Validate the actual remote launcher/model before creating a session.
         run(base + ['bash', '-lc', shlex.join(s['command'] + ['--dry-run'])])
         if exists:
             tmux('kill-session', '-t', '=' + session)
-        gate = 'jetpilot-web-' + os.urandom(8).hex()
-        cmd = 'tmux wait-for ' + gate + '; exec bash -lc ' + shlex.quote(shlex.join(s['command']))
-        tmux('new-session', '-d', '-s', session, '-n', 'bringup', cmd)
+        tmux('new-session', '-d', '-s', session, '-n', 'bringup')
         tmux('set-option', '-t', '=' + session, '@jetpilot_web', '1')
         tmux('set-option', '-w', '-t', session + ':bringup', 'remain-on-exit', 'on')
-        tmux('wait-for', '-S', gate)
+        pane = tmux(
+            'list-panes', '-t', '=' + session + ':bringup', '-F', '#{pane_id}'
+        ).stdout.splitlines()[0].strip()
+        launch_command = 'exec bash -lc ' + shlex.quote(shlex.join(s['command']))
+        tmux('respawn-pane', '-k', '-t', pane, launch_command)
         message = '起動要求を送信しました。稼働状態とログを確認してください。'
     elif action == 'stop' and exists and not dead:
         tmux('send-keys', '-t', pane, 'C-c')
@@ -147,7 +191,8 @@ def execute_locked(s, directory):
               'screen_running': screen_exists(),
               'message': '\n'.join(part for part in (detected_message, message) if part),
               'state': 'not_started', 'log': ''}
-    screen_log = directory / (screen + '.log')
+    if action == 'start':
+        result['command'] = shlex.join(s['command'])
     if screen_log.is_file():
         with screen_log.open('rb') as log:
             log.seek(max(0, screen_log.stat().st_size - 16000))

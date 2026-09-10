@@ -15,6 +15,7 @@ let runtimePreparePollRemaining = 0;
 let runtimeBag = {state:'unknown'};
 let runtimeBagTime = '';
 let runtimeBagBusy = false;
+let runtimeLogViewOpen = false;
 let runtimeTune = {node:'/e2e_control_decoder', parameter:'fixed_throttle', value:0.2, sensor:'realsense', stream:'rgb', fps:30, evs_window_ms:50, evs_stride_ms:10};
 let runtimeTuneMessage = '';
 
@@ -47,6 +48,10 @@ function runtimeConnectionState() {
   if (runtimeResult?.screen_running) return ['checking','Docker起動待ち'];
   if (runtimeResult) return ['idle','SSH接続済み'];
   return ['idle','未確認'];
+}
+function runtimeLogToggle(details) {
+  runtimeLogViewOpen = details.open;
+  if (!details.open && state.tab === 'runtime') render();
 }
 const runtimeControllerFields = [
  ['algorithm','制御方式'],['min_lookahead_m','最小lookahead（m）'],['max_lookahead_m','最大lookahead（m）'],
@@ -135,12 +140,13 @@ function renderRuntime() {
   <section class="runtime-result ${runtimeError ? 'bad' : runtimeResult ? 'visible' : ''}">
     <div class="runtime-result-summary" role="status" aria-live="polite"><strong>${runtimeBusy?'操作中…':esc(runtimeResult?.message || '接続または起動操作を行うと、ここに状態とログが表示されます。')}</strong>${runtimeLastUpdate ? `<span>最終確認 ${esc(runtimeLastUpdate)}</span>` : ''}</div>
     ${runtimeError ? `<div class="runtime-error" role="alert">${esc(runtimeError)}</div>`:''}
-    ${runtimeResult ? `<div class="runtime-state-chips"><span class="${runtimeResult.screen_running?'ok':''}">screen ${runtimeResult.screen_running ? '起動済み':'未起動'}</span><span class="${runtimeResult.container_running?'ok':''}">Docker ${runtimeResult.container_running ? '起動済み':'未起動'}${runtimeResult.container ? ' · '+esc(runtimeResult.container) : ''}</span><span>${esc(states[runtimeResult.state] || '')}${runtimeResult.exit_code != null ? ' · code '+esc(runtimeResult.exit_code):''}</span></div>${runtimeResult.command ? `<details><summary>実行コマンド</summary><pre>${esc(runtimeResult.command)}</pre></details>`:''}<details open><summary>bringupログ</summary><pre class="runtime-log">${esc(runtimeResult.log || 'ログはまだありません')}</pre></details><details><summary>環境準備ログ</summary><pre class="runtime-log">${esc(runtimeResult.environment_log || 'ログはまだありません')}</pre></details>`:''}
+    ${runtimeResult ? `<div class="runtime-state-chips"><span class="${runtimeResult.screen_running?'ok':''}">screen ${runtimeResult.screen_running ? '起動済み':'未起動'}</span><span class="${runtimeResult.container_running?'ok':''}">Docker ${runtimeResult.container_running ? '起動済み':'未起動'}${runtimeResult.container ? ' · '+esc(runtimeResult.container) : ''}</span><span>${esc(states[runtimeResult.state] || '')}${runtimeResult.exit_code != null ? ' · code '+esc(runtimeResult.exit_code):''}</span></div>${runtimeResult.command ? `<details><summary>実行コマンド</summary><pre>${esc(runtimeResult.command)}</pre></details>`:''}<details open><summary>bringupログ</summary><pre class="runtime-log">${esc(runtimeResult.log || 'ログはまだありません')}</pre></details><details class="runtime-environment-log" ontoggle="runtimeLogToggle(this)"><summary>環境準備ログ（開いている間は自動更新を停止）</summary><pre class="runtime-log">${esc(runtimeResult.environment_log || 'ログはまだありません')}</pre></details>`:''}
   </section>
   </section>`;
 }
 async function runtimeAction(action) {
   if (runtimeBusy) return;
+  runtimeLogViewOpen = false;
   runtimeBusy = true; runtimeError = ''; render();
   try {
     runtimeResult = await api('/api/runtime/'+action, {method:'POST',body:JSON.stringify(runtimeConfig)});
@@ -153,7 +159,7 @@ async function runtimeAction(action) {
     runtimeLastUpdate = new Date().toLocaleTimeString();
     runtimeRefreshBag();
   } catch (error) { runtimeError = error.message; runtimePreparePollRemaining = 0; }
-  finally { runtimeBusy = false; if (state.tab === 'runtime') render(); }
+  finally { runtimeBusy = false; if (state.tab === 'runtime' && !runtimeLogViewOpen) render(); }
 }
 
 async function runtimeRefreshBag() {
@@ -170,7 +176,7 @@ async function runtimeRefreshBag() {
     runtimeBag = {state:'unknown',message:error.message}; runtimeBagTime = '';
   } finally {
     runtimeBagBusy = false;
-    if (state.tab === 'runtime' && !document.querySelector('.runtime-panel input:focus, .runtime-panel select:focus')) render();
+    if (state.tab === 'runtime' && !runtimeLogViewOpen && !document.querySelector('.runtime-panel input:focus, .runtime-panel select:focus')) render();
   }
 }
 async function runtimeTuningAction(action) {
@@ -188,10 +194,10 @@ async function runtimeTuningAction(action) {
   finally {runtimeBusy=false;if(state.tab==='runtime')render();}
 }
 setInterval(()=>{
-  if (state.tab === 'runtime' && runtimeResult?.container_running && !runtimeBusy) runtimeRefreshBag();
+  if (state.tab === 'runtime' && runtimeResult?.container_running && !runtimeBusy && !runtimeLogViewOpen) runtimeRefreshBag();
 },5000);
 setInterval(()=>{
-  if (state.tab !== 'runtime' || runtimeBusy || runtimePreparePollRemaining <= 0) return;
+  if (state.tab !== 'runtime' || runtimeBusy || runtimeLogViewOpen || runtimePreparePollRemaining <= 0) return;
   if (runtimeResult?.container_running) { runtimePreparePollRemaining = 0; return; }
   runtimePreparePollRemaining -= 1;
   runtimeAction('status');

@@ -43,7 +43,7 @@ TeleopCmdNode::TeleopCmdNode() : Node("teleop_cmd_node")
   reverse_trigger_max_ = declare_numeric_parameter("reverse_trigger_max", trigger_max_);
   reverse_trigger_inverted_ = declare_parameter<bool>("reverse_trigger_inverted", false);
 
-  if (!std::isfinite(steering_scale_.load()) || steering_scale_ < 0.0 || steering_scale_ > 3.0 ||
+  if (!std::isfinite(steering_scale_.load()) || std::abs(steering_scale_.load()) > 3.0 ||
       !std::isfinite(steering_offset_.load()) || steering_offset_ < -1.0 || steering_offset_ > 1.0) {
     throw std::invalid_argument("steering scale/offset is outside its allowed range");
   }
@@ -172,7 +172,8 @@ rcl_interfaces::msg::SetParametersResult TeleopCmdNode::handle_parameters(
       return result;
     }
     const auto value = parameter.as_double();
-    const auto minimum = name == "steering_offset" ? -1.0 :
+    const auto minimum = name == "steering_scale" ? -3.0 :
+      name == "steering_offset" ? -1.0 :
       name == "throttle_scale" ? throttle_scale_min_ : 0.0;
     const auto maximum = name == "steering_scale" ? 3.0 :
       name == "throttle_scale" ? throttle_scale_max_ : 1.0;
