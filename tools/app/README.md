@@ -155,9 +155,9 @@ existing offline evaluator:
    size, validation split, data fraction, worker count, and device.
 3. Export a completed run's `best.pt` checkpoint to `model.onnx` and
    `metadata.json`, then select it directly for Offline teacher comparison.
-4. Transfer the ONNX model to a configured Jetson profile. Engine generation is
-   enabled by default and runs `trtexec` remotely to create `model.plan` before
-   the Isaac ROS TensorRT launch consumes it.
+4. Transfer the ONNX model to a configured Jetson profile. The Console does not
+   run `trtexec` during transfer; TensorRT engine generation is disabled because
+   it is not reliable in this workflow.
 
 Every stage is a cancellable Console task with its command, log, output
 artifacts, and an exclusive lock for the selected dataset/run/deployment target.

@@ -664,8 +664,6 @@ def build_deploy_task(config: Any, body: dict[str, Any]) -> PipelineTaskSpec:
         remote_root,
         "--yes",
     ]
-    if bool(body.get("build_engine", True)):
-        command.append("--build-engine")
     return PipelineTaskSpec(
         kind="e2e-deploy",
         title=f"Deploy E2E model to {target}",

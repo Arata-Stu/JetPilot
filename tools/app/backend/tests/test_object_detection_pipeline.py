@@ -284,9 +284,9 @@ class ObjectDetectionPipelineTests(unittest.TestCase):
         self.assertIn("--user", deploy.command)
         self.assertIn("--host", deploy.command)
         self.assertIn("10.42.0.1", deploy.command)
-        self.assertIn("--build-engine", deploy.command)
+        self.assertNotIn("--build-engine", deploy.command)
         self.assertIn("/models/yolov8", " ".join(deploy.command))
-        self.assertIn("jetson-trtexec:tamiya@10.42.0.1", deploy.resource_keys)
+        self.assertNotIn("jetson-trtexec:tamiya@10.42.0.1", deploy.resource_keys)
 
         manual = build_deploy_task(
             self.config,

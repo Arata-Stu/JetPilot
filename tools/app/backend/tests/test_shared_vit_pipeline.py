@@ -126,7 +126,7 @@ class SharedVitPipelineTests(unittest.TestCase):
             "build_engine": True,
         })
         self.assertEqual(deploy.kind, "shared-vit-deploy")
-        self.assertIn("--build-engine", deploy.command)
+        self.assertNotIn("--build-engine", deploy.command)
         self.assertIn("deploy_shared_vit_model.sh", " ".join(deploy.command))
 
 

@@ -353,8 +353,6 @@ def build_deploy_task(config: Any, body: dict[str, Any]) -> PipelineTaskSpec:
         "--onnx", str(onnx), "--user", user, "--host", host,
         "--remote-root", remote_root, "--name", name,
     ]
-    if bool(body.get("build_engine", True)):
-        command.append("--build-engine")
     return PipelineTaskSpec(
         kind="shared-vit-deploy",
         title=f"Deploy shared ViT model to {target}",

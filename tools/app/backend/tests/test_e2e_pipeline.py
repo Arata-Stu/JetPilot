@@ -289,7 +289,7 @@ class E2EPipelineTests(unittest.TestCase):
             },
         )
         self.assertEqual(deploy.kind, "e2e-deploy")
-        self.assertIn("--build-engine", deploy.command)
+        self.assertNotIn("--build-engine", deploy.command)
         self.assertIn("10.42.0.1", deploy.command)
 
         outside = self.root / "outside.onnx"

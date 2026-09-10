@@ -587,7 +587,7 @@ def pipeline_snapshot(config: Any) -> dict[str, Any]:
             "freeze": 0,
             "opset": 17,
             "export_after_training": True,
-            "build_engine": True,
+            "build_engine": False,
             "deploy_user": str(selected_profile.get("user") or config.jetson_user),
             "deploy_host": (
                 ""
@@ -908,15 +908,10 @@ def build_deploy_task(config: Any, body: dict[str, Any]) -> PipelineTaskSpec:
         host,
         "--yes",
     ]
-    build_engine = _boolean(body.get("build_engine"), default=True)
-    if build_engine:
-        command.append("--build-engine")
     resource_keys = [
         f"object-detection-run:{directory}",
         f"object-detection-deploy:{target}:{remote_root}/{deployment_name}",
     ]
-    if build_engine:
-        resource_keys.append(f"jetson-trtexec:{target}")
     return PipelineTaskSpec(
         kind="object-detection-deploy",
         title=f"Deploy YOLOv8 model to {target}",

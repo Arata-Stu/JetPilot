@@ -76,7 +76,6 @@ const state = {
     deployHost: "",
     deployUser: "",
     remoteRoot: "",
-    buildEngine: true,
   },
   objectDetectionPipeline: {
     datasets: [],
@@ -108,7 +107,6 @@ const state = {
     deployUser: "",
     remoteRoot: "",
     deployName: "yolov8n_224",
-    buildEngine: true,
   },
   sharedVitPipeline: {
     weights: [],
@@ -144,7 +142,6 @@ const state = {
     deployUser: "",
     remoteRoot: "",
     deployName: "",
-    buildEngine: true,
   },
   listControls: {
     rosbags: { query: "", sort: "newest", groupByDate: true, collapsedDays: {} },
@@ -3268,7 +3265,6 @@ function refreshSuggestedOutputNames() {
 
 function updateE2EPipelineOption(key, value) {
   if (!(key in state.e2ePipeline)) return;
-  const booleanKeys = ["buildEngine"];
   const numberKeys = [
     "inputWidth", "inputHeight", "maxControlDtSec", "jpegQuality", "batchSize",
     "maxOdometryDtSec", "trajectoryPoints", "trajectoryHorizonSec", "trajectoryScaleM",
@@ -3276,8 +3272,7 @@ function updateE2EPipelineOption(key, value) {
     "numWorkers", "epochs", "learningRate", "finetuneEpochs",
     "finetuneLearningRate", "valFraction", "fraction", "weightDecay", "seed",
   ];
-  if (booleanKeys.includes(key)) state.e2ePipeline[key] = Boolean(value);
-  else if (numberKeys.includes(key)) state.e2ePipeline[key] = Number(value);
+  if (numberKeys.includes(key)) state.e2ePipeline[key] = Number(value);
   else state.e2ePipeline[key] = String(value ?? "");
   if (key === "deployProfile") {
     const profile = state.e2ePipeline.deployProfiles.find((item) => item.id === state.e2ePipeline.deployProfile);
@@ -3434,7 +3429,6 @@ function deployE2EModel() {
       user: pipeline.deployUser,
       host: pipeline.deployHost,
       remote_root: pipeline.remoteRoot,
-      build_engine: pipeline.buildEngine,
     },
   );
 }
@@ -3522,11 +3516,11 @@ function renderE2EPipeline() {
             <div class="button-stack"><button class="primary ${actionBusy("e2e-pipeline:export") ? "is-busy" : ""}" onclick="exportE2EOnnx()" ${run?.best_checkpoint ? "" : "disabled"} ${actionButtonAttrs("e2e-pipeline:export", "ONNX export is starting...")}>${esc(actionButtonLabel("e2e-pipeline:export", "Export ONNX", "Starting..."))}</button><button onclick="useE2ERunForOfflineEval()" ${run?.onnx_path ? "" : "disabled"}>Use in offline eval</button></div>
           </article>
           <article class="e2e-pipeline-stage">
-            <header><span>04</span><div><strong>Deploy to Jetson</strong><small>SCP + remote trtexec + model.plan</small></div></header>
+            <header><span>04</span><div><strong>Deploy to Jetson</strong><small>Transfer exported ONNX files only</small></div></header>
             <div class="field"><label>Connection profile</label><select onchange="updateE2EPipelineOption('deployProfile', this.value)">${pipeline.deployProfiles.map((item) => `<option value="${esc(item.id)}" ${item.id === pipeline.deployProfile ? "selected" : ""}>${esc(item.label)} — ${esc(item.host === "__manual__" ? "manual" : item.host)}</option>`).join("")}</select></div>
             <div class="e2e-compact-fields"><label>SSH user<input value="${esc(pipeline.deployUser || profile?.user || "")}" onchange="updateE2EPipelineOption('deployUser', this.value)" /></label><label>Host<input value="${esc(pipeline.deployHost || (profile?.host === "__manual__" ? "" : profile?.host) || "")}" onchange="updateE2EPipelineOption('deployHost', this.value)" /></label></div>
             <div class="field"><label>Deploy destination (from model)</label><input readonly value="${esc(deployment?.label || (run ? "No compatible deployment preset" : "Select a training run"))}" /><div class="field-hint">${esc(deployment?.model_name || "")} · matched to the training sensor and learning target</div></div>
-            <label class="check-row"><input type="checkbox" ${pipeline.buildEngine ? "checked" : ""} onchange="updateE2EPipelineOption('buildEngine', this.checked)" /><span>Build TensorRT engine on Jetson with trtexec (FP16)</span></label>
+            <div class="notice compact">TensorRT build is disabled. This step only transfers the ONNX model and metadata.</div>
             <div class="field-hint">${esc(pipeline.remoteRoot || profile?.remote_root || "")}</div>
             <button class="primary ${actionBusy("e2e-pipeline:deploy") ? "is-busy" : ""}" onclick="deployE2EModel()" ${run?.onnx_path && deployment ? "" : "disabled"} ${actionButtonAttrs("e2e-pipeline:deploy", "Deployment is starting...")}>${esc(actionButtonLabel("e2e-pipeline:deploy", "Transfer & deploy", "Starting..."))}</button>
           </article>
@@ -3583,10 +3577,8 @@ function sharedVitName(kind, modality = state.sharedVitPipeline.modality) {
 function updateSharedVitOption(key, value) {
   const pipeline = state.sharedVitPipeline;
   if (!(key in pipeline)) return;
-  const booleanKeys = ["buildEngine"];
   const numberKeys = ["epochs", "batch", "workers", "learningRate", "weightDecay", "opset"];
-  if (booleanKeys.includes(key)) pipeline[key] = Boolean(value);
-  else if (numberKeys.includes(key)) pipeline[key] = Number(value);
+  if (numberKeys.includes(key)) pipeline[key] = Number(value);
   else pipeline[key] = String(value ?? "");
   if (key === "backboneWeights") {
     const weight = pipeline.weights.find((item) => item.path === pipeline.backboneWeights);
@@ -3693,7 +3685,6 @@ function deploySharedVitModel() {
       host,
       remote_root: pipeline.remoteRoot,
       deploy_name: pipeline.deployName,
-      build_engine: pipeline.buildEngine,
     },
   );
 }
@@ -3757,8 +3748,8 @@ function renderSharedVitPipeline() {
             <div class="e2e-compact-fields"><label>SSH user<input value="${esc(user)}" onchange="updateSharedVitOption('deployUser', this.value)" /></label><label>Host<input value="${esc(host)}" onchange="updateSharedVitOption('deployHost', this.value)" /></label></div>
             <div class="field"><label>Remote model root</label><input value="${esc(pipeline.remoteRoot)}" onchange="updateSharedVitOption('remoteRoot', this.value)" /></div>
             <div class="field"><label>Deploy name</label><input value="${esc(pipeline.deployName)}" onchange="updateSharedVitOption('deployName', this.value)" /></div>
-            <label class="check-row"><input type="checkbox" ${pipeline.buildEngine ? "checked" : ""} onchange="updateSharedVitOption('buildEngine', this.checked)" /><span>Build TensorRT model.plan on Jetson (FP16)</span></label>
-            <button class="primary ${actionBusy("shared-vit:deploy") ? "is-busy" : ""}" onclick="deploySharedVitModel()" ${model?.onnx_path && user && host ? "" : "disabled"} ${actionButtonAttrs("shared-vit:deploy", "Deployment is starting...")}>${esc(actionButtonLabel("shared-vit:deploy", "Transfer & build shared engine", "Starting..."))}</button>
+            <div class="notice compact">TensorRT build is disabled. This step only transfers the shared ONNX model and metadata.</div>
+            <button class="primary ${actionBusy("shared-vit:deploy") ? "is-busy" : ""}" onclick="deploySharedVitModel()" ${model?.onnx_path && user && host ? "" : "disabled"} ${actionButtonAttrs("shared-vit:deploy", "Deployment is starting...")}>${esc(actionButtonLabel("shared-vit:deploy", "Transfer shared model", "Starting..."))}</button>
             <div class="field-hint">ROS 2: <code>enable_shared_vit_inference:=true</code>. E2E/YOLO単独推論とは同時に有効化しません。</div>
           </article>
         </div>
@@ -3831,7 +3822,7 @@ function objectDetectionModelCatalog() {
 function updateObjectDetectionPipelineOption(key, value) {
   const pipeline = state.objectDetectionPipeline;
   if (!(key in pipeline)) return;
-  const booleanKeys = ["buildEngine", "simplify"];
+  const booleanKeys = ["simplify"];
   const numberKeys = ["epochs", "batch", "workers", "patience", "seed", "freeze", "opset"];
   if (booleanKeys.includes(key)) pipeline[key] = Boolean(value);
   else if (numberKeys.includes(key)) pipeline[key] = Number(value);
@@ -3964,7 +3955,6 @@ function deployObjectDetectionModel() {
       host,
       remote_root: pipeline.remoteRoot,
       model_name: pipeline.deployName,
-      build_engine: pipeline.buildEngine,
     },
   );
 }
@@ -4032,7 +4022,7 @@ function renderObjectDetectionPipeline() {
       <section class="panel e2e-pipeline-panel">
         <div class="panel-header"><h2>YOLOv8 Object Detection</h2><span class="spacer"></span><button onclick="refreshAll()">Refresh artifacts</button></div>
         <div class="panel-body">
-          <div class="notice compact">Training and ONNX export run on this Notebook. TensorRT <code>model.plan</code> is generated on the selected Jetson.</div>
+          <div class="notice compact">Training and ONNX export run on this Notebook. Deployment transfers the exported files without building TensorRT <code>model.plan</code>.</div>
           <div class="e2e-pipeline-progress">
             ${objectDetectionPipelineStageState().map(([label, detail, done], index) => `<div class="${done ? "done" : ""}"><span>${index + 1}</span><strong>${esc(label)}</strong><small>${esc(detail)}</small></div>`).join("")}
           </div>
@@ -4063,13 +4053,13 @@ function renderObjectDetectionPipeline() {
             </article>
 
             <article class="e2e-pipeline-stage">
-              <header><span>04</span><div><strong>Deploy to Jetson</strong><small>SSH transfer + target-side TensorRT FP16 build</small></div></header>
+              <header><span>04</span><div><strong>Deploy to Jetson</strong><small>Transfer exported ONNX files only</small></div></header>
               <div class="field"><label>Connection profile</label><select onchange="updateObjectDetectionPipelineOption('deployProfile', this.value)"><option value="">Select profile</option>${pipeline.deployProfiles.map((item) => `<option value="${esc(item.id)}" ${item.id === pipeline.deployProfile ? "selected" : ""}>${esc(item.label || item.id)} — ${esc(item.host === "__manual__" ? "manual" : item.host)}</option>`).join("")}</select></div>
               <div class="e2e-compact-fields"><label>SSH user<input value="${esc(user)}" onchange="updateObjectDetectionPipelineOption('deployUser', this.value)" /></label><label>Host<input value="${esc(host)}" onchange="updateObjectDetectionPipelineOption('deployHost', this.value)" /></label></div>
               <div class="field"><label>Remote model root</label><input value="${esc(pipeline.remoteRoot || profile?.remote_root || "")}" onchange="updateObjectDetectionPipelineOption('remoteRoot', this.value)" /></div>
               <div class="field"><label>Model name</label><input value="${esc(pipeline.deployName)}" onchange="updateObjectDetectionPipelineOption('deployName', this.value)" /><div class="field-hint">Installed as &lt;remote root&gt;/${esc(pipeline.deployName || "model")}/model.onnx.</div></div>
-              <label class="check-row"><input type="checkbox" ${pipeline.buildEngine ? "checked" : ""} onchange="updateObjectDetectionPipelineOption('buildEngine', this.checked)" /><span>Build TensorRT model.plan on the Jetson (FP16)</span></label>
-              <button class="primary ${actionBusy("object-detection:deploy") ? "is-busy" : ""}" onclick="deployObjectDetectionModel()" ${run?.onnx_path && host && user ? "" : "disabled"} ${actionButtonAttrs("object-detection:deploy", "Deployment is starting...")}>${esc(actionButtonLabel("object-detection:deploy", "Transfer & build", "Starting..."))}</button>
+              <div class="notice compact">TensorRT build is disabled. This step only transfers the ONNX model and metadata.</div>
+              <button class="primary ${actionBusy("object-detection:deploy") ? "is-busy" : ""}" onclick="deployObjectDetectionModel()" ${run?.onnx_path && host && user ? "" : "disabled"} ${actionButtonAttrs("object-detection:deploy", "Deployment is starting...")}>${esc(actionButtonLabel("object-detection:deploy", "Transfer model", "Starting..."))}</button>
             </article>
           </div>
           <details class="e2e-pipeline-tasks" ${pipelineTasks.some(isActiveTask) ? "open" : ""}><summary>Object-detection tasks (${pipelineTasks.length})</summary>${renderTaskTable(pipelineTasks)}</details>
