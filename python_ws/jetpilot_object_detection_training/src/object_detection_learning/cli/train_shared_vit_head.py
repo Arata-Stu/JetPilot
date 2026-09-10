@@ -296,6 +296,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "classes": classes,
         "backbone_weights": str(backbone_path),
         "backbone_sha256": backbone_sha256,
+        "backbone_fingerprint": frozen_backbone_fingerprint,
         "modality": args.modality,
         "mean": list(args.mean),
         "std": list(args.std),

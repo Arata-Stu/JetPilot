@@ -90,6 +90,12 @@ from .object_detection_pipeline import (
     build_validate_dataset_task as build_object_detection_validate_dataset_task,
     pipeline_snapshot as object_detection_pipeline_snapshot,
 )
+from .shared_vit_pipeline import (
+    build_deploy_task as build_shared_vit_deploy_task,
+    build_detection_train_task as build_shared_vit_detection_train_task,
+    build_export_task as build_shared_vit_export_task,
+    pipeline_snapshot as shared_vit_pipeline_snapshot,
+)
 from .preflight import evaluate_preflight
 from .security import (
     RequestRejected,
@@ -347,6 +353,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/object-detection/pipeline":
             self._json(object_detection_pipeline_snapshot(self.server.state.config))
             return
+        if path == "/api/shared-vit/pipeline":
+            self._json(shared_vit_pipeline_snapshot(self.server.state.config))
+            return
         if path.startswith("/api/analyses/"):
             self._analysis_get(path)
             return
@@ -595,6 +604,27 @@ class Handler(BaseHTTPRequestHandler):
                 build_object_detection_deploy_task,
                 body,
                 pipeline_label="object-detection",
+            )
+            return
+        if path == "/api/shared-vit/detection-training/start":
+            self._start_e2e_pipeline_task(
+                build_shared_vit_detection_train_task,
+                body,
+                pipeline_label="shared ViT",
+            )
+            return
+        if path == "/api/shared-vit/export-onnx":
+            self._start_e2e_pipeline_task(
+                build_shared_vit_export_task,
+                body,
+                pipeline_label="shared ViT",
+            )
+            return
+        if path == "/api/shared-vit/deploy":
+            self._start_e2e_pipeline_task(
+                build_shared_vit_deploy_task,
+                body,
+                pipeline_label="shared ViT",
             )
             return
         if path == "/api/maps/build-vgl-vslam":

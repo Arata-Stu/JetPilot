@@ -87,6 +87,8 @@ const state = {
     datasetRoot: "",
     runRoot: "",
     modelRoot: "",
+    occupiedDetectionNames: [],
+    occupiedModelNames: [],
     datasetYaml: "",
     runDir: "",
     sourceRunDir: "",
@@ -107,6 +109,40 @@ const state = {
     deployUser: "",
     remoteRoot: "",
     deployName: "yolov8n_224",
+    buildEngine: true,
+  },
+  sharedVitPipeline: {
+    weights: [],
+    datasets: [],
+    controlRuns: [],
+    detectionRuns: [],
+    models: [],
+    deployProfiles: [],
+    weightRoot: "",
+    detectionRunRoot: "",
+    modelRoot: "",
+    backboneWeights: "",
+    datasetYaml: "",
+    controlRunDir: "",
+    detectionRunDir: "",
+    modelDir: "",
+    detectionRunName: "",
+    modelName: "",
+    modality: "rgb",
+    mean: "0.485,0.456,0.406",
+    std: "0.229,0.224,0.225",
+    epochs: 100,
+    batch: 16,
+    workers: 4,
+    device: "cuda",
+    learningRate: 0.001,
+    weightDecay: 0.0001,
+    opset: 17,
+    deployProfile: "",
+    deployHost: "",
+    deployUser: "",
+    remoteRoot: "",
+    deployName: "",
     buildEngine: true,
   },
   listControls: {
@@ -1305,7 +1341,7 @@ async function refreshAll() {
   const needsRunNameSuggestion = !state.e2ePipeline.runName
     || state.e2ePipeline.runName === "pilotnet_run_v1";
   const previousFpvSession = state.fpv.browserStatus?.session_id || "";
-  const [config, tasks, rosbags, rosbagTrash, maps, cameraTopicConfigs, vglModels, localIps, analyses, e2eModels, e2ePipeline, objectDetectionPipeline, fpvStatus] = await Promise.all([
+  const [config, tasks, rosbags, rosbagTrash, maps, cameraTopicConfigs, vglModels, localIps, analyses, e2eModels, e2ePipeline, objectDetectionPipeline, sharedVitPipeline, fpvStatus] = await Promise.all([
     api("/api/config"),
     api("/api/tasks"),
     api("/api/rosbags/local"),
@@ -1318,6 +1354,7 @@ async function refreshAll() {
     api("/api/e2e/models").catch(() => ({ models: [] })),
     api("/api/e2e/pipeline").catch(() => ({ datasets: [], runs: [], experiments: [], deploy_profiles: [], deploy_presets: [] })),
     api("/api/object-detection/pipeline").catch(() => ({ datasets: [], runs: [], models: [], base_models: [], deploy_profiles: [], defaults: {} })),
+    api("/api/shared-vit/pipeline").catch(() => ({ weights: [], datasets: [], control_runs: [], detection_runs: [], models: [], deploy_profiles: [], defaults: {} })),
     api("/api/fpv/status").catch(() => ({ fpv: { available: false, running: false } })),
   ]);
   state.config = config;
@@ -1425,6 +1462,44 @@ async function refreshAll() {
   ) {
     state.analysis.objectDetectionModelRoot = availableDetectionModels[0].path || state.analysis.objectDetectionModelRoot;
   }
+  const shared = state.sharedVitPipeline;
+  shared.weights = sharedVitPipeline.weights || [];
+  shared.datasets = sharedVitPipeline.datasets || [];
+  shared.controlRuns = sharedVitPipeline.control_runs || [];
+  shared.detectionRuns = sharedVitPipeline.detection_runs || [];
+  shared.models = sharedVitPipeline.models || [];
+  shared.deployProfiles = sharedVitPipeline.deploy_profiles || [];
+  shared.weightRoot = sharedVitPipeline.weight_root || "";
+  shared.detectionRunRoot = sharedVitPipeline.detection_run_root || "";
+  shared.modelRoot = sharedVitPipeline.model_root || "";
+  shared.occupiedDetectionNames = sharedVitPipeline.occupied_detection_names || [];
+  shared.occupiedModelNames = sharedVitPipeline.occupied_model_names || [];
+  if (!shared.backboneWeights || !shared.weights.some((item) => item.path === shared.backboneWeights)) {
+    shared.backboneWeights = shared.weights[0]?.path || "";
+  }
+  if (!shared.datasetYaml || !shared.datasets.some((item) => objectDetectionDatasetPath(item) === shared.datasetYaml)) {
+    shared.datasetYaml = objectDetectionDatasetPath(shared.datasets[0]);
+  }
+  if (!shared.controlRunDir || !shared.controlRuns.some((item) => item.path === shared.controlRunDir)) {
+    shared.controlRunDir = shared.controlRuns[0]?.path || "";
+  }
+  if (!shared.detectionRunDir || !shared.detectionRuns.some((item) => item.path === shared.detectionRunDir)) {
+    shared.detectionRunDir = shared.detectionRuns[0]?.path || "";
+  }
+  if (!shared.modelDir || !shared.models.some((item) => item.path === shared.modelDir)) {
+    shared.modelDir = shared.models[0]?.path || "";
+  }
+  if (!shared.detectionRunName) shared.detectionRunName = sharedVitPipeline.suggested_detection_name || `vit-dinov3-vits16-rgb-det-head_${compactLocalDateTime()}`;
+  if (!shared.modelName) shared.modelName = sharedVitPipeline.suggested_model_name || `vit-dinov3-vits16-rgb-shared_${compactLocalDateTime()}`;
+  if (!shared.deployProfile) shared.deployProfile = sharedVitPipeline.default_deploy_profile || shared.deployProfiles[0]?.id || "";
+  const sharedDefaults = sharedVitPipeline.defaults || {};
+  if (!shared.remoteRoot) shared.remoteRoot = sharedDefaults.remote_root || "";
+  if (!shared.deployUser) shared.deployUser = sharedDefaults.deploy_user || "";
+  if (!shared.deployHost) shared.deployHost = sharedDefaults.deploy_host || "";
+  const activeSharedWeight = shared.weights.find((item) => item.path === shared.backboneWeights);
+  if (activeSharedWeight?.modality) shared.modality = activeSharedWeight.modality;
+  const activeSharedModel = shared.models.find((item) => item.path === shared.modelDir);
+  if (!shared.deployName) shared.deployName = activeSharedModel?.name || shared.modelName;
   state.fpv.browserStatus = fpvStatus.fpv || state.fpv.browserStatus;
   noteFpvWebRtcRtpObserved(state.fpv.browserStatus);
   if (
@@ -3148,10 +3223,13 @@ function e2eExperimentOptionLabel(experiment) {
 function refreshSuggestedOutputNames() {
   const e2e = state.e2ePipeline;
   const detection = state.objectDetectionPipeline;
+  const shared = state.sharedVitPipeline;
   const fields = [
     [e2e, "datasetName", "datasetRoot", "datasets", "occupiedDatasetNames", "e2e-preprocess"],
     [e2e, "runName", "runRoot", "runs", "occupiedRunNames", "e2e-train"],
     [detection, "runName", "runRoot", "runs", "occupiedRunNames", "object-detection-train"],
+    [shared, "detectionRunName", "detectionRunRoot", "detectionRuns", "occupiedDetectionNames", "shared-vit-detection-train"],
+    [shared, "modelName", "modelRoot", "models", "occupiedModelNames", "shared-vit-export"],
   ];
   for (const [pipeline, field, rootField, recordsField, namesField, taskKind] of fields) {
     // Resume intentionally targets the existing training directory.
