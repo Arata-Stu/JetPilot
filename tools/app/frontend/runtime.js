@@ -42,46 +42,70 @@ function runtimeTuneField(name) {
 function renderRuntime() {
   const field = (key, label, placeholder = '') => `<label>${esc(label)}<input value="${esc(runtimeConfig[key])}" placeholder="${esc(placeholder)}" onchange="runtimeChange('${key}',this.value)"></label>`;
   const select = (key, label, choices) => `<label>${esc(label)}<select onchange="runtimeChange('${key}',this.value,true)">${choices.map(([value, text]) => `<option value="${esc(value)}" ${String(runtimeConfig[key]) === String(value) ? 'selected' : ''}>${esc(text)}</option>`).join('')}</select></label>`;
-  const button = (action, label) => `<button ${runtimeBusy ? 'disabled' : ''} onclick="runtimeAction('${action}')">${label}</button>`;
+  const button = (action, label, tone = '') => `<button class="${tone}" ${runtimeBusy ? 'disabled' : ''} onclick="runtimeAction('${action}')">${label}</button>`;
   const offline = runtimeConfig.preset.startsWith('offline-');
   const states = {running: 'プロセス実行中（ROSの正常稼働はログで確認）', exited: '終了', not_started: '未起動'};
-  return `<section class="panel runtime-panel"><h2>実機</h2><p>Jetsonの環境準備から起動・ログ確認まで。接続が切れてもscreenとtmuxに処理が残ります。</p>
-  <fieldset ${runtimeBusy ? 'disabled' : ''}><legend>接続先</legend><div class="runtime-grid">
-  ${field('host','Jetsonホスト','192.168.…')}${field('user','SSHユーザー')}${field('container','Dockerコンテナ名')}${field('container_user','コンテナ内ユーザー')}
-  ${field('host_workspace','Jetsonホストの作業ディレクトリ','isaac-ros activateを実行する場所')}
-  </div><details><summary>セッション・パス設定</summary><div class="runtime-grid">${field('screen','screen名')}${field('session','tmux名')}${field('bringup','コンテナ内bringupパス')}</div></details></fieldset>
-  <p>${button('prepare','1. 環境を準備')} ${button('status','状態・ログ更新')}</p><p>環境準備はscreen内で <code>isaac-ros activate</code> を実行します。SSH鍵認証を使います。</p>
-  <fieldset ${runtimeBusy ? 'disabled' : ''}><legend>起動設定</legend><div class="runtime-grid">
+  const connectionState = runtimeBusy ? ['checking','接続確認中'] : runtimeError ? ['bad','接続エラー'] : runtimeResult?.container_running ? ['ok','接続済み'] : ['idle','未確認'];
+  const bagState = {unknown:'未確認', recording:'● 記録中', idle:'停止中'}[runtimeBag.state] || '未確認';
+  return `<section class="runtime-panel">
+  <div class="runtime-hero">
+    <div><span class="runtime-kicker">JETSON RUNTIME</span><h1>起動・運転</h1><p>Jetsonへ接続し、環境準備、車両起動、記録、走行中の調整を行います。</p></div>
+    <div class="runtime-hero-status ${connectionState[0]}"><i></i><span>接続状態</span><strong>${connectionState[1]}</strong><small>${esc(runtimeConfig.host || 'Jetsonホスト未設定')}</small></div>
+  </div>
+  <div class="runtime-workflow">
+  <section class="runtime-card runtime-connect-card">
+    <header><span class="runtime-step">01</span><div><h2>Jetsonへ接続</h2><p>SSHとIsaac ROSコンテナを準備</p></div></header>
+    <fieldset ${runtimeBusy ? 'disabled' : ''}><div class="runtime-grid runtime-grid-compact">
+      ${field('host','Jetsonホスト','192.168.…')}${field('user','SSHユーザー')}${field('container','Dockerコンテナ名')}${field('container_user','コンテナ内ユーザー')}
+      <div class="runtime-wide">${field('host_workspace','Jetson側の作業ディレクトリ','isaac-ros activateを実行する場所')}</div>
+    </div><details><summary>詳細なセッション・パス設定</summary><div class="runtime-grid runtime-grid-compact">${field('screen','screen名')}${field('session','tmux名')}<div class="runtime-wide">${field('bringup','コンテナ内bringupパス')}</div></div></details></fieldset>
+    <div class="runtime-actions">${button('prepare','1. 環境を準備','primary')} ${button('status','状態・ログ更新')}</div>
+    <p class="runtime-hint">screen内で<code>isaac-ros activate</code>を実行します。SSH鍵認証を使用します。</p>
+  </section>
+
+  <section class="runtime-card runtime-launch-card">
+    <header><span class="runtime-step">02</span><div><h2>車両を起動</h2><p>用途・センサー・モデルを選択</p></div></header>
+    <fieldset ${runtimeBusy ? 'disabled' : ''}><div class="runtime-grid runtime-grid-compact">
   ${select('preset','用途', [['record','データ収集'],['e2e','E2E走行'],['drive','通常走行：手動'],['runtime','通常走行：自己位置推定付き手動'],['competition','通常走行：ルールベース自動'],['tuning','通常走行：地図・ライン実車調整'],['offline-vslam','オフライン：地図なしVSLAM'],['offline-vslam-map','オフライン：保存地図VSLAM'],['offline-localization','オフライン：VGL・VSLAM']])}
   ${offline ? field('bag','bagのパス（コンテナ内）') : `${field('vehicle','車両プロファイル')}${select('sensor','センサー', [['realsense','RealSense'],['event-camera','EVS単独'],['realsense-silky','RealSense＋EVS'],['realsense-silky-flir','RealSense＋EVS＋FLIR']])}${runtimeConfig.sensor === 'event-camera' ? '' : ['rgb','infra'].map(stream => select(stream+'_fps',stream.toUpperCase()+' Hz',[[0,'OFF'],[30,'30 Hz'],[60,'60 Hz'],[90,'90 Hz']])).join('')}`}
   ${runtimeConfig.preset === 'record' ? `<label>操作方式<select onchange="runtimeChange('fixed',this.value==='fixed',true)"><option value="joy" ${!runtimeConfig.fixed?'selected':''}>Joy</option><option value="fixed" ${runtimeConfig.fixed?'selected':''}>固定スロットル（L2で停止）</option></select></label>`:''}
-  ${runtimeConfig.preset === 'e2e' ? field('model','モデルディレクトリ（コンテナ内）','/workspaces/ros2_ws/models/e2e/camera_steering'):''}
+  ${runtimeConfig.preset === 'e2e' ? `<div class="runtime-wide">${field('model','モデルディレクトリ（コンテナ内）','/workspaces/ros2_ws/models/e2e/camera_steering')}</div>`:''}
   ${(runtimeConfig.preset === 'record' && runtimeConfig.fixed) || runtimeConfig.preset === 'e2e' ? field('throttle','固定モードで使うスロットル（0〜1）'):''}
-  ${['runtime','competition','tuning','offline-vslam-map','offline-localization'].includes(runtimeConfig.preset) ? field('map','地図のパス（コンテナ内）'):''}
+  ${['runtime','competition','tuning','offline-vslam-map','offline-localization'].includes(runtimeConfig.preset) ? `<div class="runtime-wide">${field('map','地図のパス（コンテナ内）')}</div>`:''}
   </div></fieldset>
-  <p>E2Eの制御方式はモデルのmetadataから自動設定します。起動後の走行操作は既存のJoyで行います。</p>
-  <p>${button('preview','起動内容を確認')} ${button('start','2. bringupを起動')} ${button('stop','bringupを終了')}</p>
-  <p>「終了」はプロセスへの終了要求です。走行中のブレーキ操作には使わず、Joyで停止してから終了してください。</p>
-  ${offline ? '' : `<p>${button('record-start','記録開始')} ${button('record-stop','記録停止')}</p>`}
-  <h3>記録状態</h3><p>${esc({unknown:'応答なし・未確認', recording:'● 記録中', idle:'停止中'}[runtimeBag.state] || '未確認')} ${esc(runtimeBagTime)}</p>
-  <p>${esc(runtimeBag.current_uri || '')}</p><p>${esc(runtimeBag.message || '')}</p>
-  <button onclick="runtimeRefreshBag()" ${runtimeBusy || runtimeBagBusy ? 'disabled' : ''}>記録状態を更新</button>
-  <p>コンテナ接続確認後、この画面を開いている間は約5秒ごとに更新します。</p>
-  <h3>実行中の調整</h3><fieldset ${runtimeBusy ? 'disabled' : ''}><div class="runtime-grid">
+    <p class="runtime-hint">E2Eの制御方式はmetadataから自動設定します。走行操作はJoyを使用します。</p>
+    <div class="runtime-actions">${button('preview','起動内容を確認')} ${button('start','2. bringupを起動','primary')} ${button('stop','bringupを終了','danger')}</div>
+    <p class="runtime-warning">終了はブレーキではありません。Joyで停止してからbringupを終了してください。</p>
+  </section>
+
+  <section class="runtime-card runtime-record-card">
+    <header><span class="runtime-step">03</span><div><h2>走行を記録</h2><p>rosbagの開始・停止と保存先を確認</p></div><span class="runtime-card-status ${runtimeBag.state === 'recording' ? 'recording' : ''}">${esc(bagState)}</span></header>
+    ${offline ? `<div class="runtime-empty">オフライン用途では新しい記録を開始しません。</div>` : `<div class="runtime-actions">${button('record-start','● 記録開始','record')} ${button('record-stop','記録停止')}</div>`}
+    <div class="runtime-record-detail"><strong>${esc(runtimeBag.current_uri || '記録先はまだありません')}</strong><span>${esc(runtimeBag.message || 'コンテナ接続後、約5秒ごとに状態を更新します。')}</span><small>${esc(runtimeBagTime)}</small></div>
+    <button onclick="runtimeRefreshBag()" ${runtimeBusy || runtimeBagBusy ? 'disabled' : ''}>記録状態を更新</button>
+  </section>
+
+  <section class="runtime-card runtime-tune-card">
+    <header><span class="runtime-step">04</span><div><h2>走行中に調整</h2><p>現在のノードへ一時的にparameterを適用</p></div></header>
+    <fieldset ${runtimeBusy ? 'disabled' : ''}><div class="runtime-grid runtime-grid-compact">
   <label>対象<select onchange="runtimeTuneTarget(this.value)"><option value="/e2e_control_decoder" ${runtimeTune.node==='/e2e_control_decoder'?'selected':''}>E2E出力</option><option value="/teleop_cmd_node" ${runtimeTune.node==='/teleop_cmd_node'?'selected':''}>Joy出力</option><option value="/path_tracking_controller_node" ${runtimeTune.node==='/path_tracking_controller_node'?'selected':''}>Controller</option></select></label>
   <label>項目<select onchange="runtimeTuneField(this.value)">${(runtimeTune.node==='/path_tracking_controller_node'?runtimeControllerFields:[['fixed_throttle','固定スロットル'],['steering_offset','ステア offset（−1〜1）'],['steering_scale','ステア scale（0〜3）'],...(runtimeTune.node==='/teleop_cmd_node'?[['throttle_scale','Joyスロットル倍率']]:[])]).map(([key,label])=>`<option value="${key}" ${runtimeTune.parameter===key?'selected':''}>${label}</option>`).join('')}</select></label>
   ${runtimeTune.parameter==='algorithm'?`<label>制御方式<select onchange="runtimeTune.value=this.value">${['pure_pursuit','map_pursuit','kinematic_mpc'].map(name=>`<option ${runtimeTune.value===name?'selected':''}>${name}</option>`).join('')}</select></label>`:`<label>値<input type="number" step="0.01" value="${esc(runtimeTune.value)}" onchange="runtimeTune.value=Number(this.value)"></label>`}
-  </div><p><button onclick="runtimeTuningAction('param-get')">現在値を取得</button> <button onclick="runtimeTuningAction('param-set')">値を適用</button></p>
-  <p>${runtimeTune.node==='/path_tracking_controller_node'?'Controllerの方式変更は制御器を入れ替えます。速度PID変更時は積分状態をリセットします。lookaheadはPure／Map Pursuitで使用します。':'ステア出力＝入力 × scale ＋ offset（最後に出力範囲に制限）。固定スロットル値は固定モード時に使用します。'}</p>
-  <div class="runtime-grid"><label>RealSense<select onchange="runtimeTune.stream=this.value"><option value="rgb" ${runtimeTune.stream==='rgb'?'selected':''}>RGB</option><option value="infra" ${runtimeTune.stream==='infra'?'selected':''}>Infra</option></select></label>
+  </div><div class="runtime-actions"><button onclick="runtimeTuningAction('param-get')">現在値を取得</button><button class="primary" onclick="runtimeTuningAction('param-set')">値を適用</button></div>
+  <p class="runtime-hint">${runtimeTune.node==='/path_tracking_controller_node'?'方式変更は制御器を入れ替えます。速度PID変更時は積分状態をリセットします。lookaheadはPure／Map Pursuitで使用します。':'ステア出力＝入力 × scale ＋ offset。固定スロットル値は固定モード時に使用します。'}</p>
+  <div class="runtime-grid runtime-grid-compact"><label>RealSense<select onchange="runtimeTune.stream=this.value"><option value="rgb" ${runtimeTune.stream==='rgb'?'selected':''}>RGB</option><option value="infra" ${runtimeTune.stream==='infra'?'selected':''}>Infra</option></select></label>
   <label>Hz<select onchange="runtimeTune.fps=Number(this.value)">${[30,60,90].map(fps=>`<option ${runtimeTune.fps===fps?'selected':''}>${fps}</option>`).join('')}</select></label></div>
-  <p><button onclick="runtimeTuningAction('camera-get')">カメラ設定を取得</button> <button onclick="runtimeTuningAction('camera-set')">Hzを適用</button></p>
-  <p>Hz変更時は対象ストリームが一時停止します。解像度・元のON/OFF状態は維持します。</p>
-  </fieldset><p role="status">${esc(runtimeTuneMessage)}</p><p>動的変更は現在のノードに適用されます。次回起動用の設定は変更しません。</p>
-  <button onclick="setTab('maps')">地図・ライン・区間速度の実車調整を開く</button><p>centerline／raceline／custom lineの変更は、用途「地図・ライン実車調整」で起動してから地図画面で適用します。</p>
-  <div role="status" aria-live="polite">${runtimeBusy?'操作中…':esc(runtimeResult?.message || '')}</div>
-  ${runtimeError ? `<p role="alert">${esc(runtimeError)}</p>`:''}
-  ${runtimeResult ? `<p>最終確認：${esc(runtimeLastUpdate)} ／ screen：${runtimeResult.screen_running ? '起動済み':'未確認・未起動'} ／ Docker：${runtimeResult.container_running ? '起動済み':'未確認・未起動'}</p><p>${esc(states[runtimeResult.state] || '')} ${runtimeResult.exit_code != null ? '終了コード：'+esc(runtimeResult.exit_code):''}</p>${runtimeResult.command ? `<pre>${esc(runtimeResult.command)}</pre>`:''}<h3>bringupログ</h3><pre class="runtime-log">${esc(runtimeResult.log || 'ログはまだありません')}</pre><details><summary>環境準備ログ</summary><pre class="runtime-log">${esc(runtimeResult.environment_log || 'ログはまだありません')}</pre></details>`:''}
+  <div class="runtime-actions"><button onclick="runtimeTuningAction('camera-get')">カメラ設定を取得</button><button onclick="runtimeTuningAction('camera-set')">Hzを適用</button></div>
+  </fieldset><div class="runtime-inline-message" role="status">${esc(runtimeTuneMessage || '変更は現在のノードだけに適用され、次回起動設定は変わりません。')}</div>
+  <button onclick="setTab('maps')">地図・ライン・区間速度の実車調整を開く</button>
+  </section>
+  </div>
+
+  <section class="runtime-result ${runtimeError ? 'bad' : runtimeResult ? 'visible' : ''}">
+    <div class="runtime-result-summary" role="status" aria-live="polite"><strong>${runtimeBusy?'操作中…':esc(runtimeResult?.message || '接続または起動操作を行うと、ここに状態とログが表示されます。')}</strong>${runtimeLastUpdate ? `<span>最終確認 ${esc(runtimeLastUpdate)}</span>` : ''}</div>
+    ${runtimeError ? `<div class="runtime-error" role="alert">${esc(runtimeError)}</div>`:''}
+    ${runtimeResult ? `<div class="runtime-state-chips"><span class="${runtimeResult.screen_running?'ok':''}">screen ${runtimeResult.screen_running ? '起動済み':'未起動'}</span><span class="${runtimeResult.container_running?'ok':''}">Docker ${runtimeResult.container_running ? '起動済み':'未起動'}</span><span>${esc(states[runtimeResult.state] || '')}${runtimeResult.exit_code != null ? ' · code '+esc(runtimeResult.exit_code):''}</span></div>${runtimeResult.command ? `<details><summary>実行コマンド</summary><pre>${esc(runtimeResult.command)}</pre></details>`:''}<details open><summary>bringupログ</summary><pre class="runtime-log">${esc(runtimeResult.log || 'ログはまだありません')}</pre></details><details><summary>環境準備ログ</summary><pre class="runtime-log">${esc(runtimeResult.environment_log || 'ログはまだありません')}</pre></details>`:''}
+  </section>
   </section>`;
 }
 async function runtimeAction(action) {

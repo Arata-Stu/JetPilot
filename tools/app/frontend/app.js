@@ -43,6 +43,7 @@ const state = {
     runName: "",
     runDir: "",
     experiment: "pilotnet_scratch",
+    outputTarget: "control",
     datasetTask: "control",
     imageTopic: "/realsense/color/image_raw",
     controlTopic: "/teleop/control_cmd",
@@ -430,7 +431,7 @@ const state = {
 };
 
 const workspaces = [
-  { id: "drive", label: "走らせる", description: "映像を確認し、車両と操作を準備する", pages: [["runtime", "実機"], ["fpv", "ライブ映像"], ["jetson", "車両・転送"], ["joy-profile", "コントローラー"]] },
+  { id: "drive", label: "Jetsonに接続", description: "Jetsonへの接続、車両起動、ライブ映像、データ転送を管理する", pages: [["runtime", "起動・運転"], ["fpv", "ライブ映像"], ["jetson", "接続・転送"], ["joy-profile", "コントローラー"]] },
   { id: "map", label: "地図を作る・直す", description: "地図を選んで編集・調整、または新しく作成する", pages: [["maps", "地図・実車調整"], ["map-builder", "地図を新規作成"]] },
   { id: "review", label: "走行を振り返る", description: "走行記録を選び、映像や軌跡を解析する", pages: [["rosbags", "走行記録"], ["bag-analysis", "走行解析"]] },
   { id: "model", label: "モデルを育てる", description: "モデルを学習し、評価して車両へ配備する", pages: [["e2e-analysis", "E2Eモデル"], ["object-detection", "物体検出モデル"]] },
@@ -1389,6 +1390,14 @@ async function refreshAll() {
     state.e2ePipeline.experiment = state.e2ePipeline.experiments.find(
       (item) => item.task === activeDataset.task,
     )?.id || "";
+  }
+  const selectedOutputExperiment = state.e2ePipeline.experiments.find(
+    (item) => item.id === state.e2ePipeline.experiment,
+  );
+  const supportedOutputTargets = selectedOutputExperiment?.output_targets
+    || [selectedOutputExperiment?.target || "control"];
+  if (!supportedOutputTargets.includes(state.e2ePipeline.outputTarget)) {
+    state.e2ePipeline.outputTarget = supportedOutputTargets[0] || "control";
   }
   if (needsDatasetNameSuggestion) {
     state.e2ePipeline.datasetName = e2ePipeline.suggested_dataset_name
@@ -3199,7 +3208,13 @@ function suggestedE2ERunName(experiment) {
   const selected = experiment || state.e2ePipeline.experiments.find(
     (item) => item.id === state.e2ePipeline.experiment,
   );
-  const prefix = selected?.name_prefix || selected?.id || "model";
+  const target = state.e2ePipeline.outputTarget || selected?.target || "control";
+  const suggested = selected?.suggested_run_names?.[target];
+  if (suggested) return suggested;
+  let prefix = selected?.name_prefix || selected?.id || "model";
+  if (target === "steer" && prefix.includes("-control")) {
+    prefix = prefix.replace("-control", "-steer-only");
+  }
   return `${prefix}_${compactLocalDateTime()}`.slice(0, 64);
 }
 
@@ -3214,10 +3229,9 @@ function applyE2ENameSuggestion(kind) {
 
 function e2eExperimentOptionLabel(experiment) {
   const family = String(experiment?.family || "model").toUpperCase();
-  const target = experiment?.target === "steer"
-    ? "STEER ONLY"
-    : String(experiment?.target || experiment?.task || "").toUpperCase();
-  return `[${family}] [${target}] ${experiment?.label || experiment?.id || ""}`;
+  const label = String(experiment?.label || experiment?.id || "")
+    .replace(/^(Control|Steering only) · /, "");
+  return `[${family}] ${label}`;
 }
 
 function refreshSuggestedOutputNames() {
@@ -3278,10 +3292,19 @@ function updateE2EPipelineOption(key, value) {
     const current = state.e2ePipeline.experiments.find((item) => item.id === state.e2ePipeline.experiment);
     if (dataset && current?.task !== dataset.task) {
       state.e2ePipeline.experiment = state.e2ePipeline.experiments.find((item) => item.task === dataset.task)?.id || "";
+      const replacement = state.e2ePipeline.experiments.find((item) => item.id === state.e2ePipeline.experiment);
+      const targets = replacement?.output_targets || [replacement?.target || "control"];
+      if (!targets.includes(state.e2ePipeline.outputTarget)) state.e2ePipeline.outputTarget = targets[0] || "control";
       state.e2ePipeline.runName = suggestedE2ERunName();
     }
   }
-  if (key === "experiment") state.e2ePipeline.runName = suggestedE2ERunName();
+  if (key === "experiment") {
+    const experiment = state.e2ePipeline.experiments.find((item) => item.id === state.e2ePipeline.experiment);
+    const targets = experiment?.output_targets || [experiment?.target || "control"];
+    if (!targets.includes(state.e2ePipeline.outputTarget)) state.e2ePipeline.outputTarget = targets[0] || "control";
+    state.e2ePipeline.runName = suggestedE2ERunName(experiment);
+  }
+  if (key === "outputTarget") state.e2ePipeline.runName = suggestedE2ERunName();
   if (key === "runDir") {
     state.e2ePipeline.deployPreset = recommendedE2EDeployPreset(selectedE2ERun());
   }
@@ -3368,6 +3391,7 @@ function trainE2EModel() {
       dataset_dir: pipeline.datasetDir,
       run_name: pipeline.runName,
       experiment: pipeline.experiment,
+      output_target: pipeline.outputTarget,
       batch_size: pipeline.batchSize,
       num_workers: pipeline.numWorkers,
       epochs: pipeline.epochs,
@@ -3456,6 +3480,8 @@ function renderE2EPipeline() {
   const experiments = dataset
     ? pipeline.experiments.filter((item) => item.task === dataset.task)
     : pipeline.experiments;
+  const outputTargets = selectedExperiment?.output_targets
+    || [selectedExperiment?.target || "control"];
   return `
     <section class="panel e2e-pipeline-panel">
       <div class="panel-header"><h2>E2E Training & Deployment</h2><span class="spacer"></span><button onclick="refreshAll()">Refresh artifacts</button></div>
@@ -3481,7 +3507,8 @@ function renderE2EPipeline() {
           <article class="e2e-pipeline-stage">
             <header><span>02</span><div><strong>Train model</strong><small>Adjust repeatable training parameters</small></div></header>
             <div class="field"><label>Dataset</label><select onchange="updateE2EPipelineOption('datasetDir', this.value)"><option value="">Select dataset</option>${pipeline.datasets.map((item) => `<option value="${esc(item.path)}" ${item.path === pipeline.datasetDir ? "selected" : ""}>${esc(item.task)} · ${esc(item.name)} — ${esc(item.sample_count)} samples</option>`).join("")}</select></div>
-            <div class="field"><label>Model architecture / target</label><select onchange="updateE2EPipelineOption('experiment', this.value)">${experiments.map((item) => `<option value="${esc(item.id)}" ${item.id === pipeline.experiment ? "selected" : ""}>${esc(e2eExperimentOptionLabel(item))}</option>`).join("")}</select></div>
+            <div class="field"><label>Model architecture / training</label><select onchange="updateE2EPipelineOption('experiment', this.value)">${experiments.map((item) => `<option value="${esc(item.id)}" ${item.id === pipeline.experiment ? "selected" : ""}>${esc(e2eExperimentOptionLabel(item))}</option>`).join("")}</select></div>
+            <div class="field"><label>Model output</label><select onchange="updateE2EPipelineOption('outputTarget', this.value)">${outputTargets.map((value) => `<option value="${esc(value)}" ${value === pipeline.outputTarget ? "selected" : ""}>${esc(value === "steer" ? "Steer only（throttleは0固定）" : value === "control" ? "Control（steering + throttle）" : "Trajectory")}</option>`).join("")}</select><div class="field-hint">モデル構造とは独立して学習出力を選択します。</div></div>
             <div class="field"><label>Model / run name</label><input value="${esc(pipeline.runName)}" onchange="updateE2EPipelineOption('runName', this.value)" /><div class="field-hint">${esc(pipeline.runRoot)} · architecture変更時に自動更新 · <button type="button" class="link-button" onclick="applyE2ENameSuggestion('run')">現在日時で再提案</button></div></div>
             <div class="e2e-compact-fields"><label>Epochs<input type="number" min="1" value="${esc(pipeline.epochs)}" onchange="updateE2EPipelineOption('epochs', this.value)" /></label><label>Learning rate<input type="number" min="0.00000001" step="0.0001" value="${esc(pipeline.learningRate)}" onchange="updateE2EPipelineOption('learningRate', this.value)" /></label><label>Batch<input type="number" min="1" value="${esc(pipeline.batchSize)}" onchange="updateE2EPipelineOption('batchSize', this.value)" /></label></div>
             ${hasTwoStages ? `<div class="e2e-compact-fields"><label>Fine-tune epochs<input type="number" min="1" value="${esc(pipeline.finetuneEpochs)}" onchange="updateE2EPipelineOption('finetuneEpochs', this.value)" /></label><label>Fine-tune LR<input type="number" min="0.00000001" step="0.0001" value="${esc(pipeline.finetuneLearningRate)}" onchange="updateE2EPipelineOption('finetuneLearningRate', this.value)" /></label></div>` : ""}
@@ -8898,19 +8925,20 @@ function renderJunctionSummary(junction) {
 
 function renderJetson() {
   return `
-    <div class="page">
+    <div class="page jetson-page">
+      <div class="jetson-page-intro"><div><span class="jetson-page-kicker">JETSON LINK</span><h1>接続とデータ転送</h1><p>SSH接続を確認し、走行データを取得、完成した地図をJetsonへ送ります。</p></div><div class="jetson-flow"><span>Jetson</span><i>⇄</i><span>Notebook</span></div></div>
       <div class="grid-2">
-        <section class="panel">
-          <div class="panel-header"><h2>Connection</h2></div>
+        <section class="panel jetson-connect-panel">
+          <div class="panel-header"><span class="panel-icon">●</span><h2>接続先</h2></div>
           <div class="panel-body">${renderJetsonTarget()}</div>
         </section>
-        <section class="panel">
-          <div class="panel-header"><h2>Remote State</h2><span class="spacer"></span><button onclick="copyJetsonInspect()">Copy SSH</button></div>
+        <section class="panel jetson-state-panel">
+          <div class="panel-header"><span class="panel-icon">◎</span><h2>Jetsonの状態</h2><span class="spacer"></span><button onclick="copyJetsonInspect()">SSHコマンドをコピー</button></div>
           <div class="panel-body">${renderJetsonSummary()}</div>
         </section>
       </div>
-      <section class="panel">
-        <div class="panel-header"><h2>Transfers</h2></div>
+      <section class="panel jetson-transfer-panel">
+        <div class="panel-header"><span class="panel-icon">⇄</span><h2>データ転送</h2><span class="panel-caption">rosbagを取得・mapを送信</span></div>
         <div class="panel-body">${renderJetsonTransfers()}</div>
       </section>
     </div>
@@ -8963,10 +8991,10 @@ function renderJetsonSummary() {
   if (state.jetsonInspectBusy && !result) {
     return `
       <div class="remote-state">
-        <div class="state-tile checking"><span>SSH</span><strong>checking</strong></div>
-        <div class="state-tile"><span>latest</span><strong>-</strong></div>
-        <div class="state-tile"><span>maps</span><strong>-</strong></div>
-        <div class="state-tile"><span>rosbags</span><strong>-</strong></div>
+      <div class="state-tile ssh checking"><span>SSH接続</span><strong>確認中</strong></div>
+        <div class="state-tile latest"><span>最新モデル</span><strong>-</strong></div>
+        <div class="state-tile maps"><span>MAP</span><strong>-</strong></div>
+        <div class="state-tile rosbags"><span>ROSBAG</span><strong>-</strong></div>
       </div>
       <div class="notice">Inspect Jetson is running. This can take up to about 12 seconds when the Jetson is slow or unreachable.</div>
     `;
@@ -8974,10 +9002,10 @@ function renderJetsonSummary() {
   if (!result) {
     return `
       <div class="remote-state">
-        <div class="state-tile"><span>SSH</span><strong>not checked</strong></div>
-        <div class="state-tile"><span>latest</span><strong>-</strong></div>
-        <div class="state-tile"><span>maps</span><strong>-</strong></div>
-        <div class="state-tile"><span>rosbags</span><strong>-</strong></div>
+        <div class="state-tile ssh"><span>SSH接続</span><strong>未確認</strong></div>
+        <div class="state-tile latest"><span>最新モデル</span><strong>-</strong></div>
+        <div class="state-tile maps"><span>MAP</span><strong>-</strong></div>
+        <div class="state-tile rosbags"><span>ROSBAG</span><strong>-</strong></div>
       </div>
     `;
   }
@@ -8988,10 +9016,10 @@ function renderJetsonSummary() {
   const checkedAt = result.inspected_at ? new Date(result.inspected_at).toLocaleString() : "";
   return `
     <div class="remote-state">
-      <div class="state-tile ${state.jetsonInspectBusy ? "checking" : result.ok ? "ok" : "bad"}"><span>SSH</span><strong>${state.jetsonInspectBusy ? "checking" : result.ok ? "online" : "failed"}</strong></div>
-      <div class="state-tile"><span>latest</span><strong title="${esc(latest)}">${esc(shortName(latest))}</strong></div>
-      <div class="state-tile"><span>maps</span><strong>${esc(maps)}</strong></div>
-      <div class="state-tile"><span>rosbags</span><strong>${esc(rosbags)}</strong></div>
+      <div class="state-tile ssh ${state.jetsonInspectBusy ? "checking" : result.ok ? "ok" : "bad"}"><span>SSH接続</span><strong>${state.jetsonInspectBusy ? "確認中" : result.ok ? "オンライン" : "失敗"}</strong></div>
+      <div class="state-tile latest"><span>最新モデル</span><strong title="${esc(latest)}">${esc(shortName(latest))}</strong></div>
+      <div class="state-tile maps"><span>MAP</span><strong>${esc(maps)}</strong></div>
+      <div class="state-tile rosbags"><span>ROSBAG</span><strong>${esc(rosbags)}</strong></div>
     </div>
     ${checkedAt ? `<div class="inline-summary">Last inspected: ${esc(checkedAt)}</div>` : ""}
     ${state.jetsonInspectBusy ? `<div class="notice">Inspect Jetson is running. Previous results are still shown until the new check finishes.</div>` : ""}
@@ -9055,8 +9083,8 @@ function renderJetsonTransfers() {
     .join("");
   return `
     <div class="transfer-grid">
-      <section class="transfer-card">
-        <h3>Pull rosbag sequences</h3>
+      <section class="transfer-card transfer-pull">
+        <div class="transfer-card-heading"><span>↓</span><div><h3>Jetsonからrosbagを取得</h3><small>走行記録をNotebookへコピー</small></div></div>
         <div class="form-grid">
           <div class="field full">
             <label>Discovered by metadata.yaml</label>
@@ -9084,8 +9112,8 @@ function renderJetsonTransfers() {
           }
         </div>
       </section>
-      <section class="transfer-card">
-        <h3>Push map bundle</h3>
+      <section class="transfer-card transfer-push">
+        <div class="transfer-card-heading"><span>↑</span><div><h3>Jetsonへmapを送信</h3><small>実行可能な地図bundleを配備</small></div></div>
         <div class="form-grid">
           <div class="field full">
             <label>From notebook</label>

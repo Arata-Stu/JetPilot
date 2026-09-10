@@ -139,6 +139,10 @@ class E2EPipelineTests(unittest.TestCase):
             suggest_run_name("dinov3_vits16_scratch", now),
             "vit-dinov3-vits16-control-scratch_0910-1800",
         )
+        self.assertEqual(
+            suggest_run_name("dinov3_vits16_scratch", now, "steer"),
+            "vit-dinov3-vits16-steer-only-scratch_0910-1800",
+        )
 
     def test_preprocess_timestamp_source_override_and_validation(self) -> None:
         body = {"rosbag": str(self.bag), "dataset_name": "clock-test", "image_topic": "/event_camera/event_image"}
@@ -184,6 +188,34 @@ class E2EPipelineTests(unittest.TestCase):
 
         self.assertIn("data.input_width=212", train.command)
         self.assertIn("data.input_height=120", train.command)
+
+    def test_vit_and_mobilenet_support_control_or_steer_only_output(self) -> None:
+        dataset = self._dataset()
+        for index, experiment in enumerate((
+            "dinov3_vits16_frozen_head",
+            "mobilenet_frozen_head",
+        )):
+            steer = build_train_task(
+                self.config,
+                {
+                    "dataset_dir": str(dataset),
+                    "run_name": f"steer-{index}",
+                    "experiment": experiment,
+                    "output_target": "steer",
+                },
+            )
+            self.assertIn("model.steering_only=true", steer.command)
+
+            control = build_train_task(
+                self.config,
+                {
+                    "dataset_dir": str(dataset),
+                    "run_name": f"control-{index}",
+                    "experiment": experiment,
+                    "output_target": "control",
+                },
+            )
+            self.assertIn("model.steering_only=false", control.command)
 
     def test_trajectory_training_uses_dataset_geometry(self) -> None:
         dataset = self.training / "datasets" / "trajectory-a"
@@ -238,6 +270,14 @@ class E2EPipelineTests(unittest.TestCase):
 
         self.assertEqual(catalog["datasets"][0]["path"], str(dataset.resolve()))
         self.assertEqual(catalog["runs"][0]["onnx_path"], str(run.resolve() / "model.onnx"))
+        experiment_ids = {item["id"] for item in catalog["experiments"]}
+        self.assertNotIn("pilotnet_steering", experiment_ids)
+        mobilenet = next(
+            item for item in catalog["experiments"]
+            if item["id"] == "mobilenet_frozen_head"
+        )
+        self.assertEqual(mobilenet["output_targets"], ["control", "steer"])
+        self.assertIn("steer", mobilenet["suggested_run_names"])
 
         deploy = build_deploy_task(
             self.config,

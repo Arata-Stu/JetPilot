@@ -13,6 +13,10 @@ const context = vm.createContext({
 });
 vm.runInContext(source, context);
 assert.match(vm.runInContext('renderRuntime()',context), /環境を準備/);
+assert.match(vm.runInContext('renderRuntime()',context), /runtime-connect-card/);
+assert.match(vm.runInContext('renderRuntime()',context), /runtime-launch-card/);
+assert.match(vm.runInContext('renderRuntime()',context), /runtime-record-card/);
+assert.match(vm.runInContext('renderRuntime()',context), /runtime-tune-card/);
 assert.equal(calls.length,0,'render must not access the Jetson');
 vm.runInContext("runtimeChange('preset','e2e',true)",context);
 assert.match(vm.runInContext('renderRuntime()',context), /モデルディレクトリ/);

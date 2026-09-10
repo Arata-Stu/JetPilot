@@ -18,12 +18,14 @@ class TorchvisionEncoderHead(nn.Module):
         self,
         backbone_name: str,
         output_dim: int = 2,
+        steering_only: bool = False,
         pretrained: bool = False,
         weights_path: str = "",
     ) -> None:
         super().__init__()
         if backbone_name != "mobilenet_v3_small":
             raise ValueError(f"Unsupported pretrained encoder: {backbone_name}")
+        self.steering_only = steering_only
 
         weights = models.MobileNet_V3_Small_Weights.DEFAULT if pretrained and not weights_path else None
         backbone = models.mobilenet_v3_small(weights=weights)
@@ -39,7 +41,7 @@ class TorchvisionEncoderHead(nn.Module):
             nn.Linear(in_features, 128),
             nn.Hardswish(inplace=True),
             nn.Dropout(p=0.1),
-            nn.Linear(128, output_dim),
+            nn.Linear(128, 1 if steering_only else output_dim),
         )
 
     def set_encoder_trainable(self, trainable: bool) -> None:
@@ -49,7 +51,7 @@ class TorchvisionEncoderHead(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         raw = self.head(self.pool(self.encoder(x)))
         steering = torch.tanh(raw[:, 0:1])
-        throttle = torch.sigmoid(raw[:, 1:2])
+        throttle = torch.zeros_like(steering) if self.steering_only else torch.sigmoid(raw[:, 1:2])
         return torch.cat([steering, throttle], dim=1)
 
 
@@ -66,6 +68,7 @@ def build_model(config: Any) -> nn.Module:
         return TorchvisionEncoderHead(
             backbone_name=name,
             output_dim=output_dim,
+            steering_only=bool(getattr(config, "steering_only", False)),
             pretrained=bool(getattr(config, "pretrained", False)),
             weights_path=str(getattr(config, "weights_path", "")),
         )

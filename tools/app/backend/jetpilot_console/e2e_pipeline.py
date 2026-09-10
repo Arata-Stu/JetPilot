@@ -23,11 +23,13 @@ EXPERIMENTS = {
         "label": "Steering only · PilotNet (fixed throttle)", "stages": 1,
         "task": "control", "family": "cnn", "target": "steer",
         "name_prefix": "cnn-pilotnet-steer-only",
+        "hidden": True,
     },
     "pilotnet_scratch": {
         "label": "Control · PilotNet", "stages": 1, "task": "control",
         "family": "cnn", "target": "control",
         "name_prefix": "cnn-pilotnet-control",
+        "name_prefix_base": "cnn-pilotnet", "output_targets": ["control", "steer"],
     },
     "dinov3_vits16_scratch": {
         "label": "Control · DINOv3 ViT-S/16 / scratch",
@@ -36,6 +38,7 @@ EXPERIMENTS = {
         "family": "vit",
         "target": "control",
         "name_prefix": "vit-dinov3-vits16-control-scratch",
+        "name_prefix_base": "vit-dinov3-vits16-scratch", "output_targets": ["control", "steer"],
         "input_width": 212,
         "input_height": 120,
     },
@@ -46,6 +49,7 @@ EXPERIMENTS = {
         "family": "vit",
         "target": "control",
         "name_prefix": "vit-dinov3-vits16-control-finetune",
+        "name_prefix_base": "vit-dinov3-vits16-finetune", "output_targets": ["control", "steer"],
         "input_width": 212,
         "input_height": 120,
     },
@@ -56,6 +60,7 @@ EXPERIMENTS = {
         "family": "vit",
         "target": "control",
         "name_prefix": "vit-dinov3-vits16-control-frozen",
+        "name_prefix_base": "vit-dinov3-vits16-frozen", "output_targets": ["control", "steer"],
         "input_width": 212,
         "input_height": 120,
     },
@@ -66,6 +71,7 @@ EXPERIMENTS = {
         "family": "vit",
         "target": "control",
         "name_prefix": "vit-dinov3-vits16-evs-control",
+        "name_prefix_base": "vit-dinov3-vits16-evs-finetune", "output_targets": ["control", "steer"],
         "input_width": 212,
         "input_height": 120,
     },
@@ -76,6 +82,7 @@ EXPERIMENTS = {
         "family": "vit",
         "target": "control",
         "name_prefix": "vit-dinov3-vits16-evs-control-frozen",
+        "name_prefix_base": "vit-dinov3-vits16-evs-frozen", "output_targets": ["control", "steer"],
         "input_width": 212,
         "input_height": 120,
     },
@@ -87,7 +94,7 @@ EXPERIMENTS = {
     "trajectory_pilotnet_gru": {"label": "Trajectory · PilotNet + GRU", "stages": 1, "task": "trajectory", "model": "fusion", "family": "cnn", "target": "trajectory", "name_prefix": "cnn-pilotnet-gru-trajectory"},
     "trajectory_pilotnet_imu": {"label": "Trajectory · PilotNet + IMU", "stages": 1, "task": "trajectory", "model": "fusion", "family": "cnn", "target": "trajectory", "name_prefix": "cnn-pilotnet-imu-trajectory"},
     "trajectory_pilotnet_gru_imu": {"label": "Trajectory · PilotNet + GRU + IMU", "stages": 1, "task": "trajectory", "model": "fusion", "family": "cnn", "target": "trajectory", "name_prefix": "cnn-pilotnet-gru-imu-trajectory"},
-    "mobilenet_frozen_head": {"label": "Control · MobileNetV3 / frozen head", "stages": 1, "task": "control", "family": "cnn", "target": "control", "name_prefix": "cnn-mobilenetv3-control-frozen"},
+    "mobilenet_frozen_head": {"label": "Control · MobileNetV3 / frozen head", "stages": 1, "task": "control", "family": "cnn", "target": "control", "name_prefix": "cnn-mobilenetv3-control-frozen", "name_prefix_base": "cnn-mobilenetv3-frozen", "output_targets": ["control", "steer"]},
     "mobilenet_head_then_finetune": {
         "label": "Control · MobileNetV3 / head then fine-tune",
         "stages": 2,
@@ -95,6 +102,7 @@ EXPERIMENTS = {
         "family": "cnn",
         "target": "control",
         "name_prefix": "cnn-mobilenetv3-control-finetune",
+        "name_prefix_base": "cnn-mobilenetv3-finetune", "output_targets": ["control", "steer"],
     },
 }
 
@@ -139,9 +147,19 @@ def suggest_dataset_name(now: datetime | None = None) -> str:
     return f"e2e_dataset_{_date_time_suffix(now)}"
 
 
-def suggest_run_name(experiment: str, now: datetime | None = None) -> str:
+def suggest_run_name(
+    experiment: str,
+    now: datetime | None = None,
+    output_target: str | None = None,
+) -> str:
     definition = EXPERIMENTS.get(experiment) or EXPERIMENTS["pilotnet_scratch"]
+    target = str(output_target or definition.get("target") or "control")
     prefix = str(definition.get("name_prefix") or experiment)
+    if target == "steer" and "-control" in prefix:
+        prefix = prefix.replace("-control", "-steer-only", 1)
+    elif target != str(definition.get("target") or "control"):
+        base = str(definition.get("name_prefix_base") or prefix)
+        prefix = f"{base}-{'steer-only' if target == 'steer' else target}"
     return f"{prefix}_{_date_time_suffix(now)}"[:64]
 
 
@@ -341,8 +359,15 @@ def pipeline_catalog(config: Any) -> dict[str, Any]:
                 "suggested_run_name": _available_output_name(
                     suggest_run_name(key, suggestion_time), run_root(config)
                 ),
+                "suggested_run_names": {
+                    target: _available_output_name(
+                        suggest_run_name(key, suggestion_time, target), run_root(config)
+                    )
+                    for target in value.get("output_targets", [value.get("target", "control")])
+                },
             }
             for key, value in EXPERIMENTS.items()
+            if not value.get("hidden")
         ],
         "deploy_profiles": profiles,
         "default_deploy_profile": profile_default,
@@ -434,9 +459,22 @@ def build_train_task(config: Any, body: dict[str, Any]) -> PipelineTaskSpec:
     experiment = str(body.get("experiment") or "pilotnet_scratch")
     if experiment not in EXPERIMENTS:
         raise ValueError(f"unsupported experiment: {experiment}")
+    supported_targets = [
+        str(value) for value in EXPERIMENTS[experiment].get(
+            "output_targets", [EXPERIMENTS[experiment].get("target", "control")]
+        )
+    ]
+    output_target = str(body.get("output_target") or EXPERIMENTS[experiment].get("target") or "control")
+    if output_target not in supported_targets:
+        raise ValueError(
+            f"{experiment} does not support output target {output_target}; "
+            f"choose one of {', '.join(supported_targets)}"
+        )
     requested_name = str(body.get("run_name") or "").strip()
     run_name = _name(
-        requested_name or _available_output_name(suggest_run_name(experiment), run_root(config)),
+        requested_name or _available_output_name(
+            suggest_run_name(experiment, output_target=output_target), run_root(config)
+        ),
         label="run name",
     )
     output = resolve_under_root(run_name, run_root(config), label="training output")
@@ -492,6 +530,8 @@ def build_train_task(config: Any, body: dict[str, Any]) -> PipelineTaskSpec:
         f"train.stages.0.epochs={epochs}",
         f"train.stages.0.lr={learning_rate}",
     ]
+    if experiment_task == "control":
+        overrides.append(f"model.steering_only={'true' if output_target == 'steer' else 'false'}")
     for key in (
         "trajectory_horizon_sec",
         "trajectory_points",

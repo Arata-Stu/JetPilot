@@ -17,6 +17,14 @@ test('every existing page belongs to a purpose and internal navigation selects i
   const ctx = context();
   const pages = vm.runInContext('workspaces.flatMap(w => w.pages.map(p => p[0]))', ctx);
   assert.equal(new Set(pages).size, 9);
+  const drive = vm.runInContext("workspaces.find(w => w.id === 'drive')", ctx);
+  assert.equal(drive.label, 'Jetsonに接続');
+  assert.deepEqual(Array.from(drive.pages, item => Array.from(item)), [
+    ['runtime', '起動・運転'],
+    ['fpv', 'ライブ映像'],
+    ['jetson', '接続・転送'],
+    ['joy-profile', 'コントローラー'],
+  ]);
   for (const page of pages) {
     vm.runInContext(`state.tab = ${JSON.stringify(page)}`, ctx);
     const nav = ctx.renderWorkspaceNavigation();

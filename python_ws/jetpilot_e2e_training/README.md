@@ -46,17 +46,22 @@ python -m e2e_learning.cli.preprocess_bag \
 
 ## モデル構成
 
-RGBで操舵だけを学習する場合は`experiment=pilotnet_steering`を使います。
-スロットルは損失に含めず、モデルは互換出力`[steering, 0]`を返します。
-Consoleにも`Steering only · PilotNet (fixed throttle)`として表示されます。
+PilotNet、MobileNetV3、DINOv3 ViT-S/16では、同じarchitectureに対して
+`Control`（steering + throttle）と`Steer only`を選択できます。Steer onlyでは
+スロットルを損失に含めず、モデルは互換出力`[steering, 0]`を返します。
+Consoleではarchitectureとoutputを別々に選択します。CLIでは選択したexperimentへ
+`model.steering_only=true`を追加してください。
 実車では`bringup.sh e2e-collect`で固定スロットルの教師データを収集し、
 配備先`Camera Steering Only (fixed throttle)`へ転送した後、
 `bringup.sh e2e-steering --set fixed_throttle:=0.2`で推論します。
 
 | experiment | 画像時系列 | IMU | 出力 |
 |---|---:|---:|---|
-| `dinov3_vits16_scratch` | 1 frame (212×120) | なし | control |
-| `dinov3_vits16_finetune` | 1 frame (212×120) | なし | control |
+| `dinov3_vits16_scratch` | 1 frame (212×120) | なし | control / steer only |
+| `dinov3_vits16_finetune` | 1 frame (212×120) | なし | control / steer only |
+| `dinov3_vits16_frozen_head` | 1 frame (212×120) | なし | control / steer only |
+| `mobilenet_frozen_head` | 1 frame | なし | control / steer only |
+| `mobilenet_head_then_finetune` | 1 frame | なし | control / steer only |
 | `trajectory_pilotnet` | 1 frame | なし | trajectory |
 | `trajectory_pilotnet_gru` | 4 frames + GRU | なし | trajectory |
 | `trajectory_pilotnet_imu` | 1 frame | GRU encoder | trajectory |
@@ -180,8 +185,10 @@ backbone、temporal、IMU有無、ADE/FDEまたはcontrol誤差を横並びで�
 
 ## Console UIでの利用
 
-E2E Pipeline画面でLearning taskを`Trajectory`にすると、odometry、IMU、点数、
-horizon、scaleを指定してデータ作成できます。学習構成には上記experimentが表示されます。
+E2E Pipeline画面では`Model architecture / training`と`Model output`を分けて選択できます。
+Control datasetでは対応modelごとに`Control`または`Steer only`を選択できます。
+Learning taskを`Trajectory`にすると、odometry、IMU、点数、horizon、scaleを指定して
+データ作成できます。
 
 E2E Analysisでtrajectory ONNXを選ぶと、動画時刻に同期したローカル鳥瞰plotへ
 予測経路とodometry由来GTを重ねて表示します。ADE/FDEの時系列、集計、worst sample、
