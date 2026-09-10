@@ -76,9 +76,11 @@ class RuntimeTests(unittest.TestCase):
         self.assertIn('tuning',args)
         self.assertIn('/maps/test',args)
 
-    def fake_remote(self, action, alive=True, screen=False, exists=False, owned=True, dead=False):
+    def fake_remote(self, action, alive=True, screen=False, exists=False, owned=True, dead=False, current_command='bash'):
         calls = []
+        created = False
         def fake(args, check=True):
+            nonlocal created
             calls.append(args)
             code, out = 0, ''
             if args[:2] == ['docker', 'inspect']:
@@ -87,12 +89,16 @@ class RuntimeTests(unittest.TestCase):
                 out = '  123.jetpilot-web (Detached)\n' if screen else ''
             elif 'tmux' in args:
                 command = args[args.index('tmux') + 1]
-                if command == 'has-session': code = 0 if exists else 1
+                if command == 'new-session': created = True
+                if command == 'has-session': code = 0 if exists or created else 1
                 if command == 'show-options': out = '1\n' if owned else ''
                 if command == 'list-panes':
-                    code = 0 if exists else 1
-                    out = f'%1 {int(dead)} 0\n' if exists and 'pane_dead_status' in args[-1] else f'%1 {int(dead)}\n' if exists else ''
+                    active = exists or created
+                    code = 0 if active else 1
+                    if active and args[-1] == '#{pane_id}': out = '%1\n'
+                    elif active: out = f'%1 {int(dead)} 0\n' if 'pane_dead_status' in args[-1] else f'%1 {int(dead)}\n'
                 if command == 'capture-pane': out = 'example log'
+                if command == 'display-message': out = current_command + '\n'
             return subprocess.CompletedProcess(args, code, out, '')
         with tempfile.TemporaryDirectory() as tmp, patch.object(agent.Path, 'home', return_value=Path(tmp)), patch.object(agent, 'run', side_effect=fake):
             (Path(tmp) / 'ros2_ws').mkdir()
@@ -185,6 +191,14 @@ class RuntimeTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 self.fake_remote('start', exists=True, owned=owned)
 
+    def test_start_replaces_a_legacy_wait_gate_and_respawns_bringup(self):
+        result, calls = self.fake_remote('start', exists=True, owned=True, current_command='tmux')
+        commands = [call[call.index('tmux') + 1] for call in calls if 'tmux' in call]
+        self.assertIn('kill-session', commands)
+        self.assertIn('respawn-pane', commands)
+        self.assertNotIn('wait-for', commands)
+        self.assertIn('/workspaces/scripts/bringup.sh', result['command'])
+
     def test_stop_only_interrupts_managed_pane(self):
         _, calls = self.fake_remote('stop', exists=True)
         self.assertTrue(any('send-keys' in c and c[-1] == 'C-c' for c in calls))
@@ -194,8 +208,11 @@ class RuntimeTests(unittest.TestCase):
         _, calls = self.fake_remote('start')
         preview = next(i for i,c in enumerate(calls) if '--dry-run' in c[-1])
         create = next(i for i,c in enumerate(calls) if 'new-session' in c)
+        respawn = next(i for i,c in enumerate(calls) if 'respawn-pane' in c)
         self.assertLess(preview, create)
+        self.assertLess(create, respawn)
         self.assertTrue(any('remain-on-exit' in c for c in calls))
+        self.assertFalse(any('wait-for' in c for c in calls))
         result, _ = self.fake_remote('status', exists=True, dead=True)
         self.assertEqual(result['state'], 'exited')
         self.assertEqual(result['log'], 'example log')

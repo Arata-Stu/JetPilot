@@ -1,7 +1,6 @@
 """Executed through SSH on the Jetson host; only Python standard library required."""
 import fcntl
 import json
-import os
 from pathlib import Path
 import re
 import shlex
