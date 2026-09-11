@@ -20,7 +20,7 @@ def generate_launch_description() -> LaunchDescription:
                 "control_cmd_topic", default_value="/auto/control_cmd"
             ),
             DeclareLaunchArgument(
-                "model_root", default_value="/workspaces/ros2_ws/models/e2e/latest"
+                "model_root", default_value=""
             ),
             DeclareLaunchArgument(
                 "model_file_path",

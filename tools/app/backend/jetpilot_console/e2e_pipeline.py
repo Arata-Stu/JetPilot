@@ -696,6 +696,9 @@ def build_deploy_task(config: Any, body: dict[str, Any]) -> PipelineTaskSpec:
         str(body.get("remote_root") or profile.get("remote_root") or "/workspaces/ros2_ws/models/e2e"),
         label="remote E2E model root",
     )
+    deploy_name = _name(
+        str(body.get("deploy_name") or allowed.parent.name), label="deployment model name"
+    )
     command = [
         str(root / "scripts/deploy_model.sh"),
         "--onnx",
@@ -710,13 +713,20 @@ def build_deploy_task(config: Any, body: dict[str, Any]) -> PipelineTaskSpec:
         host,
         "--remote-root",
         remote_root,
+        "--name",
+        deploy_name,
         "--yes",
     ]
+    if body.get("build_engine") is True:
+        command.append("--build-engine")
     return PipelineTaskSpec(
         kind="e2e-deploy",
-        title=f"Deploy E2E model to {target}",
+        title=f"Deploy E2E model {deploy_name} to {target}",
         command=command,
         cwd=str(root),
         artifacts=[{"name": "source ONNX", "path": str(allowed)}],
-        resource_keys=[f"e2e-run:{allowed.parent}", f"e2e-deploy:{target}:{remote_root}"],
+        resource_keys=[
+            f"e2e-run:{allowed.parent}",
+            f"e2e-deploy:{target}:{remote_root}",
+        ],
     )

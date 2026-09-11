@@ -200,7 +200,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument("input_tensor_name", default_value="input_tensor"),
             DeclareLaunchArgument(
-                "model_root", default_value="/workspaces/ros2_ws/models/e2e/latest"
+                "model_root", default_value=""
             ),
             DeclareLaunchArgument(
                 "model_file_path",

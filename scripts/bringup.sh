@@ -1712,7 +1712,9 @@ configure_e2e_model() {
       selected="${choice%%$'\t'*}"
     fi
   fi
-  selected="${selected:-${model_root}/${base}_${target}}"
+  if [[ -z "$selected" ]]; then
+    die "E2Eモデルを明示してください: --e2e-model ${model_root}/<model-name>"
+  fi
   set_arg e2e_model_root "$selected"
   # Dry-run may be used on a workstation without the Jetson model directory.
   if [[ "$DRY_RUN" == true && ! -d "$selected" ]]; then return 0; fi

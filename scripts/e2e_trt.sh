@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="${JETPILOT_PROJECT_ROOT:-$(dirname -- "$SCRIPT_DIR")}"
 ROS2_WS="${ROS2_WS:-${PROJECT_ROOT}/ros2_ws}"
-MODEL_PATH="${E2E_MODEL_ROOT:-${ROS2_WS}/models/e2e/latest}"
+MODEL_PATH="${E2E_MODEL_ROOT:-}"
 BUILDER="${PROJECT_ROOT}/ros2_ws/src/perception/jetpilot_e2e_inference/scripts/build_tensorrt_engine.sh"
 MODEL_SPECIFIED=false
 
@@ -12,13 +12,12 @@ usage() {
   cat <<'EOF'
 Usage: scripts/e2e_trt.sh [MODEL_DIR | MODEL.onnx] [--fp16 | --fp32]
 
-Build an E2E TensorRT engine inside the Jetson runtime container.
-Defaults to ros2_ws/models/e2e/latest and FP16.
+Build a selected E2E TensorRT engine inside the Jetson runtime container.
+MODEL_DIR (or E2E_MODEL_ROOT) is required. Precision defaults to FP16.
 Writes model.plan and build_engine.log beside the input ONNX file.
 
 Examples:
-  scripts/e2e_trt.sh
-  scripts/e2e_trt.sh /workspaces/ros2_ws/models/e2e/camera_control
+  scripts/e2e_trt.sh /workspaces/ros2_ws/models/e2e/pilotnet-control_0911-1200
   scripts/e2e_trt.sh /path/to/model.onnx --fp32
 
 Environment: ROS2_WS, E2E_MODEL_ROOT, TRTEXEC, E2E_TRT_FP16
@@ -42,6 +41,12 @@ while (($# > 0)); do
   esac
   shift
 done
+
+if [[ -z "$MODEL_PATH" ]]; then
+  echo "Specify the model directory or ONNX file to build." >&2
+  usage >&2
+  exit 1
+fi
 
 if [[ -d "$MODEL_PATH" || "$MODEL_PATH" != *.onnx ]]; then
   MODEL_PATH="${MODEL_PATH%/}/model.onnx"

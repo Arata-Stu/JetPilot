@@ -1,11 +1,13 @@
 drivable_guard:
   ros__parameters:
     base_frame: base_link
-    # Full body extents from base_frame. Circumcircle includes these plus margin.
-    front_m: 0.25
-    rear_m: 0.25
-    width_m: 0.22
-    margin_m: 0.05
+    # Full body extents from base_frame. The oriented footprint includes margin.
+    # Approximate 0.32 x 0.18 m body with base_link assumed at its center.
+    # Re-measure front/rear separately if base_link is not centered.
+    front_m: 0.16
+    rear_m: 0.16
+    width_m: 0.18
+    margin_m: 0.01
     # Assumptions, NOT measured vehicle capabilities: calibrate on the real vehicle.
     reaction_s: 0.3
     braking_mps2: 1.0

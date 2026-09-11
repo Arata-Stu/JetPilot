@@ -41,13 +41,13 @@ class E2EModelSelectionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "learning target"):
             inspect_model(self.root / "event_control", "event", True)
 
-    def test_bringup_four_default_destinations_and_explicit_override(self):
+    def test_bringup_requires_explicit_model_and_accepts_compatible_override(self):
         for preset in ("e2e", "e2e-steering"):
             for sensor, prefix in (("realsense", "camera"), ("event-camera", "event")):
                 expected = f"{prefix}_{'steering' if preset == 'e2e-steering' else 'control'}"
                 args = ["bash", str(ROOT / "scripts/bringup.sh"), preset, "--vehicle", "jpbb", "--sensor-kit", sensor, "--dry-run"]
-                result = subprocess.run(args, text=True, capture_output=True, check=True)
-                self.assertIn(f"e2e_model_root:=/workspaces/ros2_ws/models/e2e/{expected}", result.stdout)
+                result = subprocess.run(args, text=True, capture_output=True)
+                self.assertNotEqual(result.returncode, 0)
                 result = subprocess.run(args + ["--e2e-model", str(self.root / expected)], text=True, capture_output=True, check=True)
                 self.assertIn(f"e2e_model_root:={self.root / expected}", result.stdout)
                 self.assertIn("e2e_network_image_width:=212", result.stdout)
@@ -92,6 +92,27 @@ class E2EModelSelectionTests(unittest.TestCase):
         path.write_text(json.dumps(metadata))
         with self.assertRaisesRegex(ValueError, "single RGB-format image"):
             inspect_model(path.parent, "rgb", False)
+
+    def test_tensorrt_build_requires_explicit_model(self):
+        result = subprocess.run(
+            ["bash", str(ROOT / "scripts/e2e_trt.sh")],
+            text=True,
+            capture_output=True,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Specify the model directory", result.stderr)
+
+    def test_deploy_and_tui_do_not_update_latest_alias(self):
+        deploy = (
+            ROOT / "python_ws/jetpilot_e2e_training/scripts/deploy_model.sh"
+        ).read_text()
+        tui = (
+            ROOT
+            / "ros2_ws/src/perception/jetpilot_e2e_inference/scripts/deploy_tensorrt_tui.sh"
+        ).read_text()
+        self.assertIn("--name", deploy)
+        self.assertNotIn("ln -sfn", deploy)
+        self.assertNotIn("ln -sfn", tui)
 
 
 if __name__ == "__main__":

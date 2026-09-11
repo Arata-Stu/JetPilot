@@ -604,15 +604,15 @@ values are metres and must be finite and non-negative:
 {
   "map_dir": "/workspaces/map/course_a",
   "direction": "reverse",
-  "vehicle_width_m": 0.25,
+  "vehicle_width_m": 0.18,
   "safety_margin_m": 0.05
 }
 ```
 
 `direction` accepts `forward` or `reverse` and defaults to `forward`.
 The effective optimizer envelope is `vehicle_width_m + 2 * safety_margin_m`.
-The API defaults preserve the existing `0.25 m` vehicle and `0.05 m` per-side
-margin behavior. Generation keeps the existing raceline CSV layout and writes
+The API defaults use the measured approximation of a `0.18 m` vehicle and a conservative
+`0.05 m` per-side margin for localization and tracking error. Generation keeps the existing raceline CSV layout and writes
 the selected values to `<map_name>_raceline.meta.json` for reproducibility.
 
 Named Custom Lines live under `custom_lines/<line_id>/`. `custom_line.json` is
@@ -805,6 +805,10 @@ Section・Junction）、生成済みCenterline／Raceline、走行用Custom line
 名前と **Centerline / Raceline** のコピー元を指定して **Clone as Custom**、
 続いて **Edit shape** を押します。クリックで追加、ドラッグで移動、右クリックで
 削除し、**Save** で保存します。**Use for drive** で次の走行・転送用に選択します。
+Racelineのcloneなど点数が多い場合は、**Max shape error (m)** に許容する最大偏差を指定して
+**Simplify all**を押します。直線部の点を優先的に削除し、曲がりは許容偏差内で保持します。
+単純に点数を減らす場合は **1/2 pts** または **1/4 pts** を使います。元の折れ線上を
+弧長ベースの等間隔で再サンプリングします。どの簡略化もUndoできます。
 元のCenterline / Racelineは変更されません。既存のコース内判定と速度検証は
 引き続き適用されます。
 
@@ -949,7 +953,7 @@ controllerは安全判定が0.3秒届かなくなっても停止します。判�
 地図の欠落・更新失敗時は表示用に旧地図を保持しても走行許可には使いません。
 再生bagの安全判定・走行領域は隔離し、現在の処理で判定し直します。
 
-車体は`base_link`を中心に全体を囲む円と余裕で扱い、停止までその円が通る範囲を検証します。
+車体は`base_link`基準の向き付き長方形と余裕で扱い、停止までに車体が通る範囲を検証します。
 停止距離は「速度 × 反応時間 + 速度² ÷ (2 × 減速度)」です。
 旋回を続ける場合と、停止指令で操舵を中央へ戻す場合の両方を確認します。前進・後退・横方向速度に対応します。
 経路は停止距離以上の前方を確認し、型付き経路の速度と周回設定も反映します。
@@ -957,10 +961,11 @@ controllerは安全判定が0.3秒届かなくなっても停止します。判�
 
 設定は`jetpilot_hdmap_publisher/config/drivable_guard.param.yaml`です。
 `front_m` / `rear_m`は座標原点から車体端まで、`width_m`は車幅、`margin_m`は追加余裕です。
+現在値はbase_linkが中央にある約0.32 × 0.18 mの車体を仮定し、前後各0.16 m、margin 0.01 mです。
+直進時の判定寸法は前後各0.17 m、左右各0.10 mです。旋回中は、向きが変わる間に長方形が通過する領域も含めます。
 `reaction_s`と`braking_mps2`は**実測済みではない仮値**です。controllerの`safety_brake_command`は
 従来の値を使い、標準値0ではスロットルを切る停止指令になります。実車で停止距離を測り、実際に得られる減速度以下に設定してください。
-車体を囲む円を使うため、車体が通れる狭い部分でも停止することがあります。また、レーンの境界をまたぐ場合は
-各短区間の車体円がいずれか一つのレーンに収まることを要求するため、重なりのない接続部では保守的に停止します。
+複数Laneが接続・重複する部分は走行可能領域の和集合として扱い、Lane間の内部境界は壁にしません。
 地図と自己位置の誤差、路面の変化まで含めた停止保証や、自動迂回を提供するものではありません。
 
 新しいメッセージ・HD Map publisher・planning・controllerをROS実行環境で再ビルドし、同時に再起動してください。
@@ -1086,7 +1091,8 @@ Centerlineは既存のAuto Center、接続Laneは選択した直線またはカ�
 地図の形状・接続・障害物が変わると候補を無効化するため、再生成してください。
 旧Pythonエディタは接続情報を更新できないため、ネットワーク地図の上書きを拒否します。
 
-生成時の物理的な余裕は標準の安全判定と同じ、車体を囲む円の半径（約0.323m）です。
+生成時は車幅0.18 mと安全余裕0.05 mを使い、Centerlineから左右各0.14 mを確保します。
+実行時の車体判定（左右各0.10 m）より片側0.04 m広く取り、自己位置や追従のずれに余裕を残します。
 開始・終了地点も車体全体が入るよう、物理的な境界はCenterlineの端点より先まで確保してください。
 実車の寸法や安全判定の設定を変更した場合は、この生成条件との整合も確認してください。
 

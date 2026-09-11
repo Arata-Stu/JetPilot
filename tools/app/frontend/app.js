@@ -1,4 +1,4 @@
-const DEFAULT_RACELINE_VEHICLE_WIDTH_M = 0.25;
+const DEFAULT_RACELINE_VEHICLE_WIDTH_M = 0.18;
 const DEFAULT_RACELINE_SAFETY_MARGIN_M = 0.05;
 const DEFAULT_RACELINE_MAX_SPEED_MPS = 3.0;
 const DEFAULT_RACELINE_MIN_SPEED_MPS = 0.8;
@@ -15,6 +15,7 @@ const MAX_LIVE_LOG_CHARS = 400_000;
 const LIVE_LOG_TRUNCATION_NOTICE = "[Showing the latest live log only. Use Copy Log for the full log.]\n...\n";
 const DEFAULT_MAP_EDITOR_ASSIST_RANGE_POINTS = 4;
 const DEFAULT_MAP_EDITOR_ASSIST_SPACING_M = 0.08;
+const DEFAULT_CUSTOM_LINE_SIMPLIFY_TOLERANCE_M = 0.02;
 const MAX_MAP_EDITOR_ASSIST_RANGE_POINTS = 30;
 const MAX_MAP_EDITOR_ASSIST_RESAMPLE_POINTS = 1200;
 const MAP_EDITOR_FIELDS = ["left_bound", "right_bound", "centerline", "drivable_left_bound", "drivable_right_bound"];
@@ -42,6 +43,9 @@ const state = {
     datasetDir: "",
     runName: "",
     runDir: "",
+    deployRunDir: "",
+    deployName: "",
+    buildEngine: true,
     experiment: "pilotnet_scratch",
     outputTarget: "control",
     datasetTask: "control",
@@ -213,6 +217,7 @@ const state = {
     redoStack: [],
     assistRangePoints: DEFAULT_MAP_EDITOR_ASSIST_RANGE_POINTS,
     assistSpacingM: DEFAULT_MAP_EDITOR_ASSIST_SPACING_M,
+    simplifyToleranceM: DEFAULT_CUSTOM_LINE_SIMPLIFY_TOLERANCE_M,
   },
   sectionEditor: {
     enabled: false,
@@ -1412,6 +1417,11 @@ async function refreshAll() {
   }
   if (!state.e2ePipeline.runDir && state.e2ePipeline.runs[0]) {
     state.e2ePipeline.runDir = state.e2ePipeline.runs[0].path || "";
+  }
+  const exportedRuns = state.e2ePipeline.runs.filter((item) => item.onnx_path);
+  if (!exportedRuns.some((item) => item.path === state.e2ePipeline.deployRunDir)) {
+    state.e2ePipeline.deployRunDir = exportedRuns[0]?.path || "";
+    state.e2ePipeline.deployName = exportedRuns[0]?.name || "";
   }
   if (!state.e2ePipeline.deployProfile) {
     state.e2ePipeline.deployProfile = e2ePipeline.default_deploy_profile || state.e2ePipeline.deployProfiles[0]?.id || "";
@@ -3342,6 +3352,11 @@ function updateE2EPipelineOption(key, value) {
   if (key === "runDir") {
     state.e2ePipeline.deployPreset = recommendedE2EDeployPreset(selectedE2ERun());
   }
+  if (key === "deployRunDir") {
+    const run = selectedE2EDeployRun();
+    state.e2ePipeline.deployPreset = recommendedE2EDeployPreset(run);
+    state.e2ePipeline.deployName = run?.name || "";
+  }
   render();
 }
 
@@ -3361,6 +3376,12 @@ function selectedE2EDataset() {
 
 function selectedE2ERun() {
   return state.e2ePipeline.runs.find((item) => item.path === state.e2ePipeline.runDir) || null;
+}
+
+function selectedE2EDeployRun() {
+  return state.e2ePipeline.runs.find(
+    (item) => item.path === state.e2ePipeline.deployRunDir,
+  ) || null;
 }
 
 function selectedE2EDeployProfile() {
@@ -3458,7 +3479,7 @@ function exportE2EOnnx() {
 
 function deployE2EModel() {
   const pipeline = state.e2ePipeline;
-  const run = selectedE2ERun();
+  const run = selectedE2EDeployRun();
   const profile = selectedE2EDeployProfile();
   return startE2EPipelineTask(
     "e2e-pipeline:deploy",
@@ -3472,6 +3493,8 @@ function deployE2EModel() {
       user: pipeline.deployUser,
       host: pipeline.deployHost,
       remote_root: pipeline.remoteRoot,
+      deploy_name: pipeline.deployName,
+      build_engine: pipeline.buildEngine,
     },
   );
 }
@@ -3492,7 +3515,7 @@ function useE2ERunForOfflineEval() {
 
 function e2ePipelineStageState() {
   const pipeline = state.e2ePipeline;
-  const run = selectedE2ERun();
+  const run = selectedE2EDeployRun();
   return [
     ["Dataset", pipeline.datasets.length ? `${pipeline.datasets.length} ready` : "not created", Boolean(pipeline.datasets.length)],
     ["Training", pipeline.runs.some((item) => item.best_checkpoint) ? `${pipeline.runs.length} run(s)` : "not trained", pipeline.runs.some((item) => item.best_checkpoint)],
@@ -3506,9 +3529,10 @@ function renderE2EPipeline() {
   const pipeline = state.e2ePipeline;
   const dataset = selectedE2EDataset();
   const run = selectedE2ERun();
-  const recommendedPreset = recommendedE2EDeployPreset(run);
+  const deployRun = selectedE2EDeployRun();
+  const recommendedPreset = recommendedE2EDeployPreset(deployRun);
   const deployment = pipeline.deployPresets.find((item) => item.id === recommendedPreset);
-  if (run) pipeline.deployPreset = recommendedPreset;
+  if (deployRun) pipeline.deployPreset = recommendedPreset;
   const profile = selectedE2EDeployProfile();
   const selectedExperiment = pipeline.experiments.find((item) => item.id === pipeline.experiment);
   const hasTwoStages = selectedExperiment?.stages === 2;
@@ -3560,13 +3584,14 @@ function renderE2EPipeline() {
             <div class="button-stack"><button class="primary ${actionBusy("e2e-pipeline:export") ? "is-busy" : ""}" onclick="exportE2EOnnx()" ${run?.best_checkpoint ? "" : "disabled"} ${actionButtonAttrs("e2e-pipeline:export", "ONNX export is starting...")}>${esc(actionButtonLabel("e2e-pipeline:export", "Export ONNX", "Starting..."))}</button><button onclick="useE2ERunForOfflineEval()" ${run?.onnx_path ? "" : "disabled"}>Use in offline eval</button></div>
           </article>
           <article class="e2e-pipeline-stage">
-            <header><span>04</span><div><strong>Deploy to Jetson</strong><small>Transfer exported ONNX files only</small></div></header>
+            <header><span>04</span><div><strong>Deploy to Jetson</strong><small>Select ONNX → transfer → build TensorRT</small></div></header>
+            <div class="field"><label>ONNX model to deploy</label><select onchange="updateE2EPipelineOption('deployRunDir', this.value)"><option value="">Select exported run</option>${pipeline.runs.filter((item) => item.onnx_path).map((item) => `<option value="${esc(item.path)}" ${item.path === pipeline.deployRunDir ? "selected" : ""}>${esc(item.task)} · ${esc(item.name)}</option>`).join("")}</select></div>
             <div class="field"><label>Connection profile</label><select onchange="updateE2EPipelineOption('deployProfile', this.value)">${pipeline.deployProfiles.map((item) => `<option value="${esc(item.id)}" ${item.id === pipeline.deployProfile ? "selected" : ""}>${esc(item.label)} — ${esc(item.host === "__manual__" ? "manual" : item.host)}</option>`).join("")}</select></div>
             <div class="e2e-compact-fields"><label>SSH user<input value="${esc(pipeline.deployUser || profile?.user || "")}" onchange="updateE2EPipelineOption('deployUser', this.value)" /></label><label>Host<input value="${esc(pipeline.deployHost || (profile?.host === "__manual__" ? "" : profile?.host) || "")}" onchange="updateE2EPipelineOption('deployHost', this.value)" /></label></div>
-            <div class="field"><label>Deploy destination (from model)</label><input readonly value="${esc(deployment?.label || (run ? "No compatible deployment preset" : "Select a training run"))}" /><div class="field-hint">${esc(deployment?.model_name || "")} · matched to the training sensor and learning target</div></div>
-            <div class="notice compact">TensorRT build is disabled. This step only transfers the ONNX model and metadata.</div>
+            <div class="field"><label>Model name on Jetson</label><input value="${esc(pipeline.deployName)}" onchange="updateE2EPipelineOption('deployName', this.value)" /><div class="field-hint">${esc(deployment?.label || (deployRun ? "No compatible deployment preset" : "Select an exported run"))} · ${esc(deployment?.model_name || "")}</div></div>
+            <label class="check"><input type="checkbox" ${pipeline.buildEngine ? "checked" : ""} onchange="state.e2ePipeline.buildEngine=this.checked; render()" /> 転送後、選択したモデルのTensorRT engineをJetsonで生成</label>
             <div class="field-hint">${esc(pipeline.remoteRoot || profile?.remote_root || "")}</div>
-            <button class="primary ${actionBusy("e2e-pipeline:deploy") ? "is-busy" : ""}" onclick="deployE2EModel()" ${run?.onnx_path && deployment ? "" : "disabled"} ${actionButtonAttrs("e2e-pipeline:deploy", "Deployment is starting...")}>${esc(actionButtonLabel("e2e-pipeline:deploy", "Transfer & deploy", "Starting..."))}</button>
+            <button class="primary ${actionBusy("e2e-pipeline:deploy") ? "is-busy" : ""}" onclick="deployE2EModel()" ${deployRun?.onnx_path && pipeline.deployName && deployment ? "" : "disabled"} ${actionButtonAttrs("e2e-pipeline:deploy", "Deployment is starting...")}>${esc(actionButtonLabel("e2e-pipeline:deploy", pipeline.buildEngine ? "Transfer & build" : "Transfer model", "Starting..."))}</button>
           </article>
         </div>
         <details class="e2e-pipeline-tasks" ${pipelineTasks.some(isActiveTask) ? "open" : ""}><summary>Pipeline tasks (${pipelineTasks.length})</summary>${renderTaskTable(pipelineTasks)}</details>
@@ -8562,6 +8587,9 @@ function renderCustomLineEditor(detail) {
               <button id="custom-line-undo" onclick="undoCustomLineEdit()" ${editor.undoStack.length ? "" : "disabled"}>Undo</button>
               <button id="custom-line-redo" onclick="redoCustomLineEdit()" ${editor.redoStack.length ? "" : "disabled"}>Redo</button>
               <button id="custom-line-smooth" onclick="smoothCustomLineRange()" ${editor.enabled && canSmoothCustomLineRange() ? "" : "disabled"}>Smooth</button>
+              <button id="custom-line-simplify" onclick="simplifyCustomLineFull()" ${editor.enabled && pointCount > (line.closed_loop ? 3 : 2) ? "" : "disabled"}>Simplify all</button>
+              <button id="custom-line-half" onclick="downsampleCustomLine(2)" ${editor.enabled && pointCount > (line.closed_loop ? 3 : 2) ? "" : "disabled"}>1/2 pts</button>
+              <button id="custom-line-quarter" onclick="downsampleCustomLine(4)" ${editor.enabled && pointCount > (line.closed_loop ? 3 : 2) ? "" : "disabled"}>1/4 pts</button>
               <button id="custom-line-delete-point" onclick="deleteSelectedCustomLinePoint()" ${editor.enabled && selectedPoint ? "" : "disabled"}>Delete Pt</button>
               <button class="danger" onclick="deleteCustomLine(${js(line.id)})">Delete Line</button>
             </div>
@@ -8573,6 +8601,10 @@ function renderCustomLineEditor(detail) {
               <div class="field">
                 <label for="custom-line-assist-spacing">Spacing (m)</label>
                 <input id="custom-line-assist-spacing" type="number" min="0.02" max="1" step="0.01" value="${esc(editor.assistSpacingM)}" oninput="updateCustomLineAssist('spacingM', this)" ${editor.enabled ? "" : "disabled"} />
+              </div>
+              <div class="field">
+                <label for="custom-line-simplify-tolerance">Max shape error (m)</label>
+                <input id="custom-line-simplify-tolerance" type="number" min="0.001" max="0.5" step="0.005" value="${esc(editor.simplifyToleranceM)}" oninput="updateCustomLineAssist('simplifyToleranceM', this)" ${editor.enabled ? "" : "disabled"} />
               </div>
             </div>
             <label class="layer-toggle custom-line-closed-toggle">
@@ -11513,14 +11545,134 @@ function updateCustomLineAssist(field, input) {
   const raw = String(input?.value ?? "").trim();
   const value = Number(raw);
   const isRange = field === "rangePoints";
-  const min = isRange ? 1 : 0.02;
-  const max = isRange ? MAX_MAP_EDITOR_ASSIST_RANGE_POINTS : 1;
+  const isTolerance = field === "simplifyToleranceM";
+  const min = isRange ? 1 : isTolerance ? 0.001 : 0.02;
+  const max = isRange ? MAX_MAP_EDITOR_ASSIST_RANGE_POINTS : isTolerance ? 0.5 : 1;
   const valid = raw !== "" && Number.isFinite(value) && value >= min && value <= max;
   input?.setCustomValidity(valid ? "" : `Enter a value from ${min} to ${max}`);
   if (!valid) return;
   if (isRange) state.customLineEditor.assistRangePoints = Math.round(value);
   else if (field === "spacingM") state.customLineEditor.assistSpacingM = value;
+  else if (isTolerance) state.customLineEditor.simplifyToleranceM = value;
   updateCustomLineChrome();
+}
+
+function simplifyOpenPolylineIndices(points, toleranceM) {
+  if (points.length <= 2) return points.map((_, index) => index);
+  const keep = new Set([0, points.length - 1]);
+  const pending = [[0, points.length - 1]];
+  while (pending.length) {
+    const [startIndex, endIndex] = pending.pop();
+    let farthestIndex = -1;
+    let farthestDistance = -1;
+    for (let index = startIndex + 1; index < endIndex; index += 1) {
+      const distance = pointSegmentDistance(points[index], points[startIndex], points[endIndex]);
+      if (distance > farthestDistance) {
+        farthestDistance = distance;
+        farthestIndex = index;
+      }
+    }
+    if (farthestIndex >= 0 && farthestDistance > toleranceM) {
+      keep.add(farthestIndex);
+      pending.push([startIndex, farthestIndex], [farthestIndex, endIndex]);
+    }
+  }
+  return [...keep].sort((a, b) => a - b);
+}
+
+function simplifyCustomLinePoints(points, toleranceM, closedLoop) {
+  const minimum = closedLoop ? 3 : 2;
+  if (points.length <= minimum) return points.map(cloneCustomLinePoint);
+  const coordinates = points.map((point) => [Number(point.x_m), Number(point.y_m)]);
+  if (!closedLoop) {
+    return simplifyOpenPolylineIndices(coordinates, toleranceM)
+      .map((index) => cloneCustomLinePoint(points[index]));
+  }
+  const farthestFrom = (originIndex) => {
+    let result = originIndex;
+    let distance = -1;
+    for (let index = 0; index < coordinates.length; index += 1) {
+      const candidate = pointDistance(coordinates[originIndex], coordinates[index]);
+      if (candidate > distance) [result, distance] = [index, candidate];
+    }
+    return result;
+  };
+  const first = farthestFrom(0);
+  const second = farthestFrom(first);
+  const chain = (start, end) => {
+    const indices = [start];
+    while (indices.at(-1) !== end) indices.push((indices.at(-1) + 1) % points.length);
+    return indices;
+  };
+  const keep = new Set();
+  for (const indices of [chain(first, second), chain(second, first)]) {
+    const segment = indices.map((index) => coordinates[index]);
+    for (const localIndex of simplifyOpenPolylineIndices(segment, toleranceM)) {
+      keep.add(indices[localIndex]);
+    }
+  }
+  const simplified = points.filter((_, index) => keep.has(index)).map(cloneCustomLinePoint);
+  return simplified.length >= minimum ? simplified : points.map(cloneCustomLinePoint);
+}
+
+function simplifyCustomLineFull() {
+  const editor = state.customLineEditor;
+  const line = editor.workingLine;
+  if (!editor.enabled || !line) return;
+  const tolerance = Number(editor.simplifyToleranceM);
+  if (!Number.isFinite(tolerance) || tolerance < 0.001 || tolerance > 0.5) {
+    toast("Max shape error must be between 0.001 and 0.5 m.", "error");
+    return;
+  }
+  const before = line.points.length;
+  const selected = Number.isInteger(editor.selectedPointIndex)
+    ? cloneCustomLinePoint(line.points[editor.selectedPointIndex])
+    : null;
+  const simplified = simplifyCustomLinePoints(line.points, tolerance, line.closed_loop);
+  if (simplified.length >= before) {
+    toast(`No points can be removed within ${tolerance.toFixed(3)} m shape error.`);
+    return;
+  }
+  rememberCustomLineState();
+  line.points = simplified;
+  editor.selectedPointIndex = selected
+    ? nearestCustomLinePointIndex(line.points, [selected.x_m, selected.y_m])
+    : null;
+  markCustomLineDirty();
+  toast(`Simplified ${before} points to ${simplified.length} points (max error ${tolerance.toFixed(3)} m)`);
+  render();
+}
+
+function downsampleCustomLine(factor) {
+  const editor = state.customLineEditor;
+  const line = editor.workingLine;
+  if (!editor.enabled || !line || ![2, 4].includes(Number(factor))) return;
+  const before = line.points.length;
+  const minimum = line.closed_loop ? 3 : 2;
+  const targetCount = Math.max(minimum, Math.ceil(before / Number(factor)));
+  if (targetCount >= before) return;
+  const selected = Number.isInteger(editor.selectedPointIndex)
+    ? cloneCustomLinePoint(line.points[editor.selectedPointIndex])
+    : null;
+  const coordinates = customLineCoordinates(line);
+  const sampled = resamplePolyline(coordinates, targetCount, line.closed_loop);
+  const points = sampled.map((point, index) => ({
+    x_m: point[0],
+    y_m: point[1],
+    speed_mps: interpolateCustomSpeed(
+      line.points,
+      index / Math.max(1, line.closed_loop ? targetCount : targetCount - 1),
+      line.closed_loop,
+    ),
+  }));
+  rememberCustomLineState();
+  line.points = points;
+  editor.selectedPointIndex = selected
+    ? nearestCustomLinePointIndex(line.points, [selected.x_m, selected.y_m])
+    : null;
+  markCustomLineDirty();
+  toast(`Resampled ${before} points to ${targetCount} equally spaced points`);
+  render();
 }
 
 function canSmoothCustomLineRange() {
@@ -11882,6 +12034,12 @@ function updateCustomLineChrome() {
   if (redo) redo.disabled = !editor.redoStack.length;
   const smooth = $("custom-line-smooth");
   if (smooth) smooth.disabled = !canSmoothCustomLineRange();
+  const simplify = $("custom-line-simplify");
+  if (simplify) simplify.disabled = !(editor.enabled && line.points.length > (line.closed_loop ? 3 : 2));
+  for (const id of ["custom-line-half", "custom-line-quarter"]) {
+    const button = $(id);
+    if (button) button.disabled = !(editor.enabled && line.points.length > (line.closed_loop ? 3 : 2));
+  }
   const del = $("custom-line-delete-point");
   if (del) del.disabled = !(editor.enabled && Number.isInteger(editor.selectedPointIndex));
   const counts = $("custom-line-counts");
@@ -15694,6 +15852,8 @@ window.deleteCustomLine = deleteCustomLine;
 window.undoCustomLineEdit = undoCustomLineEdit;
 window.redoCustomLineEdit = redoCustomLineEdit;
 window.smoothCustomLineRange = smoothCustomLineRange;
+window.simplifyCustomLineFull = simplifyCustomLineFull;
+window.downsampleCustomLine = downsampleCustomLine;
 window.deleteSelectedCustomLinePoint = deleteSelectedCustomLinePoint;
 window.toggleCustomLineClosedLoop = toggleCustomLineClosedLoop;
 window.updateCustomLineAssist = updateCustomLineAssist;

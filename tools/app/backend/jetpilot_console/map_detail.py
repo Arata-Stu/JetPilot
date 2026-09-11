@@ -16,6 +16,10 @@ from urllib.parse import quote
 
 from .network_geometry import network, geometry
 from .map_environment import normalize_obstacles, obstacle_path_issue
+from .map_pipeline import (
+    DEFAULT_RACELINE_SAFETY_MARGIN_M,
+    DEFAULT_RACELINE_VEHICLE_WIDTH_M,
+)
 from .config import ConsoleConfig
 from .indexes import _artifact, _dir_size, _iso_mtime
 
@@ -4182,7 +4186,12 @@ def save_hd_map(config: ConsoleConfig, payload: dict[str, Any]) -> dict[str, Any
         physical = geometry.Environment([
             (*_lane_drivable_bounds(lane).values(), lane["closed_loop"]) for lane in lanes
         ], obstacles)
-        clearance = geometry.Settings().radius  # Same default swept-body envelope as runtime.
+        # Raceline generation intentionally keeps more lateral allowance than
+        # the runtime footprint guard for localization and tracking error.
+        clearance = (
+            DEFAULT_RACELINE_VEHICLE_WIDTH_M / 2
+            + DEFAULT_RACELINE_SAFETY_MARGIN_M
+        )
         for lane in lanes:
             if lane.get("closed_loop", True):
                 raise ValueError("Network generation requires open lanes; use the existing generator for a closed single lane.")

@@ -1,7 +1,7 @@
 """Dependency-free, conservative planar safety geometry.
 
-A disk enclosing the complete body is swept continuously along each segment.
-Only exposed edges of the physical lane union constrain the swept disk.
+An oriented rectangular body is swept continuously along each segment. Only
+exposed edges of the physical lane union constrain that swept footprint.
 Internal seams and overlaps do not create fictitious walls; obstacles remain holes.
 """
 from dataclasses import dataclass
@@ -76,6 +76,26 @@ def polygon(raw):
             if near(a,b,*segments[j],EPS):
                 raise ValueError("self-intersecting polygon")
     return p
+
+
+def convex_hull(raw):
+    """Return a counter-clockwise convex hull without repeating its first point."""
+    points = sorted(set(point(value) for value in raw))
+    if len(points) < 3:
+        raise ValueError("degenerate footprint")
+
+    def half(values):
+        result = []
+        for value in values:
+            while len(result) >= 2 and cross(result[-2], result[-1], value) <= EPS:
+                result.pop()
+            result.append(value)
+        return result
+
+    result = half(points)[:-1] + half(list(reversed(points)))[:-1]
+    if len(result) < 3:
+        raise ValueError("degenerate footprint")
+    return result
 
 
 def split_parameters(a, b, c, d):
@@ -159,6 +179,27 @@ class Environment:
             return ""
         return "outside physical drivable bounds"
 
+    def shape_issue(self, shape):
+        """Check a polygonal body or conservative swept hull against the map."""
+        shape = [point(value) for value in shape]
+        shape_edges = list(edges(shape))
+        for name, obstacle, margin in self.obstacles:
+            if (any(inside(value, obstacle) for value in shape)
+                    or any(inside(value, shape) for value in obstacle)
+                    or any(near(a, b, c, d, margin + EPS)
+                           for a, b in shape_edges for c, d in edges(obstacle))):
+                return "static obstacle: " + name
+        if not all(self.contains(value) for value in shape):
+            return "outside physical drivable bounds"
+        if any(near(a, b, c, d, EPS)
+               for a, b in shape_edges for c, d in self.boundary):
+            return "outside physical drivable bounds"
+        # A footprint can enclose a small forbidden island without its own edges
+        # crossing that island. Checking exposed-boundary vertices closes that gap.
+        if any(inside(value, shape) for boundary in self.boundary for value in boundary):
+            return "outside physical drivable bounds"
+        return ""
+
     def contains(self, p):
         return any(inside(p,outer) if other is None else inside(p,outer) != inside(p,other)
                    for outer,other in self.lanes)
@@ -168,10 +209,10 @@ class Environment:
 @dataclass(frozen=True)
 class Settings:
     # Extents relative to base_frame, including overhangs, not wheelbase.
-    front_m: float = .25
-    rear_m: float = .25
-    width_m: float = .22
-    margin_m: float = .05
+    front_m: float = .16
+    rear_m: float = .16
+    width_m: float = .18
+    margin_m: float = .01
     reaction_s: float = .3
     braking_mps2: float = 1.
     route_preview_m: float = .5
@@ -189,16 +230,58 @@ class Settings:
         # Circumscribed about base_frame, conservative even with asymmetric overhang.
         return math.hypot(max(self.front_m,self.rear_m), self.width_m/2)+self.margin_m
 
+    @property
+    def corner_radius(self):
+        return math.hypot(
+            max(self.front_m, self.rear_m) + self.margin_m,
+            self.width_m / 2 + self.margin_m,
+        )
+
     def stopping_distance(self, speed):
         return speed*self.reaction_s + speed*speed/(2*self.braking_mps2)
+
+
+def footprint(pose, cfg, extra=0.):
+    """Oriented rectangular vehicle footprint expanded by configured margin."""
+    x, y, yaw = pose
+    front = cfg.front_m + cfg.margin_m + extra
+    rear = cfg.rear_m + cfg.margin_m + extra
+    half_width = cfg.width_m / 2 + cfg.margin_m + extra
+    cosine, sine = math.cos(yaw), math.sin(yaw)
+    result = []
+    for longitudinal, lateral in (
+        (front, half_width), (-rear, half_width),
+        (-rear, -half_width), (front, -half_width),
+    ):
+        result.append((
+            x + cosine * longitudinal - sine * lateral,
+            y + sine * longitudinal + cosine * lateral,
+        ))
+    return result
+
+
+def swept_footprint(previous, current, cfg):
+    """Conservative hull for translation and rotation between two sampled poses."""
+    delta_yaw = math.atan2(
+        math.sin(current[2] - previous[2]), math.cos(current[2] - previous[2])
+    )
+    translation = math.hypot(current[0] - previous[0], current[1] - previous[1])
+    # The convex hull contains the chord between samples. Expand by the maximum
+    # arc/chord deviation of both the base path and rotating body corners.
+    half_angle = abs(delta_yaw) / 2.
+    angular_error = cfg.corner_radius * (1. - math.cos(half_angle))
+    translation_error = 0. if half_angle <= EPS else (
+        translation / (2. * math.sin(half_angle)) * (1. - math.cos(half_angle))
+    )
+    extra = angular_error + translation_error
+    return convex_hull(footprint(previous, cfg, extra) + footprint(current, cfg, extra))
 
 
 def motion_issue(env, pose, velocity, cfg):
     """Constant body twist, then deceleration at constant curvature, forward/reverse.
 
-    Exact arc endpoints; inflate each capsule by its arc/chord error so thin
-    obstacles cannot hide between samples. Zero translation with rotation is
-    covered by the base-centred circumcircle.
+    Exact arc endpoints; inflate each swept footprint by its arc/chord error so
+    thin obstacles cannot hide between samples. Rotation in place is included.
     """
     x,y,yaw = pose
     vx,vy,w = velocity
@@ -209,22 +292,25 @@ def motion_issue(env, pose, velocity, cfg):
     count = max(1,math.ceil(travel/cfg.step_m),math.ceil(abs(w)*(cfg.reaction_s+speed/cfg.braking_mps2)/.1))
     if count > 5000:
         raise ValueError("prediction exceeds computation limit")
-    previous = (x,y)
-    if speed < EPS:
-        return env.issue(previous,previous,cfg.radius)
+    previous = (x, y, yaw)
+    if speed < EPS and abs(w) < EPS:
+        return env.shape_issue(footprint(previous, cfg))
     # Equivalent constant-speed travel time gives braking arc with fixed curvature.
-    duration = travel/speed
+    duration = travel/speed if speed >= EPS else cfg.reaction_s
+    count = max(count, math.ceil(abs(w) * duration / .1))
     for i in range(1,count+1):
         t = duration*i/count
-        if abs(w) < EPS:
+        if speed < EPS:
+            bx, by = 0., 0.
+        elif abs(w) < EPS:
             bx,by = vx*t,vy*t
         else:
             bx = (vx*math.sin(w*t)+vy*(math.cos(w*t)-1))/w
             by = (vx*(1-math.cos(w*t))+vy*math.sin(w*t))/w
         current = (x+math.cos(yaw)*bx-math.sin(yaw)*by,
-                   y+math.sin(yaw)*bx+math.cos(yaw)*by)
-        sagitta = 0. if abs(w)<EPS else speed/abs(w)*(1-math.cos(abs(w)*duration/count/2))
-        issue = env.issue(previous,current,cfg.radius+sagitta)
+                   y+math.sin(yaw)*bx+math.cos(yaw)*by,
+                   yaw+w*t)
+        issue = env.shape_issue(swept_footprint(previous, current, cfg))
         if issue:
             return issue
         previous = current
@@ -265,23 +351,27 @@ def route_issue(env, position, raw_points, speed, cfg, closed=False):
             raise ValueError("closed trajectory exceeds computation limit")
         chain += points[1:]*loops
     budget=5000
+    previous_pose = None
     for a,b in zip(chain,chain[1:]):
         length=math.dist(a,b)
         if length <= EPS:
-            issue=env.issue(a,a,cfg.radius)
-            if issue: return issue
             continue
+        yaw = math.atan2(b[1]-a[1], b[0]-a[0])
+        if previous_pose is None:
+            previous_pose = (a[0], a[1], yaw)
+            issue = env.shape_issue(footprint(previous_pose, cfg))
+            if issue: return issue
         used=min(remaining,length)
         count=max(1,math.ceil(used/cfg.step_m))
         budget-=count
         if budget<0: raise ValueError("route exceeds computation limit")
-        previous=a
         for j in range(1,count+1):
             t=used/length*j/count
             current=(a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t)
-            issue=env.issue(previous,current,cfg.radius)
+            current_pose=(current[0],current[1],yaw)
+            issue=env.shape_issue(swept_footprint(previous_pose,current_pose,cfg))
             if issue: return issue
-            previous=current
+            previous_pose=current_pose
         remaining-=used
         if remaining<=EPS: break
     return ""

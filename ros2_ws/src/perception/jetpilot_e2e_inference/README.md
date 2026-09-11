@@ -132,9 +132,9 @@ PyTorchノードは、学習が出力する`checkpoints/best.pt`または`last.p
 配備先ではcheckpointを`model.pt`という名前で配置してください。
 
 ```bash
-mkdir -p /workspaces/ros2_ws/models/e2e/latest
+mkdir -p /workspaces/ros2_ws/models/e2e/<run-name>
 cp /path/to/checkpoints/best.pt \
-  /workspaces/ros2_ws/models/e2e/latest/model.pt
+  /workspaces/ros2_ws/models/e2e/<run-name>/model.pt
 ```
 
 `pilotnet`はPyTorchだけで動作します。`mobilenet_v3_small` checkpointを使う場合は
@@ -157,58 +157,45 @@ PyTorchノードでraw checkpointを直接読む経路は対象外で、比較�
 RealSenseとEVSの両方を含むセンサー構成では、モデル選択の前に推論入力を
 RGB／EVSから選択できます。どちらか一方の入力で推論し、融合は行いません。
 
-非対話起動の既定モデルは次のとおりです。共通の`latest`には依存しません。
-
-| センサー | preset | モデルディレクトリ |
-| --- | --- | --- |
-| RealSense RGB | `e2e` | `models/e2e/camera_control` |
-| RealSense RGB | `e2e-steering` | `models/e2e/camera_steering` |
-| `event-camera` | `e2e` | `models/e2e/event_control` |
-| `event-camera` | `e2e-steering` | `models/e2e/event_steering` |
-
-Consoleの配備先も学習センサー・操舵のみ設定から同じ4種類へ自動選択されます。
-センサープロファイル自体はモデルの保存先を変更しません。
+非対話起動ではモデルディレクトリの明示指定が必須です。Consoleの配備先種別は
+学習センサー・操舵のみ設定から自動判定されますが、保存先名には選択したrun名を使います。
 
 ```bash
-/workspaces/scripts/bringup.sh e2e-steering --vehicle jpbb --sensor-kit event-camera
-# 配備済みの別モデルを明示指定
 /workspaces/scripts/bringup.sh e2e-steering --vehicle jpbb --sensor-kit event-camera \
-  --e2e-model /workspaces/ros2_ws/models/e2e/my_event_steering
+  --e2e-model /workspaces/ros2_ws/models/e2e/<run-name>
 ```
 
 `metadata.json`を確認し、センサー・学習対象・単一画像入力が合わないモデルは拒否します。
 ネットワーク入力寸法はmetadataから設定します。旧モデルで学習画像トピックの情報が
 不足している場合は、正しい学習設定からONNXとmetadataを再出力してください。
 候補の検索先は`E2E_MODEL_BASE`（既定`$ROS2_WS/models/e2e`）で変更できます。
-実機にモデルが存在しない開発PCでの`--dry-run`では、存在しない既定モデルの検証は省略します。
+実機にモデルが存在しない開発PCでの`--dry-run`では、明示したモデルが存在しない場合の
+内容検証は省略します。
 
-`e2e_trt.sh`単体の引数なし動作は従来どおり共通`latest`です。起動するモデルを
-確実にビルドするにはディレクトリを指定します。
+`e2e_trt.sh`は対象ディレクトリまたはONNXファイルの指定が必須です。
 
 ```bash
-/workspaces/scripts/e2e_trt.sh /workspaces/ros2_ws/models/e2e/event_steering
+/workspaces/scripts/e2e_trt.sh /workspaces/ros2_ws/models/e2e/<run-name>
 ```
 
 Jetson上でTensorRT engineを生成:
 
 実行用コンテナ内では、プロジェクト直下のスクリプトからもビルドできます。
-引数なしで`ros2_ws/models/e2e/latest/model.onnx`を使い、同じディレクトリへ
-`model.plan`と`build_engine.log`を出力します（既定FP16）。ROS 2の事前ビルドは不要です。
+指定したディレクトリの`model.onnx`を使い、同じディレクトリへ`model.plan`と
+`build_engine.log`を出力します（既定FP16）。ROS 2の事前ビルドは不要です。
 
 ```bash
-/workspaces/scripts/e2e_trt.sh
-# モデルのディレクトリまたはONNXファイルを指定する場合
-/workspaces/scripts/e2e_trt.sh /workspaces/ros2_ws/models/e2e/camera_control
+/workspaces/scripts/e2e_trt.sh /workspaces/ros2_ws/models/e2e/<run-name>
 # FP32でビルドする場合
-/workspaces/scripts/e2e_trt.sh --fp32
+/workspaces/scripts/e2e_trt.sh /workspaces/ros2_ws/models/e2e/<run-name> --fp32
 ```
 
 ROS 2から既存スクリプトを呼び出す場合:
 
 ```bash
 ros2 run jetpilot_e2e_inference build_tensorrt_engine.sh \
-  /workspaces/ros2_ws/models/e2e/latest/model.onnx \
-  /workspaces/ros2_ws/models/e2e/latest/model.plan
+  /workspaces/ros2_ws/models/e2e/<run-name>/model.onnx \
+  /workspaces/ros2_ws/models/e2e/<run-name>/model.plan
 ```
 
 Isaac ROSまたはTensorRTを更新した後は、以前の`model.plan`を再利用せず、対象Jetsonの
@@ -227,7 +214,7 @@ ros2 run jetpilot_e2e_inference deploy_tensorrt_tui.sh
 ros2 launch jetpilot_e2e_inference e2e_tensor_rt.launch.py \
   image_topic:=/realsense/color/image_raw \
   control_cmd_topic:=/auto/control_cmd \
-  model_root:=/workspaces/ros2_ws/models/e2e/latest
+  model_root:=/workspaces/ros2_ws/models/e2e/<run-name>
 ```
 
 trajectoryモデルは次のように起動します。出力はcontrollerの既定入力である
@@ -264,7 +251,8 @@ ros2 launch jetpilot_e2e_inference e2e_tensor_rt.launch.py \
 専用presetを使用します。
 
 ```bash
-/workspaces/scripts/bringup.sh e2e --vehicle vesc
+/workspaces/scripts/bringup.sh e2e --vehicle vesc \
+  --e2e-model /workspaces/ros2_ws/models/e2e/<run-name>
 ```
 
 このbringup経路ではsensor launchが`multi_sensor_container`の
@@ -310,10 +298,11 @@ ConsoleのOffline teacher comparisonも`metadata.json`の`steering_only`を読�
 
 ```bash
 /workspaces/scripts/bringup.sh e2e-steering --vehicle jpbb --sensor-kit realsense \
+  --e2e-model /workspaces/ros2_ws/models/e2e/<run-name> \
   --set fixed_throttle:=0.2
 ```
 
-`e2e-steering`は`models/e2e/camera_steering`のモデルを使い、AUTOモードで予測操舵と
+`e2e-steering`は明示指定したモデルを使い、AUTOモードで予測操舵と
 固定スロットルを車両へ渡します。有効な推論結果を受信した時だけ指令をpublishするため、
 推論停止時に固定スロットルだけを配信し続ける動作にはなりません。
 通常の`e2e`は引き続きモデルの操舵・スロットル両方を使います。
@@ -334,18 +323,19 @@ GEP画像を使います。
 2. ConsoleのE2E画面で画像トピックを`/event_camera/event_image`、Learning taskを
    `Control`、画像サイズを212×120にしてデータセットを作成します。
 3. 単一画像・IMUなしの`pilotnet_scratch`で学習し、ONNXへ出力します。
-4. 配備プリセット`Event Camera Control`を選んで転送・TensorRTビルドします。
-   配備先は`models/e2e/event_control`です。
+4. 配備対象runを選んで転送・TensorRTビルドします。
+   配備先は`models/e2e/<run-name>`です。
 5. Jetsonの実行用コンテナ内で起動します。
 
 ```bash
-/workspaces/scripts/bringup.sh e2e --vehicle jpbb --sensor-kit event-camera
+/workspaces/scripts/bringup.sh e2e --vehicle jpbb --sensor-kit event-camera \
+  --e2e-model /workspaces/ros2_ws/models/e2e/<run-name>
 ```
 
 手動でエンジンを作る場合:
 
 ```bash
-/workspaces/scripts/e2e_trt.sh /workspaces/ros2_ws/models/e2e/event_control
+/workspaces/scripts/e2e_trt.sh /workspaces/ros2_ws/models/e2e/<run-name>
 ```
 
 実行時は`e2e_event_image_adapter`が蓄積画像を`INTER_AREA`で212×120に縮小し、
@@ -357,7 +347,7 @@ RGBへ変換して`/e2e/event/image`へ出力します。画像前処理ノー�
 学習と実行では同じイベント蓄積周期・色設定・biasを使用してください。
 別サイズで学習した場合は起動時の`e2e_network_image_width`と
 `e2e_network_image_height`も合わせます。イベント用モデルを先に配備する必要があり、
-`event-camera`設定はRGB用の`latest`を自動流用しません。
+`event-camera`設定でも指定したモデルだけを使用します。
 
 既にドライバーを起動している場合の推論単独起動:
 
@@ -390,7 +380,7 @@ checkpointを統合してください。
 
 ```bash
 ros2 launch jetpilot_e2e_inference e2e_pytorch.launch.py \
-  model_file_path:=/workspaces/ros2_ws/models/e2e/latest/model.pt \
+  model_file_path:=/workspaces/ros2_ws/models/e2e/<run-name>/model.pt \
   image_topic:=/realsense/color/image_raw \
   control_cmd_topic:=/auto/control_cmd \
   device:=cpu
@@ -400,7 +390,7 @@ ros2 launch jetpilot_e2e_inference e2e_pytorch.launch.py \
 
 ```bash
 ros2 launch jetpilot_system_launch e2e.launch.py \
-  model_file_path:=/workspaces/ros2_ws/models/e2e/latest/model.pt
+  model_file_path:=/workspaces/ros2_ws/models/e2e/<run-name>/model.pt
 ```
 
 すでにカメラを起動済みなら、重複起動を避けます。

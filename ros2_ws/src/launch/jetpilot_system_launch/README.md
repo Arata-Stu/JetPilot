@@ -124,12 +124,16 @@ Jetson 上の通常起動では `isaac_ros_jetson_stats` が既定で有効に�
 RealSense RGBをTensorRT E2Eへ入力して直接制御する場合は、専用presetを使用します。
 
 ```bash
-/workspaces/scripts/bringup.sh e2e --vehicle vesc
+/workspaces/scripts/bringup.sh e2e --vehicle vesc \
+  --e2e-model /workspaces/ros2_ws/models/e2e/<run-name>
 ```
 
 このpresetはsensor kit、E2E inference、joy/teleop、operation mux、指定したvehicle interfaceを
-有効にします。localization、planning、従来controllerはOFFのままです。モデルを変更する場合は
-`--set e2e_model_root:=/workspaces/ros2_ws/models/e2e/<model>`を追加します。
+有効にします。localization、planning、従来controllerはOFFのままです。E2Eモデルは必ず
+名前付きディレクトリで指定します。
+
+`ros2 launch`を直接使う場合も
+`e2e_model_root:=/workspaces/ros2_ws/models/e2e/<run-name>`が必須です。
 
 `custom`では`e2e` componentを選択できます。`control`と`e2e`はどちらも
 `/auto/control_cmd`へpublishするため併用できません。`scripts/bringup.sh`と統合

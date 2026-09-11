@@ -53,7 +53,7 @@ Consoleではarchitectureとoutputを別々に選択します。CLIでは選択�
 `model.steering_only=true`を追加してください。
 実車では`bringup.sh e2e-collect`で固定スロットルの教師データを収集し、
 配備先`Camera Steering Only (fixed throttle)`へ転送した後、
-`bringup.sh e2e-steering --set fixed_throttle:=0.2`で推論します。
+`bringup.sh e2e-steering --e2e-model <配備したrun> --set fixed_throttle:=0.2`で推論します。
 
 | experiment | 画像時系列 | IMU | 出力 |
 |---|---:|---:|---|
@@ -244,7 +244,24 @@ E2E Analysisでtrajectory ONNXを選ぶと、動画時刻に同期したロー�
 
 ```bash
 scripts/deploy_model.sh outputs/e2e/trajectory_run/model.onnx \
-  --preset camera_trajectory
+  --preset camera_trajectory \
+  --name trajectory_run \
+  --build-engine
+```
+
+配備先は`<remote-root>/<name>`です。`latest`リンクは更新しません。別途buildする場合も
+対象を明示します。
+
+```bash
+/workspaces/scripts/e2e_trt.sh \
+  /workspaces/ros2_ws/models/e2e/trajectory_run
+```
+
+実行時も同じディレクトリを指定します。
+
+```bash
+/workspaces/scripts/bringup.sh e2e --vehicle jpbb --sensor-kit realsense \
+  --e2e-model /workspaces/ros2_ws/models/e2e/trajectory_run
 ```
 
 現行のIsaac ROS TensorRT画像パイプラインへ直接接続できるのは、4D NCHWの

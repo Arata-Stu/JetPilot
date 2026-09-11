@@ -64,7 +64,7 @@ def generate_launch_description() -> lut.LaunchDescription:
 
     args.add_arg("image_topic", "/realsense/color/image_raw", cli=True)
     args.add_arg("control_cmd_topic", "/auto/control_cmd", cli=True)
-    args.add_arg("model_root", "/workspaces/ros2_ws/models/e2e/latest", cli=True)
+    args.add_arg("model_root", "", cli=True)
     args.add_arg(
         "model_file_path",
         PathJoinSubstitution([args.model_root, "model.pt"]),

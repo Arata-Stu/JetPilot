@@ -21,6 +21,7 @@ REQUESTED_PRESET="${E2E_MODEL_PRESET:-}"
 REMOTE_USER="${E2E_REMOTE_USER:-}"
 REMOTE_HOST="${E2E_REMOTE_HOST:-}"
 REMOTE_ROOT="${E2E_REMOTE_MODEL_ROOT:-}"
+DEPLOY_NAME="${E2E_DEPLOY_NAME:-}"
 ASSUME_YES=false
 BUILD_ENGINE=false
 
@@ -52,6 +53,7 @@ usage() {
     "  --user USER          Override the SSH user" \
     "  --host HOST          Override the Jetson host" \
     "  --remote-root PATH   Override the remote model root" \
+    "  --name NAME          Remote model directory name (defaults to the source run name)" \
     "  --build-engine       Run trtexec on the Jetson after upload" \
     "  -y, --yes            Deploy without confirmation"
 }
@@ -70,6 +72,7 @@ parse_args() {
       --user) REMOTE_USER="${2:?}"; shift 2 ;;
       --host) REMOTE_HOST="${2:?}"; shift 2 ;;
       --remote-root) REMOTE_ROOT="${2:?}"; shift 2 ;;
+      --name) DEPLOY_NAME="${2:?}"; shift 2 ;;
       --build-engine) BUILD_ENGINE=true; shift ;;
       -y|--yes) ASSUME_YES=true; shift ;;
       -h|--help) usage; exit 0 ;;
@@ -270,7 +273,9 @@ main() {
   preset_index="$(select_preset_index)"
   model_path="$(select_model)"
   metadata_path="$(dirname -- "$model_path")/${PRESET_METADATA_FILENAMES[$preset_index]}"
-  model_name="${PRESET_MODEL_NAMES[$preset_index]}"
+  model_name="${DEPLOY_NAME:-$(basename -- "$(dirname -- "$model_path")")}"
+  [[ "$model_name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] \
+    || die "deployment name may contain only letters, numbers, '.', '_' and '-'"
 
   REMOTE_USER="${REMOTE_USER:-${PROFILE_USERS[$profile_index]}}"
   REMOTE_HOST="${REMOTE_HOST:-${PROFILE_HOSTS[$profile_index]}}"
@@ -302,7 +307,6 @@ main() {
   if [[ "$BUILD_ENGINE" == true ]]; then
     ssh "$remote_target" "set -e; /usr/src/tensorrt/bin/trtexec --onnx='$remote_model_dir/model.onnx' --saveEngine='$remote_model_dir/model.plan.building' --fp16 > '$remote_model_dir/build_engine.log' 2>&1; mv -- '$remote_model_dir/model.plan.building' '$remote_model_dir/model.plan'"
   fi
-  ssh "$remote_target" "ln -sfn -- '$model_name' '${REMOTE_ROOT%/}/latest'"
   echo "転送が完了しました: ${remote_target}:${remote_model_dir}"
 }
 

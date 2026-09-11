@@ -116,7 +116,7 @@ class GenerateRacelineScriptTest(unittest.TestCase):
     def test_passes_default_vehicle_clearance_explicitly(self) -> None:
         script = generate_raceline_script(self.config, "/workspaces/map/course_a")
 
-        self.assertIn("--vehicle-width-m 0.25", script)
+        self.assertIn("--vehicle-width-m 0.18", script)
         self.assertIn("--safety-margin-m 0.05", script)
         self.assertIn("--max-speed 3", script)
         self.assertIn("--min-speed 0.8", script)

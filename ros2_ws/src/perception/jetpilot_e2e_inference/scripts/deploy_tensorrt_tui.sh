@@ -75,14 +75,5 @@ else
   E2E_TRT_FP16=0 "$SCRIPT_DIR/build_tensorrt_engine.sh" "$selected" "$engine_path"
 fi
 
-model_dir="$(dirname -- "$selected")"
-latest_path="${MODEL_ROOT%/}/latest"
-if [[ -e "$latest_path" && ! -L "$latest_path" ]]; then
-  die "latest exists but is not a symlink: $latest_path"
-fi
-relative_model_dir="${model_dir#"${MODEL_ROOT%/}"/}"
-[[ "$relative_model_dir" != "$model_dir" ]] || die "selected model is outside model root"
-ln -sfn -- "$relative_model_dir" "$latest_path"
-
 echo "TensorRT engineを生成しました: $engine_path"
-echo "有効モデルを切り替えました: $latest_path -> $relative_model_dir"
+echo "bringupではこのモデルを明示してください: $(dirname -- "$selected")"

@@ -85,7 +85,8 @@ Common presets:
 /workspaces/scripts/bringup.sh calibration --vehicle jpbb
 
 # Live RealSense RGB + TensorRT E2E direct control + manual/STOP fallback
-/workspaces/scripts/bringup.sh e2e --vehicle vesc
+/workspaces/scripts/bringup.sh e2e --vehicle vesc \
+  --e2e-model /workspaces/ros2_ws/models/e2e/<run-name>
 
 # Live camera + localization, without an actuator driver
 /workspaces/scripts/bringup.sh localization \
@@ -387,8 +388,8 @@ bash scripts/bringup.sh e2e --e2e-model /workspaces/ros2_ws/models/e2e/camera_st
 上記もmetadataから固定モードに切り替わります。固定値は `--set fixed_throttle:=0.2` で指定できます。
 `e2e-steering` は固定モデル限定のCLI互換名として残しています。
 明示した `e2e_fixed_throttle_mode` とモデルが矛盾する場合は、設定を上書きせずエラーにします。
-非対話でモデル未指定の場合の配備先は従来どおりcamera_control／event_controlです。
-この自動設定はbringup.sh経由で適用されます。
+非対話起動では`--e2e-model`が必須です。指定した名前付きディレクトリは
+bringup.shから`e2e_model_root`へそのまま渡されます。
 
 
 ### 用途から起動するメニュー

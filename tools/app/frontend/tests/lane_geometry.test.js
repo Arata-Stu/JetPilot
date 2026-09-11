@@ -81,6 +81,58 @@ function editorContext() {
   `, context);
   return context;
 }
+
+test('custom line simplification removes dense straight points and preserves corners', () => {
+  const c = editorContext();
+  vm.runInContext(`
+    updateCustomLineChrome = () => {};
+    drawMapPreview = () => {};
+    render = () => {};
+    toast = () => {};
+    state.customLineEditor.enabled = true;
+    state.customLineEditor.simplifyToleranceM = 0.01;
+    state.customLineEditor.workingLine = cloneCustomLine({
+      id:'dense', closed_loop:false,
+      points:[...Array.from({length:11},(_,i)=>({x_m:i,y_m:0,speed_mps:1})),
+              ...Array.from({length:10},(_,i)=>({x_m:10,y_m:i+1,speed_mps:1}))]
+    });
+    simplifyCustomLineFull();
+  `, c);
+  const points = JSON.parse(vm.runInContext('JSON.stringify(state.customLineEditor.workingLine.points)', c));
+  assert.deepEqual(points.map(({x_m,y_m}) => [x_m,y_m]), [[0,0],[10,0],[10,10]]);
+  assert.equal(vm.runInContext('state.customLineEditor.undoStack.length', c), 1);
+  assert.equal(vm.runInContext('state.customLineEditor.dirty', c), true);
+});
+
+test('closed custom line simplification preserves the loop corners', () => {
+  const c = editorContext();
+  const points = JSON.parse(vm.runInContext(`JSON.stringify(simplifyCustomLinePoints([
+    [0,0],[1,0],[2,0],[2,1],[2,2],[1,2],[0,2],[0,1]
+  ].map(([x_m,y_m])=>({x_m,y_m,speed_mps:1})), 0.01, true))`, c));
+  assert.deepEqual(points.map(({x_m,y_m}) => [x_m,y_m]), [[0,0],[2,0],[2,2],[0,2]]);
+});
+
+test('custom line 1/2 and 1/4 downsampling uses equal arc-length spacing', () => {
+  for (const [factor, expectedCount] of [[2, 8], [4, 4]]) {
+    const c = editorContext();
+    vm.runInContext(`
+      updateCustomLineChrome = () => {};
+      render = () => {};
+      toast = () => {};
+      state.customLineEditor.enabled = true;
+      state.customLineEditor.workingLine = cloneCustomLine({
+        id:'dense', closed_loop:false,
+        points:Array.from({length:16},(_,i)=>({x_m:i,y_m:0,speed_mps:1}))
+      });
+      downsampleCustomLine(${factor});
+    `, c);
+    const points = JSON.parse(vm.runInContext('JSON.stringify(state.customLineEditor.workingLine.points)', c));
+    assert.equal(points.length, expectedCount);
+    assert.deepEqual([points[0].x_m, points.at(-1).x_m], [0, 15]);
+    const gaps = points.slice(1).map((point, index) => point.x_m - points[index].x_m);
+    gaps.forEach(gap => assert.ok(Math.abs(gap - gaps[0]) < 1e-9));
+  }
+});
 test('manual centerline survives boundary updates and undo/redo restores mode', () => {
   const c = editorContext();
   vm.runInContext(`setManualCenterline(true); activeEditorLane().centerline[1] = [2,0.5]; regenerateEditorCenterline(activeEditorLane());`, c);

@@ -5,7 +5,7 @@ import sys
 import unittest
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-from jetpilot_hdmap_publisher.drivable_guard import Environment, Settings, motion_issue, route_issue
+from jetpilot_hdmap_publisher.drivable_guard import Environment, Settings, footprint, motion_issue, route_issue
 
 
 def corridor(width=2,obstacles=()):
@@ -27,6 +27,13 @@ class GuardTest(unittest.TestCase):
 
     def test_body_outside_while_base_inside(self):
         self.assertIn('bounds',motion_issue(corridor(),(0,1.99,0),(0,0,0),self.cfg))
+
+    def test_oriented_footprint_uses_body_width_instead_of_circumcircle_laterally(self):
+        cfg=Settings(front_m=.16,rear_m=.16,width_m=.18,margin_m=.01)
+        self.assertGreater(cfg.radius,.19)
+        self.assertEqual(motion_issue(corridor(.11),(0,0,0),(0,0,0),cfg),'')
+        self.assertIn('bounds',motion_issue(corridor(.095),(0,0,0),(0,0,0),cfg))
+        self.assertAlmostEqual(max(point[1] for point in footprint((0,0,0),cfg)),.10)
 
     def test_reverse_and_lateral_velocity(self):
         env=corridor(obstacles=[('box',[(-.7,-.1),(-.69,-.1),(-.69,.1),(-.7,.1)],0)])
@@ -52,6 +59,11 @@ class GuardTest(unittest.TestCase):
 
     def test_turning_motion_hits_wall(self):
         self.assertIn('bounds',motion_issue(corridor(1),(0,.5,0),(1,0,2),self.cfg))
+
+    def test_rotation_checks_swept_oriented_body(self):
+        cfg=Settings(front_m=.4,rear_m=.1,width_m=.1,margin_m=0,reaction_s=.5)
+        self.assertEqual(motion_issue(corridor(.4),(0,0,0),(0,0,0),cfg),'')
+        self.assertIn('bounds',motion_issue(corridor(.4),(0,0,0),(0,0,math.pi),cfg))
 
     def test_unsafe_route_does_not_imply_current_motion_emergency(self):
         env=corridor(obstacles=[('box',[(.4,-.1),(.5,-.1),(.5,.1),(.4,.1)],0)])
