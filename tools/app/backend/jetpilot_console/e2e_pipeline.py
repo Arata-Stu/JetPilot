@@ -86,6 +86,32 @@ EXPERIMENTS = {
         "input_width": 212,
         "input_height": 120,
     },
+    "wam_dinov3_vits16_frozen": {
+        "label": "World Action Model · DINOv3 ViT-S/16 + Tiny GRU / frozen",
+        "stages": 1,
+        "task": "control",
+        "model": "wam_dinov3_vits16",
+        "family": "wam",
+        "target": "control",
+        "name_prefix": "wam-dinov3-vits16-gru-control-frozen",
+        "output_targets": ["control"],
+        "input_width": 212,
+        "input_height": 120,
+        "recommended_batch_size": 8,
+    },
+    "wam_dinov3_vits16_eventstate_frozen": {
+        "label": "World Action Model · DINOv3 ViT-S/16 EventState + Tiny GRU / frozen",
+        "stages": 1,
+        "task": "control",
+        "model": "wam_dinov3_vits16",
+        "family": "wam",
+        "target": "control",
+        "name_prefix": "wam-dinov3-vits16-evs-gru-control-frozen",
+        "output_targets": ["control"],
+        "input_width": 212,
+        "input_height": 120,
+        "recommended_batch_size": 8,
+    },
     "control_pilotnet_fusion": {"label": "Control · PilotNet (fusion baseline)", "stages": 1, "task": "control", "model": "fusion", "family": "cnn", "target": "control", "name_prefix": "cnn-pilotnet-control-fusion"},
     "control_pilotnet_gru": {"label": "Control · PilotNet + GRU", "stages": 1, "task": "control", "model": "fusion", "family": "cnn", "target": "control", "name_prefix": "cnn-pilotnet-gru-control"},
     "control_pilotnet_imu": {"label": "Control · PilotNet + IMU", "stages": 1, "task": "control", "model": "fusion", "family": "cnn", "target": "control", "name_prefix": "cnn-pilotnet-imu-control"},
@@ -532,6 +558,23 @@ def build_train_task(config: Any, body: dict[str, Any]) -> PipelineTaskSpec:
     ]
     if experiment_task == "control":
         overrides.append(f"model.steering_only={'true' if output_target == 'steer' else 'false'}")
+    if str(EXPERIMENTS[experiment].get("model") or "") == "wam_dinov3_vits16":
+        context_length = _integer(
+            body.get("wam_context_length", 4), label="WAM context length", minimum=1, maximum=32
+        )
+        future_horizon = _integer(
+            body.get("wam_future_horizon", 6), label="WAM future horizon", minimum=1, maximum=32
+        )
+        future_stride = _integer(
+            body.get("wam_future_stride", 1), label="WAM future stride", minimum=1, maximum=10
+        )
+        overrides.extend(
+            [
+                f"model.sequence_length={context_length}",
+                f"model.future_horizon={future_horizon}",
+                f"model.future_stride={future_stride}",
+            ]
+        )
     for key in (
         "trajectory_horizon_sec",
         "trajectory_points",
@@ -616,6 +659,11 @@ def build_deploy_task(config: Any, body: dict[str, Any]) -> PipelineTaskSpec:
         raise ValueError("model must be an exported model.onnx from an E2E training run")
 
     metadata = _read_json(allowed.parent / "metadata.json")
+    architecture = metadata.get("architecture") if isinstance(metadata.get("architecture"), dict) else {}
+    if architecture.get("stateful_step"):
+        raise ValueError(
+            "WAM ONNX is TensorRT-buildable, but online deployment requires the recurrent-state adapter"
+        )
     image_topic = str(metadata.get("image_topic") or model.get("image_topic") or "")
     model_config = metadata.get("config", {})
     if not image_topic and isinstance(model_config, dict):

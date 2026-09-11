@@ -59,6 +59,10 @@ def update_rosbag_metadata(bag_dir: Path, **updates: object) -> dict[str, object
 
 def _rosbag_record(record_root: Path, metadata: Path, *, trashed: bool = False) -> dict[str, object]:
     bag_dir = metadata.parent
+    try:
+        relative_path = bag_dir.relative_to(record_root).as_posix()
+    except ValueError:
+        relative_path = bag_dir.name
     topic_count = 0
     try:
         text = metadata.read_text(encoding="utf-8", errors="replace")
@@ -70,6 +74,7 @@ def _rosbag_record(record_root: Path, metadata: Path, *, trashed: bool = False) 
     return {
         "name": bag_dir.name,
         "display_name": display_name,
+        "relative_path": relative_path,
         "path": str(bag_dir),
         "metadata_path": str(metadata),
         "size_bytes": _dir_size(bag_dir),

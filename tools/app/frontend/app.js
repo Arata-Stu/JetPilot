@@ -61,6 +61,9 @@ const state = {
     imuSamples: 10,
     jpegQuality: 92,
     batchSize: 64,
+    wamContextLength: 4,
+    wamFutureHorizon: 6,
+    wamFutureStride: 1,
     numWorkers: 4,
     epochs: 30,
     learningRate: 0.001,
@@ -2576,6 +2579,40 @@ function renderCompactList(items, kind) {
   `;
 }
 
+function rosbagRelativePath(item) {
+  const explicit = String(item?.relative_path || "").replace(/^\/+|\/+$/g, "");
+  if (explicit) return explicit;
+  const fullPath = String(item?.path || "").replace(/\/+$/g, "");
+  const recordRoot = String(state.config?.record_root || "").replace(/\/+$/g, "");
+  if (recordRoot && fullPath.startsWith(`${recordRoot}/`)) return fullPath.slice(recordRoot.length + 1);
+  return String(item?.name || fullPath.split("/").filter(Boolean).pop() || "rosbag");
+}
+
+function rosbagOptionLabel(item) {
+  const relativePath = rosbagRelativePath(item);
+  const breadcrumb = relativePath.split("/").filter(Boolean).join(" / ");
+  const displayName = String(item?.display_name || "");
+  const name = String(item?.name || "");
+  return displayName && displayName !== name ? `${breadcrumb} — ${displayName}` : breadcrumb;
+}
+
+function renderRosbagOptions(selectedPath = "") {
+  const groups = new Map();
+  state.rosbags.forEach((item) => {
+    const relativePath = rosbagRelativePath(item);
+    const parts = relativePath.split("/").filter(Boolean);
+    const category = parts.length > 1 ? parts[0] : "record root";
+    if (!groups.has(category)) groups.set(category, []);
+    groups.get(category).push(item);
+  });
+  return [...groups.entries()]
+    .map(([category, items]) => `
+      <optgroup label="${esc(category === "record root" ? "record" : `record / ${category}`)}">
+        ${items.map((item) => `<option value="${esc(item.path)}" ${item.path === selectedPath ? "selected" : ""}>${esc(rosbagOptionLabel(item))}</option>`).join("")}
+      </optgroup>`)
+    .join("");
+}
+
 function renderMapBuilder() {
   return `
     <div class="page">
@@ -2630,7 +2667,7 @@ function renderMapBuildForm() {
         <label>Rosbag</label>
         <select id="build-rosbag" onchange="selectMapBuildRosbag(this.value)">
           <option value="">Select rosbag</option>
-          ${state.rosbags.map((bag) => `<option value="${esc(bag.path)}">${esc(bag.display_name || bag.name)} - ${esc(bag.path)}</option>`).join("")}
+          ${renderRosbagOptions()}
         </select>
       </div>
       <div class="field">
@@ -3267,6 +3304,7 @@ function updateE2EPipelineOption(key, value) {
   if (!(key in state.e2ePipeline)) return;
   const numberKeys = [
     "inputWidth", "inputHeight", "maxControlDtSec", "jpegQuality", "batchSize",
+    "wamContextLength", "wamFutureHorizon", "wamFutureStride",
     "maxOdometryDtSec", "trajectoryPoints", "trajectoryHorizonSec", "trajectoryScaleM",
     "imuWindowSec", "imuSamples",
     "numWorkers", "epochs", "learningRate", "finetuneEpochs",
@@ -3297,6 +3335,7 @@ function updateE2EPipelineOption(key, value) {
     const experiment = state.e2ePipeline.experiments.find((item) => item.id === state.e2ePipeline.experiment);
     const targets = experiment?.output_targets || [experiment?.target || "control"];
     if (!targets.includes(state.e2ePipeline.outputTarget)) state.e2ePipeline.outputTarget = targets[0] || "control";
+    if (experiment?.recommended_batch_size) state.e2ePipeline.batchSize = experiment.recommended_batch_size;
     state.e2ePipeline.runName = suggestedE2ERunName(experiment);
   }
   if (key === "outputTarget") state.e2ePipeline.runName = suggestedE2ERunName();
@@ -3308,6 +3347,7 @@ function updateE2EPipelineOption(key, value) {
 
 function recommendedE2EDeployPreset(run) {
   if (!run) return "";
+  if (run.architecture?.stateful_step) return "";
   const dataset = state.e2ePipeline.datasets.find((item) => item.path === run.dataset_dir);
   const topic = dataset?.image_topic || run.image_topic || "";
   const sensor = topic.endsWith("/event_image") ? "event" : "camera";
@@ -3398,6 +3438,9 @@ function trainE2EModel() {
       weight_decay: pipeline.weightDecay,
       seed: pipeline.seed,
       device: pipeline.device,
+      wam_context_length: pipeline.wamContextLength,
+      wam_future_horizon: pipeline.wamFutureHorizon,
+      wam_future_stride: pipeline.wamFutureStride,
     },
   );
 }
@@ -3486,7 +3529,7 @@ function renderE2EPipeline() {
         <div class="e2e-pipeline-grid">
           <article class="e2e-pipeline-stage">
             <header><span>01</span><div><strong>Create dataset</strong><small>Images + control / future trajectory + causal IMU</small></div></header>
-            <div class="field"><label>Rosbag</label><select onchange="selectAnalysisBag(this.value)"><option value="">Select rosbag</option>${state.rosbags.map((item) => `<option value="${esc(item.path)}" ${item.path === state.analysis.selectedBagPath ? "selected" : ""}>${esc(item.display_name || item.name)}</option>`).join("")}</select></div>
+            <div class="field"><label>Rosbag</label><select onchange="selectAnalysisBag(this.value)"><option value="">Select rosbag</option>${renderRosbagOptions(state.analysis.selectedBagPath)}</select></div>
             <div class="field"><label>Dataset name</label><input value="${esc(pipeline.datasetName)}" onchange="updateE2EPipelineOption('datasetName', this.value)" /><div class="field-hint">${esc(pipeline.datasetRoot)} · <button type="button" class="link-button" onclick="applyE2ENameSuggestion('dataset')">現在日時で再提案</button></div></div>
             <div class="field"><label>Learning task</label><select onchange="updateE2EPipelineOption('datasetTask', this.value)">${[["control","Control (steering + throttle)"],["trajectory","Trajectory (future odometry)"]].map(([value,label]) => `<option value="${value}" ${pipeline.datasetTask === value ? "selected" : ""}>${label}</option>`).join("")}</select></div>
             <div class="field"><label>Image topic</label><select onchange="updateE2EPipelineOption('imageTopic', this.value)">${analysisTopicOptions("image", imageTopic)}</select></div>
@@ -3505,6 +3548,7 @@ function renderE2EPipeline() {
             <div class="field"><label>Model output</label><select onchange="updateE2EPipelineOption('outputTarget', this.value)">${outputTargets.map((value) => `<option value="${esc(value)}" ${value === pipeline.outputTarget ? "selected" : ""}>${esc(value === "steer" ? "Steer only（throttleは0固定）" : value === "control" ? "Control（steering + throttle）" : "Trajectory")}</option>`).join("")}</select><div class="field-hint">モデル構造とは独立して学習出力を選択します。</div></div>
             <div class="field"><label>Model / run name</label><input value="${esc(pipeline.runName)}" onchange="updateE2EPipelineOption('runName', this.value)" /><div class="field-hint">${esc(pipeline.runRoot)} · architecture変更時に自動更新 · <button type="button" class="link-button" onclick="applyE2ENameSuggestion('run')">現在日時で再提案</button></div></div>
             <div class="e2e-compact-fields"><label>Epochs<input type="number" min="1" value="${esc(pipeline.epochs)}" onchange="updateE2EPipelineOption('epochs', this.value)" /></label><label>Learning rate<input type="number" min="0.00000001" step="0.0001" value="${esc(pipeline.learningRate)}" onchange="updateE2EPipelineOption('learningRate', this.value)" /></label><label>Batch<input type="number" min="1" value="${esc(pipeline.batchSize)}" onchange="updateE2EPipelineOption('batchSize', this.value)" /></label></div>
+            ${selectedExperiment?.family === "wam" ? `<div class="e2e-compact-fields"><label>Context frames<input type="number" min="1" max="32" value="${esc(pipeline.wamContextLength)}" onchange="updateE2EPipelineOption('wamContextLength', this.value)" /></label><label>Future steps<input type="number" min="1" max="32" value="${esc(pipeline.wamFutureHorizon)}" onchange="updateE2EPipelineOption('wamFutureHorizon', this.value)" /></label><label>Future stride<input type="number" min="1" max="10" value="${esc(pipeline.wamFutureStride)}" onchange="updateE2EPipelineOption('wamFutureStride', this.value)" /></label></div><div class="field-hint">未来DINO latentと未来のsteering/throttleを同時に学習します。TensorRT出力は明示的なhidden stateを持つ1-step graphです。</div>` : ""}
             ${hasTwoStages ? `<div class="e2e-compact-fields"><label>Fine-tune epochs<input type="number" min="1" value="${esc(pipeline.finetuneEpochs)}" onchange="updateE2EPipelineOption('finetuneEpochs', this.value)" /></label><label>Fine-tune LR<input type="number" min="0.00000001" step="0.0001" value="${esc(pipeline.finetuneLearningRate)}" onchange="updateE2EPipelineOption('finetuneLearningRate', this.value)" /></label></div>` : ""}
             <details><summary>Advanced parameters</summary><div class="e2e-compact-fields"><label>Data fraction<input type="number" min="0.001" max="1" step="0.05" value="${esc(pipeline.fraction)}" onchange="updateE2EPipelineOption('fraction', this.value)" /></label><label>Validation<input type="number" min="0.01" max="0.9" step="0.05" value="${esc(pipeline.valFraction)}" onchange="updateE2EPipelineOption('valFraction', this.value)" /></label><label>Workers<input type="number" min="0" value="${esc(pipeline.numWorkers)}" onchange="updateE2EPipelineOption('numWorkers', this.value)" /></label><label>Weight decay<input type="number" min="0" max="1" step="0.0001" value="${esc(pipeline.weightDecay)}" onchange="updateE2EPipelineOption('weightDecay', this.value)" /></label><label>Seed<input type="number" min="0" value="${esc(pipeline.seed)}" onchange="updateE2EPipelineOption('seed', this.value)" /></label><label>Device<select onchange="updateE2EPipelineOption('device', this.value)">${[["","Auto"],["cuda","CUDA"],["mps","Apple MPS"],["cpu","CPU"]].map(([value,label]) => `<option value="${value}" ${pipeline.device === value ? "selected" : ""}>${label}</option>`).join("")}</select></label></div></details>
             <button class="primary ${actionBusy("e2e-pipeline:train") ? "is-busy" : ""}" onclick="trainE2EModel()" ${pipeline.datasetDir ? "" : "disabled"} ${actionButtonAttrs("e2e-pipeline:train", "Training is starting...")}>${esc(actionButtonLabel("e2e-pipeline:train", "Start training", "Starting..."))}</button>
@@ -4116,7 +4160,7 @@ function renderE2EAnalysisForm() {
       <div class="field full"><label>1. Evaluation mode</label><div class="e2e-mode-grid">
         ${modeCards.map(([value, title, detail]) => `<button type="button" class="e2e-mode-card ${mode === value ? "selected" : ""}" onclick="updateE2EOption('e2eMode', ${js(value)})"><strong>${esc(title)}</strong><span>${esc(detail)}</span></button>`).join("")}
       </div></div>
-      <div class="field full"><label for="e2e-bag">2. Rosbag</label><select id="e2e-bag" onchange="selectAnalysisBag(this.value)"><option value="">Select rosbag</option>${state.rosbags.map((item) => `<option value="${esc(item.path)}" ${item.path === analysis.selectedBagPath ? "selected" : ""}>${esc(item.display_name || item.name)} - ${esc(item.path)}</option>`).join("")}</select><div class="field-hint">${analysis.bagDetailLoading ? "Inspecting topics..." : analysis.selectedBagPath ? esc(analysis.selectedBagPath) : "Select the bag to evaluate."}</div></div>
+      <div class="field full"><label for="e2e-bag">2. Rosbag</label><select id="e2e-bag" onchange="selectAnalysisBag(this.value)"><option value="">Select rosbag</option>${renderRosbagOptions(analysis.selectedBagPath)}</select><div class="field-hint">${analysis.bagDetailLoading ? "Inspecting topics..." : analysis.selectedBagPath ? esc(analysis.selectedBagPath) : "Select the bag to evaluate."}</div></div>
       <div class="field full"><label>3. Image topics</label>${renderAnalysisImageTopicsSelector()}</div>
       ${mode === "supervised" ? `
         <div class="field full"><label for="e2e-model">ONNX model</label><select id="e2e-model" onchange="updateE2EOption('e2eModelPath', this.value)"><option value="">Select model</option>${state.e2eModels.map((model) => `<option value="${esc(model.path)}" ${model.path === analysis.e2eModelPath ? "selected" : ""}>${esc(model.task || model.output?.task || "control")} · ${esc(model.name)} — ${esc(model.relative_path || model.path)}</option>`).join("")}</select><div class="field-hint">${state.e2eModels.length ? `${state.e2eModels.length} exported model(s) found. Trajectory models use recorded odometry as GT.` : "No model.onnx was found under the configured outputs folders."}</div></div>
@@ -4186,7 +4230,7 @@ function renderAnalysisForm() {
         <label for="analysis-bag">1. Select Rosbag</label>
         <select id="analysis-bag" onchange="selectAnalysisBag(this.value)">
           <option value="">Select rosbag</option>
-          ${state.rosbags.map((item) => `<option value="${esc(item.path)}" ${item.path === analysis.selectedBagPath ? "selected" : ""}>${esc(item.display_name || item.name)} - ${esc(item.path)}</option>`).join("")}
+          ${renderRosbagOptions(analysis.selectedBagPath)}
         </select>
         <div class="field-hint">${analysis.bagDetailLoading ? "Inspecting topics..." : bag ? `${esc(bag.path)}${duration > 0 ? ` / ${formatAnalysisClock(duration)}` : ""}` : "Choose a local rosbag to inspect its topics."}</div>
       </div>

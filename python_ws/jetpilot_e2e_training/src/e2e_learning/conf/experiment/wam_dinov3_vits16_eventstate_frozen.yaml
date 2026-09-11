@@ -1,0 +1,19 @@
+# @package _global_
+
+defaults:
+  - override /model: wam_dinov3_vits16
+  - override /train: vit_frozen_head
+
+data:
+  input_width: 212
+  input_height: 120
+  mean: [0.8993729785, 0.7969581015, 0.8928228776]
+  std: [0.2204336077, 0.2921656668, 0.2204992771]
+
+model:
+  weights_path: ${oc.env:EVENTSTATE_DINOV3_VITS16_WEIGHTS,"weights/eventstate/eventstate_dinov3_vits16.pth"}
+  require_weights: true
+  trusted_checkpoint: true
+
+run:
+  name: wam-dinov3-vits16-evs-gru-frozen

@@ -62,6 +62,19 @@ def write_bag(bag_dir: Path, topics: dict[str, tuple[str, int]]) -> Path:
 
 
 class RosbagDetailTests(unittest.TestCase):
+    def test_scanner_exposes_record_root_relative_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            record_root = Path(temporary_directory) / "record"
+            write_bag(
+                record_root / "competition" / "dry" / "run_001",
+                {"/camera": ("sensor_msgs/msg/Image", 1)},
+            )
+
+            scanned = scan_rosbags(record_root)
+
+            self.assertEqual(len(scanned), 1)
+            self.assertEqual(scanned[0]["relative_path"], "competition/dry/run_001")
+
     def test_metadata_detail_exposes_topics_and_string_epoch(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             record_root = Path(temporary_directory) / "record"

@@ -70,6 +70,43 @@ Consoleではarchitectureとoutputを別々に選択します。CLIでは選択�
 | `control_pilotnet_gru` | 4 frames + GRU | なし | control |
 | `control_pilotnet_imu` | 1 frame | GRU encoder | control |
 | `control_pilotnet_gru_imu` | 4 frames + GRU | GRU encoder | control |
+| `wam_dinov3_vits16_frozen` | 4 context frames + recurrent state | なし | control + future action/latent |
+| `wam_dinov3_vits16_eventstate_frozen` | 4 EVS context frames + recurrent state | なし | control + future action/latent |
+
+### Tiny World Action Model
+
+`wam_dinov3_vits16_frozen`は、DINOv3 ViT-S/16を固定したまま、小型の
+deterministic GRU dynamicsだけを学習する最初のWAM構成です。現在のcontrolに加えて、
+複数step先のsteering/throttleと、将来画像から得たstop-gradient DINO CLS latentを
+予測します。既定値はcontext 4 frame、future 6 step、latent/hidden 256です。
+
+学習用の時系列は既存control datasetの`sequence_id`と時刻順を利用します。
+train/validation境界にはfuture horizon分のgapを設け、未来教師がvalidation区間へ
+漏れないようにします。Consoleでは`[WAM]`のモデルとして選択でき、context、future
+steps、future strideを変更できます。
+EventState EVS encoderとGEP用mean/stdを使う場合は
+`wam_dinov3_vits16_eventstate_frozen`を選択します。
+
+```bash
+python -m e2e_learning.cli.train \
+  experiment=wam_dinov3_vits16_frozen \
+  data.dataset_dir=datasets/control_run_001 \
+  train.batch_size=8 \
+  run.name=wam-dinov3-vits16-gru-control-frozen_001
+```
+
+ONNXはonline用の1-step graphとしてexportします。入出力は固定shapeで、GRUは
+`Gemm/Sigmoid/Tanh/Add/Mul`相当の基本演算へ展開できる独自cellを使います。
+
+```text
+inputs : image, hidden_state, previous_action
+outputs: control, next_hidden_state, future_controls, future_latents
+```
+
+このONNXは`trtexec`でTensorRT engineへbuildできます。実車online接続には、
+`next_hidden_state`と`control`を次周期の入力へ戻し、リセットも管理するROS 2 state
+adapterが必要です。そのadapterを実装するまではConsoleからの通常E2E配備を拒否します。
+将来RSSMを追加する場合も、このTensorRT state境界は維持します。
 
 ### DINOv3互換ViT-S/16
 

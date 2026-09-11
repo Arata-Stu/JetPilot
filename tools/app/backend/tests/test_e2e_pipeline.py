@@ -143,6 +143,10 @@ class E2EPipelineTests(unittest.TestCase):
             suggest_run_name("dinov3_vits16_scratch", now, "steer"),
             "vit-dinov3-vits16-steer-only-scratch_0910-1800",
         )
+        self.assertEqual(
+            suggest_run_name("wam_dinov3_vits16_frozen", now),
+            "wam-dinov3-vits16-gru-control-frozen_0910-1800",
+        )
 
     def test_preprocess_timestamp_source_override_and_validation(self) -> None:
         body = {"rosbag": str(self.bag), "dataset_name": "clock-test", "image_topic": "/event_camera/event_image"}
@@ -188,6 +192,29 @@ class E2EPipelineTests(unittest.TestCase):
 
         self.assertIn("data.input_width=212", train.command)
         self.assertIn("data.input_height=120", train.command)
+
+    def test_wam_is_available_as_an_independent_control_model(self) -> None:
+        dataset = self._dataset()
+        catalog = pipeline_catalog(self.config)
+        experiments = {item["id"]: item for item in catalog["experiments"]}
+
+        self.assertEqual(experiments["wam_dinov3_vits16_frozen"]["family"], "wam")
+        train = build_train_task(
+            self.config,
+            {
+                "dataset_dir": str(dataset),
+                "run_name": "wam-run",
+                "experiment": "wam_dinov3_vits16_frozen",
+                "wam_context_length": 5,
+                "wam_future_horizon": 8,
+                "wam_future_stride": 2,
+            },
+        )
+        self.assertIn("experiment=wam_dinov3_vits16_frozen", train.command)
+        self.assertIn("model.steering_only=false", train.command)
+        self.assertIn("model.sequence_length=5", train.command)
+        self.assertIn("model.future_horizon=8", train.command)
+        self.assertIn("model.future_stride=2", train.command)
 
     def test_vit_and_mobilenet_support_control_or_steer_only_output(self) -> None:
         dataset = self._dataset()
@@ -296,6 +323,16 @@ class E2EPipelineTests(unittest.TestCase):
         outside.write_bytes(b"onnx")
         with self.assertRaises(ValueError):
             build_deploy_task(self.config, {"model_path": str(outside)})
+
+    def test_stateful_wam_requires_runtime_adapter_before_deploy(self) -> None:
+        run = self._run(onnx=True)
+        (run / "metadata.json").write_text(json.dumps({
+            "task": "control",
+            "architecture": {"stateful_step": True},
+        }))
+
+        with self.assertRaisesRegex(ValueError, "recurrent-state adapter"):
+            build_deploy_task(self.config, {"model_path": str(run / "model.onnx")})
 
 
 if __name__ == "__main__":

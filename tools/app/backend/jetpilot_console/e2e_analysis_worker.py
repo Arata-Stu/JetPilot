@@ -206,6 +206,7 @@ def _supervised_predictions(
     architecture = metadata.get("architecture") if isinstance(metadata.get("architecture"), dict) else {}
     sequence_length = max(1, int(architecture.get("sequence_length") or 1))
     use_imu = bool(architecture.get("use_imu", False))
+    stateful_step = bool(architecture.get("stateful_step", False))
     model_input = metadata.get("input") if isinstance(metadata.get("input"), dict) else {}
     output_fields = (
         metadata.get("output", {}).get("fields")
@@ -228,7 +229,14 @@ def _supervised_predictions(
             if len(session_inputs[0].shape) == 5:
                 warmup_tensor = np.repeat(warmup_tensor[:, None, ...], sequence_length, axis=1)
             warmup_feed = {input_name: warmup_tensor}
-            if use_imu and len(session_inputs) > 1:
+            if stateful_step:
+                for state_input in session_inputs[1:]:
+                    shape = tuple(
+                        int(value) if isinstance(value, int) and value > 0 else 1
+                        for value in state_input.shape
+                    )
+                    warmup_feed[state_input.name] = np.zeros(shape, dtype=np.float32)
+            elif use_imu and len(session_inputs) > 1:
                 imu_shape = [int(value) for value in session_inputs[1].shape if isinstance(value, int)]
                 warmup_feed[session_inputs[1].name] = np.zeros(
                     tuple(imu_shape) if len(imu_shape) == 3 else (1, 10, 7), dtype=np.float32
@@ -239,8 +247,21 @@ def _supervised_predictions(
     samples: list[dict[str, Any]] = []
     excluded_mode = 0
     missing_teacher = 0
+    recurrent_hidden = None
+    previous_action = np.zeros((1, 2), dtype=np.float32)
+    previous_inference_time = None
     for index, frame in enumerate(frames):
         t = float(frame["t"])
+        if stateful_step and (
+            recurrent_hidden is None
+            or (previous_inference_time is not None and t - previous_inference_time > 0.5)
+        ):
+            hidden_shape = tuple(
+                int(value) if isinstance(value, int) and value > 0 else 1
+                for value in session_inputs[1].shape
+            )
+            recurrent_hidden = np.zeros(hidden_shape, dtype=np.float32)
+            previous_action.fill(0.0)
         mode = _nearest(modes, mode_times, t, max_control_dt_s * 2.0)
         if manual_only and modes and _mode_name(mode) != "MANUAL":
             excluded_mode += 1
@@ -265,7 +286,10 @@ def _supervised_predictions(
         if len(session_inputs[0].shape) == 4:
             tensor = tensor[:, -1]
         feed = {input_name: tensor.astype(np.float32)}
-        if use_imu and len(session_inputs) > 1:
+        if stateful_step:
+            feed[session_inputs[1].name] = recurrent_hidden
+            feed[session_inputs[2].name] = previous_action
+        elif use_imu and len(session_inputs) > 1:
             imu_shape = session_inputs[1].shape
             imu_count = int(imu_shape[-2]) if isinstance(imu_shape[-2], int) else 10
             imu_feature_count = int(imu_shape[-1]) if isinstance(imu_shape[-1], int) else 7
@@ -288,6 +312,10 @@ def _supervised_predictions(
             feed[session_inputs[1].name] = imu_values[None, ...]
         preprocessed = time.perf_counter_ns()
         outputs = session.run(None, feed)
+        if stateful_step:
+            recurrent_hidden = np.asarray(outputs[1], dtype=np.float32)
+            previous_action = np.asarray(outputs[0], dtype=np.float32).reshape(1, 2)
+            previous_inference_time = t
         finished = time.perf_counter_ns()
         flat = np.asarray(outputs[0], dtype=np.float32).reshape(-1)
         decoded = {field: float(flat[field_index]) for field_index, field in enumerate(fields) if field_index < flat.size}
@@ -327,6 +355,12 @@ def _supervised_predictions(
                 "total_ms": round(total_ms, 6),
                 "missed_deadline": total_ms > deadline_ms,
             }
+        if stateful_step and len(outputs) > 2:
+            future_controls = np.asarray(outputs[2], dtype=np.float32).reshape(-1, 2)
+            sample["future_controls_pred"] = [
+                {"steering": round(float(action[0]), 7), "throttle": round(float(action[1]), 7)}
+                for action in future_controls
+            ]
         if task == "trajectory":
             output_metadata = metadata.get("output") if isinstance(metadata.get("output"), dict) else {}
             point_count = int(output_metadata.get("points") or max(1, flat.size // 2))

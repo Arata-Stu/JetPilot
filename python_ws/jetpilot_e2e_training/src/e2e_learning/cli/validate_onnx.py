@@ -15,12 +15,15 @@ def main(cfg: DictConfig) -> None:
     model = onnx.load(str(onnx_path))
     onnx.checker.check_model(model)
     session = ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
-    input_name = session.get_inputs()[0].name
+    session_inputs = session.get_inputs()
     input_shape = [1, 3, int(cfg.data.input_height), int(cfg.data.input_width)]
-    x = np.random.randn(*input_shape).astype(np.float32)
-    outputs = session.run(None, {input_name: x})
+    feed = {session_inputs[0].name: np.random.randn(*input_shape).astype(np.float32)}
+    for item in session_inputs[1:]:
+        shape = tuple(int(value) if isinstance(value, int) and value > 0 else 1 for value in item.shape)
+        feed[item.name] = np.zeros(shape, dtype=np.float32)
+    outputs = session.run(None, feed)
     print(f"ONNX OK: {onnx_path}")
-    print(f"input : {input_name} {input_shape}")
+    print(f"inputs: {[(name, list(value.shape)) for name, value in feed.items()]}")
     print(f"output: {[list(out.shape) for out in outputs]}")
 
 

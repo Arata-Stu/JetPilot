@@ -72,10 +72,12 @@ def apply_dataset_metadata(cfg: DictConfig) -> None:
 def split_dataset(dataset: E2EDataset, val_fraction: float, seed: int):
     del seed  # Temporal data must not be randomly interleaved across train and validation.
     val_size = max(1, int(len(dataset) * val_fraction))
-    train_size = len(dataset) - val_size
+    val_start = len(dataset) - val_size
+    future_gap = dataset.future_horizon * dataset.future_stride
+    train_size = val_start - future_gap
     if train_size <= 0:
         raise RuntimeError("Dataset is too small for the requested validation split")
-    return Subset(dataset, range(train_size)), Subset(dataset, range(train_size, len(dataset)))
+    return Subset(dataset, range(train_size)), Subset(dataset, range(val_start, len(dataset)))
 
 
 def set_encoder_trainable(model: nn.Module, trainable: bool) -> None:
@@ -111,6 +113,88 @@ def train_epoch(model, loader, optimizer, loss_fn, device, model_name, use_imu) 
         total_loss += float(loss.detach().cpu()) * batch
         count += batch
     return {"loss": total_loss / max(count, 1)}
+
+
+def _wam_losses(model, batch, device, model_cfg) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    images = batch["images"].to(device)
+    history_actions = batch["history_actions"].to(device)
+    control = batch["control"].to(device)
+    future_images = batch["future_images"].to(device)
+    future_actions = batch["future_actions"].to(device)
+    mask = batch["future_mask"].to(device)
+    outputs = model.forward_train(
+        images,
+        history_actions,
+        control,
+        future_actions,
+    )
+    target_latents = model.encode_target(future_images)
+    learned_slice = slice(0, 1) if model.steering_only else slice(0, 2)
+    current_action_loss = nn.functional.mse_loss(
+        outputs["control"][:, learned_slice], control[:, learned_slice]
+    )
+    future_action_error = (
+        outputs["future_controls"][:, :, learned_slice]
+        - future_actions[:, :, learned_slice]
+    ).square().mean(dim=-1)
+    future_latent_error = 1.0 - nn.functional.cosine_similarity(
+        outputs["future_latents"], target_latents, dim=-1
+    )
+    denominator = mask.sum().clamp_min(1.0)
+    future_action_loss = (future_action_error * mask).sum() / denominator
+    future_latent_loss = (future_latent_error * mask).sum() / denominator
+    loss = (
+        float(getattr(model_cfg, "current_action_loss_weight", 1.0)) * current_action_loss
+        + float(getattr(model_cfg, "future_action_loss_weight", 0.5)) * future_action_loss
+        + float(getattr(model_cfg, "future_latent_loss_weight", 1.0)) * future_latent_loss
+    )
+    return loss, {
+        "current_action_loss": current_action_loss,
+        "future_action_loss": future_action_loss,
+        "future_latent_loss": future_latent_loss,
+        "steering_abs": (outputs["control"][:, 0] - control[:, 0]).abs().sum(),
+        "throttle_abs": (outputs["control"][:, 1] - control[:, 1]).abs().sum(),
+    }
+
+
+def train_wam_epoch(model, loader, optimizer, device, model_cfg) -> dict[str, float]:
+    model.train()
+    totals = {key: 0.0 for key in ("loss", "current_action_loss", "future_action_loss", "future_latent_loss")}
+    count = 0
+    for batch in tqdm(loader, desc="train", leave=False):
+        optimizer.zero_grad(set_to_none=True)
+        loss, parts = _wam_losses(model, batch, device, model_cfg)
+        loss.backward()
+        optimizer.step()
+        batch_size = int(batch["images"].shape[0])
+        totals["loss"] += float(loss.detach().cpu()) * batch_size
+        for key in ("current_action_loss", "future_action_loss", "future_latent_loss"):
+            totals[key] += float(parts[key].detach().cpu()) * batch_size
+        count += batch_size
+    return {key: value / max(count, 1) for key, value in totals.items()}
+
+
+@torch.no_grad()
+def evaluate_wam(model, loader, device, model_cfg) -> dict[str, float]:
+    model.eval()
+    totals = {key: 0.0 for key in ("loss", "current_action_loss", "future_action_loss", "future_latent_loss")}
+    steering_abs = 0.0
+    throttle_abs = 0.0
+    count = 0
+    for batch in tqdm(loader, desc="val", leave=False):
+        loss, parts = _wam_losses(model, batch, device, model_cfg)
+        batch_size = int(batch["images"].shape[0])
+        totals["loss"] += float(loss.cpu()) * batch_size
+        for key in ("current_action_loss", "future_action_loss", "future_latent_loss"):
+            totals[key] += float(parts[key].cpu()) * batch_size
+        steering_abs += float(parts["steering_abs"].cpu())
+        throttle_abs += float(parts["throttle_abs"].cpu())
+        count += batch_size
+    result = {key: value / max(count, 1) for key, value in totals.items()}
+    result["steering_mae"] = steering_abs / max(count, 1)
+    if not model.steering_only:
+        result["throttle_mae"] = throttle_abs / max(count, 1)
+    return result
 
 
 @torch.no_grad()
@@ -194,19 +278,23 @@ def train_stage(
         loss_fn = SteeringLoss()
     best_metrics: dict[str, float] = {}
     for epoch in range(1, int(stage.epochs) + 1):
-        train_metrics = train_epoch(
-            model, train_loader, optimizer, loss_fn, device, model_name, use_imu
-        )
-        val_metrics = evaluate(
-            model,
-            val_loader,
-            loss_fn,
-            device,
-            model_name,
-            use_imu,
-            task,
-            trajectory_scale_m,
-        )
+        if model_name == "wam_dinov3_vits16":
+            train_metrics = train_wam_epoch(model, train_loader, optimizer, device, cfg.model)
+            val_metrics = evaluate_wam(model, val_loader, device, cfg.model)
+        else:
+            train_metrics = train_epoch(
+                model, train_loader, optimizer, loss_fn, device, model_name, use_imu
+            )
+            val_metrics = evaluate(
+                model,
+                val_loader,
+                loss_fn,
+                device,
+                model_name,
+                use_imu,
+                task,
+                trajectory_scale_m,
+            )
         global_step = int(writer.get_logdir().split("_")[-1]) if False else epoch
         writer.add_scalar(f"{stage.name}/train_loss", train_metrics["loss"], global_step)
         for key, value in val_metrics.items():
@@ -276,6 +364,12 @@ def main(cfg: DictConfig) -> None:
         imu_samples=int(getattr(cfg.model, "imu_samples", getattr(cfg.data, "imu_samples", 10))),
         imu_features=int(getattr(cfg.model, "imu_features", 7)),
         data_fraction=float(cfg.data.fraction),
+        future_horizon=(
+            int(getattr(cfg.model, "future_horizon", 0))
+            if model_name == "wam_dinov3_vits16"
+            else 0
+        ),
+        future_stride=int(getattr(cfg.model, "future_stride", 1)),
     )
     train_set, val_set = split_dataset(dataset, float(cfg.train.val_fraction), int(cfg.train.seed))
     train_loader = DataLoader(
@@ -328,6 +422,9 @@ def main(cfg: DictConfig) -> None:
             "temporal": str(getattr(cfg.model, "temporal", "none")),
             "use_imu": use_imu,
             "sequence_length": int(getattr(cfg.model, "sequence_length", 1)),
+            "future_horizon": int(getattr(cfg.model, "future_horizon", 0)),
+            "future_stride": int(getattr(cfg.model, "future_stride", 1)),
+            "stateful_step": model_name == "wam_dinov3_vits16",
         },
         "dataset_dir": str(cfg.data.dataset_dir),
         "data_fraction": float(cfg.data.fraction),

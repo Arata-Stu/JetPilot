@@ -28,6 +28,8 @@ class E2EDataset(Dataset):
         imu_samples: int = 10,
         imu_features: int = 7,
         data_fraction: float = 1.0,
+        future_horizon: int = 0,
+        future_stride: int = 1,
     ) -> None:
         self.dataset_dir = Path(dataset_dir)
         self.samples_path = self.dataset_dir / "samples.csv"
@@ -39,10 +41,14 @@ class E2EDataset(Dataset):
         self.trajectory_scale_m = float(trajectory_scale_m)
         self.imu_samples = int(imu_samples)
         self.imu_features = int(imu_features)
+        self.future_horizon = int(future_horizon)
+        self.future_stride = int(future_stride)
         if self.task not in {"control", "trajectory"}:
             raise ValueError("task must be control or trajectory")
         if self.sequence_length < 1 or self.frame_stride < 1:
             raise ValueError("sequence_length and frame_stride must be positive")
+        if self.future_horizon < 0 or self.future_stride < 1:
+            raise ValueError("future_horizon must be non-negative and future_stride positive")
         if self.trajectory_points < 2 or self.trajectory_scale_m <= 0.0:
             raise ValueError("trajectory geometry configuration is invalid")
         self.rows = self._read_rows()
@@ -111,10 +117,50 @@ class E2EDataset(Dataset):
             )
         return torch.from_numpy(np.clip(array / self.trajectory_scale_m, -1.0, 1.0))
 
-    def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    @staticmethod
+    def _control(row: dict[str, str]) -> torch.Tensor:
+        return torch.tensor(
+            [float(row["steering"]), float(row["throttle"])], dtype=torch.float32
+        )
+
+    def _future_indices(self, index: int) -> tuple[list[int], list[bool]]:
+        sequence_id = self.rows[index].get("sequence_id", "")
+        indices: list[int] = []
+        valid: list[bool] = []
+        for offset in range(1, self.future_horizon + 1):
+            candidate = index + offset * self.future_stride
+            is_valid = (
+                candidate < len(self.rows)
+                and self.rows[candidate].get("sequence_id", "") == sequence_id
+            )
+            indices.append(candidate if is_valid else index)
+            valid.append(is_valid)
+        return indices, valid
+
+    def __getitem__(self, index: int):
         row = self.rows[index]
-        images = torch.stack([self._image(self.rows[item]) for item in self._sequence_indices(index)])
-        return images, self._imu(row), self._target(row)
+        history_indices = self._sequence_indices(index)
+        images = torch.stack([self._image(self.rows[item]) for item in history_indices])
+        if self.future_horizon == 0:
+            return images, self._imu(row), self._target(row)
+
+        if self.task != "control":
+            raise RuntimeError("future prediction currently requires a control dataset")
+        future_indices, future_valid = self._future_indices(index)
+        return {
+            "images": images,
+            "history_actions": torch.stack(
+                [self._control(self.rows[item]) for item in history_indices]
+            ),
+            "control": self._control(row),
+            "future_images": torch.stack(
+                [self._image(self.rows[item]) for item in future_indices]
+            ),
+            "future_actions": torch.stack(
+                [self._control(self.rows[item]) for item in future_indices]
+            ),
+            "future_mask": torch.tensor(future_valid, dtype=torch.float32),
+        }
 
 
 # Kept for external imports that used the first control-only dataset name.
