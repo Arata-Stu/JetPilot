@@ -4659,8 +4659,12 @@ function renderAnalysisViewer() {
         ${analysisSignalCard("Throttle", "analysis-value-throttle", "-")}
         ${analysisSignalCard("Brake", "analysis-value-brake", "-")}
         ${analysisSignalCard("Vehicle speed", "analysis-value-speed", "-", "analysis-label-speed")}
-        ${timeline.e2e?.mode && timeline.e2e?.task !== "trajectory" ? analysisSignalCard("E2E steering", "analysis-value-e2e-steering", "-") : ""}
-        ${timeline.e2e?.mode && timeline.e2e?.task !== "trajectory" ? analysisSignalCard("Steering error / applied Δ", "analysis-value-e2e-steering-error", "-") : ""}
+        ${timeline.e2e?.mode && timeline.e2e?.task !== "trajectory" ? analysisSignalCard("Model steer", "analysis-value-e2e-steering", "-") : ""}
+        ${timeline.e2e?.mode && timeline.e2e?.task !== "trajectory" ? analysisSignalCard("Steer output − GT", "analysis-value-e2e-steering-error", "-") : ""}
+        ${timeline.e2e?.mode && timeline.e2e?.task !== "trajectory" ? analysisSignalCard("Steer output − applied", "analysis-value-e2e-steering-applied-error", "-") : ""}
+        ${timeline.e2e?.mode && timeline.e2e?.task !== "trajectory" && !timeline.e2e?.metrics?.steering_only ? analysisSignalCard("Model throttle", "analysis-value-e2e-throttle", "-") : ""}
+        ${timeline.e2e?.mode && timeline.e2e?.task !== "trajectory" && !timeline.e2e?.metrics?.steering_only ? analysisSignalCard("Throttle output − GT", "analysis-value-e2e-throttle-error", "-") : ""}
+        ${timeline.e2e?.mode && timeline.e2e?.task !== "trajectory" && !timeline.e2e?.metrics?.steering_only ? analysisSignalCard("Throttle output − applied", "analysis-value-e2e-throttle-applied-error", "-") : ""}
         ${timeline.e2e?.mode ? analysisSignalCard("Pipeline latency", "analysis-value-e2e-latency", "-") : ""}
         ${timeline.e2e?.mode && timeline.e2e?.task !== "trajectory" ? analysisSignalCard("Aggressiveness", "analysis-value-e2e-aggression", "-") : ""}
         ${timeline.e2e?.mode && timeline.e2e?.task !== "trajectory" ? analysisSignalCard("Lateral acceleration", "analysis-value-e2e-latacc", "-") : ""}
@@ -4669,8 +4673,33 @@ function renderAnalysisViewer() {
         ${timeline.e2e?.task === "trajectory" ? analysisSignalCard("Trajectory FDE", "analysis-value-e2e-trajectory-fde", "-") : ""}
       </div>
       <div class="analysis-chart-shell">
+        ${timeline.e2e?.mode && timeline.e2e?.task !== "trajectory" ? `
+          <div class="analysis-control-legend" aria-label="Control graph legend">
+            <div class="analysis-control-legend-title"><strong>Control comparison</strong><span>下段の Δ は「モデル出力 − 比較対象」</span></div>
+            <div class="analysis-control-legend-items">
+              <span><i class="gt"></i><b>GT</b><em>教師値</em></span>
+              <span><i class="prediction"></i><b>Model output</b><em>推論出力</em></span>
+              <span><i class="applied"></i><b>Applied</b><em>実際に適用された値</em></span>
+              <span><i class="delta-gt"></i><b>Output − GT</b><em>GTとの差</em></span>
+              <span><i class="delta-applied"></i><b>Output − Applied</b><em>実適用値との差</em></span>
+            </div>
+          </div>` : ""}
         <canvas id="analysis-timeline-canvas" class="analysis-timeline-canvas" onclick="seekAnalysisFromTimeline(event)"></canvas>
       </div>
+      ${analysisHasWamFuturePrediction(timeline) ? `
+        <div class="analysis-wam-future-panel">
+          <div class="analysis-wam-future-heading">
+            <div><strong>WAM future prediction</strong><span id="analysis-wam-future-status">選択時刻から先の制御予測</span></div>
+            <div class="analysis-wam-future-legend">
+              <span><i class="prediction"></i>予測</span>
+              <span><i class="gt"></i>未来GT</span>
+              <span><i class="applied"></i>未来の実適用値</span>
+              <span><i class="delta-gt"></i>GTとの差</span>
+              <span><i class="delta-applied"></i>実適用値との差</span>
+            </div>
+          </div>
+          <canvas id="analysis-wam-future-canvas" class="analysis-wam-future-canvas"></canvas>
+        </div>` : ""}
       ${renderJetsonStatsPanel()}
       ${issues.length ? `<div class="analysis-data-issues"><strong>Missing or degraded data</strong>${issues.map((issue) => `<span>${esc(issue)}</span>`).join("")}</div>` : ""}
     </div>
@@ -5984,7 +6013,11 @@ function updateAnalysisPlaybackDom(force = false) {
       analysisSpeedIsCommanded(speed) ? "" : " m/s",
     ),
     "analysis-value-e2e-steering": formatAnalysisValue(e2ePrediction?.steering_pred ?? e2ePrediction?.steering),
-    "analysis-value-e2e-steering-error": formatAnalysisValue(e2ePrediction?.steering_error ?? e2ePrediction?.steering_applied_error),
+    "analysis-value-e2e-steering-error": formatAnalysisValue(e2ePrediction?.steering_error),
+    "analysis-value-e2e-steering-applied-error": formatAnalysisValue(e2ePrediction?.steering_applied_error),
+    "analysis-value-e2e-throttle": formatAnalysisValue(e2ePrediction?.throttle_pred ?? e2ePrediction?.throttle),
+    "analysis-value-e2e-throttle-error": formatAnalysisValue(e2ePrediction?.throttle_error),
+    "analysis-value-e2e-throttle-applied-error": formatAnalysisValue(e2ePrediction?.throttle_applied_error),
     "analysis-value-e2e-latency": formatAnalysisValue(
       e2eLatency?.capture_to_command_ms ?? e2ePrediction?.pipeline_latency_ms ?? e2ePrediction?.total_ms,
       " ms",
@@ -6010,7 +6043,193 @@ function updateAnalysisPlaybackDom(force = false) {
     drawAnalysisVisual("map", drawAnalysisMap);
     drawAnalysisVisual("camera overlay", drawAnalysisCameraOverlays);
     drawAnalysisVisual("E2E trajectory", drawE2ETrajectory);
+    drawAnalysisVisual("WAM future prediction", drawWamFuturePrediction);
     state.analysis.lastVisualUpdateMs = now;
+  }
+}
+
+function analysisHasWamFuturePrediction(timeline = state.analysis.timeline) {
+  return Boolean(timeline?.e2e?.predictions?.some(
+    (sample) => Array.isArray(sample?.future_controls_pred) && sample.future_controls_pred.length,
+  ));
+}
+
+function analysisWamStepSeconds(predictions) {
+  const differences = [];
+  for (let index = 1; index < predictions.length; index += 1) {
+    const difference = Number(predictions[index]?.t) - Number(predictions[index - 1]?.t);
+    if (Number.isFinite(difference) && difference > 0 && difference <= 0.5) differences.push(difference);
+  }
+  if (!differences.length) return 0;
+  differences.sort((first, second) => first - second);
+  const middle = Math.floor(differences.length / 2);
+  return differences.length % 2
+    ? differences[middle]
+    : (differences[middle - 1] + differences[middle]) / 2;
+}
+
+function drawWamFuturePrediction() {
+  const canvas = $("analysis-wam-future-canvas");
+  const timeline = state.analysis.timeline;
+  const predictions = timeline?.e2e?.predictions || [];
+  if (!canvas || !analysisHasWamFuturePrediction(timeline)) return;
+  const currentIndex = timedRecordIndex(predictions, state.analysis.currentTime);
+  const sample = currentIndex >= 0 ? predictions[currentIndex] : null;
+  const future = Array.isArray(sample?.future_controls_pred) ? sample.future_controls_pred : [];
+  if (!future.length) return;
+
+  const worldModel = timeline.e2e?.metrics?.world_model || {};
+  const stride = Math.max(1, Number.parseInt(worldModel.future_stride, 10) || 1);
+  const stepSeconds = analysisWamStepSeconds(predictions) * stride;
+  const steeringOnly = Boolean(timeline.e2e?.metrics?.steering_only);
+  const trackCount = steeringOnly ? 1 : 2;
+  const canvasHeight = 62 + trackCount * 112;
+  canvas.style.height = `${canvasHeight}px`;
+  const prepared = analysisCanvasContext(canvas, canvasHeight);
+  if (!prepared) return;
+  const { ctx, width, height } = prepared;
+  const left = 74;
+  const right = 22;
+  const top = 18;
+  const bottom = 34;
+  const gap = 16;
+  const trackHeight = (height - top - bottom - gap * (trackCount - 1)) / trackCount;
+  const plotWidth = Math.max(1, width - left - right);
+  const pointCount = future.length + 1;
+  const toX = (index) => left + index / Math.max(1, pointCount - 1) * plotWidth;
+  const finite = (value) => {
+    if (value === null || value === undefined || value === "") return null;
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+  };
+  const nearestApplied = (targetTime, field) => {
+    const records = timeline.e2e?.recorded_applied_controls || [];
+    if (!records.length || !Number.isFinite(targetTime)) return null;
+    const index = timedRecordIndex(records, targetTime);
+    const candidates = [index, index + 1].filter((item) => item >= 0 && item < records.length);
+    if (!candidates.length) return null;
+    const nearest = candidates.reduce((best, item) => (
+      Math.abs(Number(records[item].t) - targetTime) < Math.abs(Number(records[best].t) - targetTime) ? item : best
+    ));
+    return Math.abs(Number(records[nearest].t) - targetTime) <= Math.max(0.1, stepSeconds * 0.75)
+      ? finite(records[nearest][field])
+      : null;
+  };
+  const series = (field) => {
+    const predicted = [finite(sample?.[`${field}_pred`] ?? sample?.[field]), ...future.map((item) => finite(item?.[field]))];
+    const groundTruth = [finite(sample?.[`${field}_gt`])];
+    const applied = [finite(sample?.[`${field}_applied`]) ?? nearestApplied(Number(sample?.t), field)];
+    for (let step = 0; step < future.length; step += 1) {
+      const candidate = predictions[currentIndex + (step + 1) * stride];
+      const expectedTime = stepSeconds > 0
+        ? Number(sample?.t) + stepSeconds * (step + 1)
+        : Number.NaN;
+      const reference = candidate && (
+        !Number.isFinite(expectedTime)
+        || Math.abs(Number(candidate.t) - expectedTime) <= Math.max(0.05, stepSeconds * 0.75)
+      ) ? candidate : null;
+      const targetTime = Number(reference?.t ?? expectedTime);
+      groundTruth.push(finite(reference?.[`${field}_gt`]));
+      applied.push(finite(reference?.[`${field}_applied`]) ?? nearestApplied(targetTime, field));
+    }
+    return { predicted, groundTruth, applied };
+  };
+
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = "#080a0d";
+  ctx.fillRect(0, 0, width, height);
+  ctx.font = "10px ui-sans-serif, system-ui";
+  ctx.textBaseline = "middle";
+
+  const drawTrack = (trackIndex, label, min, max, values) => {
+    const y = top + trackIndex * (trackHeight + gap);
+    const innerTop = y + 10;
+    const innerHeight = trackHeight - 20;
+    const toY = (value) => innerTop + (1 - Math.max(0, Math.min(1, (value - min) / (max - min)))) * innerHeight;
+    ctx.fillStyle = trackIndex % 2 ? "#0d1115" : "#0f1418";
+    ctx.fillRect(left, y, plotWidth, trackHeight);
+    [min, (min + max) / 2, max].forEach((value) => {
+      const lineY = toY(value);
+      ctx.strokeStyle = "rgba(255,255,255,0.09)";
+      ctx.lineWidth = 1;
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      ctx.moveTo(left, lineY);
+      ctx.lineTo(width - right, lineY);
+      ctx.stroke();
+    });
+    ctx.fillStyle = "#98a2ad";
+    ctx.textAlign = "right";
+    ctx.fillText(label, left - 9, y + trackHeight / 2);
+
+    const drawErrorBars = (reference, color, widthValue) => {
+      values.predicted.forEach((prediction, index) => {
+        const target = reference[index];
+        if (prediction === null || target === null) return;
+        ctx.strokeStyle = color;
+        ctx.lineWidth = widthValue;
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        ctx.moveTo(toX(index), toY(prediction));
+        ctx.lineTo(toX(index), toY(target));
+        ctx.stroke();
+      });
+    };
+    drawErrorBars(values.groundTruth, "rgba(255,107,107,0.58)", 4);
+    drawErrorBars(values.applied, "rgba(246,200,95,0.65)", 2);
+
+    const drawLine = (items, color, dash, lineWidth, marker) => {
+      let started = false;
+      ctx.strokeStyle = color;
+      ctx.fillStyle = color;
+      ctx.lineWidth = lineWidth;
+      ctx.setLineDash(dash);
+      ctx.beginPath();
+      items.forEach((value, index) => {
+        if (value === null) {
+          started = false;
+          return;
+        }
+        const x = toX(index);
+        const pointY = toY(value);
+        if (started) ctx.lineTo(x, pointY);
+        else ctx.moveTo(x, pointY);
+        started = true;
+      });
+      ctx.stroke();
+      ctx.setLineDash([]);
+      items.forEach((value, index) => {
+        if (value === null) return;
+        const x = toX(index);
+        const pointY = toY(value);
+        ctx.beginPath();
+        if (marker === "square") ctx.rect(x - 2.5, pointY - 2.5, 5, 5);
+        else ctx.arc(x, pointY, marker === "large" ? 3.5 : 2.5, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    };
+    drawLine(values.applied, "#cf7cff", [2, 4], 2.0, "square");
+    drawLine(values.groundTruth, "#f4f7fb", [7, 4], 1.9, "small");
+    drawLine(values.predicted, "#43a5ff", [], 2.7, "large");
+  };
+
+  drawTrack(0, "STEERING", -1, 1, series("steering"));
+  if (!steeringOnly) drawTrack(1, "THROTTLE", 0, 1, series("throttle"));
+
+  ctx.fillStyle = "#7f8a95";
+  ctx.textAlign = "center";
+  for (let index = 0; index < pointCount; index += 1) {
+    const label = index === 0
+      ? "now"
+      : stepSeconds > 0
+        ? `+${Math.round(stepSeconds * index * 1000)}ms`
+        : `+${index}`;
+    ctx.fillText(label, toX(index), height - 13);
+  }
+  const status = $("analysis-wam-future-status");
+  if (status) {
+    const horizon = stepSeconds > 0 ? ` / 約 ${(stepSeconds * future.length).toFixed(2)} 秒先まで` : "";
+    status.textContent = `${future.length} future steps / stride ${stride}${horizon}`;
   }
 }
 
@@ -6060,9 +6279,14 @@ function drawAnalysisTimeline() {
   const e2e = timeline.e2e?.mode ? timeline.e2e : null;
   const predictions = e2e?.predictions || [];
   const recordedAppliedControls = e2e?.recorded_applied_controls || [];
-  const errorMax = finiteNumberMaximum(predictions, (item) => [
-    Math.abs(Number(item.steering_error ?? item.steering_applied_error)),
-    Math.abs(Number(item.throttle_error ?? item.throttle_applied_error)),
+  const appliedControlRecords = recordedAppliedControls.length ? recordedAppliedControls : predictions;
+  const steeringErrorMax = finiteNumberMaximum(predictions, (item) => [
+    Math.abs(Number(item.steering_error)),
+    Math.abs(Number(item.steering_applied_error)),
+  ], 0.1) * 1.1;
+  const throttleErrorMax = finiteNumberMaximum(predictions, (item) => [
+    Math.abs(Number(item.throttle_error)),
+    Math.abs(Number(item.throttle_applied_error)),
   ], 0.1) * 1.1;
   const latencyRecords = (e2e?.latency || []).length ? e2e.latency : predictions;
   const latencyMax = finiteNumberMaximum(latencyRecords, (item) => item.capture_to_command_ms ?? item.total_ms ?? item.inference_ms, 1) * 1.08;
@@ -6100,38 +6324,47 @@ function drawAnalysisTimeline() {
   ];
   const controlTracks = [
     {
-      label: "STEER GT/PRED",
+      label: "STEERING",
       min: -1,
       max: 1,
       lines: [
-        { records: predictions, value: (item) => item.steering_gt, color: "#d8dee9" },
-        { records: predictions, value: (item) => item.steering_pred ?? item.steering, color: "#5aa8ff" },
-        { records: recordedAppliedControls, value: (item) => item.steering, color: "#bd93f9" },
+        { records: appliedControlRecords, value: (item) => item.steering_applied ?? item.steering, color: "#cf7cff", dash: [2, 4], width: 2.1 },
+        { records: predictions, value: (item) => item.steering_gt, color: "#f4f7fb", dash: [7, 4], width: 1.9 },
+        { records: predictions, value: (item) => item.steering_pred ?? item.steering, color: "#43a5ff", width: 2.6 },
       ],
     },
     {
-      label: e2e?.metrics?.steering_only ? "THROTTLE RECORDED" : "THROTTLE GT/PRED",
+      label: e2e?.metrics?.steering_only ? "THROTTLE (REFERENCE)" : "THROTTLE",
       min: 0,
       max: 1,
       lines: [
-        { records: predictions, value: (item) => item.throttle_gt, color: "#d8dee9" },
+        { records: appliedControlRecords, value: (item) => item.throttle_applied ?? item.throttle, color: "#cf7cff", dash: [2, 4], width: 2.1 },
+        { records: predictions, value: (item) => item.throttle_gt, color: "#f4f7fb", dash: [7, 4], width: 1.9 },
         ...(e2e?.metrics?.steering_only ? [] : [
-          { records: predictions, value: (item) => item.throttle_pred ?? item.throttle, color: "#45c478" },
+          { records: predictions, value: (item) => item.throttle_pred ?? item.throttle, color: "#43a5ff", width: 2.6 },
         ]),
-        { records: recordedAppliedControls, value: (item) => item.throttle, color: "#bd93f9" },
       ],
     },
     {
-      label: e2e?.metrics?.steering_only ? "STEERING ERROR" : "CONTROL ERROR",
-      min: -errorMax,
-      max: errorMax,
+      label: "STEER Δ",
+      min: -steeringErrorMax,
+      max: steeringErrorMax,
+      zeroLine: true,
       lines: [
-        { records: predictions, value: (item) => item.steering_error ?? item.steering_applied_error, color: "#ff6b6b" },
-        ...(e2e?.metrics?.steering_only ? [] : [
-          { records: predictions, value: (item) => item.throttle_error ?? item.throttle_applied_error, color: "#f0b35a" },
-        ]),
+        { records: predictions, value: (item) => item.steering_error, color: "#ff6b6b", width: 2.2 },
+        { records: predictions, value: (item) => item.steering_applied_error, color: "#f6c85f", dash: [6, 4], width: 2.0 },
       ],
     },
+    ...(e2e?.metrics?.steering_only ? [] : [{
+      label: "THROTTLE Δ",
+      min: -throttleErrorMax,
+      max: throttleErrorMax,
+      zeroLine: true,
+      lines: [
+        { records: predictions, value: (item) => item.throttle_error, color: "#ff6b6b", width: 2.2 },
+        { records: predictions, value: (item) => item.throttle_applied_error, color: "#f6c85f", dash: [6, 4], width: 2.0 },
+      ],
+    }]),
     {
       label: "AGGRESSIVENESS",
       min: 0,
@@ -6178,7 +6411,7 @@ function drawAnalysisTimeline() {
   if (!prepared) return;
   const { ctx, width, height } = prepared;
   const duration = Math.max(0.001, analysisDuration(timeline));
-  const left = 70;
+  const left = e2e ? 118 : 70;
   const right = 14;
   const top = 14;
   const modeHeight = 28;
@@ -6235,7 +6468,8 @@ function drawAnalysisTimeline() {
     const innerHeight = chartHeight - 12;
     ctx.fillStyle = trackIndex % 2 ? "#0d1115" : "#0f1418";
     ctx.fillRect(left, y, plotWidth, chartHeight - 2);
-    ctx.strokeStyle = "rgba(255,255,255,0.08)";
+    ctx.strokeStyle = track.zeroLine ? "rgba(255,255,255,0.28)" : "rgba(255,255,255,0.08)";
+    ctx.lineWidth = track.zeroLine ? 1.2 : 1;
     ctx.beginPath();
     ctx.moveTo(left, y + chartHeight / 2);
     ctx.lineTo(width - right, y + chartHeight / 2);
@@ -6243,7 +6477,7 @@ function drawAnalysisTimeline() {
     ctx.fillStyle = "#98a2ad";
     ctx.textAlign = "right";
     ctx.fillText(track.label, left - 8, y + chartHeight / 2);
-    track.lines.forEach((line) => drawAnalysisSeries(ctx, line.records, line.value, line.color, toX, innerTop, innerHeight, track.min, track.max, plotWidth));
+    track.lines.forEach((line) => drawAnalysisSeries(ctx, line.records, line.value, line.color, toX, innerTop, innerHeight, track.min, track.max, plotWidth, line));
   });
 
   const cursorX = toX(state.analysis.currentTime);
@@ -6262,14 +6496,16 @@ function drawAnalysisTimeline() {
   ctx.fill();
 }
 
-function drawAnalysisSeries(ctx, records, valueOf, color, toX, top, height, min, max, plotWidth) {
+function drawAnalysisSeries(ctx, records, valueOf, color, toX, top, height, min, max, plotWidth, style = {}) {
   if (!records?.length || max <= min) return;
   const maxPoints = Math.max(200, Math.floor(plotWidth * 2));
   const step = Math.max(1, Math.ceil(records.length / maxPoints));
   let started = false;
   ctx.save();
   ctx.strokeStyle = color;
-  ctx.lineWidth = 1.7;
+  ctx.globalAlpha = Number.isFinite(Number(style.alpha)) ? Number(style.alpha) : 1;
+  ctx.lineWidth = Number.isFinite(Number(style.width)) ? Number(style.width) : 1.7;
+  ctx.setLineDash(Array.isArray(style.dash) ? style.dash : []);
   ctx.lineJoin = "round";
   ctx.beginPath();
   for (let index = 0; index < records.length; index += step) {

@@ -187,6 +187,7 @@ def main(cfg: DictConfig) -> None:
             "use_imu": use_imu,
             "sequence_length": sequence_length,
             "future_horizon": int(getattr(run_cfg.model, "future_horizon", 0)),
+            "future_stride": int(getattr(run_cfg.model, "future_stride", 1)),
             "stateful_step": is_wam,
         },
         "checkpoint": str(checkpoint_path),

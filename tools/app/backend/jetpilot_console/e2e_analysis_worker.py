@@ -204,6 +204,12 @@ def _supervised_predictions(
     steering_only = is_steering_only(metadata)
     task = str(metadata.get("task") or metadata.get("output", {}).get("task") or "control")
     architecture = metadata.get("architecture") if isinstance(metadata.get("architecture"), dict) else {}
+    output_metadata = metadata.get("output") if isinstance(metadata.get("output"), dict) else {}
+    world_model = (
+        output_metadata.get("world_model")
+        if isinstance(output_metadata.get("world_model"), dict)
+        else {}
+    )
     sequence_length = max(1, int(architecture.get("sequence_length") or 1))
     use_imu = bool(architecture.get("use_imu", False))
     stateful_step = bool(architecture.get("stateful_step", False))
@@ -419,6 +425,7 @@ def _supervised_predictions(
         "provider": session.get_providers(),
         "task": task,
         "architecture": architecture,
+        "world_model": world_model,
     }
     if steering_only:
         _exclude_throttle_metrics(metrics)
