@@ -35,6 +35,7 @@ event_topic: /event_camera/events
 event_bins: 10
 event_window_ms: 40.0
 event_stride_ms: 4.0
+event_polarity_mode: separate
 event_polarity_layout: polarity_major
 event_temporal_interpolation: none
 sample_hz: 10.0

@@ -27,6 +27,16 @@ from jetpilot_console.map_detail import (
 
 
 class MapDetailYamlTest(unittest.TestCase):
+    def test_accepts_json_compatible_worker_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            path = Path(temporary_directory) / "metadata.yaml"
+            path.write_text(
+                json.dumps({"modality": "event_tensor", "input_channels": 20}),
+                encoding="utf-8",
+            )
+            self.assertEqual(load_yaml(path)["modality"], "event_tensor")
+            self.assertEqual(load_yaml(path)["input_channels"], 20)
+
     def test_parses_unquoted_inline_id_lists(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             path = Path(temporary_directory) / "junction.yaml"

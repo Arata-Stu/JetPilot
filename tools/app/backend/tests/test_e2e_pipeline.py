@@ -181,6 +181,42 @@ class E2EPipelineTests(unittest.TestCase):
         self.assertIn("--sample-hz 10.0", script)
         self.assertIn("/usr/bin/python3 -X faulthandler", script)
 
+    def test_event_tensor_dataset_only_accepts_event_tensor_experiment(self) -> None:
+        dataset = self.training / "datasets" / "evs20"
+        dataset.mkdir(parents=True)
+        (dataset / "samples.csv").write_text(
+            "tensor_path,steering,throttle\ntensors/000.npy,0.1,0.2\n"
+        )
+        # The system-Python extraction worker emits JSON-compatible YAML.
+        (dataset / "metadata.yaml").write_text(json.dumps({
+            "task": "control",
+            "modality": "event_tensor",
+            "input_channels": 20,
+            "input_width": 212,
+            "input_height": 120,
+        }))
+
+        with self.assertRaisesRegex(ValueError, "requires a image dataset"):
+            build_train_task(
+                self.config,
+                {
+                    "dataset_dir": str(dataset),
+                    "run_name": "wrong-rgb-model",
+                    "experiment": "pilotnet_scratch",
+                },
+            )
+
+        train = build_train_task(
+            self.config,
+            {
+                "dataset_dir": str(dataset),
+                "run_name": "evs20-run",
+                "experiment": "event_tensor_pilotnet",
+            },
+        )
+        self.assertIn("experiment=event_tensor_pilotnet", train.command)
+        self.assertIn("model.steering_only=false", train.command)
+
     def test_train_and_export_tasks_preserve_selected_configuration(self) -> None:
         dataset = self._dataset()
         train = build_train_task(

@@ -260,6 +260,16 @@ def _parse_yaml_list(lines: list[tuple[int, str]], index: int, indent: int) -> t
 
 
 def load_yaml(path: Path) -> dict[str, Any]:
+    # JSON is a valid subset of YAML. Some dependency-light workers emit their
+    # metadata.yaml in this form, so handle it before the built-in YAML parser.
+    raw = path.read_text(encoding="utf-8")
+    if raw.lstrip().startswith(("{", "[")):
+        try:
+            json_data = json.loads(raw)
+        except json.JSONDecodeError:
+            pass
+        else:
+            return json_data if isinstance(json_data, dict) else {}
     lines = _yaml_lines(path)
     data, _ = _parse_yaml_block(lines, 0, lines[0][0] if lines else 0)
     return data if isinstance(data, dict) else {}
