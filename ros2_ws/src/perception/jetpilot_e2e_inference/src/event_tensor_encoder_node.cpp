@@ -542,7 +542,8 @@ void EventTensorEncoderNode::maybe_publish_cuda_snapshot()
 
     const auto timestamp_us = cuda_backend_->latest_timestamp_us();
     auto timestamp_ns = ros_timestamp_ns(static_cast<Timestamp>(timestamp_us));
-    timestamp_ns = std::max(timestamp_ns, last_snapshot_header_timestamp_ns_ + 1LL);
+    timestamp_ns = std::max(
+      timestamp_ns, last_snapshot_header_timestamp_ns_ + std::int64_t{1});
     std_msgs::msg::Header header;
     header.stamp.sec = static_cast<std::int32_t>(timestamp_ns / 1000000000LL);
     header.stamp.nanosec =
