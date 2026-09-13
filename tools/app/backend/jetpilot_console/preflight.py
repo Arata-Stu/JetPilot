@@ -433,7 +433,7 @@ def _offline_map_artifacts(
 
 
 def _analysis_max_fps(payload: Mapping[str, Any], report: _Report) -> None:
-    raw_value = payload.get("max_fps", 15.0)
+    raw_value = payload.get("max_fps", 10.0)
     try:
         value = float(raw_value)
     except (TypeError, ValueError):

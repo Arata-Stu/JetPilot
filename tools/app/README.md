@@ -267,10 +267,11 @@ trajectory, smoothness, latency, deadline misses, and section context instead.
 E2E Analysis can also generate a lightweight **20ch event tensor preview** from
 the recorded `/event_camera/events` `EventPacket` stream. The preview uses the
 selected bin count, window, stride, and optional temporal interpolation. It
-stores at most 12 JPEG contact sheets, never the tensor itself: positive bins
-are blue and negative bins are red. The 2B channels and two polarity aggregates
-are arranged in a compact grid in temporal order so that `B=10` remains visible
-in the multi-camera viewer. Empty snapshots are skipped. Select
+stores one JPEG contact sheet for every extracted primary RGB frame, never the
+tensor itself. Therefore `Max extraction FPS = 10` produces approximately
+600–1,200 previews for a one-to-two-minute bag. Positive and negative bins plus
+their polarity aggregates are arranged in a compact grid. An initial snapshot
+before the RGB/event clocks overlap is skipped. Select
 `/analysis/event_tensor_20ch` in the synchronized image viewer after analysis.
 Decoding uses the upstream `event_camera_py` binding; install the ROS package
 for the active distribution when it is not already present.

@@ -63,7 +63,6 @@ class SnapshotTrajectoryTests(unittest.TestCase):
                 stride_ms=1.0,
                 output_width=4,
                 output_height=3,
-                bag_duration_ns=1_000_000_000,
                 linear_interpolation=False,
             )
             message = SimpleNamespace(
@@ -71,10 +70,14 @@ class SnapshotTrajectoryTests(unittest.TestCase):
             )
             preview.add_packet(message, 3_000_000)
             image, stats = preview.render(3_000_000)
+            for frame_index in range(1, 20):
+                self.assertTrue(preview.should_render(3_000_000 + frame_index * 100_000_000))
+                preview.render(3_000_000 + frame_index * 100_000_000)
 
         # Four tensor channels plus two aggregate cells are laid out as 3x2,
         # with a two-pixel separator between cells.
         self.assertEqual(image.shape, (8, 16, 3))
+        self.assertEqual(preview.generated, 20)
         self.assertEqual(stats["channels"], 4)
         self.assertEqual(stats["events"], 2)
         self.assertGreater(int(image[:3, :, 0].max()), 0)

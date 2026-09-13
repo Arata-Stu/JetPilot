@@ -33,7 +33,6 @@ OBJECT_DETECTION_TOPICS = (
 )
 OBJECT_DETECTION_OVERLAY_TOPIC = "/perception/detections_overlay"
 EVENT_TENSOR_PREVIEW_TOPIC = "/analysis/event_tensor_20ch"
-MAX_EVENT_TENSOR_PREVIEWS = 12
 JETSON_METRIC_ORDER = {
     "cpu": 10,
     "gpu": 20,
@@ -1220,7 +1219,7 @@ class AnalysisOptions:
 
 
 class _EventTensorPreview:
-    """Decode EventPacket messages and render a few transient 2B-channel tensors."""
+    """Decode EventPacket messages into RGB-synchronized 2B-channel previews."""
 
     def __init__(
         self,
@@ -1230,7 +1229,6 @@ class _EventTensorPreview:
         stride_ms: float,
         output_width: int,
         output_height: int,
-        bag_duration_ns: int | None,
         linear_interpolation: bool,
     ) -> None:
         try:
@@ -1252,11 +1250,6 @@ class _EventTensorPreview:
         self.source_width = 0
         self.source_height = 0
         self.chunks: collections.deque[tuple[object, object, object, object]] = collections.deque()
-        self.preview_interval_ns = max(
-            self.stride_ns,
-            int((bag_duration_ns or 0) / max(MAX_EVENT_TENSOR_PREVIEWS - 1, 1)),
-        )
-        self.next_preview_ns: int | None = None
         self.generated = 0
         self.decoded_events = 0
         self.first_event_ns: int | None = None
@@ -1292,11 +1285,10 @@ class _EventTensorPreview:
             self.chunks.popleft()
 
     def should_render(self, timestamp_ns: int) -> bool:
-        if self.generated >= MAX_EVENT_TENSOR_PREVIEWS or not self.chunks:
-            return False
-        if self.next_preview_ns is None:
-            self.next_preview_ns = timestamp_ns
-        return timestamp_ns >= self.next_preview_ns
+        # The caller invokes this only after primary-image max_fps throttling.
+        # Rendering here therefore produces one preview per extracted RGB frame,
+        # rather than one preview per high-rate event stride.
+        return bool(self.chunks)
 
     def render(self, timestamp_ns: int):
         np = self.np
@@ -1395,14 +1387,11 @@ class _EventTensorPreview:
             x0 = column * (self.width + gap)
             image[y0 : y0 + self.height, x0 : x0 + self.width, colour_channel] = cell
 
-        if event_count > 0:
+        # Suppress only an initial frame whose event/RGB clocks do not overlap.
+        # Once synchronization is established, an empty event window is useful
+        # information and remains part of the one-to-one RGB sequence.
+        if event_count > 0 or self.generated > 0:
             self.generated += 1
-            self.next_preview_ns = timestamp_ns + self.preview_interval_ns
-        else:
-            # The first RGB frame can be ordered just before the first event
-            # packet. Retry on the next stride instead of waiting for the next
-            # bag-wide representative preview slot.
-            self.next_preview_ns = timestamp_ns + self.stride_ns
         nonzero = int(np.count_nonzero(tensors))
         return image, {
             "events": event_count,
@@ -1671,7 +1660,6 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
             stride_ms=options.event_stride_ms,
             output_width=options.event_output_width,
             output_height=options.event_output_height,
-            bag_duration_ns=bag_duration_ns,
             linear_interpolation=options.event_linear_interpolation,
         )
         if options.event_tensor_preview
@@ -1784,10 +1772,9 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
                         primary_height = h
 
                 if event_preview is not None and event_preview.should_render(timestamp_ns):
+                    previous_preview_count = event_preview.generated
                     preview_image, preview_stats = event_preview.render(timestamp_ns)
-                    # Skip a visually blank first snapshot when the primary
-                    # camera precedes the first usable event window.
-                    if int(preview_stats["events"]) > 0:
+                    if event_preview.generated > previous_preview_count:
                         preview_name = f"preview_{event_preview.generated - 1:04d}.jpg"
                         preview_rel_path = (
                             f"frames/{topic_slugs[EVENT_TENSOR_PREVIEW_TOPIC]}/{preview_name}"
