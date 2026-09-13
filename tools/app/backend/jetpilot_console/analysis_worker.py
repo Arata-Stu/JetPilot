@@ -1304,7 +1304,7 @@ class _EventTensorPreview:
             int(packet_header_ns)
             if packet_header_ns is not None and packet_header_ns > 0 else None
         )
-        self.decoded_events += len(events)
+        self.decoded_events += len(decoded_events)
         # The most recent complete stride boundary can lag the newest decoded
         # event by almost one stride, so retain window + stride history.
         oldest = self.latest_event_ns - self.window_ns - self.stride_ns
