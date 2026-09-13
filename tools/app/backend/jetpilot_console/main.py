@@ -1702,6 +1702,7 @@ find {shlex.quote(record_root)} -name metadata.yaml -printf '%TY-%Tm-%Td %TH:%TM
             e2e_provider = str(resolved.get("inference_provider") or "auto")
             e2e_deadline_ms = float(resolved.get("deadline_ms") or 33.3)
             e2e_manual_only = bool(resolved.get("manual_only", True))
+            event_tensor_preview = bool(resolved.get("event_tensor_preview", False))
             offline_detection_model_root = (
                 Path(str(resolved["object_detection_model_root"]))
                 if resolved.get("offline_object_detection")
@@ -1740,6 +1741,14 @@ find {shlex.quote(record_root)} -name metadata.yaml -printf '%TY-%Tm-%Td %TH:%TM
             "inference_provider",
             "manual_only",
             "deadline_ms",
+            "event_tensor_preview",
+            "event_topic",
+            "event_bins",
+            "event_window_ms",
+            "event_stride_ms",
+            "event_linear_interpolation",
+            "event_output_width",
+            "event_output_height",
             "offline_object_detection",
             "object_detection_model_root",
             "object_detection_image_topic",
@@ -1810,6 +1819,16 @@ find {shlex.quote(record_root)} -name metadata.yaml -printf '%TY-%Tm-%Td %TH:%TM
                 e2e_applied_control_topic=str(resolved.get("applied_control_topic") or ""),
                 e2e_manual_only=e2e_manual_only,
                 e2e_deadline_ms=e2e_deadline_ms,
+                event_tensor_preview=event_tensor_preview,
+                event_topic=str(resolved.get("event_topic") or "/event_camera/events"),
+                event_bins=int(resolved.get("event_bins") or 10),
+                event_window_ms=float(resolved.get("event_window_ms") or 50.0),
+                event_stride_ms=float(resolved.get("event_stride_ms") or 10.0),
+                event_linear_interpolation=bool(
+                    resolved.get("event_linear_interpolation", False)
+                ),
+                event_output_width=int(resolved.get("event_output_width") or 212),
+                event_output_height=int(resolved.get("event_output_height") or 120),
                 offline_detection_model_root=offline_detection_model_root,
                 offline_detection_image_topic=str(
                     resolved.get("object_detection_image_topic") or ""

@@ -520,6 +520,50 @@ def _analyze_rosbag_preflight(
         report.resolved["primary_image_topic"] = primary_image_topic
         report.resolved["image_topic"] = primary_image_topic
 
+    event_tensor_preview = bool(payload.get("event_tensor_preview", False))
+    report.resolved["event_tensor_preview"] = event_tensor_preview
+    if event_tensor_preview:
+        event_topic = _analysis_topic(
+            topics,
+            report,
+            check_id="analysis.event_topic",
+            label="Event tensor source",
+            raw_value=payload.get("event_topic"),
+            default="/event_camera/events",
+            required=True,
+            expected_types={"event_camera_msgs/msg/EventPacket"},
+        )
+        if event_topic:
+            report.resolved["event_topic"] = event_topic
+        numeric_specs = (
+            ("event_bins", 10, 1.0, 64.0, True),
+            ("event_window_ms", 50.0, 0.001, 10_000.0, False),
+            ("event_stride_ms", 10.0, 0.001, 10_000.0, False),
+            ("event_output_width", 212, 1.0, 4096.0, True),
+            ("event_output_height", 120, 1.0, 4096.0, True),
+        )
+        for key, default, minimum, maximum, integer in numeric_specs:
+            raw = payload.get(key, default)
+            try:
+                parsed = float(raw)
+            except (TypeError, ValueError):
+                parsed = math.nan
+            if not math.isfinite(parsed) or parsed < minimum or parsed > maximum or (
+                integer and not parsed.is_integer()
+            ):
+                report.add(
+                    f"analysis.{key}",
+                    key.replace("_", " ").title(),
+                    BLOCKED,
+                    f"{key} is outside the supported range.",
+                    details={"value": raw, "minimum": minimum, "maximum": maximum},
+                )
+            else:
+                report.resolved[key] = int(parsed) if integer else parsed
+        report.resolved["event_linear_interpolation"] = bool(
+            payload.get("event_linear_interpolation", False)
+        )
+
     control_topic = _analysis_topic(
         topics,
         report,

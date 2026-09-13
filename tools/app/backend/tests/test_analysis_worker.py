@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 from jetpilot_console.analysis_worker import (
     AnalysisOptions,
@@ -16,6 +18,7 @@ from jetpilot_console.analysis_worker import (
     Progress,
     _snapshot_samples,
     _THERMAL_SMOOTHING_STATE,
+    _EventTensorPreview,
     _transform_recorded_trajectory,
     extract_analysis,
     trajectory_map_consistency,
@@ -25,6 +28,56 @@ from jetpilot_console.map_detail import directory_fingerprint
 
 
 class SnapshotTrajectoryTests(unittest.TestCase):
+    def test_event_tensor_preview_renders_polarity_bins_without_tensor_files(self) -> None:
+        try:
+            import numpy as np
+        except ImportError:
+            self.skipTest("NumPy is unavailable")
+
+        events = np.zeros(
+            2,
+            dtype={
+                "names": ["x", "y", "p", "t"],
+                "formats": ["<u2", "<u2", "i1", "<i4"],
+                "offsets": [0, 2, 4, 8],
+                "itemsize": 12,
+            },
+        )
+        events["x"] = [1, 2]
+        events["y"] = [1, 2]
+        events["p"] = [1, 0]
+        events["t"] = [1000, 2000]
+
+        class FakeDecoder:
+            def decode_bytes(self, *args):
+                self.args = args
+
+            def get_cd_events(self):
+                return events
+
+        fake_module = SimpleNamespace(Decoder=FakeDecoder)
+        with mock.patch.dict(sys.modules, {"event_camera_py": fake_module}):
+            preview = _EventTensorPreview(
+                bins=2,
+                window_ms=2.0,
+                stride_ms=1.0,
+                output_width=4,
+                output_height=3,
+                bag_duration_ns=1_000_000_000,
+                linear_interpolation=False,
+            )
+            message = SimpleNamespace(
+                encoding="evt3", width=4, height=3, time_base=0, events=b"raw"
+            )
+            preview.add_packet(message, 3_000_000)
+            image, stats = preview.render(3_000_000)
+
+        self.assertEqual(image.shape, (6, 12, 3))
+        self.assertEqual(stats["channels"], 4)
+        self.assertEqual(stats["events"], 2)
+        self.assertGreater(int(image[:3, :, 0].max()), 0)
+        self.assertGreater(int(image[3:, :, 2].max()), 0)
+
     def test_extracts_jazzy_detection2d_payload(self) -> None:
         message = SimpleNamespace(
             detections=[

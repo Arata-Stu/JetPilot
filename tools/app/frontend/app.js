@@ -432,6 +432,12 @@ const state = {
     e2eSectionTopic: "/localization/current_section",
     e2eManualOnly: true,
     e2eDeadlineMs: 33.3,
+    eventTensorPreview: false,
+    eventTopic: "/event_camera/events",
+    eventBins: 10,
+    eventWindowMs: 50,
+    eventStrideMs: 10,
+    eventLinearInterpolation: false,
   },
 };
 
@@ -2924,6 +2930,7 @@ function analysisTopics(kind) {
     mode: (topic) => /OperationModeState$/.test(topic.type) || /operation_mode\/state$/i.test(topic.name),
     pose: (topic) => /nav_msgs\/(msg\/)?Odometry$/.test(topic.type) || /(^|\/)(odometry|odom)$/i.test(topic.name),
     speed: (topic) => /(Float32|Float64|Odometry)$/.test(topic.type) && /(speed|velocity|odometry)/i.test(topic.name),
+    event: (topic) => /event_camera_msgs\/(msg\/)?EventPacket$/.test(topic.type) || /(^|\/)events(_raw)?$/i.test(topic.name),
   }[kind];
   return matches ? topics.filter(matches) : topics;
 }
@@ -2940,6 +2947,7 @@ function preferredAnalysisTopic(kind, topics) {
     mode: ["/operation_mode/state"],
     pose: ["/visual_slam/tracking/odometry", "/localization/odometry", "/odom"],
     speed: ["/visual_slam/tracking/odometry", "/commands/motor/speed"],
+    event: ["/event_camera/events", "/event_camera/events_raw"],
   }[kind] || [];
   return preferences.map((name) => topics.find((topic) => topic.name === name)).find(Boolean)?.name || topics[0]?.name || "";
 }
@@ -3194,13 +3202,21 @@ function e2eAnalysisPayload() {
     manual_only: Boolean(analysis.e2eManualOnly),
     deadline_ms: Number(analysis.e2eDeadlineMs) || 33.3,
     max_fps: Number(analysis.maxFps) || 15,
+    event_tensor_preview: Boolean(analysis.eventTensorPreview),
+    event_topic: analysis.eventTopic || "/event_camera/events",
+    event_bins: Number(analysis.eventBins) || 10,
+    event_window_ms: Number(analysis.eventWindowMs) || 50,
+    event_stride_ms: Number(analysis.eventStrideMs) || 10,
+    event_linear_interpolation: Boolean(analysis.eventLinearInterpolation),
+    event_output_width: 212,
+    event_output_height: 120,
   };
 }
 
 function updateE2EOption(key, value) {
   if (!(key in state.analysis)) return;
-  if (key === "e2eManualOnly") state.analysis[key] = Boolean(value);
-  else if (["e2eDeadlineMs", "maxFps"].includes(key)) state.analysis[key] = Number(value) || (key === "maxFps" ? 15 : 33.3);
+  if (["e2eManualOnly", "eventTensorPreview", "eventLinearInterpolation"].includes(key)) state.analysis[key] = Boolean(value);
+  else if (["e2eDeadlineMs", "maxFps", "eventBins", "eventWindowMs", "eventStrideMs"].includes(key)) state.analysis[key] = Number(value) || ({ maxFps: 15, e2eDeadlineMs: 33.3, eventBins: 10, eventWindowMs: 50, eventStrideMs: 10 }[key]);
   else state.analysis[key] = String(value ?? "");
   render();
   scheduleE2EPreflight();
@@ -4205,6 +4221,10 @@ function renderE2EAnalysisForm() {
       <div class="field"><label>Speed</label><select onchange="updateAnalysisOption('speedTopic', this.value)">${analysisTopicOptions("speed", analysis.speedTopic)}</select></div>
       <div class="field"><label>Max extraction FPS</label><input type="number" min="1" max="60" value="${esc(analysis.maxFps)}" onchange="updateE2EOption('maxFps', this.value)" /></div>
       <div class="field"><label>Deadline (ms)</label><input type="number" min="0.1" step="0.1" value="${esc(analysis.e2eDeadlineMs)}" onchange="updateE2EOption('e2eDeadlineMs', this.value)" /></div>
+      <details class="field full" ${analysis.eventTensorPreview ? "open" : ""}><summary>20ch event tensor preview</summary>
+        <label class="check-row"><input type="checkbox" ${analysis.eventTensorPreview ? "checked" : ""} onchange="updateE2EOption('eventTensorPreview', this.checked)" /><span>Generate representative previews from raw EventPacket (tensor data is not saved)</span></label>
+        ${analysis.eventTensorPreview ? `<div class="e2e-compact-fields"><label>Event topic<select onchange="updateE2EOption('eventTopic', this.value)">${analysisTopicOptions("event", analysis.eventTopic)}</select></label><label>Bins<input type="number" min="1" max="64" value="${esc(analysis.eventBins)}" onchange="updateE2EOption('eventBins', this.value)" /></label><label>Window (ms)<input type="number" min="0.1" step="0.1" value="${esc(analysis.eventWindowMs)}" onchange="updateE2EOption('eventWindowMs', this.value)" /></label><label>Stride (ms)<input type="number" min="0.1" step="0.1" value="${esc(analysis.eventStrideMs)}" onchange="updateE2EOption('eventStrideMs', this.value)" /></label></div><label class="check-row"><input type="checkbox" ${analysis.eventLinearInterpolation ? "checked" : ""} onchange="updateE2EOption('eventLinearInterpolation', this.checked)" /><span>Temporal linear interpolation (off is faster)</span></label><div class="field-hint">Top: positive events in blue. Bottom: negative events in red. Time runs from oldest on the left to newest on the right; the final column is the all-bin aggregate.</div>` : ""}
+      </details>
       <div class="field full e2e-action-row"><button class="primary ${actionBusy("e2e-analysis:start") ? "is-busy" : ""}" onclick="startE2EAnalysis()" ${preflightButtonAttrs("analyze-e2e", payload)} ${actionButtonAttrs("e2e-analysis:start", "E2E analysis is starting...")}>${esc(actionButtonLabel("e2e-analysis:start", "Start E2E Analysis", "Starting..."))}</button><button onclick="scheduleE2EPreflight({ immediate:true, force:true })">Recheck</button><span>${renderPreflightButtonReason("analyze-e2e", payload)}</span></div>
       <details class="field full"><summary>Preflight readiness</summary><div>${renderReadinessPanel("analyze-e2e", payload, { title: "E2E analysis readiness" })}</div></details>
     </div>`;
@@ -4627,6 +4647,7 @@ function renderAnalysisViewer() {
   const trajectory = analysisTrajectory(timeline);
   const consistency = analysisMapConsistency();
   const issues = analysisTimelineIssues();
+  const eventPreview = timeline.event_tensor_preview || {};
   return `
     <div class="analysis-viewer">
       <div class="analysis-viewer-title">
@@ -4634,11 +4655,13 @@ function renderAnalysisViewer() {
         <div class="chips">
           <span class="chip ${frames.length ? "ok" : "missing"}">${esc(frames.length)} frames</span>
           <span class="chip ${trajectory.samples.length ? "ok" : "missing"}">${esc(trajectory.samples.length)} poses</span>
+          ${eventPreview.enabled ? `<span class="chip ${Number(eventPreview.generated) > 0 ? "ok" : "missing"}">${esc(eventPreview.generated || 0)} event previews</span>` : ""}
           <span class="chip ${consistency.className}">${esc(consistency.label)}</span>
         </div>
       </div>
       ${consistency.message ? `<div class="analysis-consistency ${consistency.className}"><strong>Map consistency</strong><span>${esc(consistency.message)}</span></div>` : ""}
       ${renderAnalysisSources()}
+      ${eventPreview.enabled ? `<div class="analysis-consistency ${Number(eventPreview.generated) > 0 ? "ok" : "missing"}"><strong>20ch event tensor</strong><span>${esc(eventPreview.decoded_events || 0)} events decoded · select ${esc(eventPreview.virtual_image_topic || "/analysis/event_tensor_20ch")} from Channel</span></div>` : ""}
       ${renderE2ESummaryPanel()}
       <div class="analysis-media-grid">
         <div class="analysis-image-panel">
@@ -4899,6 +4922,7 @@ async function selectAnalysisBag(path) {
     mode: state.analysis.modeTopic,
     pose: state.analysis.poseTopic,
     speed: state.analysis.speedTopic,
+    event: state.analysis.eventTopic,
   };
   state.analysis.selectedBagPath = selectedPath;
   state.analysis.bagDetail = null;
@@ -4909,6 +4933,7 @@ async function selectAnalysisBag(path) {
     state.analysis.modeTopic = "";
     state.analysis.poseTopic = "";
     state.analysis.speedTopic = "";
+    state.analysis.eventTopic = "";
   }
   if (isAnalysisTab()) render();
   if (!selectedPath) {
@@ -4924,7 +4949,7 @@ async function selectAnalysisBag(path) {
       const selectedConfig = cameraTopicConfigForTopics(analysisTopicRecords()) || defaultCameraTopicConfig();
       state.analysis.topicConfigPath = selectedConfig?.path || "";
     }
-    for (const kind of ["image", "control", "mode", "pose", "speed"]) {
+    for (const kind of ["image", "control", "mode", "pose", "speed", "event"]) {
       const key = `${kind}Topic`;
       state.analysis[key] = changed ? preferredAnalysisTopic(kind, analysisTopics(kind)) : previousTopics[kind];
     }

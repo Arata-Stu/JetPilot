@@ -264,6 +264,16 @@ and clickable section metrics. Supervised control error is only meaningful when
 a teacher command exists; autonomous runs without a teacher are evaluated using
 trajectory, smoothness, latency, deadline misses, and section context instead.
 
+E2E Analysis can also generate a lightweight **20ch event tensor preview** from
+the recorded `/event_camera/events` `EventPacket` stream. The preview uses the
+selected bin count, window, stride, and optional temporal interpolation. It
+stores at most 12 JPEG contact sheets, never the tensor itself: positive bins
+are blue on the top row, negative bins are red on the bottom row, time advances
+left-to-right, and the final column is the all-bin aggregate. Select
+`/analysis/event_tensor_20ch` in the synchronized image viewer after analysis.
+Decoding uses the upstream `event_camera_py` binding; install the ROS package
+for the active distribution when it is not already present.
+
 Teacher-free evaluation is calculated for every E2E result, including bags
 without manual commands. It reports absolute steering and steering/throttle
 rate, steering oscillations, control saturation, speed, longitudinal

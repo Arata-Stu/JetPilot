@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import bisect
+import collections
 import fcntl
 import hashlib
 import json
@@ -31,6 +32,8 @@ OBJECT_DETECTION_TOPICS = (
     "/perception/detections",
 )
 OBJECT_DETECTION_OVERLAY_TOPIC = "/perception/detections_overlay"
+EVENT_TENSOR_PREVIEW_TOPIC = "/analysis/event_tensor_20ch"
+MAX_EVENT_TENSOR_PREVIEWS = 12
 JETSON_METRIC_ORDER = {
     "cpu": 10,
     "gpu": 20,
@@ -1206,6 +1209,180 @@ class AnalysisOptions:
     max_fps: float = 10.0
     jpeg_quality: int = 85
     expected_map_fingerprint: str = ""
+    event_tensor_preview: bool = False
+    event_topic: str = "/event_camera/events"
+    event_bins: int = 10
+    event_window_ms: float = 50.0
+    event_stride_ms: float = 10.0
+    event_linear_interpolation: bool = False
+    event_output_width: int = 212
+    event_output_height: int = 120
+
+
+class _EventTensorPreview:
+    """Decode EventPacket messages and render a few transient 2B-channel tensors."""
+
+    def __init__(
+        self,
+        *,
+        bins: int,
+        window_ms: float,
+        stride_ms: float,
+        output_width: int,
+        output_height: int,
+        bag_duration_ns: int | None,
+        linear_interpolation: bool,
+    ) -> None:
+        try:
+            import numpy as np
+            from event_camera_py import Decoder
+        except ImportError as error:
+            raise RuntimeError(
+                "イベントTensorプレビューにはevent_camera_pyが必要です。"
+                "ROS環境へros-${ROS_DISTRO}-event-camera-pyを導入してください。"
+            ) from error
+        self.np = np
+        self.decoder = Decoder()
+        self.bins = bins
+        self.window_ns = int(round(window_ms * 1_000_000.0))
+        self.stride_ns = int(round(stride_ms * 1_000_000.0))
+        self.width = output_width
+        self.height = output_height
+        self.linear_interpolation = linear_interpolation
+        self.source_width = 0
+        self.source_height = 0
+        self.chunks: collections.deque[tuple[object, object, object, object]] = collections.deque()
+        self.preview_interval_ns = max(
+            self.stride_ns,
+            int((bag_duration_ns or 0) / max(MAX_EVENT_TENSOR_PREVIEWS - 1, 1)),
+        )
+        self.next_preview_ns: int | None = None
+        self.generated = 0
+        self.decoded_events = 0
+        self.first_event_ns: int | None = None
+
+    def add_packet(self, message: Any, bag_timestamp_ns: int) -> None:
+        self.decoder.decode_bytes(
+            str(message.encoding), int(message.width), int(message.height),
+            int(message.time_base), bytes(message.events),
+        )
+        events = self.decoder.get_cd_events()
+        if events is None or len(events) == 0:
+            return
+        np = self.np
+        sensor_us = np.asarray(events["t"], dtype=np.int64)
+        # Align the newest event to the bag's master clock for RGB synchronization;
+        # the constant offset preserves all intra-packet bin boundaries.
+        event_ns = sensor_us * 1000 + (int(bag_timestamp_ns) - int(sensor_us[-1]) * 1000)
+        self.source_width = int(message.width)
+        self.source_height = int(message.height)
+        self.chunks.append(
+            (
+                event_ns,
+                np.asarray(events["x"], dtype=np.int32).copy(),
+                np.asarray(events["y"], dtype=np.int32).copy(),
+                np.asarray(events["p"], dtype=np.bool_).copy(),
+            )
+        )
+        if self.first_event_ns is None:
+            self.first_event_ns = int(event_ns[0])
+        self.decoded_events += len(events)
+        oldest = int(bag_timestamp_ns) - self.window_ns
+        while self.chunks and int(self.chunks[0][0][-1]) < oldest:
+            self.chunks.popleft()
+
+    def should_render(self, timestamp_ns: int) -> bool:
+        if self.generated >= MAX_EVENT_TENSOR_PREVIEWS or not self.chunks:
+            return False
+        if self.next_preview_ns is None:
+            self.next_preview_ns = timestamp_ns
+        return timestamp_ns >= self.next_preview_ns
+
+    def render(self, timestamp_ns: int):
+        np = self.np
+        if self.first_event_ns is not None and timestamp_ns >= self.first_event_ns:
+            timestamp_ns = self.first_event_ns + (
+                (timestamp_ns - self.first_event_ns) // self.stride_ns
+            ) * self.stride_ns
+        start_ns = timestamp_ns - self.window_ns
+        tensors = np.zeros((2 * self.bins, self.height, self.width), dtype=np.float32)
+        event_count = 0
+        for times, source_x, source_y, polarity in self.chunks:
+            selected = (times >= start_ns) & (times < timestamp_ns)
+            if not bool(selected.any()):
+                continue
+            times_selected = times[selected]
+            valid = (
+                (source_x[selected] >= 0) & (source_x[selected] < self.source_width)
+                & (source_y[selected] >= 0) & (source_y[selected] < self.source_height)
+            )
+            if not bool(valid.any()):
+                continue
+            times_selected = times_selected[valid]
+            x = np.minimum(
+                self.width - 1,
+                source_x[selected][valid].astype(np.int64) * self.width // max(self.source_width, 1),
+            )
+            y = np.minimum(
+                self.height - 1,
+                source_y[selected][valid].astype(np.int64) * self.height // max(self.source_height, 1),
+            )
+            positive = polarity[selected][valid]
+            polarity_offset = np.where(positive, 0, self.bins)
+            if self.linear_interpolation and self.bins > 1:
+                position = (
+                    (times_selected - start_ns).astype(np.float64)
+                    * (self.bins - 1)
+                    / self.window_ns
+                )
+                lower = np.floor(position).astype(np.int64)
+                upper = np.minimum(lower + 1, self.bins - 1)
+                upper_weight = (position - lower).astype(np.float32)
+                np.add.at(tensors, (lower + polarity_offset, y, x), 1.0 - upper_weight)
+                np.add.at(tensors, (upper + polarity_offset, y, x), upper_weight)
+            else:
+                bins = np.minimum(
+                    self.bins - 1,
+                    (times_selected - start_ns) * self.bins // self.window_ns,
+                ).astype(np.int64)
+                np.add.at(tensors, (bins + polarity_offset, y, x), 1.0)
+            event_count += int(valid.sum())
+
+        peak = max(float(tensors.max()), 1.0)
+        intensity = np.rint(np.log1p(tensors) * (255.0 / np.log1p(peak))).astype(np.uint8)
+        image = np.zeros((self.height * 2, self.width * (self.bins + 1), 3), dtype=np.uint8)
+        for bin_index in range(self.bins):
+            x0 = bin_index * self.width
+            x1 = x0 + self.width
+            image[: self.height, x0:x1, 0] = intensity[bin_index]
+            image[self.height :, x0:x1, 2] = intensity[self.bins + bin_index]
+        aggregate_x = self.bins * self.width
+        positive_sum = tensors[: self.bins].sum(axis=0)
+        negative_sum = tensors[self.bins :].sum(axis=0)
+        aggregate_peak = max(float(positive_sum.max()), float(negative_sum.max()), 1.0)
+        aggregate_scale = 255.0 / np.log1p(aggregate_peak)
+        image[: self.height, aggregate_x:, 0] = np.rint(
+            np.log1p(positive_sum) * aggregate_scale
+        ).astype(np.uint8)
+        image[self.height :, aggregate_x:, 2] = np.rint(
+            np.log1p(negative_sum) * aggregate_scale
+        ).astype(np.uint8)
+
+        self.generated += 1
+        self.next_preview_ns = timestamp_ns + self.preview_interval_ns
+        nonzero = int(np.count_nonzero(tensors))
+        return image, {
+            "events": event_count,
+            "nonzero_fraction": nonzero / max(int(tensors.size), 1),
+            "peak_count": peak,
+            "bins": self.bins,
+            "channels": 2 * self.bins,
+            "window_ms": self.window_ns / 1e6,
+            "stride_ms": self.stride_ns / 1e6,
+            "temporal_interpolation": "linear" if self.linear_interpolation else "none",
+            "layout": "top=positive(blue), bottom=negative(red), left=oldest, right=all bins",
+            "snapshot_timestamp_ns": timestamp_ns,
+        }
 
 
 class Progress:
@@ -1318,6 +1495,16 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
         raise ValueError("--max-fps must be greater than zero")
     if options.jpeg_quality < 1 or options.jpeg_quality > 100:
         raise ValueError("--jpeg-quality must be between 1 and 100")
+    if options.event_tensor_preview:
+        if options.event_bins < 1 or options.event_bins > 64:
+            raise ValueError("--event-bins must be between 1 and 64")
+        if (
+            not math.isfinite(options.event_window_ms) or options.event_window_ms <= 0.0
+            or not math.isfinite(options.event_stride_ms) or options.event_stride_ms <= 0.0
+        ):
+            raise ValueError("event window and stride must be positive finite values")
+        if options.event_output_width < 1 or options.event_output_height < 1:
+            raise ValueError("event preview output dimensions must be positive")
     if options.map_dir and options.expected_map_fingerprint:
         current_map_fingerprint = _file_fingerprint(options.map_dir)
         if current_map_fingerprint != options.expected_map_fingerprint:
@@ -1328,7 +1515,10 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
     analysis_dir = options.analysis_dir
     frames_dir = analysis_dir / "frames"
     frames_dir.mkdir(parents=True, exist_ok=True)
-    topic_slugs = {topic: _topic_slug(topic) for topic in image_topics}
+    display_image_topics = list(image_topics)
+    if options.event_tensor_preview:
+        display_image_topics.append(EVENT_TENSOR_PREVIEW_TOPIC)
+    topic_slugs = {topic: _topic_slug(topic) for topic in display_image_topics}
     for slug in topic_slugs.values():
         (frames_dir / slug).mkdir(parents=True, exist_ok=True)
 
@@ -1369,12 +1559,20 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
     missing_image_topics = [t for t in image_topics if t not in topic_types]
     if missing_image_topics:
         raise RuntimeError("Image topics were not found in bag: " + ", ".join(missing_image_topics))
+    if options.event_tensor_preview:
+        event_type = str(topic_types.get(options.event_topic) or "")
+        if not event_type.endswith("event_camera_msgs/msg/EventPacket"):
+            raise RuntimeError(
+                f"EventPacket topic was not found for tensor preview: {options.event_topic}"
+            )
 
     from .camera_projection import ProjectionCollector
     projection_collector = ProjectionCollector(offline=offline_snapshot_samples is not None)
     camera_info_topics = {topic for topic, msg_type in topic_types.items() if msg_type.endswith("/CameraInfo")}
     transform_topics = {topic for topic in ("/tf", "/tf_static") if topic in topic_types}
     requested = set(image_topics) | camera_info_topics | transform_topics
+    if options.event_tensor_preview:
+        requested.add(options.event_topic)
     for topic in (
         options.control_topic,
         options.comparison_control_topic,
@@ -1430,6 +1628,21 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
     last_frame_timestamp_ns: int | None = None
     latest_decoded_images: dict[str, dict[str, object]] = {}
     bag_duration_ns = _metadata_duration_ns(options.rosbag)
+    event_preview = (
+        _EventTensorPreview(
+            bins=options.event_bins,
+            window_ms=options.event_window_ms,
+            stride_ms=options.event_stride_ms,
+            output_width=options.event_output_width,
+            output_height=options.event_output_height,
+            bag_duration_ns=bag_duration_ns,
+            linear_interpolation=options.event_linear_interpolation,
+        )
+        if options.event_tensor_preview
+        else None
+    )
+    latest_event_preview: dict[str, object] | None = None
+    event_preview_samples: list[dict[str, object]] = []
     effective_max_fps = options.max_fps
     if bag_duration_ns:
         effective_max_fps = min(
@@ -1453,6 +1666,9 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
         selected_count += 1
         timestamp_ns = int(bag_timestamp_ns)
         message = deserialize_message(serialized, message_classes[topic])
+        if event_preview is not None and topic == options.event_topic:
+            event_preview.add_packet(message, int(bag_timestamp_ns))
+            continue
         if topic in camera_info_topics:
             projection_collector.add_info(topic, message, timestamp_ns)
             continue
@@ -1530,6 +1746,37 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
                         primary_path = rel_path
                         primary_width = w
                         primary_height = h
+
+                if event_preview is not None and event_preview.should_render(timestamp_ns):
+                    preview_image, preview_stats = event_preview.render(timestamp_ns)
+                    preview_name = f"preview_{event_preview.generated - 1:04d}.jpg"
+                    preview_rel_path = (
+                        f"frames/{topic_slugs[EVENT_TENSOR_PREVIEW_TOPIC]}/{preview_name}"
+                    )
+                    preview_width, preview_height = _write_jpeg(
+                        analysis_dir / preview_rel_path, preview_image, options.jpeg_quality
+                    )
+                    latest_event_preview = {
+                        "path": preview_rel_path,
+                        "width": preview_width,
+                        "height": preview_height,
+                        "timestamp_ns": int(preview_stats["snapshot_timestamp_ns"]),
+                        "stats": preview_stats,
+                    }
+                    event_preview_samples.append(
+                        {"_timestamp_ns": int(preview_stats["snapshot_timestamp_ns"]), **preview_stats}
+                    )
+                if latest_event_preview is not None:
+                    channels_payload[EVENT_TENSOR_PREVIEW_TOPIC] = {
+                        "path": latest_event_preview["path"],
+                        "width": latest_event_preview["width"],
+                        "height": latest_event_preview["height"],
+                        "delta_ms": round(
+                            (int(latest_event_preview["timestamp_ns"]) - timestamp_ns) / 1e6,
+                            3,
+                        ),
+                        "stats": latest_event_preview["stats"],
+                    }
 
                 if not primary_path:
                     primary_slug = topic_slugs[primary_image_topic]
@@ -1681,6 +1928,7 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
         speeds,
         trajectory,
         jetson_samples,
+        event_preview_samples,
     ]
     timestamp_values = [
         int(sample["_timestamp_ns"])
@@ -1802,6 +2050,8 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
         warnings.append("Jetson diagnostics topicはありますが、plot可能なjtop数値は抽出されませんでした。")
     if object_detection_topic and object_detections and not detection_overlay_frames:
         warnings.append("物体検出結果はありますが、画像と時刻同期できずoverlayを生成できませんでした。")
+    if event_preview is not None and not event_preview_samples:
+        warnings.append("EventPacketは見つかりましたが、20chイベントTensorプレビューを生成できませんでした。")
     if offline_localization_method in {"vslam_identity", "vslam_identity_fallback"}:
         warnings.append(
             "VGLを使わず、保存cuVSLAM Mapの原点をidentity初期姿勢として自己位置を生成しました。"
@@ -1820,7 +2070,17 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
         "duration_s": round(duration_s, 6),
         "requested_max_fps": options.max_fps,
         "effective_max_fps": effective_max_fps,
+        "image_topics": display_image_topics,
+        "primary_image_topic": primary_image_topic,
         "frames": frames,
+        "event_tensor_preview": {
+            "enabled": event_preview is not None,
+            "topic": options.event_topic if event_preview is not None else "",
+            "virtual_image_topic": EVENT_TENSOR_PREVIEW_TOPIC if event_preview is not None else "",
+            "generated": len(event_preview_samples),
+            "decoded_events": event_preview.decoded_events if event_preview is not None else 0,
+            "samples": event_preview_samples,
+        },
         "controls": controls,
         "comparison_controls": comparison_controls,
         "modes": modes,
@@ -1868,8 +2128,9 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
             },
             "topics": {
                 "image": options.image_topic,
-                "image_topics": image_topics,
+                "image_topics": display_image_topics,
                 "primary_image_topic": primary_image_topic,
+                "event": options.event_topic if event_preview is not None else "",
                 "control": options.control_topic,
                 "comparison_control": options.comparison_control_topic,
                 "mode": options.mode_topic,
@@ -1899,6 +2160,7 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
             "duration_s": round(duration_s, 6),
             "counts": {
                 "frames": len(frames),
+                "event_tensor_previews": len(event_preview_samples),
                 "controls": len(controls),
                 "comparison_controls": len(comparison_controls),
                 "modes": len(modes),
@@ -2075,6 +2337,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-fps", type=float, default=10.0)
     parser.add_argument("--jpeg-quality", type=int, default=85)
     parser.add_argument("--expected-map-fingerprint", default="")
+    parser.add_argument("--event-tensor-preview", action="store_true")
+    parser.add_argument("--event-topic", default="/event_camera/events")
+    parser.add_argument("--event-bins", type=int, default=10)
+    parser.add_argument("--event-window-ms", type=float, default=50.0)
+    parser.add_argument("--event-stride-ms", type=float, default=10.0)
+    parser.add_argument("--event-linear-interpolation", action="store_true")
+    parser.add_argument("--event-output-width", type=int, default=212)
+    parser.add_argument("--event-output-height", type=int, default=120)
     parser.add_argument("--demo", action="store_true")
     parser.add_argument(
         "--set-status",
@@ -2155,6 +2425,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                     max_fps=args.max_fps,
                     jpeg_quality=args.jpeg_quality,
                     expected_map_fingerprint=args.expected_map_fingerprint,
+                    event_tensor_preview=args.event_tensor_preview,
+                    event_topic=args.event_topic,
+                    event_bins=args.event_bins,
+                    event_window_ms=args.event_window_ms,
+                    event_stride_ms=args.event_stride_ms,
+                    event_linear_interpolation=args.event_linear_interpolation,
+                    event_output_width=args.event_output_width,
+                    event_output_height=args.event_output_height,
                 )
             )
         return 0

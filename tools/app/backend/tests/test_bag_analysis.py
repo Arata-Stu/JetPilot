@@ -242,6 +242,35 @@ class AnalysisPreflightTests(unittest.TestCase):
         self.assertEqual(self.check(result, "analysis.control_topic")["status"], WARNING)
         self.assertEqual(self.check(result, "analysis.mode_topic")["status"], WARNING)
 
+    def test_event_tensor_preview_resolves_event_packet_and_parameters(self) -> None:
+        bag = write_bag(
+            self.record_root / "event-run",
+            {
+                "/camera": ("sensor_msgs/msg/Image", 30),
+                "/event_camera/events": ("event_camera_msgs/msg/EventPacket", 300),
+            },
+        )
+        result = evaluate_preflight(
+            self.config,
+            "analyze-rosbag",
+            {
+                "rosbag": str(bag),
+                "image_topic": "/camera",
+                "trajectory_mode": "none",
+                "event_tensor_preview": True,
+                "event_topic": "/event_camera/events",
+                "event_bins": 10,
+                "event_window_ms": 50,
+                "event_stride_ms": 10,
+            },
+        )
+
+        self.assertTrue(result["ready"])
+        self.assertTrue(result["resolved"]["event_tensor_preview"])
+        self.assertEqual(result["resolved"]["event_topic"], "/event_camera/events")
+        self.assertEqual(result["resolved"]["event_bins"], 10)
+        self.assertEqual(self.check(result, "analysis.event_topic")["status"], PASS)
+
     def test_offline_object_detection_requires_raw_image_camera_info_and_model(self) -> None:
         detector_launch = (
             self.ros2_ws
@@ -461,6 +490,46 @@ class AnalysisPreflightTests(unittest.TestCase):
 
 
 class AnalysisScriptTests(unittest.TestCase):
+    def test_event_tensor_preview_worker_arguments(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            config = SimpleNamespace(
+                ros2_ws=root / "ros2_ws",
+                python_bin="/opt/env/bin/python",
+                launch_package="jetpilot_system_launch",
+                analysis_ros_domain_id=92,
+            )
+            script = build_analysis_script(
+                config,
+                analysis_dir=root / "analysis",
+                rosbag=root / "record/run",
+                image_topic="/camera",
+                control_topic="",
+                mode_topic="",
+                pose_topic="",
+                speed_topic="",
+                map_dir=None,
+                trajectory_mode="none",
+                max_fps=10.0,
+                event_tensor_preview=True,
+                event_topic="/event_camera/events",
+                event_bins=10,
+                event_window_ms=50.0,
+                event_stride_ms=10.0,
+                event_linear_interpolation=True,
+            )
+
+            self.assertIn("--event-tensor-preview", script)
+            self.assertIn("--event-topic /event_camera/events", script)
+            self.assertIn("--event-bins 10", script)
+            self.assertIn("--event-window-ms 50", script)
+            self.assertIn("--event-stride-ms 10", script)
+            self.assertIn("--event-linear-interpolation", script)
+            syntax = subprocess.run(
+                ["bash", "-n"], input=script, text=True, capture_output=True, check=False
+            )
+            self.assertEqual(syntax.returncode, 0, syntax.stderr)
+
     def test_offline_detection_sidecar_runs_before_extraction(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)

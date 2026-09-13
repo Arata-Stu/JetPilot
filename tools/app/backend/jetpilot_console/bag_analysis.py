@@ -460,6 +460,14 @@ def build_analysis_script(
     offline_detection_confidence: float = 0.35,
     offline_detection_nms: float = 0.45,
     offline_detection_replay_rate: float = 0.5,
+    event_tensor_preview: bool = False,
+    event_topic: str = "/event_camera/events",
+    event_bins: int = 10,
+    event_window_ms: float = 50.0,
+    event_stride_ms: float = 10.0,
+    event_linear_interpolation: bool = False,
+    event_output_width: int = 212,
+    event_output_height: int = 120,
 ) -> str:
     """Build the Linux/Docker task script used by ``POST /api/analyses``.
 
@@ -487,6 +495,16 @@ def build_analysis_script(
         raise ValueError("E2E provider must be auto, cpu, or cuda")
     if not math.isfinite(e2e_deadline_ms) or e2e_deadline_ms <= 0.0:
         raise ValueError("E2E deadline must be a positive finite value")
+    if event_tensor_preview:
+        if not event_topic or event_bins < 1 or event_bins > 64:
+            raise ValueError("event preview requires a topic and 1..64 bins")
+        if (
+            not math.isfinite(event_window_ms) or event_window_ms <= 0.0
+            or not math.isfinite(event_stride_ms) or event_stride_ms <= 0.0
+        ):
+            raise ValueError("event preview window and stride must be positive")
+        if event_output_width < 1 or event_output_height < 1:
+            raise ValueError("event preview dimensions must be positive")
     if offline_detection_model_root is not None:
         if not offline_detection_image_topic or not offline_detection_camera_info_topic:
             raise ValueError("offline detection requires image and camera_info topics")
@@ -858,6 +876,20 @@ def build_analysis_script(
             worker.extend(["--image-topics", _q(t)])
     if primary_image_topic:
         worker.extend(["--primary-image-topic", _q(primary_image_topic)])
+    if event_tensor_preview:
+        worker.extend(
+            [
+                "--event-tensor-preview",
+                "--event-topic", _q(event_topic),
+                "--event-bins", str(event_bins),
+                "--event-window-ms", f"{event_window_ms:.9g}",
+                "--event-stride-ms", f"{event_stride_ms:.9g}",
+                "--event-output-width", str(event_output_width),
+                "--event-output-height", str(event_output_height),
+            ]
+        )
+        if event_linear_interpolation:
+            worker.append("--event-linear-interpolation")
     if offline_detection_model_root is not None:
         worker.extend(
             [
