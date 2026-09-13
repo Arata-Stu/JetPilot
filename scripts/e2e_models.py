@@ -44,11 +44,43 @@ def inspect_model(
         raise ValueError("model.onnx is missing")
     if not all(isinstance(size, int) and size > 0 for size in shape[2:]):
         raise ValueError("model image dimensions must be fixed positive integers")
-    return {
+    record = {
         "path": str(path), "name": str(metadata.get("model_name") or path.name),
         "width": shape[3], "height": shape[2], "steering_only": actual_steering,
         "engine": (path / "model.plan").is_file(),
     }
+    if modality == "event_tensor":
+        representation = metadata.get("event_representation", {})
+        model_input = metadata.get("input", {})
+        bins = int(representation.get("bins") or shape[1] // 2)
+        if event_tensor_channels is not None and shape[1] != event_tensor_channels:
+            raise ValueError(
+                f"event tensor channels mismatch: requested={event_tensor_channels}, model={shape[1]}"
+            )
+        record["event_representation"] = {
+            "bins": bins,
+            "window_ms": float(representation.get("window_ms") or 40.0),
+            "stride_ms": float(representation.get("stride_ms") or 4.0),
+            "polarity_mode": str(representation.get("polarity_mode") or "separate"),
+            "polarity_layout": str(representation.get("polarity_layout") or "polarity_major"),
+            "temporal_interpolation": str(
+                representation.get("temporal_interpolation") or "none"
+            ),
+            "mean": model_input.get("mean") or [0.0],
+            "std": model_input.get("std") or [1.0],
+        }
+        event = record["event_representation"]
+        window_us = int(round(event["window_ms"] * 1000.0))
+        stride_us = int(round(event["stride_ms"] * 1000.0))
+        bin_width_us = window_us // bins if bins > 0 and window_us % bins == 0 else 0
+        event["backend"] = (
+            "cuda"
+            if event["temporal_interpolation"] == "none"
+            and bin_width_us > 0
+            and stride_us % bin_width_us == 0
+            else "cpu"
+        )
+    return record
 
 
 def list_models(
@@ -100,6 +132,24 @@ def main():
                 print(f"e2e_fixed_throttle_mode\t{str(record['steering_only']).lower()}")
             print(f"e2e_network_image_width\t{record['width']}")
             print(f"e2e_network_image_height\t{record['height']}")
+            event = record.get("event_representation")
+            if event:
+                print("e2e_event_tensor_mode\ttrue")
+                print(f"e2e_event_bins\t{event['bins']}")
+                print(f"e2e_event_window_ms\t{event['window_ms']}")
+                print(f"e2e_event_stride_ms\t{event['stride_ms']}")
+                print(f"e2e_event_polarity_mode\t{event['polarity_mode']}")
+                print(f"e2e_event_polarity_layout\t{event['polarity_layout']}")
+                print(f"e2e_event_temporal_interpolation\t{event['temporal_interpolation']}")
+                print(f"e2e_event_representation_backend\t{event['backend']}")
+                print(
+                    "e2e_event_tensor_mean\t"
+                    + json.dumps(event["mean"], separators=(",", ":"))
+                )
+                print(
+                    "e2e_event_tensor_stddev\t"
+                    + json.dumps(event["std"], separators=(",", ":"))
+                )
     except (OSError, ValueError, TypeError, AttributeError) as error:
         parser.exit(1, f"E2E model error: {error}\n")
 

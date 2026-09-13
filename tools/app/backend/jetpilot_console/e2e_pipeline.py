@@ -4,6 +4,7 @@ import csv
 import json
 import os
 import re
+import shlex
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -19,6 +20,20 @@ from .security import (
 
 NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 EXPERIMENTS = {
+    "event_tensor_pilotnet": {
+        "label": "Raw EVS 20ch · PilotNet",
+        "stages": 1,
+        "task": "control",
+        "family": "event_cnn",
+        "target": "control",
+        "modality": "event_tensor",
+        "name_prefix": "evs20-pilotnet-control",
+        "name_prefix_base": "evs20-pilotnet",
+        "output_targets": ["control", "steer"],
+        "input_width": 212,
+        "input_height": 120,
+        "recommended_batch_size": 32,
+    },
     "pilotnet_steering": {
         "label": "Steering only · PilotNet (fixed throttle)", "stages": 1,
         "task": "control", "family": "cnn", "target": "steer",
@@ -286,6 +301,12 @@ def scan_datasets(config: Any) -> list[dict[str, Any]]:
                 "odometry_topic": str(metadata.get("odometry_topic") or ""),
                 "imu_topic": str(metadata.get("imu_topic") or ""),
                 "task": str(metadata.get("task") or "control"),
+                "modality": str(metadata.get("modality") or "image"),
+                "event_topic": str(metadata.get("event_topic") or ""),
+                "input_channels": int(metadata.get("input_channels") or 3),
+                "event_bins": int(metadata.get("event_bins") or 0),
+                "event_window_ms": float(metadata.get("event_window_ms") or 0.0),
+                "event_stride_ms": float(metadata.get("event_stride_ms") or 0.0),
                 "trajectory_points": int(metadata.get("trajectory_points") or 0),
                 "trajectory_horizon_sec": float(metadata.get("trajectory_horizon_sec") or 0.0),
                 "input_width": int(metadata.get("input_width") or 0),
@@ -331,6 +352,7 @@ def scan_runs(config: Any) -> list[dict[str, Any]]:
                 "architecture": metrics.get("architecture") if isinstance(metrics.get("architecture"), dict) else {},
                 "dataset_dir": str(data.get("dataset_dir") or metrics.get("dataset_dir") or ""),
                 "image_topic": str(data.get("image_topic") or ""),
+                "modality": str(data.get("modality") or "image"),
                 "steering_only": bool(model_data.get("steering_only", False)),
                 "input_width": int(data.get("input_width") or 0),
                 "input_height": int(data.get("input_height") or 0),
@@ -434,10 +456,20 @@ def build_preprocess_task(config: Any, body: dict[str, Any]) -> PipelineTaskSpec
     imu_samples = _integer(body.get("imu_samples", 10), label="IMU samples", minimum=1, maximum=500)
     imu_window = _number(body.get("imu_window_sec", 0.5), label="IMU window", minimum=0.01, maximum=10.0)
     jpeg_quality = _integer(body.get("jpeg_quality", 92), label="JPEG quality", minimum=1, maximum=100)
-    command = _python_command(
-        config,
-        "e2e_learning.cli.preprocess_bag",
-        [
+    modality = str(body.get("modality") or "image")
+    if modality not in {"image", "event_tensor"}:
+        raise ValueError("modality must be image or event_tensor")
+    event_bins = _integer(body.get("event_bins", 10), label="event bins", minimum=1, maximum=64)
+    event_window_ms = _number(body.get("event_window_ms", 40.0), label="event window", minimum=0.1, maximum=10000.0)
+    event_stride_ms = _number(body.get("event_stride_ms", 4.0), label="event stride", minimum=0.1, maximum=10000.0)
+    event_polarity_layout = str(body.get("event_polarity_layout") or "polarity_major")
+    if event_polarity_layout not in {"polarity_major", "time_major"}:
+        raise ValueError("event polarity layout must be polarity_major or time_major")
+    event_temporal_interpolation = str(body.get("event_temporal_interpolation") or "none")
+    if event_temporal_interpolation not in {"none", "linear"}:
+        raise ValueError("event temporal interpolation must be none or linear")
+    sample_hz = _number(body.get("sample_hz", 10.0), label="sample rate", minimum=0.1, maximum=250.0)
+    overrides = [
             f"data.bag_path={bag}",
             f"data.output_dir={output}",
             f"data.image_topic={_topic(body.get('image_topic'), label='image topic')}",
@@ -456,8 +488,54 @@ def build_preprocess_task(config: Any, body: dict[str, Any]) -> PipelineTaskSpec
             f"data.imu_samples={imu_samples}",
             f"data.imu_window_sec={imu_window}",
             f"data.jpeg_quality={jpeg_quality}",
-        ],
-    )
+            f"data.modality={modality}",
+            f"data.event_topic={_topic(body.get('event_topic') or '/event_camera/events', label='event topic')}",
+            f"data.event_bins={event_bins}",
+            f"data.event_window_ms={event_window_ms}",
+            f"data.event_stride_ms={event_stride_ms}",
+            f"data.event_polarity_layout={event_polarity_layout}",
+            f"data.event_temporal_interpolation={event_temporal_interpolation}",
+            f"data.sample_hz={sample_hz}",
+        ]
+    if modality == "event_tensor":
+        if task != "control":
+            raise ValueError("the first raw event tensor pipeline supports control learning only")
+        repo_root = Path(getattr(config, "repo_root", training_root(config).parents[1]))
+        backend_root = repo_root / "tools" / "app" / "backend"
+        source_root = training_root(config) / "src"
+        event_python = os.environ.get("JETPILOT_EVENT_ANALYSIS_PYTHON", "/usr/bin/python3")
+        setup = Path(getattr(config, "ros2_ws", repo_root / "ros2_ws")) / "install" / "setup.bash"
+        worker_args = [
+            event_python, "-X", "faulthandler", "-m",
+            "jetpilot_console.event_tensor_dataset_worker",
+            "--rosbag", str(bag), "--output", str(output),
+            "--reference-topic", _topic(body.get("image_topic"), label="image topic"),
+            "--event-topic", _topic(body.get("event_topic") or "/event_camera/events", label="event topic"),
+            "--control-topic", _topic(body.get("control_topic") or "/teleop/control_cmd", label="control topic"),
+            "--width", str(width), "--height", str(height), "--bins", str(event_bins),
+            "--window-ms", str(event_window_ms), "--stride-ms", str(event_stride_ms),
+            "--polarity-layout", event_polarity_layout,
+            "--temporal-interpolation", event_temporal_interpolation,
+            "--sample-hz", str(sample_hz), "--max-control-dt-sec", str(max_dt),
+            "--timestamp-source", timestamp_source,
+        ]
+        python_path = os.pathsep.join((str(backend_root), str(source_root)))
+        script = "\n".join(
+            (
+                "set -euo pipefail",
+                f"test -f {shlex.quote(str(setup))} || {{ echo 'ROS workspace setup is missing'; exit 1; }}",
+                "set +u",
+                f"source {shlex.quote(str(setup))}",
+                "set -u",
+                f"export PYTHONPATH={shlex.quote(python_path)}${{PYTHONPATH:+:${{PYTHONPATH}}}}",
+                " ".join(shlex.quote(value) for value in worker_args),
+            )
+        )
+        command = ["bash", "-lc", script]
+    else:
+        command = _python_command(
+            config, "e2e_learning.cli.preprocess_bag", overrides
+        )
     return PipelineTaskSpec(
         kind="e2e-preprocess",
         title=f"Create E2E dataset: {name}",
@@ -520,10 +598,17 @@ def build_train_task(config: Any, body: dict[str, Any]) -> PipelineTaskSpec:
         raise ValueError("device must be auto, cpu, cuda or mps")
     dataset_metadata = load_yaml(dataset / "metadata.yaml") if (dataset / "metadata.yaml").is_file() else {}
     dataset_task = str(dataset_metadata.get("task") or "control")
+    dataset_modality = str(dataset_metadata.get("modality") or "image")
+    experiment_modality = str(EXPERIMENTS[experiment].get("modality") or "image")
     experiment_task = str(EXPERIMENTS[experiment].get("task") or "control")
     if dataset_task != experiment_task:
         raise ValueError(
             f"{experiment} requires a {experiment_task} dataset, but {dataset.name} is {dataset_task}"
+        )
+    if dataset_modality != experiment_modality:
+        raise ValueError(
+            f"{experiment} requires a {experiment_modality} dataset, but "
+            f"{dataset.name} is {dataset_modality}"
         )
     fixed_input_width = EXPERIMENTS[experiment].get("input_width")
     fixed_input_height = EXPERIMENTS[experiment].get("input_height")
@@ -576,6 +661,17 @@ def build_train_task(config: Any, body: dict[str, Any]) -> PipelineTaskSpec:
             ]
         )
     for key in (
+        "modality",
+        "event_topic",
+        "event_bins",
+        "event_window_ms",
+        "event_stride_ms",
+        "event_polarity_mode",
+        "event_polarity_layout",
+        "event_temporal_interpolation",
+        "input_channels",
+        "mean",
+        "std",
         "trajectory_horizon_sec",
         "trajectory_points",
         "trajectory_scale_m",
@@ -668,10 +764,12 @@ def build_deploy_task(config: Any, body: dict[str, Any]) -> PipelineTaskSpec:
     model_config = metadata.get("config", {})
     if not image_topic and isinstance(model_config, dict):
         image_topic = str(model_config.get("data", {}).get("image_topic") or "")
-    is_event = metadata.get("modality") == "event_image" or image_topic.endswith("/event_image")
+    modality = str(metadata.get("modality") or "")
+    is_event = modality in {"event_image", "event_tensor"} or image_topic.endswith("/event_image")
     steering_only = bool(metadata.get("steering_only") or model.get("steering_only"))
     task = str(metadata.get("task") or model.get("task") or "control")
-    recommended_preset = ("event" if is_event else "camera") + (
+    preset_prefix = "event_tensor" if modality == "event_tensor" else "event" if is_event else "camera"
+    recommended_preset = preset_prefix + (
         "_trajectory" if task == "trajectory" else "_steering" if steering_only else "_control"
     )
 

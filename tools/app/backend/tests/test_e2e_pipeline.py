@@ -155,6 +155,32 @@ class E2EPipelineTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "timestamp_source"):
             build_preprocess_task(self.config, {**body, "timestamp_source": "unknown"})
 
+    def test_raw_event_tensor_dataset_contract_is_forwarded(self) -> None:
+        spec = build_preprocess_task(
+            self.config,
+            {
+                "rosbag": str(self.bag),
+                "dataset_name": "evs20",
+                "image_topic": "/realsense/color/image_raw",
+                "control_topic": "/teleop/control_cmd",
+                "modality": "event_tensor",
+                "event_topic": "/event_camera/events",
+                "event_bins": 10,
+                "event_window_ms": 40,
+                "event_stride_ms": 4,
+                "event_polarity_layout": "polarity_major",
+                "event_temporal_interpolation": "none",
+                "sample_hz": 10,
+            },
+        )
+        script = spec.command[-1]
+        self.assertIn("jetpilot_console.event_tensor_dataset_worker", script)
+        self.assertIn("--bins 10", script)
+        self.assertIn("--window-ms 40.0", script)
+        self.assertIn("--stride-ms 4.0", script)
+        self.assertIn("--sample-hz 10.0", script)
+        self.assertIn("/usr/bin/python3 -X faulthandler", script)
+
     def test_train_and_export_tasks_preserve_selected_configuration(self) -> None:
         dataset = self._dataset()
         train = build_train_task(

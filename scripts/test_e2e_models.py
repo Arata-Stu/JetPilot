@@ -34,7 +34,19 @@ class E2EModelSelectionTests(unittest.TestCase):
             "task": "control",
             "steering_only": False,
             "modality": "event_tensor",
-            "input": {"shape": [1, 20, 120, 212]},
+            "input": {
+                "shape": [1, 20, 120, 212],
+                "mean": [0.1] * 20,
+                "std": [0.2] * 20,
+            },
+            "event_representation": {
+                "bins": 10,
+                "window_ms": 40.0,
+                "stride_ms": 4.0,
+                "polarity_mode": "separate",
+                "polarity_layout": "polarity_major",
+                "temporal_interpolation": "none",
+            },
         }))
 
     def test_candidates_match_both_sensor_and_learning_target(self):
@@ -107,6 +119,7 @@ class E2EModelSelectionTests(unittest.TestCase):
         path = self.root / "event_tensor_control"
         record = inspect_model(path, "event", False, event_tensor_channels=20)
         self.assertEqual(record["width"], 212)
+        self.assertEqual(record["event_representation"]["backend"], "cuda")
         with self.assertRaisesRegex(ValueError, "event tensor model mismatch"):
             inspect_model(path, "event", False, event_tensor_channels=10)
         with self.assertRaisesRegex(ValueError, "RGB-format"):
@@ -121,12 +134,16 @@ class E2EModelSelectionTests(unittest.TestCase):
             "--set", "e2e_event_polarity_mode:=separate",
         ], text=True, capture_output=True, check=True)
         self.assertIn("e2e_event_tensor_mode:=true", result.stdout)
+        self.assertIn("e2e_event_window_ms:=40.0", result.stdout)
+        self.assertIn("e2e_event_stride_ms:=4.0", result.stdout)
+        self.assertIn("e2e_event_representation_backend:=cuda", result.stdout)
+        self.assertIn("e2e_event_tensor_mean:=", result.stdout)
         launch_source = (
             ROOT
             / "ros2_ws/src/perception/jetpilot_e2e_inference/launch/e2e_tensor_rt.launch.py"
         ).read_text()
         self.assertIn('"event_representation_backend", default_value="cuda"', launch_source)
-        self.assertIn('"event_inference_policy", default_value="consumer_driven"', launch_source)
+        self.assertIn('"event_inference_policy", default_value="periodic"', launch_source)
         self.assertIn('"event_cuda_events_per_transfer", default_value="8192"', launch_source)
 
     def test_tensorrt_build_requires_explicit_model(self):

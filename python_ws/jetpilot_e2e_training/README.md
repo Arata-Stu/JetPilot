@@ -231,6 +231,35 @@ E2E Analysisでtrajectory ONNXを選ぶと、動画時刻に同期したロー�
 予測経路とodometry由来GTを重ねて表示します。ADE/FDEの時系列、集計、worst sample、
 区間別trajectory誤差も確認できます。GRU/IMUを含む全構成のoffline ONNX評価に対応します。
 
+### Raw EVS 20ch
+
+UIの`Create dataset`で`Input representation = Raw EVS 20ch tensor`を選ぶと、
+RGB topicを10 Hzの基準clockとして使い、`/event_camera/events`から因果的に利用可能な
+最新windowを`[2B,H,W]`へ変換します。tensor本体はrosbagへ追加せず、dataset内へ
+FP16 `.npy`として保存します。channel順、mean/std、window、stride、補間方式は
+`metadata.yaml`から学習checkpointと`metadata.json`まで引き継がれます。
+raw eventのdecodeだけは`event_camera_py`互換性のためROS system Pythonで実行します。
+別のNumPy 1.x環境を使う場合は`JETPILOT_EVENT_ANALYSIS_PYTHON`を指定してください。
+
+最初の検証には`B=10 / window=40 ms / stride=4 ms / polarity_major / None`を推奨します。
+これはJetsonのCUDA rolling histogramとbin幅4 msで一致し、250 Hz出力が可能です。
+`window=50 ms / B=10 / stride=4 ms`はstrideが5 ms bin境界に揃わないため、厳密な
+CUDA rolling histogramではなくCPU backendが選択されます。
+
+学習では`Raw EVS 20ch · PilotNet`を選択します。学習後は`Export ONNX`、
+`Use in offline eval`、`Deploy to Jetson`の順で同じ画面から進められます。Jetsonでは
+配備済みmetadataを使って次のように起動できます。
+
+```bash
+/workspaces/scripts/bringup.sh e2e \
+  --vehicle jpbb \
+  --sensor-kit event-camera \
+  --e2e-model /workspaces/ros2_ws/models/e2e/<run-name> \
+  --set e2e_event_tensor_mode:=true
+```
+
+実行時の生成rateと前処理時間は`/e2e/event_tensor/diagnostics`で確認します。
+
 ## 出力物
 
 - `run.yaml`: 解決済み設定

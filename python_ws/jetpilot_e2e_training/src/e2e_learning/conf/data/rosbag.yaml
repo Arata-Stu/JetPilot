@@ -13,6 +13,7 @@ task: control
 # 640x480 -> 320x240
 input_width: 212
 input_height: 120
+input_channels: 3
 
 max_control_dt_sec: 0.1
 # Match Offline Analysis by using one bag-recording clock for every stream.
@@ -26,6 +27,17 @@ imu_window_sec: 0.5
 imu_samples: 10
 image_extension: jpg
 jpeg_quality: 92
+
+# image: conventional RGB/event_image input. event_tensor: decode raw EventPacket
+# and persist causal [2B,H,W] training tensors at sample_hz.
+modality: image
+event_topic: /event_camera/events
+event_bins: 10
+event_window_ms: 40.0
+event_stride_ms: 4.0
+event_polarity_layout: polarity_major
+event_temporal_interpolation: none
+sample_hz: 10.0
 
 fraction: 1.0
 mean: [0.485, 0.456, 0.406]

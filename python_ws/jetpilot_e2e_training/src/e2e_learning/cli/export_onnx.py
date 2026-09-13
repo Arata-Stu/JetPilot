@@ -50,22 +50,28 @@ def main(cfg: DictConfig) -> None:
     use_imu = bool(getattr(run_cfg.model, "use_imu", False))
     input_height = int(run_cfg.data.input_height)
     input_width = int(run_cfg.data.input_width)
+    input_channels = int(getattr(run_cfg.model, "input_channels", 3))
+    modality = str(getattr(run_cfg.data, "modality", "image"))
     image_input_name = str(cfg.export.input_name)
     is_wam = model_name == "wam_dinov3_vits16"
     if model_name == "fusion" and sequence_length > 1:
-        dummy_images = torch.randn(1, sequence_length, 3, input_height, input_width)
+        dummy_images = torch.randn(1, sequence_length, input_channels, input_height, input_width)
     else:
-        dummy_images = torch.randn(1, 3, input_height, input_width)
+        dummy_images = torch.randn(1, input_channels, input_height, input_width)
 
     input_names = [image_input_name]
     inputs: tuple[torch.Tensor, ...] | torch.Tensor = dummy_images
     input_metadata = [
         {
             "name": image_input_name,
-            "kind": "image_sequence" if dummy_images.ndim == 5 else "image",
+            "kind": (
+                "event_tensor_sequence" if modality == "event_tensor" and dummy_images.ndim == 5
+                else "event_tensor" if modality == "event_tensor"
+                else "image_sequence" if dummy_images.ndim == 5 else "image"
+            ),
             "shape": list(dummy_images.shape),
             "layout": "NTCHW" if dummy_images.ndim == 5 else "NCHW",
-            "color_order": "rgb",
+            "color_order": "none" if modality == "event_tensor" else "rgb",
             "mean": [float(value) for value in run_cfg.data.mean],
             "std": [float(value) for value in run_cfg.data.std],
         }
@@ -177,7 +183,11 @@ def main(cfg: DictConfig) -> None:
         "format_version": 2,
         "model_name": str(run_cfg.run.name),
         "image_topic": str(run_cfg.data.image_topic),
-        "modality": "event_image" if str(run_cfg.data.image_topic).endswith("/event_image") else "rgb",
+        "modality": (
+            "event_tensor" if modality == "event_tensor"
+            else "event_image" if str(run_cfg.data.image_topic).endswith("/event_image")
+            else "rgb"
+        ),
         "model_kind": model_name,
         "task": task,
         "steering_only": bool(getattr(run_cfg.model, "steering_only", False)),
@@ -191,6 +201,7 @@ def main(cfg: DictConfig) -> None:
             "stateful_step": is_wam,
         },
         "checkpoint": str(checkpoint_path),
+        "source_dataset": str(run_cfg.data.dataset_dir),
         "stage": checkpoint.get("stage", ""),
         "epoch": checkpoint.get("epoch", 0),
         "input": input_metadata[0],
@@ -210,6 +221,22 @@ def main(cfg: DictConfig) -> None:
         },
         "config": OmegaConf.to_container(run_cfg, resolve=True),
     }
+    if modality == "event_tensor":
+        metadata["event_representation"] = {
+            "event_topic": str(getattr(run_cfg.data, "event_topic", "/event_camera/events")),
+            "bins": int(getattr(run_cfg.data, "event_bins", input_channels // 2)),
+            "channels": input_channels,
+            "window_ms": float(getattr(run_cfg.data, "event_window_ms", 40.0)),
+            "stride_ms": float(getattr(run_cfg.data, "event_stride_ms", 4.0)),
+            "polarity_mode": str(getattr(run_cfg.data, "event_polarity_mode", "separate")),
+            "polarity_layout": str(
+                getattr(run_cfg.data, "event_polarity_layout", "polarity_major")
+            ),
+            "temporal_interpolation": str(
+                getattr(run_cfg.data, "event_temporal_interpolation", "none")
+            ),
+            "clock_source": "event_sensor_time",
+        }
     write_json(output_dir / str(cfg.export.metadata_filename), metadata)
     print(f"Exported ONNX: {onnx_path}")
     print(f"Metadata     : {output_dir / str(cfg.export.metadata_filename)}")

@@ -1660,7 +1660,7 @@ choose_preset_interactively() {
 
 configure_e2e_model() {
   is_true "$(get_arg enable_e2e_inference)" || return 0
-  local sensor=rgb base=camera target=control selected records line choice key value current
+  local sensor=rgb base=camera target=control selected records line choice key value current override explicit
   local event_bins event_channels
   local model_root="${E2E_MODEL_BASE:-${ROS2_WS}/models/e2e}"
   local helper="${SCRIPT_DIR}/e2e_models.py"
@@ -1734,7 +1734,16 @@ configure_e2e_model() {
     || die '選択したセンサー・制御方式にモデルが適合しません。モデルまたは配備先を確認してください。'
   while IFS=$'\t' read -r key value; do
     current="$(get_arg "$key" 2>/dev/null || true)"
-    [[ -z "$current" || "$current" == "$value" ]] \
+    explicit=false
+    if ((${#EXTRA_LAUNCH_ARGS[@]} > 0)); then
+      for override in "${EXTRA_LAUNCH_ARGS[@]}"; do
+        if [[ "${override%%:=*}" == "$key" ]]; then
+          explicit=true
+          break
+        fi
+      done
+    fi
+    [[ "$explicit" != true || -z "$current" || "$current" == "$value" ]] \
       || die "$key=$current does not match model metadata ($value)"
     set_arg "$key" "$value"
   done <<< "$records"

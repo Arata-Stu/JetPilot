@@ -14,6 +14,7 @@ from tqdm import tqdm
 
 from e2e_learning.utils.io import ensure_dir, write_csv, write_yaml
 from e2e_learning.data.timestamps import alignment_timestamp_ns, stamp_to_ns
+from e2e_learning.data.event_tensor import EventTensorAccumulator, EventTensorConfig
 
 
 @dataclass(frozen=True)
@@ -37,6 +38,14 @@ class ExtractConfig:
     image_extension: str = "jpg"
     jpeg_quality: int = 92
     timestamp_source: str = "bag"
+    modality: str = "image"
+    event_topic: str = "/event_camera/events"
+    event_bins: int = 10
+    event_window_ms: float = 40.0
+    event_stride_ms: float = 4.0
+    event_polarity_layout: str = "polarity_major"
+    event_temporal_interpolation: str = "none"
+    sample_hz: float = 10.0
 
 
 def control_from_msg(msg: Any) -> dict[str, float]:
@@ -221,6 +230,188 @@ def _collect_signals(
     return controls, odometry, imu
 
 
+def _extract_event_tensor_dataset(config: ExtractConfig) -> dict[str, Any]:
+    try:
+        import event_camera_py
+    except ImportError as error:
+        raise RuntimeError(
+            "20ch event tensor extraction requires event_camera_py from the active ROS environment"
+        ) from error
+    try:
+        numpy_major = int(np.__version__.split(".", 1)[0])
+    except (AttributeError, TypeError, ValueError):
+        numpy_major = 0
+    if numpy_major >= 2 and getattr(event_camera_py, "__file__", None):
+        raise RuntimeError(
+            "event_camera_py is not compatible with NumPy 2.x; run dataset extraction with "
+            "the ROS system Python/NumPy 1.x environment"
+        )
+
+    tensor_config = EventTensorConfig(
+        bins=config.event_bins,
+        window_ms=config.event_window_ms,
+        stride_ms=config.event_stride_ms,
+        width=config.input_width,
+        height=config.input_height,
+        polarity_layout=config.event_polarity_layout,
+        temporal_interpolation=config.event_temporal_interpolation,
+    )
+    accumulator = EventTensorAccumulator(tensor_config)
+    decoder = event_camera_py.Decoder()
+    tensor_dir = ensure_dir(config.output_dir / "tensors")
+    controls, odometry, imu = _collect_signals(config)
+    control_times = [item[0] for item in controls]
+    odometry_times = [item[0] for item in odometry]
+    imu_times = [item[0] for item in imu]
+    if config.task == "control" and not controls:
+        raise RuntimeError(f"No control messages were found on {config.control_topic}")
+    if config.task == "trajectory" and not odometry:
+        raise RuntimeError(f"No odometry messages were found on {config.odometry_topic}")
+    if config.sample_hz <= 0.0:
+        raise ValueError("sample_hz must be positive")
+
+    rows: list[dict[str, str | float]] = []
+    sums = np.zeros(tensor_config.channels, dtype=np.float64)
+    square_sums = np.zeros(tensor_config.channels, dtype=np.float64)
+    values_per_channel = 0
+    decoded_events = 0
+    dropped_without_control = 0
+    dropped_without_trajectory = 0
+    dropped_without_events = 0
+    reference_count = 0
+    last_sample_bag_ns: int | None = None
+    min_sample_interval_ns = max(1, int(round(1_000_000_000.0 / config.sample_hz)))
+
+    with AnyReader([config.bag_path]) as reader:
+        connections = [
+            connection for connection in reader.connections
+            if connection.topic in {config.event_topic, config.image_topic}
+        ]
+        if not any(connection.topic == config.event_topic for connection in connections):
+            raise RuntimeError(f"EventPacket topic was not found in the bag: {config.event_topic}")
+        if not any(connection.topic == config.image_topic for connection in connections):
+            raise RuntimeError(f"Reference clock image topic was not found: {config.image_topic}")
+        for connection, bag_timestamp_ns, rawdata in tqdm(
+            reader.messages(connections=connections), desc="extract event tensors"
+        ):
+            msg = reader.deserialize(rawdata, connection.msgtype)
+            if connection.topic == config.event_topic:
+                decoded_events += accumulator.add_packet(decoder, msg)
+                continue
+            reference_count += 1
+            if (
+                last_sample_bag_ns is not None
+                and int(bag_timestamp_ns) - last_sample_bag_ns < min_sample_interval_ns
+            ):
+                continue
+            stamp_ns = alignment_timestamp_ns(msg, bag_timestamp_ns, config.timestamp_source)
+            control = _nearest(controls, control_times, stamp_ns, config.max_control_dt_sec)
+            trajectory = _trajectory_label(odometry, odometry_times, stamp_ns, config)
+            if config.task == "control" and control is None:
+                dropped_without_control += 1
+                continue
+            if config.task == "trajectory" and trajectory is None:
+                dropped_without_trajectory += 1
+                continue
+            snapshot = accumulator.snapshot()
+            if snapshot is None:
+                dropped_without_events += 1
+                continue
+            tensor, event_info = snapshot
+            relative_path = Path("tensors") / f"{len(rows):08d}.npy"
+            # FP16 halves disk use. Histogram/voxel values are converted back to
+            # FP32 before normalization and training.
+            np.save(config.output_dir / relative_path, tensor.astype(np.float16))
+            sums += tensor.sum(axis=(1, 2), dtype=np.float64)
+            square_sums += np.square(tensor, dtype=np.float64).sum(axis=(1, 2))
+            values_per_channel += config.input_width * config.input_height
+            control_value = control[1] if control is not None else {}
+            rows.append(
+                {
+                    "sequence_id": config.bag_path.name,
+                    "tensor_path": relative_path.as_posix(),
+                    "image_path": "",
+                    "stamp": stamp_ns,
+                    "control_stamp": control[0] if control is not None else "",
+                    "control_dt_sec": (
+                        f"{abs(stamp_ns - control[0]) / 1_000_000_000.0:.6f}"
+                        if control is not None else ""
+                    ),
+                    "steering": f"{float(control_value.get('steering', 0.0)):.8f}",
+                    "throttle": f"{float(control_value.get('throttle', 0.0)):.8f}",
+                    "trajectory": json.dumps(trajectory or [], separators=(",", ":")),
+                    "imu": json.dumps(
+                        _imu_window(imu, imu_times, stamp_ns, config), separators=(",", ":")
+                    ),
+                    "image_topic": config.image_topic,
+                    "control_topic": config.control_topic,
+                    "odometry_topic": config.odometry_topic,
+                    "imu_topic": config.imu_topic,
+                    "event_count": int(event_info["events"]),
+                    "event_window_end_sensor_ns": int(event_info["window_end_sensor_ns"]),
+                }
+            )
+            last_sample_bag_ns = int(bag_timestamp_ns)
+
+    fields = [
+        "sequence_id", "tensor_path", "image_path", "stamp", "control_stamp",
+        "control_dt_sec", "steering", "throttle", "trajectory", "imu",
+        "image_topic", "control_topic", "odometry_topic", "imu_topic",
+        "event_count", "event_window_end_sensor_ns",
+    ]
+    count = write_csv(config.output_dir / "samples.csv", rows, fields)
+    if count == 0:
+        raise RuntimeError(
+            "No aligned event tensor samples were extracted; check the reference image, event, "
+            "and teacher-control topics"
+        )
+    mean = sums / max(values_per_channel, 1)
+    variance = np.maximum(square_sums / max(values_per_channel, 1) - mean * mean, 0.0)
+    std = np.sqrt(variance)
+    std[std < 1.0e-6] = 1.0
+    metadata = {
+        "bag_path": str(config.bag_path),
+        "task": config.task,
+        "modality": "event_tensor",
+        "image_topic": config.image_topic,
+        "reference_clock_topic": config.image_topic,
+        "event_topic": config.event_topic,
+        "control_topic": config.control_topic,
+        "odometry_topic": config.odometry_topic,
+        "imu_topic": config.imu_topic,
+        "input_width": config.input_width,
+        "input_height": config.input_height,
+        "input_channels": tensor_config.channels,
+        "sample_count": count,
+        "sample_hz": config.sample_hz,
+        "timestamp_source": config.timestamp_source,
+        "event_bins": config.event_bins,
+        "event_window_ms": config.event_window_ms,
+        "event_stride_ms": config.event_stride_ms,
+        "event_polarity_mode": "separate",
+        "event_polarity_layout": config.event_polarity_layout,
+        "event_temporal_interpolation": config.event_temporal_interpolation,
+        "event_clock_source": "sensor_time_latest_causal_at_reference",
+        "tensor_dtype": "float16",
+        "tensor_layout": "CHW",
+        "mean": [float(value) for value in mean],
+        "std": [float(value) for value in std],
+        "decoded_events": decoded_events,
+        "reference_message_count": reference_count,
+        "timestamp_resets": accumulator.timestamp_resets,
+        "dropped_without_control": dropped_without_control,
+        "dropped_without_trajectory": dropped_without_trajectory,
+        "dropped_without_events": dropped_without_events,
+        "trajectory_horizon_sec": config.trajectory_horizon_sec,
+        "trajectory_points": config.trajectory_points,
+        "trajectory_scale_m": config.trajectory_scale_m,
+        "imu_window_sec": config.imu_window_sec,
+        "imu_samples": config.imu_samples,
+    }
+    write_yaml(config.output_dir / "metadata.yaml", metadata)
+    return metadata
+
+
 def extract_dataset(config: ExtractConfig) -> dict[str, Any]:
     if config.timestamp_source not in {"bag", "header"}:
         raise ValueError("timestamp_source must be bag or header")
@@ -230,6 +421,10 @@ def extract_dataset(config: ExtractConfig) -> dict[str, Any]:
         raise ValueError("trajectory_points must be at least 2")
     if config.trajectory_horizon_sec <= 0.0 or config.trajectory_scale_m <= 0.0:
         raise ValueError("trajectory horizon and scale must be positive")
+    if config.modality not in {"image", "event_tensor"}:
+        raise ValueError("modality must be image or event_tensor")
+    if config.modality == "event_tensor":
+        return _extract_event_tensor_dataset(config)
 
     image_dir = ensure_dir(config.output_dir / "images")
     controls, odometry, imu = _collect_signals(config)

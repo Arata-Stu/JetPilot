@@ -18,8 +18,8 @@ class E2EDataset(Dataset):
         dataset_dir: str | Path,
         input_width: int,
         input_height: int,
-        mean: tuple[float, float, float],
-        std: tuple[float, float, float],
+        mean: tuple[float, ...],
+        std: tuple[float, ...],
         task: str = "control",
         sequence_length: int = 1,
         frame_stride: int = 1,
@@ -34,6 +34,10 @@ class E2EDataset(Dataset):
         self.dataset_dir = Path(dataset_dir)
         self.samples_path = self.dataset_dir / "samples.csv"
         self.transform = ImageTransform(input_width, input_height, mean, std)
+        self.input_width = int(input_width)
+        self.input_height = int(input_height)
+        self.mean = np.asarray(mean, dtype=np.float32)
+        self.std = np.asarray(std, dtype=np.float32)
         self.task = str(task)
         self.sequence_length = int(sequence_length)
         self.frame_stride = int(frame_stride)
@@ -79,6 +83,28 @@ class E2EDataset(Dataset):
         return values
 
     def _image(self, row: dict[str, str]) -> torch.Tensor:
+        tensor_path_value = str(row.get("tensor_path") or "").strip()
+        if tensor_path_value:
+            tensor_path = self.dataset_dir / tensor_path_value
+            tensor = np.load(tensor_path, allow_pickle=False).astype(np.float32, copy=False)
+            if tensor.ndim != 3 or tensor.shape[1:] != (self.input_height, self.input_width):
+                raise RuntimeError(
+                    f"Expected event tensor CHW (*,{self.input_height},{self.input_width}), "
+                    f"got {tensor.shape}: {tensor_path}"
+                )
+            channels = int(tensor.shape[0])
+            mean = self.mean if self.mean.size == channels else np.zeros(channels, dtype=np.float32)
+            std = self.std if self.std.size == channels else np.ones(channels, dtype=np.float32)
+            if self.mean.size not in {1, channels} or self.std.size not in {1, channels}:
+                raise RuntimeError(
+                    f"Event tensor normalization must contain 1 or {channels} values"
+                )
+            if self.mean.size == 1:
+                mean = np.repeat(self.mean, channels)
+            if self.std.size == 1:
+                std = np.repeat(self.std, channels)
+            normalized = (tensor - mean[:, None, None]) / std[:, None, None]
+            return torch.from_numpy(np.ascontiguousarray(normalized, dtype=np.float32))
         image_path = self.dataset_dir / row["image_path"]
         image = cv2.imread(str(image_path), cv2.IMREAD_COLOR)
         if image is None:

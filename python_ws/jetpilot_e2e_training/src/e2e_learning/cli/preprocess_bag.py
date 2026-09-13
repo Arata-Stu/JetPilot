@@ -29,6 +29,16 @@ def main(cfg: DictConfig) -> None:
         imu_samples=int(data.imu_samples),
         image_extension=str(data.image_extension),
         jpeg_quality=int(data.jpeg_quality),
+        modality=str(getattr(data, "modality", "image")),
+        event_topic=str(getattr(data, "event_topic", "/event_camera/events")),
+        event_bins=int(getattr(data, "event_bins", 10)),
+        event_window_ms=float(getattr(data, "event_window_ms", 40.0)),
+        event_stride_ms=float(getattr(data, "event_stride_ms", 4.0)),
+        event_polarity_layout=str(getattr(data, "event_polarity_layout", "polarity_major")),
+        event_temporal_interpolation=str(
+            getattr(data, "event_temporal_interpolation", "none")
+        ),
+        sample_hz=float(getattr(data, "sample_hz", 10.0)),
     )
     metadata = extract_dataset(extract_cfg)
     print(OmegaConf.to_yaml(OmegaConf.create(metadata)))

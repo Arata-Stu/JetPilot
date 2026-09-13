@@ -159,6 +159,16 @@ existing offline evaluator:
    run `trtexec` during transfer; TensorRT engine generation is disabled because
    it is not reliable in this workflow.
 
+For a raw EVS model, choose **Raw EVS 20ch tensor** while creating the dataset.
+The image topic is then used only as a causal sampling clock; tensor samples are
+decoded from `/event_camera/events` and stored as FP16 CHW arrays. The default
+`B=10, window=40 ms, stride=4 ms, interpolation=None` contract is compatible
+with the Jetson CUDA encoder at 250 Hz. Dataset channel statistics and the full
+representation contract are copied into `metadata.json`. **Use in offline eval**
+loads the matching saved tensors and refuses to evaluate a different rosbag.
+Deployment transfers the metadata as well as ONNX; `bringup.sh` applies its
+event dimensions, layout, interpolation, normalization, and CUDA/CPU backend.
+
 Every stage is a cancellable Console task with its command, log, output
 artifacts, and an exclusive lock for the selected dataset/run/deployment target.
 The UI deliberately targets the Isaac ROS TensorRT runtime pipeline; the

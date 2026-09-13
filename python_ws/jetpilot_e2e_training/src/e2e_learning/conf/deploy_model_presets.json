@@ -2,6 +2,24 @@
   "default": "camera_control",
   "presets": [
     {
+      "id": "event_tensor_steering",
+      "label": "Raw EVS 20ch Steering Only",
+      "description": "Raw EventPacket to CUDA 20ch tensor and fixed-throttle steering",
+      "model_name": "event_tensor_steering",
+      "model_kind": "e2e_control",
+      "modality": "event_tensor",
+      "metadata_filename": "metadata.json"
+    },
+    {
+      "id": "event_tensor_control",
+      "label": "Raw EVS 20ch Control",
+      "description": "Raw EventPacket to CUDA 20ch tensor and steering/throttle",
+      "model_name": "event_tensor_control",
+      "model_kind": "e2e_control",
+      "modality": "event_tensor",
+      "metadata_filename": "metadata.json"
+    },
+    {
       "id": "event_steering",
       "label": "Event Camera Steering Only (fixed throttle)",
       "description": "EVS steering-only model; e2e-steering with event-camera sensor kit",

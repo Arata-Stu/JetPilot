@@ -1,0 +1,18 @@
+# @package _global_
+
+defaults:
+  - override /model: pilotnet
+  - override /train: default
+
+data:
+  modality: event_tensor
+  input_width: 212
+  input_height: 120
+  mean: [0.0]
+  std: [1.0]
+
+model:
+  input_channels: 20
+
+run:
+  name: event_tensor_pilotnet

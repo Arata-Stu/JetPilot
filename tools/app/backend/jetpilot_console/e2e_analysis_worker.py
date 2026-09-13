@@ -117,6 +117,46 @@ def _preprocess(image: Any, model_input: Mapping[str, Any]) -> Any:
     return np.transpose(rgb, (2, 0, 1))[None, ...].astype(np.float32)
 
 
+def _event_tensor_dataset(
+    metadata: Mapping[str, Any],
+) -> tuple[Path | None, list[dict[str, str]], list[int]]:
+    dataset_value = metadata.get("source_dataset")
+    if not dataset_value and isinstance(metadata.get("config"), dict):
+        dataset_value = metadata["config"].get("data", {}).get("dataset_dir")
+    dataset = Path(str(dataset_value or "")).expanduser()
+    samples_path = dataset / "samples.csv"
+    if not samples_path.is_file():
+        return None, [], []
+    with samples_path.open(newline="", encoding="utf-8", errors="replace") as handle:
+        rows = [
+            row for row in csv.DictReader(handle)
+            if row.get("tensor_path") and row.get("stamp")
+        ]
+    rows.sort(key=lambda row: int(row["stamp"]))
+    return dataset, rows, [int(row["stamp"]) for row in rows]
+
+
+def _preprocess_event_tensor(path: Path, model_input: Mapping[str, Any]) -> Any:
+    import numpy as np
+
+    tensor = np.load(path, allow_pickle=False).astype(np.float32, copy=False)
+    shape = model_input.get("shape") if isinstance(model_input.get("shape"), list) else []
+    if tensor.ndim != 3 or (len(shape) >= 4 and list(tensor.shape) != list(shape[-3:])):
+        raise RuntimeError(
+            f"Event tensor shape mismatch: expected {shape}, got {tensor.shape}: {path}"
+        )
+    channels = int(tensor.shape[0])
+    mean = np.asarray(model_input.get("mean") or [0.0], dtype=np.float32)
+    std = np.asarray(model_input.get("std") or [1.0], dtype=np.float32)
+    if mean.size == 1:
+        mean = np.repeat(mean, channels)
+    if std.size == 1:
+        std = np.repeat(std, channels)
+    if mean.size != channels or std.size != channels:
+        raise RuntimeError(f"Event tensor normalization does not match {channels} channels")
+    return ((tensor - mean[:, None, None]) / std[:, None, None])[None, ...].astype(np.float32)
+
+
 def _provider(requested: str, available: Sequence[str]) -> list[str]:
     normalized = requested.strip().lower()
     if normalized == "cuda" and "CUDAExecutionProvider" in available:
@@ -201,6 +241,7 @@ def _supervised_predictions(
     trajectory_times = [float(item["t"]) for item in trajectory]
     imu_times = [float(item["t"]) for item in imu_records]
     metadata = _metadata(model_path)
+    modality = str(metadata.get("modality") or "rgb")
     steering_only = is_steering_only(metadata)
     task = str(metadata.get("task") or metadata.get("output", {}).get("task") or "control")
     architecture = metadata.get("architecture") if isinstance(metadata.get("architecture"), dict) else {}
@@ -226,29 +267,53 @@ def _supervised_predictions(
     session_init_ms = (time.perf_counter_ns() - session_started) / 1.0e6
     session_inputs = session.get_inputs()
     input_name = session_inputs[0].name
+    event_dataset, event_rows, event_times = _event_tensor_dataset(metadata)
+    if modality == "event_tensor" and (event_dataset is None or not event_rows):
+        raise RuntimeError(
+            "20ch offline evaluation requires the source event-tensor dataset. "
+            "Keep the training dataset or recreate it from this rosbag."
+        )
+    if modality == "event_tensor" and event_dataset is not None:
+        dataset_metadata = load_yaml(event_dataset / "metadata.yaml")
+        analysis_manifest = json.loads((analysis_dir / "manifest.json").read_text(encoding="utf-8"))
+        dataset_bag = Path(str(dataset_metadata.get("bag_path") or "")).resolve(strict=False)
+        analysis_bag = Path(
+            str(analysis_manifest.get("rosbag", {}).get("path") or "")
+        ).resolve(strict=False)
+        if dataset_bag != analysis_bag:
+            raise RuntimeError(
+                "The selected 20ch model was trained from a different rosbag. "
+                "Create/select a matching event-tensor dataset before offline evaluation."
+            )
 
     warmup_frame = next((analysis_dir / str(frame.get("path")) for frame in frames if frame.get("path")), None)
-    if warmup_frame and warmup_frame.is_file():
+    warmup_tensor = None
+    if modality == "event_tensor" and event_dataset is not None and event_rows:
+        warmup_tensor = _preprocess_event_tensor(
+            event_dataset / event_rows[0]["tensor_path"], model_input
+        )
+    elif warmup_frame and warmup_frame.is_file():
         warmup_image = cv2.imread(str(warmup_frame), cv2.IMREAD_COLOR)
         if warmup_image is not None:
             warmup_tensor = _preprocess(warmup_image, model_input)
-            if len(session_inputs[0].shape) == 5:
-                warmup_tensor = np.repeat(warmup_tensor[:, None, ...], sequence_length, axis=1)
-            warmup_feed = {input_name: warmup_tensor}
-            if stateful_step:
-                for state_input in session_inputs[1:]:
-                    shape = tuple(
-                        int(value) if isinstance(value, int) and value > 0 else 1
-                        for value in state_input.shape
-                    )
-                    warmup_feed[state_input.name] = np.zeros(shape, dtype=np.float32)
-            elif use_imu and len(session_inputs) > 1:
-                imu_shape = [int(value) for value in session_inputs[1].shape if isinstance(value, int)]
-                warmup_feed[session_inputs[1].name] = np.zeros(
-                    tuple(imu_shape) if len(imu_shape) == 3 else (1, 10, 7), dtype=np.float32
+    if warmup_tensor is not None:
+        if len(session_inputs[0].shape) == 5:
+            warmup_tensor = np.repeat(warmup_tensor[:, None, ...], sequence_length, axis=1)
+        warmup_feed = {input_name: warmup_tensor}
+        if stateful_step:
+            for state_input in session_inputs[1:]:
+                shape = tuple(
+                    int(value) if isinstance(value, int) and value > 0 else 1
+                    for value in state_input.shape
                 )
-            for _ in range(5):
-                session.run(None, warmup_feed)
+                warmup_feed[state_input.name] = np.zeros(shape, dtype=np.float32)
+        elif use_imu and len(session_inputs) > 1:
+            imu_shape = [int(value) for value in session_inputs[1].shape if isinstance(value, int)]
+            warmup_feed[session_inputs[1].name] = np.zeros(
+                tuple(imu_shape) if len(imu_shape) == 3 else (1, 10, 7), dtype=np.float32
+            )
+        for _ in range(5):
+            session.run(None, warmup_feed)
 
     samples: list[dict[str, Any]] = []
     excluded_mode = 0
@@ -278,11 +343,32 @@ def _supervised_predictions(
         except ValueError:
             continue
         sequence_tensors = []
-        for sequence_index in range(max(0, index - sequence_length + 1), index + 1):
-            sequence_path = (analysis_dir / str(frames[sequence_index].get("path") or "")).resolve(strict=False)
-            sequence_image = cv2.imread(str(sequence_path), cv2.IMREAD_COLOR)
-            if sequence_image is not None:
-                sequence_tensors.append(_preprocess(sequence_image, model_input)[0])
+        if modality == "event_tensor" and event_dataset is not None:
+            frame_stamp = int(frame.get("_timestamp_ns") or frame.get("stamp") or 0)
+            position = bisect.bisect_left(event_times, frame_stamp)
+            candidates = [
+                candidate for candidate in (position - 1, position)
+                if 0 <= candidate < len(event_rows)
+            ]
+            if candidates:
+                selected = min(
+                    candidates, key=lambda candidate: abs(event_times[candidate] - frame_stamp)
+                )
+                if abs(event_times[selected] - frame_stamp) <= 250_000_000:
+                    start = max(0, selected - sequence_length + 1)
+                    for event_index in range(start, selected + 1):
+                        sequence_tensors.append(
+                            _preprocess_event_tensor(
+                                event_dataset / event_rows[event_index]["tensor_path"],
+                                model_input,
+                            )[0]
+                        )
+        else:
+            for sequence_index in range(max(0, index - sequence_length + 1), index + 1):
+                sequence_path = (analysis_dir / str(frames[sequence_index].get("path") or "")).resolve(strict=False)
+                sequence_image = cv2.imread(str(sequence_path), cv2.IMREAD_COLOR)
+                if sequence_image is not None:
+                    sequence_tensors.append(_preprocess(sequence_image, model_input)[0])
         if not sequence_tensors:
             continue
         while len(sequence_tensors) < sequence_length:

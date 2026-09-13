@@ -44,6 +44,17 @@ def apply_dataset_metadata(cfg: DictConfig) -> None:
     has_fixed_geometry = fixed_input_width is not None and fixed_input_height is not None
     for key in (
         "image_topic",
+        "modality",
+        "event_topic",
+        "event_bins",
+        "event_window_ms",
+        "event_stride_ms",
+        "event_polarity_mode",
+        "event_polarity_layout",
+        "event_temporal_interpolation",
+        "input_channels",
+        "mean",
+        "std",
         "input_width",
         "input_height",
         "trajectory_horizon_sec",
@@ -60,6 +71,8 @@ def apply_dataset_metadata(cfg: DictConfig) -> None:
     if has_fixed_geometry:
         cfg.data.input_width = int(fixed_input_width)
         cfg.data.input_height = int(fixed_input_height)
+    if str(getattr(metadata, "modality", "image")) == "event_tensor":
+        cfg.model.input_channels = int(getattr(metadata, "input_channels", 20))
     if str(cfg.model.name) == "fusion":
         if getattr(metadata, "trajectory_points", None) is not None:
             cfg.model.trajectory_points = int(metadata.trajectory_points)
@@ -266,6 +279,7 @@ def train_stage(
     use_imu: bool,
     task: str,
     trajectory_scale_m: float,
+    history: list[dict[str, Any]],
 ) -> tuple[float, dict[str, float]]:
     set_encoder_trainable(model, not bool(stage.freeze_encoder))
     optimizer = torch.optim.AdamW(
@@ -309,6 +323,15 @@ def train_stage(
             f"[{stage.name}] epoch={epoch} train_loss={train_metrics['loss']:.6f} "
             f"val_loss={val_metrics['loss']:.6f} {detail}"
         )
+        history.append(
+            {
+                "stage": str(stage.name),
+                "epoch": epoch,
+                "train_loss": float(train_metrics["loss"]),
+                "validation_loss": float(val_metrics["loss"]),
+                "validation": {key: float(value) for key, value in val_metrics.items()},
+            }
+        )
 
         checkpoint = {
             "model_state": model.state_dict(),
@@ -327,6 +350,7 @@ def train_stage(
                 "epochs_in_stage": int(stage.epochs),
                 "train": train_metrics,
                 "validation": val_metrics,
+                "history": history,
             },
         )
         torch.save(checkpoint, output_dir / "checkpoints" / "last.pt")
@@ -392,6 +416,7 @@ def main(cfg: DictConfig) -> None:
     writer = SummaryWriter(log_dir=str(output_dir / "tensorboard"))
     best_loss = float("inf")
     best_metrics: dict[str, float] = {}
+    history: list[dict[str, Any]] = []
 
     for stage in cfg.train.stages:
         best_loss, stage_best_metrics = train_stage(
@@ -408,6 +433,7 @@ def main(cfg: DictConfig) -> None:
             use_imu,
             task,
             trajectory_scale_m,
+            history,
         )
         if stage_best_metrics:
             best_metrics = stage_best_metrics
@@ -429,6 +455,7 @@ def main(cfg: DictConfig) -> None:
         "dataset_dir": str(cfg.data.dataset_dir),
         "data_fraction": float(cfg.data.fraction),
         "best": best_metrics,
+        "history": history,
     }
     write_json(output_dir / "metrics.json", payload)
     write_json(
@@ -437,6 +464,7 @@ def main(cfg: DictConfig) -> None:
             "status": "complete",
             "run_name": str(cfg.run.name),
             "best": best_metrics,
+            "history": history,
         },
     )
     print(json.dumps(payload, indent=2, sort_keys=True))
