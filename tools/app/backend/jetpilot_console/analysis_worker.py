@@ -1257,6 +1257,7 @@ class _EventTensorPreview:
         self.latest_packet_bag_timestamp_ns: int | None = None
         self.latest_packet_header_timestamp_ns: int | None = None
         self.clock_source = "sensor_time_latest_available"
+        self.timestamp_resets = 0
 
     def add_packet(self, message: Any, bag_timestamp_ns: int) -> None:
         self.decoder.decode_bytes(
@@ -1281,6 +1282,7 @@ class _EventTensorPreview:
             # backwards (for example after a decoder reset).
             self.chunks.clear()
             self.first_event_ns = None
+            self.timestamp_resets += 1
         self.source_width = int(message.width)
         self.source_height = int(message.height)
         self.chunks.append(
@@ -1451,6 +1453,8 @@ class _EventTensorPreview:
                 and self.latest_packet_bag_timestamp_ns is not None else None
             ),
             "latest_packet_header_timestamp_ns": self.latest_packet_header_timestamp_ns,
+            "timestamp_resets": self.timestamp_resets,
+            "buffered_packets": len(self.chunks),
             "snapshot_timestamp_ns": (
                 int(timeline_timestamp_ns)
                 if timeline_timestamp_ns is not None else requested_timestamp_ns

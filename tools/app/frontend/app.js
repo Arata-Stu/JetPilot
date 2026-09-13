@@ -4669,6 +4669,7 @@ function renderAnalysisViewer() {
           <div class="camera-overlay-controls"><label><input type="checkbox" ${analysis.cameraOverlay!==false?'checked':''} onchange="setAnalysisCameraOverlay(this.checked)" />HD Mapを画像に投影</label><label>投影高さ（Map Z / m）<input type="number" min="-10" max="10" step="0.01" value="${analysis.projectionHeightM || 0}" onchange="setCameraProjectionHeight(this.value, 'analysis')" /></label></div>
           <div class="field-hint">${esc(cameraGroundHeightHint(analysis.timeline))}</div>
           <div id="analysis-projection-status" class="field-hint" role="status"></div>
+          ${eventPreview.enabled ? `<div id="analysis-event-tensor-status" class="analysis-event-tensor-status">20ch: loading diagnostics...</div>` : ""}
           <div class="analysis-image-stage">
             <img id="analysis-frame-image-a" alt="Selected rosbag image frame A" decoding="async" />
             <img id="analysis-frame-image-b" alt="Selected rosbag image frame B" decoding="async" />
@@ -5762,6 +5763,30 @@ function analysisChannelPayloadAt(frames, index, channel, primaryTopic) {
   return null;
 }
 
+function updateAnalysisEventTensorStatus(payload) {
+  const target = $("analysis-event-tensor-status");
+  if (!target) return;
+  const stats = payload?.stats;
+  if (!stats) {
+    target.textContent = "20ch: no preview is available at this time";
+    target.classList.add("warning");
+    return;
+  }
+  const events = Number(stats.events || 0);
+  const positive = Number(stats.positive_events || 0);
+  const negative = Number(stats.negative_events || 0);
+  const packetAgeMs = Number(stats.latest_event_age_ms);
+  const resets = Number(stats.timestamp_resets || 0);
+  const parts = [
+    `20ch window: ${events.toLocaleString()} events`,
+    `P ${Math.round(positive).toLocaleString()} / N ${Math.round(negative).toLocaleString()}`,
+    Number.isFinite(packetAgeMs) ? `packet age ${packetAgeMs.toFixed(1)} ms` : "packet age —",
+    `timestamp resets ${resets.toLocaleString()}`,
+  ];
+  target.textContent = parts.join(" · ");
+  target.classList.toggle("warning", events === 0 || resets > 0 || (Number.isFinite(packetAgeMs) && packetAgeMs > Number(stats.window_ms || 50)));
+}
+
 function renderAnalysisMultiTiles(grid, channels, selectedChannel, primaryTopic, mode) {
   const ordered = [
     selectedChannel,
@@ -5925,6 +5950,9 @@ function updateAnalysisFrame(time, force = false) {
   const firstFrameChannels = frames[0]?.channels ? Object.keys(frames[0].channels) : [];
   const selectedChannel = state.analysis.selectedChannel || primaryTopic || firstFrameChannels[0] || null;
   const viewMode = channels.length > 1 ? (state.analysis.imageViewMode || "single") : "single";
+  updateAnalysisEventTensorStatus(
+    analysisChannelPayloadAt(frames, index, "/analysis/event_tensor_20ch", primaryTopic),
+  );
 
   if (viewMode !== "single") {
     updateAnalysisMultiFrame(frames, index, time, channels, selectedChannel, primaryTopic);

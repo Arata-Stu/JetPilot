@@ -3678,6 +3678,22 @@ tr:last-child td {
   overflow: hidden;
 }
 
+.analysis-event-tensor-status {
+  border-top: 1px solid rgba(90, 168, 255, 0.25);
+  border-bottom: 1px solid rgba(90, 168, 255, 0.25);
+  background: rgba(37, 68, 93, 0.4);
+  color: #d8efff;
+  padding: 6px 9px;
+  font: 600 11px ui-monospace, SFMono-Regular, Menlo, monospace;
+  line-height: 1.35;
+}
+
+.analysis-event-tensor-status.warning {
+  border-color: rgba(255, 184, 77, 0.4);
+  background: rgba(112, 66, 16, 0.35);
+  color: #ffd89b;
+}
+
 .analysis-image-stage {
   position: relative;
   display: grid;

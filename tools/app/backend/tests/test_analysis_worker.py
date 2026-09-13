@@ -91,6 +91,7 @@ class SnapshotTrajectoryTests(unittest.TestCase):
         self.assertEqual(stats["events"], 2)
         self.assertEqual(stats["clock_source"], "sensor_time_latest_available")
         self.assertEqual(stats["latest_event_age_ms"], 0.0)
+        self.assertEqual(stats["timestamp_resets"], 0)
         self.assertGreater(int(image[:3, :, 0].max()), 0)
         self.assertGreater(int(image[3:, :, 2].max()), 0)
 
