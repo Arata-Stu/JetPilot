@@ -1,6 +1,6 @@
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
-from launch.conditions import IfCondition
+from launch.conditions import IfCondition, UnlessCondition
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
 from launch_ros.actions import ComposableNodeContainer, LoadComposableNodes, Node
 from launch_ros.descriptions import ComposableNode
@@ -101,6 +101,71 @@ def generate_launch_description():
         extra_arguments=[{"use_intra_process_comms": True}],
     )
 
+    event_tensor_encoder = ComposableNode(
+        package="jetpilot_e2e_inference",
+        plugin="jetpilot_e2e_inference::EventTensorEncoderNode",
+        name="e2e_event_tensor_encoder",
+        namespace="",
+        parameters=[
+            {
+                "bins": ParameterValue(LaunchConfiguration("event_bins"), value_type=int),
+                "width": ParameterValue(LaunchConfiguration("network_image_width"), value_type=int),
+                "height": ParameterValue(LaunchConfiguration("network_image_height"), value_type=int),
+                "window_ms": ParameterValue(LaunchConfiguration("event_window_ms"), value_type=float),
+                "stride_ms": ParameterValue(LaunchConfiguration("event_stride_ms"), value_type=float),
+                "polarity_mode": LaunchConfiguration("event_polarity_mode"),
+                "polarity_layout": LaunchConfiguration("event_polarity_layout"),
+                "temporal_interpolation": LaunchConfiguration("event_temporal_interpolation"),
+                "incremental_mode": LaunchConfiguration("event_incremental_mode"),
+                "representation_backend": LaunchConfiguration(
+                    "event_representation_backend"
+                ),
+                "inference_policy": LaunchConfiguration("event_inference_policy"),
+                "cuda_update_us": ParameterValue(
+                    LaunchConfiguration("event_cuda_update_us"), value_type=int
+                ),
+                "cuda_events_per_transfer": ParameterValue(
+                    LaunchConfiguration("event_cuda_events_per_transfer"), value_type=int
+                ),
+                "inference_watchdog_ms": ParameterValue(
+                    LaunchConfiguration("event_inference_watchdog_ms"), value_type=float
+                ),
+                "channel_mean": LaunchConfiguration("event_tensor_mean"),
+                "channel_stddev": LaunchConfiguration("event_tensor_stddev"),
+                "tensor_name": LaunchConfiguration("input_tensor_name"),
+                "publish_empty": ParameterValue(
+                    LaunchConfiguration("event_tensor_publish_empty"), value_type=bool
+                ),
+                "use_pinned_host_memory": ParameterValue(
+                    LaunchConfiguration("event_tensor_use_pinned_host_memory"), value_type=bool
+                ),
+                "debug": ParameterValue(LaunchConfiguration("event_tensor_debug"), value_type=bool),
+                "statistics_interval_s": ParameterValue(
+                    LaunchConfiguration("event_tensor_statistics_interval_s"), value_type=float
+                ),
+                "subscription_depth": ParameterValue(
+                    LaunchConfiguration("event_tensor_subscription_depth"), value_type=int
+                ),
+                "publisher_depth": ParameterValue(
+                    LaunchConfiguration("event_tensor_publisher_depth"), value_type=int
+                ),
+                "memory_pool_num_blocks": ParameterValue(
+                    LaunchConfiguration("event_tensor_memory_pool_num_blocks"), value_type=int
+                ),
+                "diagnostics_topic": LaunchConfiguration("event_tensor_diagnostics_topic"),
+                "use_sim_time": ParameterValue(
+                    LaunchConfiguration("use_sim_time"), value_type=bool
+                ),
+            }
+        ],
+        remappings=[
+            ("events", LaunchConfiguration("event_topic")),
+            ("tensor", LaunchConfiguration("tensor_input_topic")),
+            ("tensor_feedback", LaunchConfiguration("tensor_output_topic")),
+        ],
+        extra_arguments=[{"use_intra_process_comms": True}],
+    )
+
     control_decoder = ComposableNode(
         package="jetpilot_e2e_inference",
         plugin="jetpilot_e2e_inference::E2EControlDecoderNode",
@@ -154,14 +219,45 @@ def generate_launch_description():
         extra_arguments=[{"use_intra_process_comms": True}],
     )
 
-    inference_components = [image_encoder, tensor_rt]
-
     return LaunchDescription(
         [
             DeclareLaunchArgument("container_name", default_value="multi_sensor_container"),
             DeclareLaunchArgument("run_standalone", default_value="true"),
             DeclareLaunchArgument("use_sim_time", default_value="false"),
             DeclareLaunchArgument("event_image_mode", default_value="false"),
+            DeclareLaunchArgument("event_tensor_mode", default_value="false"),
+            DeclareLaunchArgument("event_topic", default_value="/event_camera/events"),
+            DeclareLaunchArgument("event_bins", default_value="10"),
+            DeclareLaunchArgument("event_window_ms", default_value="10.0"),
+            DeclareLaunchArgument("event_stride_ms", default_value="1.0"),
+            DeclareLaunchArgument("event_polarity_mode", default_value="separate"),
+            DeclareLaunchArgument("event_polarity_layout", default_value="polarity_major"),
+            DeclareLaunchArgument("event_temporal_interpolation", default_value="none"),
+            DeclareLaunchArgument("event_incremental_mode", default_value="auto"),
+            DeclareLaunchArgument("event_representation_backend", default_value="cuda"),
+            DeclareLaunchArgument("event_inference_policy", default_value="consumer_driven"),
+            DeclareLaunchArgument("event_cuda_update_us", default_value="1000"),
+            DeclareLaunchArgument("event_cuda_events_per_transfer", default_value="8192"),
+            DeclareLaunchArgument("event_inference_watchdog_ms", default_value="100.0"),
+            DeclareLaunchArgument("event_tensor_mean", default_value="[0.0]"),
+            DeclareLaunchArgument("event_tensor_stddev", default_value="[1.0]"),
+            DeclareLaunchArgument("event_tensor_publish_empty", default_value="true"),
+            DeclareLaunchArgument(
+                "event_tensor_use_pinned_host_memory", default_value="true"
+            ),
+            DeclareLaunchArgument("event_tensor_debug", default_value="false"),
+            DeclareLaunchArgument(
+                "event_tensor_statistics_interval_s", default_value="1.0"
+            ),
+            DeclareLaunchArgument("event_tensor_subscription_depth", default_value="8"),
+            DeclareLaunchArgument("event_tensor_publisher_depth", default_value="4"),
+            DeclareLaunchArgument(
+                "event_tensor_memory_pool_num_blocks", default_value="8"
+            ),
+            DeclareLaunchArgument(
+                "event_tensor_diagnostics_topic",
+                default_value="/e2e/event_tensor/diagnostics",
+            ),
             DeclareLaunchArgument("image_topic", default_value="/realsense/color/image_raw"),
             DeclareLaunchArgument(
                 "camera_info_topic", default_value="/realsense/color/camera_info"
@@ -273,11 +369,26 @@ def generate_launch_description():
                     ("image", "/e2e/event/image"),
                     ("camera_info", "/e2e/event/camera_info"),
                 ],
-                condition=IfCondition(LaunchConfiguration("event_image_mode")),
+                condition=IfCondition(
+                    PythonExpression([
+                        "'", LaunchConfiguration("event_image_mode"), "'.lower() == 'true' and '",
+                        LaunchConfiguration("event_tensor_mode"), "'.lower() != 'true'",
+                    ])
+                ),
             ),
             LoadComposableNodes(
                 target_container=container_name,
-                composable_node_descriptions=inference_components,
+                composable_node_descriptions=[image_encoder],
+                condition=UnlessCondition(LaunchConfiguration("event_tensor_mode")),
+            ),
+            LoadComposableNodes(
+                target_container=container_name,
+                composable_node_descriptions=[event_tensor_encoder],
+                condition=IfCondition(LaunchConfiguration("event_tensor_mode")),
+            ),
+            LoadComposableNodes(
+                target_container=container_name,
+                composable_node_descriptions=[tensor_rt],
             ),
             LoadComposableNodes(
                 target_container=container_name,

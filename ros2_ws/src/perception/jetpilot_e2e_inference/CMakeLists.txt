@@ -1,13 +1,20 @@
 cmake_minimum_required(VERSION 3.22.1)
 project(jetpilot_e2e_inference)
 
+enable_language(CUDA)
+
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-  add_compile_options(-Wall -Wextra -Wpedantic)
+  add_compile_options(
+    $<$<COMPILE_LANGUAGE:CXX>:-Wall>
+    $<$<COMPILE_LANGUAGE:CXX>:-Wextra>
+    $<$<COMPILE_LANGUAGE:CXX>:-Wpedantic>
+  )
 endif()
 
 find_package(ament_cmake_auto REQUIRED)
 find_package(ament_cmake_python REQUIRED)
 find_package(CUDAToolkit REQUIRED)
+find_package(MetavisionSDK COMPONENTS base REQUIRED)
 ament_auto_find_build_dependencies()
 
 ament_auto_add_library(${PROJECT_NAME}_control_decoder_node SHARED
@@ -32,9 +39,40 @@ rclcpp_components_register_node(${PROJECT_NAME}_trajectory_decoder_node
   EXECUTABLE e2e_trajectory_decoder_node
 )
 
+ament_auto_add_library(${PROJECT_NAME}_event_tensor_encoder_node SHARED
+  src/event_tensor_encoder_node.cpp
+  src/event_tensor_cuda_backend.cu
+)
+target_compile_features(${PROJECT_NAME}_event_tensor_encoder_node PUBLIC cxx_std_17)
+set_target_properties(${PROJECT_NAME}_event_tensor_encoder_node PROPERTIES
+  CUDA_STANDARD 17
+  CUDA_STANDARD_REQUIRED ON
+  CUDA_SEPARABLE_COMPILATION ON
+)
+target_link_libraries(${PROJECT_NAME}_event_tensor_encoder_node
+  CUDA::cudart
+  MetavisionSDK::base
+)
+rclcpp_components_register_node(${PROJECT_NAME}_event_tensor_encoder_node
+  PLUGIN "jetpilot_e2e_inference::EventTensorEncoderNode"
+  EXECUTABLE event_tensor_encoder_node
+)
+
+ament_auto_add_library(${PROJECT_NAME}_latent_state_manager_node SHARED
+  src/latent_state_manager_node.cpp
+)
+target_compile_features(${PROJECT_NAME}_latent_state_manager_node PUBLIC cxx_std_17)
+target_link_libraries(${PROJECT_NAME}_latent_state_manager_node CUDA::cudart)
+rclcpp_components_register_node(${PROJECT_NAME}_latent_state_manager_node
+  PLUGIN "jetpilot_e2e_inference::LatentStateManagerNode"
+  EXECUTABLE latent_state_manager_node
+)
+
 set_target_properties(
   ${PROJECT_NAME}_control_decoder_node
   ${PROJECT_NAME}_trajectory_decoder_node
+  ${PROJECT_NAME}_event_tensor_encoder_node
+  ${PROJECT_NAME}_latent_state_manager_node
   PROPERTIES
     BUILD_WITH_INSTALL_RPATH TRUE
     BUILD_RPATH_USE_ORIGIN TRUE

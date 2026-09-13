@@ -15,6 +15,7 @@ def generate_launch_description():
         DeclareLaunchArgument("container_name", default_value="multi_sensor_container"),
         DeclareLaunchArgument("run_standalone", default_value="true"),
         DeclareLaunchArgument("silky_evcam_debug", default_value="false"),
+        DeclareLaunchArgument("silky_evcam_event_image_enabled", default_value="true"),
         DeclareLaunchArgument("silky_evcam_event_image_fps", default_value="100.0"),
         DeclareLaunchArgument("silky_evcam_event_image_window_ms", default_value="50.0"),
         DeclareLaunchArgument("silky_evcam_event_image_stride_ms", default_value="10.0"),
@@ -36,7 +37,8 @@ def generate_launch_description():
                 "enable_realsense": "false",
                 "enable_silky_evcam": "true",
                 "run_standalone": "false",
-                "silky_evcam_event_image_enabled": "true",
+                "silky_evcam_event_image_enabled":
+                    LaunchConfiguration("silky_evcam_event_image_enabled"),
                 "silky_evcam_event_image_encoding": "bgr8",
                 "silky_evcam_event_image_style": "gep",
                 "silky_evcam_event_image_percentile": "90.0",

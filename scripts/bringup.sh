@@ -1661,6 +1661,7 @@ choose_preset_interactively() {
 configure_e2e_model() {
   is_true "$(get_arg enable_e2e_inference)" || return 0
   local sensor=rgb base=camera target=control selected records line choice key value current
+  local event_bins event_channels
   local model_root="${E2E_MODEL_BASE:-${ROS2_WS}/models/e2e}"
   local helper="${SCRIPT_DIR}/e2e_models.py"
   local options=() flags=() input_options=()
@@ -1686,11 +1687,22 @@ configure_e2e_model() {
       fi
     fi
   fi
-  if is_true "$(get_arg e2e_event_image_mode 2>/dev/null || printf false)"; then
+  if is_true "$(get_arg e2e_event_tensor_mode 2>/dev/null || printf false)"; then
+    sensor=event
+    base=event_tensor
+    event_bins="$(get_arg e2e_event_bins)"
+    [[ "$event_bins" =~ ^[1-9][0-9]*$ ]] || die 'e2e_event_bins must be a positive integer'
+    case "$(get_arg e2e_event_polarity_mode)" in
+      signed) event_channels="$event_bins" ;;
+      separate) event_channels="$((event_bins * 2))" ;;
+      *) die 'e2e_event_polarity_mode must be signed or separate' ;;
+    esac
+  elif is_true "$(get_arg e2e_event_image_mode 2>/dev/null || printf false)"; then
     sensor=event
     base=event
   fi
   flags=(--sensor "$sensor")
+  [[ -z "$event_channels" ]] || flags+=(--event-tensor-channels "$event_channels")
   if [[ "$auto_throttle" == true ]]; then
     flags+=(--auto-throttle)
   fi
@@ -2053,6 +2065,7 @@ PYVALIDATE
   done
   if is_true "$(get_arg enable_e2e_inference)" \
     && ! is_true "$(get_arg e2e_event_image_mode 2>/dev/null || true)" \
+    && ! is_true "$(get_arg e2e_event_tensor_mode 2>/dev/null || true)" \
     && is_true "$(get_arg enable_sensor_kit)"; then
     [[ "$(get_arg sensor_kit_rgb_fps)" != 0 ]] \
       || die 'RGBモデルの推論にはRGB配信が必要です。RGB HzをOFF以外にしてください。'

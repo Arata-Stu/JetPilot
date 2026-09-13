@@ -26,6 +26,16 @@ class E2EModelSelectionTests(unittest.TestCase):
                     "input": {"shape": [1, 3, 120, 212]},
                     "config": {"data": {"image_topic": "/event_camera/event_image" if sensor == "event" else "/realsense/color/image_raw"}},
                 }))
+        tensor_path = self.root / "event_tensor_control"
+        tensor_path.mkdir()
+        (tensor_path / "model.onnx").write_bytes(b"test")
+        (tensor_path / "metadata.json").write_text(json.dumps({
+            "model_name": tensor_path.name,
+            "task": "control",
+            "steering_only": False,
+            "modality": "event_tensor",
+            "input": {"shape": [1, 20, 120, 212]},
+        }))
 
     def test_candidates_match_both_sensor_and_learning_target(self):
         (self.root / "latest").symlink_to("camera_control")
@@ -93,6 +103,32 @@ class E2EModelSelectionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "single RGB-format image"):
             inspect_model(path.parent, "rgb", False)
 
+    def test_event_tensor_model_requires_explicit_modality_and_channel_match(self):
+        path = self.root / "event_tensor_control"
+        record = inspect_model(path, "event", False, event_tensor_channels=20)
+        self.assertEqual(record["width"], 212)
+        with self.assertRaisesRegex(ValueError, "event tensor model mismatch"):
+            inspect_model(path, "event", False, event_tensor_channels=10)
+        with self.assertRaisesRegex(ValueError, "RGB-format"):
+            inspect_model(path, "event", False)
+
+    def test_event_tensor_bringup_accepts_matching_twenty_channel_model(self):
+        result = subprocess.run([
+            "bash", str(ROOT / "scripts/bringup.sh"), "e2e", "--dry-run",
+            "--e2e-model", str(self.root / "event_tensor_control"),
+            "--set", "e2e_event_tensor_mode:=true",
+            "--set", "e2e_event_bins:=10",
+            "--set", "e2e_event_polarity_mode:=separate",
+        ], text=True, capture_output=True, check=True)
+        self.assertIn("e2e_event_tensor_mode:=true", result.stdout)
+        launch_source = (
+            ROOT
+            / "ros2_ws/src/perception/jetpilot_e2e_inference/launch/e2e_tensor_rt.launch.py"
+        ).read_text()
+        self.assertIn('"event_representation_backend", default_value="cuda"', launch_source)
+        self.assertIn('"event_inference_policy", default_value="consumer_driven"', launch_source)
+        self.assertIn('"event_cuda_events_per_transfer", default_value="8192"', launch_source)
+
     def test_tensorrt_build_requires_explicit_model(self):
         result = subprocess.run(
             ["bash", str(ROOT / "scripts/e2e_trt.sh")],
@@ -101,6 +137,17 @@ class E2EModelSelectionTests(unittest.TestCase):
         )
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Specify the model directory", result.stderr)
+
+    def test_async_rgb_evs_launch_preserves_state_feedback_contract(self):
+        source = (
+            ROOT
+            / "ros2_ws/src/perception/jetpilot_e2e_inference/launch/async_rgb_evs_latent.launch.py"
+        ).read_text()
+        self.assertIn("jetpilot_e2e_inference::LatentStateManagerNode", source)
+        self.assertIn("['state_in', 'event_tensor', 'delta_t']", source)
+        self.assertIn("['state_out', 'trajectory']", source)
+        self.assertIn('(\"tensor_feedback\", LaunchConfiguration(\"event_feedback_topic\"))', source)
+        self.assertIn('(\"updater_output\", LaunchConfiguration(\"updater_output_topic\"))', source)
 
     def test_deploy_and_tui_do_not_update_latest_alias(self):
         deploy = (

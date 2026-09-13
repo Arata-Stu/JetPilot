@@ -42,6 +42,8 @@ def add_sensor_interface(args: lu.ArgumentContainer):
         'silky_evcam_frame_id': args.silky_evcam_frame_id,
         'silky_evcam_bias_file': args.silky_evcam_bias_file,
         'silky_evcam_debug': str(lu.is_true(args.silky_evcam_debug)).lower(),
+        'silky_evcam_event_image_enabled': str(
+            lu.is_true(args.silky_evcam_event_image_enabled)).lower(),
         'silky_evcam_event_image_fps': args.silky_evcam_event_image_fps,
         'silky_evcam_event_image_window_ms': args.silky_evcam_event_image_window_ms,
         'silky_evcam_event_image_stride_ms': args.silky_evcam_event_image_stride_ms,
@@ -116,6 +118,7 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('silky_evcam_frame_id', 'event_camera', cli=True)
     args.add_arg('silky_evcam_bias_file', '', cli=True)
     args.add_arg('silky_evcam_debug', False, cli=True)
+    args.add_arg('silky_evcam_event_image_enabled', True, cli=True)
     args.add_arg('silky_evcam_event_image_fps', '25.0', cli=True)
     args.add_arg('silky_evcam_event_image_window_ms', '0.0', cli=True)
     args.add_arg('silky_evcam_event_image_stride_ms', '0.0', cli=True)

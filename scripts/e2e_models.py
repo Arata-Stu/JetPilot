@@ -5,7 +5,12 @@ import json
 from pathlib import Path
 
 
-def inspect_model(path: Path, sensor: str, steering_only: bool | None) -> dict:
+def inspect_model(
+    path: Path,
+    sensor: str,
+    steering_only: bool | None,
+    event_tensor_channels: int | None = None,
+) -> dict:
     path = path.expanduser().resolve()
     metadata = json.loads((path / "metadata.json").read_text())
     config = metadata.get("config", {})
@@ -13,7 +18,7 @@ def inspect_model(path: Path, sensor: str, steering_only: bool | None) -> dict:
     output = metadata.get("output", {})
     topic = str(metadata.get("image_topic") or data.get("image_topic") or "")
     modality = metadata.get("modality")
-    actual_sensor = "event" if modality == "event_image" or topic.endswith("/event_image") else "rgb" if modality == "rgb" or topic else "unknown"
+    actual_sensor = "event" if modality in ("event_image", "event_tensor") or topic.endswith("/event_image") else "rgb" if modality == "rgb" or topic else "unknown"
     actual_steering = metadata.get("steering_only") is True or output.get("learned_fields") == ["steering"] or output.get("requires_fixed_throttle_mode") is True
     if actual_sensor != sensor:
         raise ValueError(f"sensor mismatch: selected={sensor}, model={actual_sensor}")
@@ -23,8 +28,18 @@ def inspect_model(path: Path, sensor: str, steering_only: bool | None) -> dict:
         raise ValueError("model learning target does not match e2e/e2e-steering")
     shape = metadata.get("input", {}).get("shape", [])
     architecture = metadata.get("architecture", {})
-    if len(shape) != 4 or shape[1] != 3 or architecture.get("use_imu") or len(metadata.get("inputs", [])) > 1:
-        raise ValueError("online inference requires a single RGB-format image and no IMU input")
+    if len(shape) != 4 or architecture.get("use_imu") or len(metadata.get("inputs", [])) > 1:
+        if event_tensor_channels is None:
+            raise ValueError("online inference requires a single RGB-format image and no IMU input")
+        raise ValueError("online event tensor inference requires one fixed NCHW input and no IMU input")
+    if event_tensor_channels is None:
+        if shape[1] != 3 or modality == "event_tensor":
+            raise ValueError("online image inference requires a single RGB-format image")
+    elif modality != "event_tensor" or shape[1] != event_tensor_channels:
+        raise ValueError(
+            "event tensor model mismatch: metadata modality must be event_tensor "
+            f"and input channels must be {event_tensor_channels}"
+        )
     if not (path / "model.onnx").is_file():
         raise ValueError("model.onnx is missing")
     if not all(isinstance(size, int) and size > 0 for size in shape[2:]):
@@ -36,7 +51,12 @@ def inspect_model(path: Path, sensor: str, steering_only: bool | None) -> dict:
     }
 
 
-def list_models(root: Path, sensor: str, steering_only: bool | None) -> list[dict]:
+def list_models(
+    root: Path,
+    sensor: str,
+    steering_only: bool | None,
+    event_tensor_channels: int | None = None,
+) -> list[dict]:
     records = []
     seen = set()
     if not root.is_dir():
@@ -46,7 +66,7 @@ def list_models(root: Path, sensor: str, steering_only: bool | None) -> list[dic
             continue
         seen.add(path.resolve())
         try:
-            records.append(inspect_model(path, sensor, steering_only))
+            records.append(inspect_model(path, sensor, steering_only, event_tensor_channels))
         except (OSError, ValueError, TypeError, AttributeError):
             continue
     return records
@@ -60,17 +80,22 @@ def main():
     target = parser.add_mutually_exclusive_group()
     target.add_argument("--steering-only", action="store_true")
     target.add_argument("--auto-throttle", action="store_true")
+    parser.add_argument("--event-tensor-channels", type=int)
     args = parser.parse_args()
     steering_only = None if args.auto_throttle else args.steering_only
     try:
         if args.action == "list":
-            for record in list_models(args.path, args.sensor, steering_only):
+            for record in list_models(
+                args.path, args.sensor, steering_only, args.event_tensor_channels
+            ):
                 mode = "固定スロットル" if record["steering_only"] else "モデルがスロットルを予測"
                 label = f"{record['name']} ({mode}, {record['width']}x{record['height']}, {'TRT ready' if record['engine'] else 'build needed'})"
                 if not any(char in record["path"] + label for char in "\t\r\n"):
                     print(f"{record['path']}\t{label}")
         else:
-            record = inspect_model(args.path, args.sensor, steering_only)
+            record = inspect_model(
+                args.path, args.sensor, steering_only, args.event_tensor_channels
+            )
             if args.auto_throttle:
                 print(f"e2e_fixed_throttle_mode\t{str(record['steering_only']).lower()}")
             print(f"e2e_network_image_width\t{record['width']}")

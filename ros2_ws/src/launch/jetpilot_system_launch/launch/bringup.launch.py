@@ -533,6 +533,7 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('sensor_kit_flir_io_method', 'mmap', cli=True)
     args.add_arg('sensor_kit_silky_evcam_bias_file', '', cli=True)
     args.add_arg('sensor_kit_silky_evcam_debug', False, cli=True)
+    args.add_arg('sensor_kit_silky_evcam_event_image_enabled', True, cli=True)
     args.add_arg('sensor_kit_silky_evcam_event_image_fps', '25.0', cli=True)
     args.add_arg('sensor_kit_silky_evcam_event_image_window_ms', '0.0', cli=True)
     args.add_arg('sensor_kit_silky_evcam_event_image_stride_ms', '0.0', cli=True)
@@ -561,6 +562,30 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('e2e_fixed_throttle_mode', False, cli=True)
     args.add_arg('fixed_throttle', '0.2', cli=True)
     args.add_arg('e2e_event_image_mode', False, cli=True)
+    args.add_arg('e2e_event_tensor_mode', False, cli=True)
+    args.add_arg('e2e_event_topic', '/event_camera/events', cli=True)
+    args.add_arg('e2e_event_bins', '10', cli=True)
+    args.add_arg('e2e_event_window_ms', '10.0', cli=True)
+    args.add_arg('e2e_event_stride_ms', '1.0', cli=True)
+    args.add_arg('e2e_event_polarity_mode', 'separate', cli=True)
+    args.add_arg('e2e_event_polarity_layout', 'polarity_major', cli=True)
+    args.add_arg('e2e_event_temporal_interpolation', 'none', cli=True)
+    args.add_arg('e2e_event_incremental_mode', 'auto', cli=True)
+    args.add_arg('e2e_event_representation_backend', 'cuda', cli=True)
+    args.add_arg('e2e_event_inference_policy', 'consumer_driven', cli=True)
+    args.add_arg('e2e_event_cuda_update_us', '1000', cli=True)
+    args.add_arg('e2e_event_cuda_events_per_transfer', '8192', cli=True)
+    args.add_arg('e2e_event_inference_watchdog_ms', '100.0', cli=True)
+    args.add_arg('e2e_event_tensor_mean', '[0.0]', cli=True)
+    args.add_arg('e2e_event_tensor_stddev', '[1.0]', cli=True)
+    args.add_arg('e2e_event_tensor_use_pinned_host_memory', True, cli=True)
+    args.add_arg('e2e_event_tensor_debug', False, cli=True)
+    args.add_arg('e2e_event_tensor_statistics_interval_s', '1.0', cli=True)
+    args.add_arg('e2e_event_tensor_subscription_depth', '8', cli=True)
+    args.add_arg('e2e_event_tensor_publisher_depth', '4', cli=True)
+    args.add_arg('e2e_event_tensor_memory_pool_num_blocks', '8', cli=True)
+    args.add_arg(
+        'e2e_event_tensor_diagnostics_topic', '/e2e/event_tensor/diagnostics', cli=True)
     args.add_arg('e2e_image_topic', '/realsense/color/image_raw', cli=True)
     args.add_arg('e2e_camera_info_topic', '/realsense/color/camera_info', cli=True)
     args.add_arg('e2e_control_cmd_topic', '/auto/control_cmd', cli=True)
@@ -989,6 +1014,8 @@ def generate_launch_description() -> lut.LaunchDescription:
                 'flir_io_method': args.sensor_kit_flir_io_method,
                 'silky_evcam_bias_file': args.sensor_kit_silky_evcam_bias_file,
                 'silky_evcam_debug': args.sensor_kit_silky_evcam_debug,
+                'silky_evcam_event_image_enabled':
+                    args.sensor_kit_silky_evcam_event_image_enabled,
                 'silky_evcam_event_image_fps':
                     args.sensor_kit_silky_evcam_event_image_fps,
                 'silky_evcam_event_image_window_ms':
@@ -1029,6 +1056,33 @@ def generate_launch_description() -> lut.LaunchDescription:
                 'fixed_throttle_mode': args.e2e_fixed_throttle_mode,
                 'fixed_throttle': args.fixed_throttle,
                 'event_image_mode': args.e2e_event_image_mode,
+                'event_tensor_mode': args.e2e_event_tensor_mode,
+                'event_topic': args.e2e_event_topic,
+                'event_bins': args.e2e_event_bins,
+                'event_window_ms': args.e2e_event_window_ms,
+                'event_stride_ms': args.e2e_event_stride_ms,
+                'event_polarity_mode': args.e2e_event_polarity_mode,
+                'event_polarity_layout': args.e2e_event_polarity_layout,
+                'event_temporal_interpolation': args.e2e_event_temporal_interpolation,
+                'event_incremental_mode': args.e2e_event_incremental_mode,
+                'event_representation_backend': args.e2e_event_representation_backend,
+                'event_inference_policy': args.e2e_event_inference_policy,
+                'event_cuda_update_us': args.e2e_event_cuda_update_us,
+                'event_cuda_events_per_transfer': args.e2e_event_cuda_events_per_transfer,
+                'event_inference_watchdog_ms': args.e2e_event_inference_watchdog_ms,
+                'event_tensor_mean': args.e2e_event_tensor_mean,
+                'event_tensor_stddev': args.e2e_event_tensor_stddev,
+                'event_tensor_use_pinned_host_memory':
+                    args.e2e_event_tensor_use_pinned_host_memory,
+                'event_tensor_debug': args.e2e_event_tensor_debug,
+                'event_tensor_statistics_interval_s':
+                    args.e2e_event_tensor_statistics_interval_s,
+                'event_tensor_subscription_depth':
+                    args.e2e_event_tensor_subscription_depth,
+                'event_tensor_publisher_depth': args.e2e_event_tensor_publisher_depth,
+                'event_tensor_memory_pool_num_blocks':
+                    args.e2e_event_tensor_memory_pool_num_blocks,
+                'event_tensor_diagnostics_topic': args.e2e_event_tensor_diagnostics_topic,
                 'model_root': args.e2e_model_root,
                 'input_image_width': args.e2e_input_image_width,
                 'input_image_height': args.e2e_input_image_height,

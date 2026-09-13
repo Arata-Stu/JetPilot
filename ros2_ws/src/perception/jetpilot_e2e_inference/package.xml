@@ -2,7 +2,7 @@
 <package format="3">
   <name>jetpilot_e2e_inference</name>
   <version>0.1.0</version>
-  <description>JetPilot image-based E2E PyTorch and TensorRT inference nodes.</description>
+  <description>JetPilot image and event-tensor E2E PyTorch/TensorRT inference nodes.</description>
   <maintainer email="user@example.com">user</maintainer>
   <license>Apache-2.0</license>
 
@@ -11,6 +11,8 @@
 
   <depend>cuda-toolkit</depend>
   <depend>diagnostic_msgs</depend>
+  <depend>event_camera_codecs</depend>
+  <depend>event_camera_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>isaac_ros_common</depend>
   <depend>isaac_ros_nitros</depend>

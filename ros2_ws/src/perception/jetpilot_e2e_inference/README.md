@@ -14,6 +14,8 @@ TensorRT経路に加えて、`sensor_msgs/Image`を直接受信するPyTorch経�
 | --- | --- | --- |
 | `e2e_pytorch_inference` | `jetpilot_e2e_inference` | ROS ImageからPyTorchで制御指令を推論する |
 | `e2e_image_encoder` | `isaac_ros_dnn_image_encoder` | ImageをTensorRT入力tensorへ変換する |
+| `e2e_event_tensor_encoder` | `jetpilot_e2e_inference` | 生eventを時系列binのNCHW tensorへ変換する |
+| `latent_state_manager` | `jetpilot_e2e_inference` | RGB latentとEVS tensorを非同期調停し、GPU上のstateを再利用する |
 | `e2e_tensor_rt` | `isaac_ros_tensor_rt` | ONNX/TensorRT engineを実行する |
 | `e2e_control_decoder` | `jetpilot_e2e_inference` | tensorを正規化制御指令へ変換する |
 | `e2e_trajectory_decoder` | `jetpilot_e2e_inference` | tensorをtrajectory、速度、readyへ変換する |
@@ -27,6 +29,8 @@ TensorRT経路に加えて、`sensor_msgs/Image`を直接受信するPyTorch経�
 | `e2e_pytorch_inference` | `/realsense/color/image_raw` | `sensor_msgs/msg/Image` | Best Effort / Volatile | PyTorch経路の標準camera入力 |
 | `e2e_image_encoder` | `/realsense/color/image_raw` | `sensor_msgs/msg/Image` | Best Effort / Volatile | TensorRT経路のcamera入力 |
 | `e2e_image_encoder` | `/realsense/color/camera_info` | `sensor_msgs/msg/CameraInfo` | Best Effort / Volatile | camera calibration |
+| `e2e_event_tensor_encoder` | `/event_camera/events` | `event_camera_msgs/msg/EventPacket` | Best Effort / Volatile | OpenEBの圧縮済み生event packet |
+| `e2e_event_tensor_encoder` | `/e2e/tensor_output` | `isaac_ros_tensor_list_interfaces/msg/TensorList` | Reliable / Volatile | consumer-driven用TensorRT完了feedback |
 | `e2e_tensor_rt` | `/e2e/tensor_input` | `isaac_ros_tensor_list_interfaces/msg/TensorList` | Best Effort / Volatile | encoder出力tensor |
 | `e2e_control_decoder` | `/e2e/tensor_output` | `isaac_ros_tensor_list_interfaces/msg/TensorList` | Reliable / Volatile | control model出力tensor |
 | `e2e_trajectory_decoder` | `/e2e/tensor_output` | `isaac_ros_tensor_list_interfaces/msg/TensorList` | Reliable / Volatile | trajectory model出力tensor |
@@ -37,6 +41,8 @@ TensorRT経路に加えて、`sensor_msgs/Image`を直接受信するPyTorch経�
 | --- | --- | --- | --- | --- |
 | `e2e_pytorch_inference` | `/auto/control_cmd` | `jetpilot_msgs/msg/ControlCommand` | Reliable / Volatile | PyTorch direct control出力 |
 | `e2e_image_encoder` | `/e2e/tensor_input` | `isaac_ros_tensor_list_interfaces/msg/TensorList` | Best Effort / Volatile | 前処理済み入力tensor |
+| `e2e_event_tensor_encoder` | `/e2e/tensor_input` | `isaac_ros_tensor_list_interfaces/msg/TensorList` | Reliable / Volatile | CUDA memory上のevent NCHW float32 tensor |
+| `e2e_event_tensor_encoder` | `/e2e/event_tensor/diagnostics` | `diagnostic_msgs/msg/DiagnosticArray` | Reliable / Volatile | event rate、処理時間、増分再利用状態 |
 | `e2e_tensor_rt` | `/e2e/tensor_output` | `isaac_ros_tensor_list_interfaces/msg/TensorList` | Reliable / Volatile | TensorRT推論出力 |
 | `e2e_control_decoder` | `/auto/control_cmd` | `jetpilot_msgs/msg/ControlCommand` | Reliable / Volatile | TensorRT direct control出力 |
 | `e2e_control_decoder` | `/e2e/diagnostics` | `diagnostic_msgs/msg/DiagnosticArray` | Reliable / Volatile | 推論deadlineとdecoder状態 |
@@ -120,6 +126,117 @@ TensorRT topicの既定tensor名:
 `[0.2204336077, 0.2921656668, 0.2204992771]`）へ自動で切り替えます。
 別datasetで蒸留したcheckpointでは`event_image_mean`と`event_image_stddev`を
 server側checkpointの埋め込みconfigに合わせて上書きしてください。
+
+### 生event tensor入力
+
+`event_tensor_mode:=true`ではImage encoderを起動せず、OpenEBの
+`EventPacket`をC++でdecodeし、CUDA rolling ringから生成したimmutable
+`NitrosTensorList`をTensorRTへ渡します。
+出力shapeはNCHW float32で、`signed`は`[1, B, H, W]`、`separate`は
+`[1, 2B, H, W]`です。既定の`B=10`、`separate`は20chになります。
+
+`polarity_layout:=polarity_major`のchannel順は
+`positive[0:B], negative[0:B]`、`time_major`は
+`positive_bin0, negative_bin0, positive_bin1, negative_bin1, ...`です。
+`signed`では正eventを`+1`、負eventを`-1`としてB個のchannelへ加算します。
+モデルの`metadata.json`には`"modality": "event_tensor"`と、実際の入力shape
+（例: `[1, 20, 120, 212]`）を保存してください。
+
+時間方向は次の2方式を選べます。
+
+- `event_temporal_interpolation:=none`: 各eventを1つの時間binだけへ加算するhistogram
+- `event_temporal_interpolation:=linear`: 時刻位置に応じて隣接2 binへ線形配分するvoxel表現
+
+`event_representation_backend:=cpu`で`event_incremental_mode:=auto`を使う場合は、
+窓が重複し、`window/B`が整数µs、かつ
+`stride`がbin幅の整数倍の場合に限り、重複binを再利用します。たとえば
+`window=50ms, stride=5ms, B=10`では9 binを保持し、新しい1 binだけを作ります。
+`stride >= window`、bin境界に揃わないstride、または線形補間では全再計算へ
+フォールバックします。`off`は常に全再計算、`require`は再利用できない設定を
+起動エラーにします。窓とbinは半開区間として扱うため、再利用時も全再計算と
+同一のhistogramになります。
+
+既定の`cuda` backendでは、`8192 events OR 1 ms`で新着eventだけをpinned bufferから
+GPUへ送り、GPU常駐ringを更新します。TensorRTのraw出力を前回推論の完了通知として使い、
+推論中の入力を変更せず、完了後に最新ringから次のFP32 snapshotを生成する
+`consumer_driven`方式です。同時in-flight推論は1件で、古いsnapshotをqueueしません。
+raw出力が来ない場合はwatchdogで復旧します。現行NITROS TensorListとの互換性のため
+snapshotはFP32とし、TensorRT engine内部では従来どおりFP16最適化を利用できます。
+
+CUDA backendは現在、厳密なrolling histogramである
+`temporal_interpolation:=none`に対応します。線形補間が必要な場合は
+`event_representation_backend:=cpu`を指定します。
+
+### RGB-EVS非同期latent state更新
+
+`async_rgb_evs_latent.launch.py`はRGBとEVSを同期せず、RGB TensorRT encoderの
+出力を初期state／定期補正として利用し、その間をEVS updater TensorRTで更新します。
+
+```text
+RGB image -> image encoder -> RGB TensorRT -> rgb_latent --+
+                                                         |
+raw EVS -> CUDA rolling representation -> event_tensor --+-> latent_state_manager
+                                                              |
+                                         [state_in,event_tensor,delta_t]
+                                                              |
+                                                        updater TensorRT
+                                                              |
+                                                [state_out,trajectory]
+                                                   |          |
+                                                   +----------+-> Path
+                                                   |
+                                                   +-> 次回state_in
+```
+
+State ManagerはTensorRTエンジンをステートフル化しません。前回出力のNITROS
+GPU bufferを保持し、次回入力では`state_in`という名前で参照します。次の
+`state_out`はTensorRT側の別output bufferへ書かれるため、入力中のstateを
+上書きしないping-pong動作になります。latentをCPUへコピーする処理はありません。
+
+実行規則は次のとおりです。
+
+- updaterのin-flightは常に1件
+- 実行中に複数のEVS tensorが届いた場合は最新版だけを保持
+- RGB latentは次の安全な推論境界でstateを置換し、EVS driftを補正
+- state時刻以前のEVS tensorは破棄
+- `delta_t`はstate時刻とEVS窓終端時刻から算出し、設定範囲へclamp
+- updater timeout時は同時推論を発行せず、安全lockを維持して診断をERRORにする
+- State Managerの専用ACKをevent encoderへ返し、次のCUDA snapshot生成を許可
+  （RGB補正より古いEVS窓を破棄した場合もACKする）
+
+既定のモデルbinding契約は以下です。updaterへwaypoint headを統合し、EVS更新ごとの
+追加TensorRT往復を避けます。
+
+| Engine | Inputs | Outputs |
+| --- | --- | --- |
+| RGB encoder | `rgb` | `rgb_latent` |
+| EVS updater + waypoint head | `state_in`, `event_tensor`, `delta_t` | `state_out`, `trajectory` |
+
+`rgb_latent`と`state_out`は同一shape・同一dtype（現在はNITROS float32）にします。
+`event_tensor`の既定shapeは`[1,20,120,212]`、`delta_t`は秒単位の`[1]`です。
+モデルが`delta_t`を使用しない場合は`include_delta_t:=false`とし、updaterの
+`*_tensor_names`および`*_binding_names`も2入力へ上書きしてください。
+
+```bash
+ros2 launch jetpilot_e2e_inference async_rgb_evs_latent.launch.py \
+  rgb_model_root:=/workspaces/ros2_ws/models/e2e/rgb_encoder \
+  updater_model_root:=/workspaces/ros2_ws/models/e2e/evs_updater
+```
+
+診断は次の2 topicで確認できます。
+
+```bash
+ros2 topic echo /e2e/event_tensor/diagnostics
+ros2 topic echo /e2e/latent_state/diagnostics
+```
+
+State Manager診断にはRGBの受信・適用・置換数、EVSの最新版置換・時刻破棄数、
+state version、in-flight状態、入力組立時間、updater往復時間、watchdog回数を含みます。
+
+空間方向は低遅延を優先し、source座標をnetwork入力寸法へ直接写像します。
+画像のbilinear resize相当ではありません。CPU backendの送信用bufferは複数の
+host staging bufferを循環利用し、pinned memoryを利用できなければpageable memoryへ
+安全にフォールバックします。
 
 OpenEBの通常`dark` event imageは黒背景かつ重なった極性をmagentaで描画するため、
 GEP frameで学習したmodelとは互換ではありません。`event-camera` sensor profileは
@@ -216,6 +333,45 @@ ros2 launch jetpilot_e2e_inference e2e_tensor_rt.launch.py \
   control_cmd_topic:=/auto/control_cmd \
   model_root:=/workspaces/ros2_ws/models/e2e/<run-name>
 ```
+
+20chの生event tensorモデルは次のように起動します。
+
+```bash
+ros2 launch jetpilot_e2e_inference e2e_tensor_rt.launch.py \
+  event_tensor_mode:=true \
+  event_topic:=/event_camera/events \
+  event_bins:=10 \
+  event_window_ms:=10.0 \
+  event_stride_ms:=1.0 \
+  event_polarity_mode:=separate \
+  event_temporal_interpolation:=none \
+  event_representation_backend:=cuda \
+  event_inference_policy:=consumer_driven \
+  event_cuda_update_us:=1000 \
+  event_cuda_events_per_transfer:=8192 \
+  event_tensor_debug:=true \
+  model_root:=/workspaces/ros2_ws/models/e2e/<event-tensor-run>
+```
+
+bringup全体から使う場合は同じ設定を`e2e_` prefix付きで指定します。
+
+```bash
+/workspaces/scripts/bringup.sh e2e --vehicle jpbb --sensor-kit event-camera \
+  --e2e-model /workspaces/ros2_ws/models/e2e/<event-tensor-run> \
+  --set e2e_event_tensor_mode:=true \
+  --set sensor_kit_silky_evcam_event_image_enabled:=false \
+  --set e2e_event_bins:=10 \
+  --set e2e_event_window_ms:=10.0 \
+  --set e2e_event_stride_ms:=1.0
+```
+
+診断は`ros2 topic echo /e2e/event_tensor/diagnostics`で確認できます。
+`packet_process_ms_avg/max`、`decode_ms_avg/max`、`representation_ms_avg/max`、
+`transfer_enqueue_publish_ms_avg/max`、event/tensor rate、queue内event数、
+CUDA update、TensorRT round-trip、sensor age、watchdog、`full_windows`と
+`incremental_windows`などを1秒ごとにpublishします。
+`event_tensor_debug:=true`では同じ概要をログにも出します。transfer値はGPU copy完了待ちを
+含まず、CUDA転送のenqueueとpublishまでのCPU時間です。
 
 trajectoryモデルは次のように起動します。出力はcontrollerの既定入力である
 `/planning/trajectory`、`/planning/target_speed`、`/planning/ready`へpublishされます。

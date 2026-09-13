@@ -2263,6 +2263,7 @@ def test_event_camera_wrapper_forwards_event_image_timing() -> None:
         / "ros2_ws/src/launch/jetpilot_system_launch/launch/sensors/event_camera.launch.py"
     ).read_text()
     for name in (
+        "silky_evcam_event_image_enabled",
         "silky_evcam_event_image_fps",
         "silky_evcam_event_image_window_ms",
         "silky_evcam_event_image_stride_ms",
