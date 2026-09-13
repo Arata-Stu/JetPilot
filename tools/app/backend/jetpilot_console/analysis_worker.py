@@ -1253,6 +1253,8 @@ class _EventTensorPreview:
         self.generated = 0
         self.decoded_events = 0
         self.first_event_ns: int | None = None
+        self.latest_event_ns: int | None = None
+        self.clock_source = "event_packet_header"
 
     def add_packet(self, message: Any, bag_timestamp_ns: int) -> None:
         self.decoder.decode_bytes(
@@ -1264,9 +1266,20 @@ class _EventTensorPreview:
             return
         np = self.np
         sensor_us = np.asarray(events["t"], dtype=np.int64)
-        # Align the newest event to the bag's master clock for RGB synchronization;
-        # the constant offset preserves all intra-packet bin boundaries.
-        event_ns = sensor_us * 1000 + (int(bag_timestamp_ns) - int(sensor_us[-1]) * 1000)
+        # Match EventTensorEncoderNode::on_packet(): the decoded sensor clock is
+        # translated to ROS time by anchoring the newest event to EventPacket's
+        # header stamp. rosbag record time includes recorder/transport jitter and
+        # made short 50 ms windows intermittently sparse during offline replay.
+        packet_header_ns = _stamp_ns(message)
+        if packet_header_ns is not None and packet_header_ns > 0:
+            packet_reference_ns = int(packet_header_ns)
+            self.clock_source = "event_packet_header"
+        else:
+            packet_reference_ns = int(bag_timestamp_ns)
+            self.clock_source = "bag_timestamp_fallback"
+        event_ns = sensor_us * 1000 + (
+            packet_reference_ns - int(sensor_us[-1]) * 1000
+        )
         self.source_width = int(message.width)
         self.source_height = int(message.height)
         self.chunks.append(
@@ -1279,8 +1292,9 @@ class _EventTensorPreview:
         )
         if self.first_event_ns is None:
             self.first_event_ns = int(event_ns[0])
+        self.latest_event_ns = int(event_ns[-1])
         self.decoded_events += len(events)
-        oldest = int(bag_timestamp_ns) - self.window_ns
+        oldest = packet_reference_ns - self.window_ns
         while self.chunks and int(self.chunks[0][0][-1]) < oldest:
             self.chunks.popleft()
 
@@ -1290,8 +1304,9 @@ class _EventTensorPreview:
         # rather than one preview per high-rate event stride.
         return bool(self.chunks)
 
-    def render(self, timestamp_ns: int):
+    def render(self, timestamp_ns: int, *, timeline_timestamp_ns: int | None = None):
         np = self.np
+        requested_timestamp_ns = int(timestamp_ns)
         if self.first_event_ns is not None and timestamp_ns >= self.first_event_ns:
             timestamp_ns = self.first_event_ns + (
                 (timestamp_ns - self.first_event_ns) // self.stride_ns
@@ -1393,8 +1408,12 @@ class _EventTensorPreview:
         if event_count > 0 or self.generated > 0:
             self.generated += 1
         nonzero = int(np.count_nonzero(tensors))
+        channel_event_counts = tensors.sum(axis=(1, 2)).astype(float).tolist()
         return image, {
             "events": event_count,
+            "channel_event_counts": channel_event_counts,
+            "positive_events": float(sum(channel_event_counts[: self.bins])),
+            "negative_events": float(sum(channel_event_counts[self.bins :])),
             "nonzero_fraction": nonzero / max(int(tensors.size), 1),
             "peak_count": peak,
             "bins": self.bins,
@@ -1406,7 +1425,18 @@ class _EventTensorPreview:
                 f"grid={columns}x{rows}, positive bins 0..B-1 (blue), "
                 "negative bins 0..B-1 (red), final two cells=polarity aggregates"
             ),
-            "snapshot_timestamp_ns": timestamp_ns,
+            "clock_source": self.clock_source,
+            "window_end_timestamp_ns": timestamp_ns,
+            "requested_rgb_timestamp_ns": requested_timestamp_ns,
+            "latest_event_timestamp_ns": self.latest_event_ns,
+            "latest_event_age_ms": (
+                (timestamp_ns - self.latest_event_ns) / 1e6
+                if self.latest_event_ns is not None else None
+            ),
+            "snapshot_timestamp_ns": (
+                int(timeline_timestamp_ns)
+                if timeline_timestamp_ns is not None else requested_timestamp_ns
+            ),
         }
 
 
@@ -1773,7 +1803,15 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
 
                 if event_preview is not None and event_preview.should_render(timestamp_ns):
                     previous_preview_count = event_preview.generated
-                    preview_image, preview_stats = event_preview.render(timestamp_ns)
+                    rgb_reference_ns = (
+                        int(header_timestamp_ns)
+                        if header_timestamp_ns is not None and header_timestamp_ns > 0
+                        else timestamp_ns
+                    )
+                    preview_image, preview_stats = event_preview.render(
+                        rgb_reference_ns,
+                        timeline_timestamp_ns=timestamp_ns,
+                    )
                     if event_preview.generated > previous_preview_count:
                         preview_name = f"preview_{event_preview.generated - 1:04d}.jpg"
                         preview_rel_path = (

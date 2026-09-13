@@ -5835,6 +5835,11 @@ function updateAnalysisMultiFrame(frames, index, time, channels, selectedChannel
       const delta = Number(payload.delta_ms || 0);
       const parts = [];
       if (channel === primaryTopic) parts.push("clock");
+      if (channel === "/analysis/event_tensor_20ch" && payload.stats) {
+        parts.push(`${Number(payload.stats.events || 0).toLocaleString()} ev`);
+        const eventAgeMs = Number(payload.stats.latest_event_age_ms);
+        if (Number.isFinite(eventAgeMs)) parts.push(`event age ${eventAgeMs.toFixed(1)}ms`);
+      }
       if (payload.future) parts.push(`next ${Math.max(0, Number(payload.frameTime || 0) - time).toFixed(2)}s`);
       else if (payload.stale && age > 0.001) parts.push(`hold ${age.toFixed(2)}s`);
       else if (delta) parts.push(`${delta >= 0 ? "+" : ""}${delta}ms`);

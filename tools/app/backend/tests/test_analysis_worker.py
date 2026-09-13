@@ -66,7 +66,14 @@ class SnapshotTrajectoryTests(unittest.TestCase):
                 linear_interpolation=False,
             )
             message = SimpleNamespace(
-                encoding="evt3", width=4, height=3, time_base=0, events=b"raw"
+                encoding="evt3",
+                width=4,
+                height=3,
+                time_base=0,
+                events=b"raw",
+                header=SimpleNamespace(
+                    stamp=SimpleNamespace(sec=0, nanosec=3_000_000)
+                ),
             )
             preview.add_packet(message, 3_000_000)
             image, stats = preview.render(3_000_000)
@@ -80,6 +87,8 @@ class SnapshotTrajectoryTests(unittest.TestCase):
         self.assertEqual(preview.generated, 20)
         self.assertEqual(stats["channels"], 4)
         self.assertEqual(stats["events"], 2)
+        self.assertEqual(stats["clock_source"], "event_packet_header")
+        self.assertEqual(stats["latest_event_age_ms"], 0.0)
         self.assertGreater(int(image[:3, :, 0].max()), 0)
         self.assertGreater(int(image[3:, :, 2].max()), 0)
 

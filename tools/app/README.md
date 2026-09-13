@@ -274,7 +274,11 @@ their polarity aggregates are arranged in a compact grid. An initial snapshot
 before the RGB/event clocks overlap is skipped. Select
 `/analysis/event_tensor_20ch` in the synchronized image viewer after analysis.
 Decoding uses the upstream `event_camera_py` binding; install the ROS package
-for the active distribution when it is not already present.
+for the active distribution when it is not already present. Decoded event
+sensor timestamps are translated with `EventPacket.header.stamp`, matching the
+runtime C++ encoder, and each window is evaluated at the primary RGB image's
+header timestamp. Per-frame event count and latest-event age remain available
+in the analysis timeline for synchronization diagnosis.
 
 Teacher-free evaluation is calculated for every E2E result, including bags
 without manual commands. It reports absolute steering and steering/throttle
