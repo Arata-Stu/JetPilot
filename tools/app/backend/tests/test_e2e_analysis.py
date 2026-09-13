@@ -14,11 +14,17 @@ from jetpilot_console.e2e_analysis_worker import (
     _teacher_free_metrics,
     _control_predictions,
     _exclude_throttle_metrics,
+    _timestamp_ns,
     trajectory_error_summary,
 )
 
 
 class E2EAnalysisMetricTests(unittest.TestCase):
+    def test_event_tensor_alignment_reads_normalized_frame_timestamp(self) -> None:
+        self.assertEqual(_timestamp_ns({"timestamp_ns": "1789320303810375102"}), 1789320303810375102)
+        self.assertEqual(_timestamp_ns({"_timestamp_ns": 42}), 42)
+        self.assertEqual(_timestamp_ns({"stamp": "43"}), 43)
+
     def test_steering_only_ignores_placeholder_throttle(self) -> None:
         self.assertTrue(is_steering_only({"steering_only": True}))
         self.assertTrue(is_steering_only({"output": {"learned_fields": ["steering"]}}))

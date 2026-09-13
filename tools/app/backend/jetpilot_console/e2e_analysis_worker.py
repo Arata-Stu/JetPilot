@@ -49,6 +49,18 @@ def _finite(value: object) -> float | None:
     return number if math.isfinite(number) else None
 
 
+def _timestamp_ns(record: Mapping[str, Any]) -> int:
+    """Read timestamps from both extracted and normalized timeline records."""
+    for key in ("timestamp_ns", "_timestamp_ns", "stamp"):
+        value = record.get(key)
+        if value not in (None, ""):
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                continue
+    return 0
+
+
 def _nearest(records: list[dict[str, Any]], times: list[float], target: float, max_dt: float) -> dict[str, Any] | None:
     if not records:
         return None
@@ -344,7 +356,7 @@ def _supervised_predictions(
             continue
         sequence_tensors = []
         if modality == "event_tensor" and event_dataset is not None:
-            frame_stamp = int(frame.get("_timestamp_ns") or frame.get("stamp") or 0)
+            frame_stamp = _timestamp_ns(frame)
             position = bisect.bisect_left(event_times, frame_stamp)
             candidates = [
                 candidate for candidate in (position - 1, position)
@@ -422,7 +434,7 @@ def _supervised_predictions(
         total_ms = (finished - started) / 1.0e6
         sample = {
                 "t": round(t, 9),
-                "stamp": str(frame.get("_timestamp_ns") or frame.get("stamp") or ""),
+                "stamp": str(_timestamp_ns(frame) or ""),
                 "frame_path": str(frame.get("path") or ""),
                 "mode": _mode_name(mode),
                 "steering_gt": steering_gt,

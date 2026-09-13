@@ -3676,8 +3676,8 @@ tr:last-child td {
 }
 
 .analysis-image-panel {
-  display: grid;
-  grid-template-rows: auto minmax(300px, 1fr) auto;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
 }
 
@@ -3708,6 +3708,13 @@ tr:last-child td {
   overflow: hidden;
   background: #050709;
   contain: inline-size paint;
+}
+
+/* Three side-by-side 16:9 sources need much less vertical space than a single
+   full-width source. This keeps the playback controls and diagnostics nearby. */
+.analysis-image-stage.multi-grid {
+  height: clamp(240px, 22vw, 380px);
+  min-height: 240px;
 }
 
 .analysis-image-stage img {

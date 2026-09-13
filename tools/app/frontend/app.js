@@ -4700,6 +4700,10 @@ function renderAnalysisViewer() {
   const consistency = analysisMapConsistency();
   const issues = analysisTimelineIssues();
   const eventPreview = timeline.event_tensor_preview || {};
+  const imageChannels = analysisImageChannels();
+  const imageViewMode = imageChannels.length === 1
+    ? "single"
+    : (analysis.imageViewMode || "single");
   return `
     <div class="analysis-viewer">
       <div class="analysis-viewer-title">
@@ -4722,7 +4726,7 @@ function renderAnalysisViewer() {
           <div class="field-hint">${esc(cameraGroundHeightHint(analysis.timeline))}</div>
           <div id="analysis-projection-status" class="field-hint" role="status"></div>
           ${eventPreview.enabled ? `<div id="analysis-event-tensor-status" class="analysis-event-tensor-status">20ch: loading diagnostics...</div>` : ""}
-          <div class="analysis-image-stage">
+          <div class="analysis-image-stage ${imageViewMode === "grid" ? "multi-grid" : imageViewMode === "strip" ? "multi-strip" : "single"}">
             <img id="analysis-frame-image-a" alt="Selected rosbag image frame A" decoding="async" />
             <img id="analysis-frame-image-b" alt="Selected rosbag image frame B" decoding="async" />
             <canvas class="analysis-camera-overlay" aria-label="HD Map投影"></canvas>
@@ -5519,6 +5523,9 @@ function analysisTimelineIssues() {
   if (!analysisFrames(timeline).length) issues.push("No supported image frames were extracted; telemetry playback remains available.");
   if (!(timeline.controls || []).length) issues.push("No control command samples were found.");
   if (!(timeline.modes || []).length) issues.push("No operation mode samples were found.");
+  if (timeline.e2e?.mode && !(timeline.e2e.predictions || []).length) {
+    issues.push("E2E inference produced no prediction samples. Check model/input compatibility and the analysis task log.");
+  }
   if (!(timeline.speeds || []).length && !analysisTrajectory(timeline).samples.some((sample) => Number.isFinite(Number(sample.speed_mps)))) issues.push("No measured or commanded speed samples were found.");
   if (!analysisTrajectory(timeline).samples.length && state.analysis.detail?.trajectory_mode !== "none") issues.push("No synchronized trajectory was produced. Check recorded poses or the offline localization log.");
   if (state.analysis.mapDetail && !analysisMapFingerprintMatches()) issues.push("The Map fingerprint no longer matches this result; the map overlay is suppressed.");
