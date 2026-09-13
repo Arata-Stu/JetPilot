@@ -5613,6 +5613,10 @@ function analysisImageChannels() {
   const detailTopics = state.analysis.detail?.topics || {};
   const manifestImageTopics = Array.isArray(detailTopics.image_topics) ? detailTopics.image_topics : [];
   const channelSet = new Set(manifestImageTopics);
+  const eventPreview = state.analysis.timeline?.event_tensor_preview || {};
+  if (eventPreview.enabled && Number(eventPreview.generated) > 0 && eventPreview.virtual_image_topic) {
+    channelSet.add(String(eventPreview.virtual_image_topic));
+  }
   const frames = analysisFrames();
   const sampleCount = Math.min(frames.length, 100);
   for (let i = 0; i < sampleCount; i += 1) {
@@ -5739,6 +5743,22 @@ function analysisChannelPayloadAt(frames, index, channel, primaryTopic) {
       };
     }
   }
+  // Representative event previews are intentionally sparse. Before the first
+  // sample, show the nearest future preview instead of a featureless black tile.
+  for (let cursor = index + 1; cursor < frames.length; cursor += 1) {
+    const frame = frames[cursor];
+    const channelPayload = frame?.channels?.[channel];
+    if (channelPayload?.path) {
+      return {
+        ...channelPayload,
+        frameIndex: cursor,
+        frameTime: Number(frame.t || 0),
+        path: channelPayload.path,
+        stale: true,
+        future: true,
+      };
+    }
+  }
   return null;
 }
 
@@ -5815,7 +5835,8 @@ function updateAnalysisMultiFrame(frames, index, time, channels, selectedChannel
       const delta = Number(payload.delta_ms || 0);
       const parts = [];
       if (channel === primaryTopic) parts.push("clock");
-      if (payload.stale && age > 0.001) parts.push(`hold ${age.toFixed(2)}s`);
+      if (payload.future) parts.push(`next ${Math.max(0, Number(payload.frameTime || 0) - time).toFixed(2)}s`);
+      else if (payload.stale && age > 0.001) parts.push(`hold ${age.toFixed(2)}s`);
       else if (delta) parts.push(`${delta >= 0 ? "+" : ""}${delta}ms`);
       captionMeta.textContent = parts.join(" / ");
     }
@@ -5908,10 +5929,10 @@ function updateAnalysisFrame(time, force = false) {
   if (grid) grid.classList.remove("visible");
 
   const currentFrame = frames[index];
-  const hasChannel = selectedChannel && (
-    selectedChannel === primaryTopic
-    || (currentFrame?.channels && Boolean(currentFrame.channels[selectedChannel]))
-  );
+  const selectedPayload = selectedChannel
+    ? analysisChannelPayloadAt(frames, index, selectedChannel, primaryTopic)
+    : null;
+  const hasChannel = Boolean(selectedPayload);
 
   if (selectedChannel && !hasChannel) {
     // Keep current image visible to prevent blackout; update frame timestamp info
@@ -5925,8 +5946,11 @@ function updateAnalysisFrame(time, force = false) {
     return;
   }
 
-  const url = analysisAssetUrl(currentFrame, selectedChannel);
-  const frameKey = `${index}|${selectedChannel || ""}|${url}`;
+  const url = selectedPayload
+    ? analysisAssetUrl({ path: selectedPayload.path })
+    : analysisAssetUrl(currentFrame, selectedChannel);
+  const payloadFrameIndex = Number(selectedPayload?.frameIndex ?? index);
+  const frameKey = `${payloadFrameIndex}|${selectedChannel || ""}|${url}`;
   if (state.analysis.pendingFrameKey && !force) {
     const frameTime = $("analysis-frame-time");
     if (frameTime) {
@@ -5960,7 +5984,7 @@ function updateAnalysisFrame(time, force = false) {
         targetImg.onload = null;
         targetImg.onerror = null;
         targetImg.src = url;
-        targetImg.dataset.projectionFrameIndex=String(index);
+        targetImg.dataset.projectionFrameIndex=String(payloadFrameIndex);
         targetImg.dataset.projectionChannel=selectedChannel || "";
         targetImg.classList.add("visible");
         if (activeImg && activeImg !== targetImg) {
@@ -6005,14 +6029,19 @@ function updateAnalysisFrame(time, force = false) {
     }
   }
 
-  const channelInfo = selectedChannel && currentFrame?.channels?.[selectedChannel];
+  const channelInfo = selectedPayload;
   const deltaStr = channelInfo && Number.isFinite(channelInfo.delta_ms) && channelInfo.delta_ms !== 0
     ? ` (${channelInfo.delta_ms >= 0 ? "+" : ""}${channelInfo.delta_ms}ms)`
     : "";
+  const sparsePreviewStr = channelInfo?.future
+    ? ` (next preview +${Math.max(0, Number(channelInfo.frameTime || 0) - time).toFixed(2)}s)`
+    : channelInfo?.stale && Number(channelInfo.frameTime || 0) < time
+      ? ` (holding preview from ${formatAnalysisClock(Number(channelInfo.frameTime || 0))})`
+      : "";
 
   const frameTime = $("analysis-frame-time");
   if (frameTime) {
-    frameTime.textContent = `${formatAnalysisClock(time)} / frame ${index + 1} of ${frames.length}${deltaStr}`;
+    frameTime.textContent = `${formatAnalysisClock(time)} / frame ${index + 1} of ${frames.length}${deltaStr}${sparsePreviewStr}`;
   }
 }
 

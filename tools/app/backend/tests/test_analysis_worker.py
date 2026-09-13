@@ -72,7 +72,9 @@ class SnapshotTrajectoryTests(unittest.TestCase):
             preview.add_packet(message, 3_000_000)
             image, stats = preview.render(3_000_000)
 
-        self.assertEqual(image.shape, (6, 12, 3))
+        # Four tensor channels plus two aggregate cells are laid out as 3x2,
+        # with a two-pixel separator between cells.
+        self.assertEqual(image.shape, (8, 16, 3))
         self.assertEqual(stats["channels"], 4)
         self.assertEqual(stats["events"], 2)
         self.assertGreater(int(image[:3, :, 0].max()), 0)

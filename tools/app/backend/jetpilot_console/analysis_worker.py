@@ -1348,28 +1348,61 @@ class _EventTensorPreview:
                 np.add.at(tensors, (bins + polarity_offset, y, x), 1.0)
             event_count += int(valid.sum())
 
-        peak = max(float(tensors.max()), 1.0)
-        intensity = np.rint(np.log1p(tensors) * (255.0 / np.log1p(peak))).astype(np.uint8)
-        image = np.zeros((self.height * 2, self.width * (self.bins + 1), 3), dtype=np.uint8)
-        for bin_index in range(self.bins):
-            x0 = bin_index * self.width
-            x1 = x0 + self.width
-            image[: self.height, x0:x1, 0] = intensity[bin_index]
-            image[self.height :, x0:x1, 2] = intensity[self.bins + bin_index]
-        aggregate_x = self.bins * self.width
         positive_sum = tensors[: self.bins].sum(axis=0)
         negative_sum = tensors[self.bins :].sum(axis=0)
+        peak = max(float(tensors.max()), 1.0)
+        intensity = np.rint(
+            np.log1p(tensors) * (255.0 / np.log1p(peak))
+        ).astype(np.uint8)
         aggregate_peak = max(float(positive_sum.max()), float(negative_sum.max()), 1.0)
         aggregate_scale = 255.0 / np.log1p(aggregate_peak)
-        image[: self.height, aggregate_x:, 0] = np.rint(
+        aggregate_positive = np.rint(
             np.log1p(positive_sum) * aggregate_scale
         ).astype(np.uint8)
-        image[self.height :, aggregate_x:, 2] = np.rint(
+        aggregate_negative = np.rint(
             np.log1p(negative_sum) * aggregate_scale
         ).astype(np.uint8)
 
-        self.generated += 1
-        self.next_preview_ns = timestamp_ns + self.preview_interval_ns
+        # A 2 x (B + 1) strip becomes almost invisible in the Console when B=10
+        # (roughly 10:1 aspect ratio). Keep every one of the 2B channels separate,
+        # but arrange them and the two polarity aggregates in a near-square grid.
+        # Channel order is positive bin 0..B-1, negative bin 0..B-1, then the
+        # positive and negative aggregate cells.
+        cell_count = 2 * self.bins + 2
+        columns = max(1, int(math.ceil(math.sqrt(cell_count))))
+        rows = int(math.ceil(cell_count / columns))
+        gap = 2
+        image = np.zeros(
+            (
+                rows * self.height + max(rows - 1, 0) * gap,
+                columns * self.width + max(columns - 1, 0) * gap,
+                3,
+            ),
+            dtype=np.uint8,
+        )
+
+        cells: list[tuple[object, int]] = [
+            (intensity[index], 0) for index in range(self.bins)
+        ]
+        cells.extend(
+            (intensity[self.bins + index], 2) for index in range(self.bins)
+        )
+        cells.extend(((aggregate_positive, 0), (aggregate_negative, 2)))
+        for cell_index, (cell, colour_channel) in enumerate(cells):
+            row = cell_index // columns
+            column = cell_index % columns
+            y0 = row * (self.height + gap)
+            x0 = column * (self.width + gap)
+            image[y0 : y0 + self.height, x0 : x0 + self.width, colour_channel] = cell
+
+        if event_count > 0:
+            self.generated += 1
+            self.next_preview_ns = timestamp_ns + self.preview_interval_ns
+        else:
+            # The first RGB frame can be ordered just before the first event
+            # packet. Retry on the next stride instead of waiting for the next
+            # bag-wide representative preview slot.
+            self.next_preview_ns = timestamp_ns + self.stride_ns
         nonzero = int(np.count_nonzero(tensors))
         return image, {
             "events": event_count,
@@ -1380,7 +1413,10 @@ class _EventTensorPreview:
             "window_ms": self.window_ns / 1e6,
             "stride_ms": self.stride_ns / 1e6,
             "temporal_interpolation": "linear" if self.linear_interpolation else "none",
-            "layout": "top=positive(blue), bottom=negative(red), left=oldest, right=all bins",
+            "layout": (
+                f"grid={columns}x{rows}, positive bins 0..B-1 (blue), "
+                "negative bins 0..B-1 (red), final two cells=polarity aggregates"
+            ),
             "snapshot_timestamp_ns": timestamp_ns,
         }
 
@@ -1749,23 +1785,26 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
 
                 if event_preview is not None and event_preview.should_render(timestamp_ns):
                     preview_image, preview_stats = event_preview.render(timestamp_ns)
-                    preview_name = f"preview_{event_preview.generated - 1:04d}.jpg"
-                    preview_rel_path = (
-                        f"frames/{topic_slugs[EVENT_TENSOR_PREVIEW_TOPIC]}/{preview_name}"
-                    )
-                    preview_width, preview_height = _write_jpeg(
-                        analysis_dir / preview_rel_path, preview_image, options.jpeg_quality
-                    )
-                    latest_event_preview = {
-                        "path": preview_rel_path,
-                        "width": preview_width,
-                        "height": preview_height,
-                        "timestamp_ns": int(preview_stats["snapshot_timestamp_ns"]),
-                        "stats": preview_stats,
-                    }
-                    event_preview_samples.append(
-                        {"_timestamp_ns": int(preview_stats["snapshot_timestamp_ns"]), **preview_stats}
-                    )
+                    # Skip a visually blank first snapshot when the primary
+                    # camera precedes the first usable event window.
+                    if int(preview_stats["events"]) > 0:
+                        preview_name = f"preview_{event_preview.generated - 1:04d}.jpg"
+                        preview_rel_path = (
+                            f"frames/{topic_slugs[EVENT_TENSOR_PREVIEW_TOPIC]}/{preview_name}"
+                        )
+                        preview_width, preview_height = _write_jpeg(
+                            analysis_dir / preview_rel_path, preview_image, options.jpeg_quality
+                        )
+                        latest_event_preview = {
+                            "path": preview_rel_path,
+                            "width": preview_width,
+                            "height": preview_height,
+                            "timestamp_ns": int(preview_stats["snapshot_timestamp_ns"]),
+                            "stats": preview_stats,
+                        }
+                        event_preview_samples.append(
+                            {"_timestamp_ns": int(preview_stats["snapshot_timestamp_ns"]), **preview_stats}
+                        )
                 if latest_event_preview is not None:
                     channels_payload[EVENT_TENSOR_PREVIEW_TOPIC] = {
                         "path": latest_event_preview["path"],
