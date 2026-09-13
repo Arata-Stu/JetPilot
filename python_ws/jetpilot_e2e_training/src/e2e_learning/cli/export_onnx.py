@@ -142,16 +142,27 @@ def main(cfg: DictConfig) -> None:
 
     output_name = output_names[0]
     onnx_path = output_dir / str(cfg.export.onnx_filename)
+    requested_opset = int(cfg.export.opset_version)
+    # Current PyTorch lowers GRUCell gate chunking to Split with the
+    # num_outputs attribute. That attribute is part of Split-18, and an
+    # opset-17 graph is rejected by ONNX Runtime as INVALID_GRAPH.
+    opset_version = max(requested_opset, 18) if is_async_rgb_evs else requested_opset
     torch.onnx.export(
         export_model,
         inputs,
         onnx_path,
         input_names=input_names,
         output_names=output_names,
-        opset_version=int(cfg.export.opset_version),
+        opset_version=opset_version,
         dynamic_axes=None,
         external_data=False,
     )
+    if is_async_rgb_evs:
+        # Fail the export task immediately if the recurrent graph cannot be
+        # consumed by the same runtime used by Console Offline Analysis.
+        import onnxruntime as ort
+
+        ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
 
     if is_async_rgb_evs:
         output_metadata = {
@@ -206,6 +217,7 @@ def main(cfg: DictConfig) -> None:
 
     metadata = {
         "format_version": 2,
+        "opset_version": opset_version,
         "model_name": str(run_cfg.run.name),
         "image_topic": str(run_cfg.data.image_topic),
         "modality": (
