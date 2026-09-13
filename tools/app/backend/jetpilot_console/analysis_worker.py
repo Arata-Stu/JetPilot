@@ -1254,7 +1254,9 @@ class _EventTensorPreview:
         self.decoded_events = 0
         self.first_event_ns: int | None = None
         self.latest_event_ns: int | None = None
-        self.clock_source = "event_packet_header"
+        self.latest_packet_bag_timestamp_ns: int | None = None
+        self.latest_packet_header_timestamp_ns: int | None = None
+        self.clock_source = "sensor_time_latest_available"
 
     def add_packet(self, message: Any, bag_timestamp_ns: int) -> None:
         self.decoder.decode_bytes(
@@ -1266,20 +1268,15 @@ class _EventTensorPreview:
             return
         np = self.np
         sensor_us = np.asarray(events["t"], dtype=np.int64)
-        # Match EventTensorEncoderNode::on_packet(): the decoded sensor clock is
-        # translated to ROS time by anchoring the newest event to EventPacket's
-        # header stamp. rosbag record time includes recorder/transport jitter and
-        # made short 50 ms windows intermittently sparse during offline replay.
-        packet_header_ns = _stamp_ns(message)
-        if packet_header_ns is not None and packet_header_ns > 0:
-            packet_reference_ns = int(packet_header_ns)
-            self.clock_source = "event_packet_header"
-        else:
-            packet_reference_ns = int(bag_timestamp_ns)
-            self.clock_source = "bag_timestamp_fallback"
-        event_ns = sensor_us * 1000 + (
-            packet_reference_ns - int(sensor_us[-1]) * 1000
-        )
+        # Match the runtime encoder's representation path: windowing and binning
+        # stay entirely in the continuous event-sensor clock. Per-packet ROS/bag
+        # arrival jitter must never be injected into 5 ms temporal bins.
+        event_ns = sensor_us * 1000
+        if self.latest_event_ns is not None and int(event_ns[0]) < self.latest_event_ns:
+            # The C++ encoder resets its rolling state when sensor time moves
+            # backwards (for example after a decoder reset).
+            self.chunks.clear()
+            self.first_event_ns = None
         self.source_width = int(message.width)
         self.source_height = int(message.height)
         self.chunks.append(
@@ -1293,8 +1290,16 @@ class _EventTensorPreview:
         if self.first_event_ns is None:
             self.first_event_ns = int(event_ns[0])
         self.latest_event_ns = int(event_ns[-1])
+        self.latest_packet_bag_timestamp_ns = int(bag_timestamp_ns)
+        packet_header_ns = _stamp_ns(message)
+        self.latest_packet_header_timestamp_ns = (
+            int(packet_header_ns)
+            if packet_header_ns is not None and packet_header_ns > 0 else None
+        )
         self.decoded_events += len(events)
-        oldest = packet_reference_ns - self.window_ns
+        # The most recent complete stride boundary can lag the newest decoded
+        # event by almost one stride, so retain window + stride history.
+        oldest = self.latest_event_ns - self.window_ns - self.stride_ns
         while self.chunks and int(self.chunks[0][0][-1]) < oldest:
             self.chunks.popleft()
 
@@ -1307,15 +1312,18 @@ class _EventTensorPreview:
     def render(self, timestamp_ns: int, *, timeline_timestamp_ns: int | None = None):
         np = self.np
         requested_timestamp_ns = int(timestamp_ns)
-        if self.first_event_ns is not None and timestamp_ns >= self.first_event_ns:
-            timestamp_ns = self.first_event_ns + (
-                (timestamp_ns - self.first_event_ns) // self.stride_ns
+        # RGB selects the latest causally available event state. The tensor
+        # window itself remains in sensor time, just like EventTensorEncoderNode.
+        window_end_ns = int(self.latest_event_ns or 0)
+        if self.first_event_ns is not None and window_end_ns >= self.first_event_ns:
+            window_end_ns = self.first_event_ns + (
+                (window_end_ns - self.first_event_ns) // self.stride_ns
             ) * self.stride_ns
-        start_ns = timestamp_ns - self.window_ns
+        start_ns = window_end_ns - self.window_ns
         tensors = np.zeros((2 * self.bins, self.height, self.width), dtype=np.float32)
         event_count = 0
         for times, source_x, source_y, polarity in self.chunks:
-            selected = (times >= start_ns) & (times < timestamp_ns)
+            selected = (times >= start_ns) & (times < window_end_ns)
             if not bool(selected.any()):
                 continue
             times_selected = times[selected]
@@ -1426,13 +1434,19 @@ class _EventTensorPreview:
                 "negative bins 0..B-1 (red), final two cells=polarity aggregates"
             ),
             "clock_source": self.clock_source,
-            "window_end_timestamp_ns": timestamp_ns,
+            "window_end_sensor_timestamp_us": window_end_ns // 1000,
             "requested_rgb_timestamp_ns": requested_timestamp_ns,
-            "latest_event_timestamp_ns": self.latest_event_ns,
-            "latest_event_age_ms": (
-                (timestamp_ns - self.latest_event_ns) / 1e6
-                if self.latest_event_ns is not None else None
+            "latest_event_sensor_timestamp_us": (
+                self.latest_event_ns // 1000 if self.latest_event_ns is not None else None
             ),
+            "latest_event_age_ms": (
+                (
+                    int(timeline_timestamp_ns) - self.latest_packet_bag_timestamp_ns
+                ) / 1e6
+                if timeline_timestamp_ns is not None
+                and self.latest_packet_bag_timestamp_ns is not None else None
+            ),
+            "latest_packet_header_timestamp_ns": self.latest_packet_header_timestamp_ns,
             "snapshot_timestamp_ns": (
                 int(timeline_timestamp_ns)
                 if timeline_timestamp_ns is not None else requested_timestamp_ns

@@ -35,7 +35,7 @@ class SnapshotTrajectoryTests(unittest.TestCase):
             self.skipTest("NumPy is unavailable")
 
         events = np.zeros(
-            2,
+            3,
             dtype={
                 "names": ["x", "y", "p", "t"],
                 "formats": ["<u2", "<u2", "i1", "<i4"],
@@ -43,10 +43,12 @@ class SnapshotTrajectoryTests(unittest.TestCase):
                 "itemsize": 12,
             },
         )
-        events["x"] = [1, 2]
-        events["y"] = [1, 2]
-        events["p"] = [1, 0]
-        events["t"] = [1000, 2000]
+        events["x"] = [1, 2, 3]
+        events["y"] = [1, 2, 1]
+        events["p"] = [1, 0, 1]
+        # The final event advances the complete-window boundary and is itself
+        # excluded by the encoder's half-open [start, end) convention.
+        events["t"] = [1000, 2000, 3000]
 
         class FakeDecoder:
             def decode_bytes(self, *args):
@@ -76,7 +78,7 @@ class SnapshotTrajectoryTests(unittest.TestCase):
                 ),
             )
             preview.add_packet(message, 3_000_000)
-            image, stats = preview.render(3_000_000)
+            image, stats = preview.render(3_000_000, timeline_timestamp_ns=3_000_000)
             for frame_index in range(1, 20):
                 self.assertTrue(preview.should_render(3_000_000 + frame_index * 100_000_000))
                 preview.render(3_000_000 + frame_index * 100_000_000)
@@ -87,7 +89,7 @@ class SnapshotTrajectoryTests(unittest.TestCase):
         self.assertEqual(preview.generated, 20)
         self.assertEqual(stats["channels"], 4)
         self.assertEqual(stats["events"], 2)
-        self.assertEqual(stats["clock_source"], "event_packet_header")
+        self.assertEqual(stats["clock_source"], "sensor_time_latest_available")
         self.assertEqual(stats["latest_event_age_ms"], 0.0)
         self.assertGreater(int(image[:3, :, 0].max()), 0)
         self.assertGreater(int(image[3:, :, 2].max()), 0)
