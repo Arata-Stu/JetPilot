@@ -157,15 +157,20 @@ server側checkpointの埋め込みconfigに合わせて上書きしてくださ�
 同一のhistogramになります。
 
 既定の`cuda` backendでは、`8192 events OR 1 ms`で新着eventだけをpinned bufferから
-GPUへ送り、GPU常駐ringを更新します。TensorRTのraw出力を前回推論の完了通知として使い、
-推論中の入力を変更せず、完了後に最新ringから次のFP32 snapshotを生成する
-`consumer_driven`方式です。同時in-flight推論は1件で、古いsnapshotをqueueしません。
-raw出力が来ない場合はwatchdogで復旧します。現行NITROS TensorListとの互換性のため
-snapshotはFP32とし、TensorRT engine内部では従来どおりFP16最適化を利用できます。
+GPUへ送り、GPU常駐ringを更新します。`periodic`方式ではsensor時刻をsteady clockで
+補間し、eventがない区間も`stride`ごとに半開区間の窓を前進させます。同じTensorの
+再送ではなく、古いbinが順に抜けて最終的にゼロになるため、E2E更新周期を一定に保てます。
+timer遅延で周期を飛ばした回数は`fixed_rate_skipped_windows`へ出力されます。
+
+`consumer_driven`を明示した場合はTensorRTのraw出力を前回推論の完了通知として使います。
+同時in-flight推論は1件で、古いsnapshotをqueueしません。raw出力が来ない場合はwatchdogで
+復旧します。現行NITROS TensorListとの互換性のためsnapshotはFP32とし、TensorRT engine
+内部では従来どおりFP16最適化を利用できます。
 
 CUDA backendは現在、厳密なrolling histogramである
 `temporal_interpolation:=none`に対応します。線形補間が必要な場合は
-`event_representation_backend:=cpu`を指定します。
+`event_representation_backend:=cpu`を指定します。CUDAでは`window/B`が整数µsで、
+`stride`がそのbin幅の整数倍になる設定が必要です。
 
 ### RGB-EVS非同期latent state更新
 
@@ -341,12 +346,12 @@ ros2 launch jetpilot_e2e_inference e2e_tensor_rt.launch.py \
   event_tensor_mode:=true \
   event_topic:=/event_camera/events \
   event_bins:=10 \
-  event_window_ms:=10.0 \
-  event_stride_ms:=1.0 \
+  event_window_ms:=40.0 \
+  event_stride_ms:=4.0 \
   event_polarity_mode:=separate \
   event_temporal_interpolation:=none \
   event_representation_backend:=cuda \
-  event_inference_policy:=consumer_driven \
+  event_inference_policy:=periodic \
   event_cuda_update_us:=1000 \
   event_cuda_events_per_transfer:=8192 \
   event_tensor_debug:=true \
@@ -361,14 +366,15 @@ bringup全体から使う場合は同じ設定を`e2e_` prefix付きで指定し
   --set e2e_event_tensor_mode:=true \
   --set sensor_kit_silky_evcam_event_image_enabled:=false \
   --set e2e_event_bins:=10 \
-  --set e2e_event_window_ms:=10.0 \
-  --set e2e_event_stride_ms:=1.0
+  --set e2e_event_window_ms:=40.0 \
+  --set e2e_event_stride_ms:=4.0 \
+  --set e2e_event_inference_policy:=periodic
 ```
 
 診断は`ros2 topic echo /e2e/event_tensor/diagnostics`で確認できます。
 `packet_process_ms_avg/max`、`decode_ms_avg/max`、`representation_ms_avg/max`、
 `transfer_enqueue_publish_ms_avg/max`、event/tensor rate、queue内event数、
-CUDA update、TensorRT round-trip、sensor age、watchdog、`full_windows`と
+CUDA update、TensorRT round-trip、sensor age、watchdog、固定周期skip、`full_windows`と
 `incremental_windows`などを1秒ごとにpublishします。
 `event_tensor_debug:=true`では同じ概要をログにも出します。transfer値はGPU copy完了待ちを
 含まず、CUDA転送のenqueueとpublishまでのCPU時間です。

@@ -59,8 +59,8 @@ EventTensorEncoderNode::EventTensorEncoderNode(const rclcpp::NodeOptions & optio
   bins_ = declare_parameter<std::int64_t>("bins", 10);
   width_ = declare_parameter<std::int64_t>("width", 212);
   height_ = declare_parameter<std::int64_t>("height", 120);
-  const auto window_ms = declare_parameter<double>("window_ms", 50.0);
-  const auto stride_ms = declare_parameter<double>("stride_ms", 5.0);
+  const auto window_ms = declare_parameter<double>("window_ms", 40.0);
+  const auto stride_ms = declare_parameter<double>("stride_ms", 4.0);
   polarity_mode_ = declare_parameter<std::string>("polarity_mode", "separate");
   polarity_layout_ = declare_parameter<std::string>("polarity_layout", "polarity_major");
   temporal_interpolation_ =
@@ -170,6 +170,21 @@ EventTensorEncoderNode::EventTensorEncoderNode(const rclcpp::NodeOptions & optio
   }
   tensor_bytes_ = tensor_elements_ * sizeof(float);
   tensor_buffer_.assign(tensor_elements_, 0.0F);
+
+  if (representation_backend_ == "cuda") {
+    if (stride_us_ > window_us_) {
+      throw std::invalid_argument("CUDA fixed-rate representation requires stride <= window");
+    }
+    if (window_us_ % bins_ != 0) {
+      throw std::invalid_argument("CUDA representation requires window_us divisible by bins");
+    }
+    const auto bin_width_us = window_us_ / bins_;
+    if (stride_us_ % bin_width_us != 0) {
+      throw std::invalid_argument(
+              "CUDA fixed-rate representation requires stride_us to be an integer multiple "
+              "of window_us/bins");
+    }
+  }
 
   const auto validate_channel_parameter = [this](
       const std::vector<double> & values, const char * name, const bool positive) {
@@ -285,13 +300,17 @@ EventTensorEncoderNode::EventTensorEncoderNode(const rclcpp::NodeOptions & optio
       std::bind(&EventTensorEncoderNode::on_cuda_timer, this));
   }
 
+  const auto reported_shift_bins = representation_backend_ == "cuda" ?
+    static_cast<std::size_t>(stride_us_ / (window_us_ / bins_)) : shift_bins_;
+  const auto reported_incremental = use_incremental_ ||
+    (representation_backend_ == "cuda" && stride_us_ < window_us_);
   RCLCPP_INFO(
     get_logger(),
     "Event tensor encoder: shape=[1,%zu,%ld,%ld], bins=%ld, window=%.3fms, "
     "stride=%.3fms, backend=%s, policy=%s, interpolation=%s, incremental=%s (shift=%zu)",
     channels_, height_, width_, bins_, window_ms, stride_ms,
     representation_backend_.c_str(), inference_policy_.c_str(), temporal_interpolation_.c_str(),
-    use_incremental_ ? "enabled" : "disabled", shift_bins_);
+    reported_incremental ? "enabled" : "disabled", reported_shift_bins);
 }
 
 EventTensorEncoderNode::~EventTensorEncoderNode()
@@ -434,9 +453,16 @@ void EventTensorEncoderNode::process_events(
         reset_state("event timestamp moved backwards");
       }
       last_event_us_ = event.t;
+      if (next_publish_us_ == 0) {
+        next_publish_us_ = event.t + window_us_;
+      }
       cuda_pending_events_.push_back(CudaEvent{
         static_cast<std::int64_t>(event.t), event.x, event.y,
         static_cast<std::uint8_t>(event.p != 0), {0, 0, 0}});
+    }
+    if (!events.empty()) {
+      last_event_sensor_update_time_ = std::chrono::steady_clock::now();
+      has_last_event_sensor_update_ = true;
     }
     queued_events_gauge_.store(cuda_pending_events_.size(), std::memory_order_relaxed);
     if (cuda_pending_events_.size() >= cuda_events_per_transfer_) {
@@ -496,19 +522,9 @@ void EventTensorEncoderNode::flush_cuda_events()
     cuda_flush_time_ns_.fetch_add(elapsed_ns, std::memory_order_relaxed);
     update_max(cuda_flush_time_max_ns_, elapsed_ns);
 
-    if (inference_policy_ == "periodic") {
-      const auto latest = static_cast<Timestamp>(cuda_backend_->latest_timestamp_us());
-      if (next_publish_us_ == 0) {
-        next_publish_us_ = latest;
-      }
-      if (latest >= next_publish_us_) {
-        maybe_publish_cuda_snapshot();
-        do {
-          next_publish_us_ += stride_us_;
-        } while (next_publish_us_ <= latest);
-      }
-    } else {
-      maybe_publish_cuda_snapshot();
+    if (inference_policy_ == "consumer_driven") {
+      maybe_publish_cuda_snapshot(
+        static_cast<Timestamp>(cuda_backend_->latest_window_end_us()));
     }
   } catch (const std::exception & error) {
     publish_errors_.fetch_add(1, std::memory_order_relaxed);
@@ -517,10 +533,11 @@ void EventTensorEncoderNode::flush_cuda_events()
   }
 }
 
-void EventTensorEncoderNode::maybe_publish_cuda_snapshot()
+void EventTensorEncoderNode::maybe_publish_cuda_snapshot(const Timestamp window_end_us)
 {
   if (
-    !cuda_backend_ || !cuda_ring_dirty_ || !cuda_backend_->ready() ||
+    !cuda_backend_ || window_end_us <= 0 || !cuda_backend_->ready() ||
+    (inference_policy_ == "consumer_driven" && !cuda_ring_dirty_) ||
     (inference_policy_ == "consumer_driven" && inference_in_flight_))
   {
     return;
@@ -537,11 +554,11 @@ void EventTensorEncoderNode::maybe_publish_cuda_snapshot()
         tensor_name_, memory_pool_, shape,
         nvidia::isaac_ros::nitros::NitrosDataType::kFloat32, *cuda_stream_);
       cuda_backend_->snapshot(
-        reinterpret_cast<float *>(write_handle.get_ptr()), *cuda_stream_);
+        reinterpret_cast<float *>(write_handle.get_ptr()), window_end_us, *cuda_stream_);
     }
 
-    const auto timestamp_us = cuda_backend_->latest_timestamp_us();
-    auto timestamp_ns = ros_timestamp_ns(static_cast<Timestamp>(timestamp_us));
+    const auto timestamp_us = window_end_us;
+    auto timestamp_ns = ros_timestamp_ns(window_end_us);
     timestamp_ns = std::max(
       timestamp_ns, last_snapshot_header_timestamp_ns_ + std::int64_t{1});
     std_msgs::msg::Header header;
@@ -616,7 +633,8 @@ void EventTensorEncoderNode::on_inference_output(TensorList::ConstSharedPtr mess
   }
   inference_feedback_count_.fetch_add(1, std::memory_order_relaxed);
   inference_in_flight_ = false;
-  maybe_publish_cuda_snapshot();
+  maybe_publish_cuda_snapshot(
+    static_cast<Timestamp>(cuda_backend_->latest_window_end_us()));
 }
 
 void EventTensorEncoderNode::on_cuda_timer()
@@ -630,6 +648,28 @@ void EventTensorEncoderNode::on_cuda_timer()
     flush_cuda_events();
   }
   if (
+    inference_policy_ == "periodic" && cuda_backend_ && cuda_backend_->ready() &&
+    next_publish_us_ > 0 && has_last_event_sensor_update_)
+  {
+    // Advance the event-time clock even when no CD events arrive. Publishing
+    // the scheduled half-open window (instead of replaying the last tensor)
+    // lets old bins decay to zero while keeping a deterministic output rate.
+    const auto estimated_sensor_us = last_event_us_ + static_cast<Timestamp>(
+      std::chrono::duration_cast<std::chrono::microseconds>(
+        now_steady - last_event_sensor_update_time_).count());
+    if (estimated_sensor_us >= next_publish_us_) {
+      const auto due_windows = static_cast<std::uint64_t>(
+        (estimated_sensor_us - next_publish_us_) / stride_us_) + 1U;
+      const auto publish_end_us = next_publish_us_ +
+        static_cast<Timestamp>(due_windows - 1U) * stride_us_;
+      if (due_windows > 1U) {
+        fixed_rate_skipped_windows_.fetch_add(due_windows - 1U, std::memory_order_relaxed);
+      }
+      maybe_publish_cuda_snapshot(publish_end_us);
+      next_publish_us_ = publish_end_us + stride_us_;
+    }
+  }
+  if (
     inference_policy_ == "consumer_driven" && inference_in_flight_ &&
     std::chrono::duration<double, std::milli>(now_steady - in_flight_started_).count() >=
     inference_watchdog_ms_)
@@ -639,7 +679,8 @@ void EventTensorEncoderNode::on_cuda_timer()
     RCLCPP_WARN_THROTTLE(
       get_logger(), *get_clock(), 5000,
       "TensorRT feedback watchdog expired; waiting for the next updated event snapshot");
-    maybe_publish_cuda_snapshot();
+    maybe_publish_cuda_snapshot(
+      static_cast<Timestamp>(cuda_backend_->latest_window_end_us()));
   }
 }
 
@@ -869,6 +910,7 @@ void EventTensorEncoderNode::reset_state(const char * reason)
   next_publish_us_ = 0;
   previous_window_end_us_ = 0;
   last_event_us_ = 0;
+  has_last_event_sensor_update_ = false;
   in_flight_timestamp_ns_ = 0;
   last_snapshot_event_timestamp_us_ = 0;
   last_snapshot_header_timestamp_ns_ = 0;
@@ -911,6 +953,8 @@ void EventTensorEncoderNode::publish_diagnostics()
   const auto feedback = inference_feedback_count_.exchange(0, std::memory_order_relaxed);
   const auto stale_feedback = stale_feedback_count_.exchange(0, std::memory_order_relaxed);
   const auto watchdog_timeouts = watchdog_timeout_count_.exchange(0, std::memory_order_relaxed);
+  const auto fixed_rate_skipped =
+    fixed_rate_skipped_windows_.exchange(0, std::memory_order_relaxed);
   const auto cuda_flushes = cuda_flush_count_.exchange(0, std::memory_order_relaxed);
   const auto cuda_events = cuda_flush_events_.exchange(0, std::memory_order_relaxed);
   const auto cuda_flush_ns = cuda_flush_time_ns_.exchange(0, std::memory_order_relaxed);
@@ -936,11 +980,14 @@ void EventTensorEncoderNode::publish_diagnostics()
   diagnostic_msgs::msg::DiagnosticStatus status;
   status.name = get_fully_qualified_name() + std::string("/event_tensor_encoder");
   status.hardware_id = "event_camera";
-  status.level = errors == 0 && publish_errors == 0 && watchdog_timeouts == 0 ?
+  status.level =
+    errors == 0 && publish_errors == 0 && watchdog_timeouts == 0 &&
+    fixed_rate_skipped == 0 ?
     diagnostic_msgs::msg::DiagnosticStatus::OK :
     diagnostic_msgs::msg::DiagnosticStatus::WARN;
-  status.message = errors == 0 && publish_errors == 0 && watchdog_timeouts == 0 ? "OK" :
-    "event tensor errors detected";
+  status.message =
+    errors == 0 && publish_errors == 0 && watchdog_timeouts == 0 &&
+    fixed_rate_skipped == 0 ? "OK" : "event tensor deadline or processing issue detected";
   status.values = {
     diagnostic_number("packets_per_s", packets / elapsed_s),
     diagnostic_number("events_per_s", events / elapsed_s),
@@ -980,6 +1027,7 @@ void EventTensorEncoderNode::publish_diagnostics()
     diagnostic_number("inference_feedback", feedback),
     diagnostic_number("stale_inference_feedback", stale_feedback),
     diagnostic_number("watchdog_timeouts", watchdog_timeouts),
+    diagnostic_number("fixed_rate_skipped_windows", fixed_rate_skipped),
     diagnostic_number(
       "inference_round_trip_ms_avg", feedback == 0 ? 0.0 :
       milliseconds(inference_ns) / feedback),
@@ -997,16 +1045,25 @@ void EventTensorEncoderNode::publish_diagnostics()
     diagnostic_value("temporal_interpolation", temporal_interpolation_),
     diagnostic_value("polarity_mode", polarity_mode_),
     diagnostic_value("polarity_layout", polarity_layout_),
-    diagnostic_value("incremental_active", use_incremental_ ? "true" : "false"),
+    diagnostic_value(
+      "incremental_active",
+      (use_incremental_ || (representation_backend_ == "cuda" && stride_us_ < window_us_)) ?
+      "true" : "false"),
     diagnostic_value(
       "pinned_host_staging_active",
       representation_backend_ == "cpu" && std::all_of(
         staging_buffer_pinned_.cbegin(), staging_buffer_pinned_.cend(),
         [](const bool pinned) {return pinned;}) ? "true" : "false"),
-    diagnostic_number("incremental_shift_bins", shift_bins_),
+    diagnostic_number(
+      "incremental_shift_bins",
+      representation_backend_ == "cuda" ?
+      stride_us_ / (window_us_ / bins_) : static_cast<std::int64_t>(shift_bins_)),
     diagnostic_number(
       "incremental_reused_bins",
-      use_incremental_ ? static_cast<std::size_t>(bins_) - shift_bins_ : 0U),
+      representation_backend_ == "cuda" && stride_us_ < window_us_ ?
+      bins_ - stride_us_ / (window_us_ / bins_) :
+      (use_incremental_ ? static_cast<std::int64_t>(bins_) -
+      static_cast<std::int64_t>(shift_bins_) : 0)),
     diagnostic_number("tensor_bytes", tensor_bytes_)
   };
   array.status.push_back(std::move(status));
@@ -1035,10 +1092,12 @@ void EventTensorEncoderNode::publish_diagnostics()
       RCLCPP_INFO(
         get_logger(),
         "event CUDA: updates=%lu events=%lu enqueue avg/max %.3f/%.3fms; "
-        "TRT feedback=%lu round-trip avg/max %.3f/%.3fms watchdog=%lu stale=%lu",
+        "fixed-rate skipped=%lu; TRT feedback=%lu round-trip avg/max %.3f/%.3fms "
+        "watchdog=%lu stale=%lu",
         static_cast<unsigned long>(cuda_flushes), static_cast<unsigned long>(cuda_events),
         cuda_flushes == 0 ? 0.0 : milliseconds(cuda_flush_ns) / cuda_flushes,
-        milliseconds(cuda_flush_max_ns), static_cast<unsigned long>(feedback),
+        milliseconds(cuda_flush_max_ns), static_cast<unsigned long>(fixed_rate_skipped),
+        static_cast<unsigned long>(feedback),
         feedback == 0 ? 0.0 : milliseconds(inference_ns) / feedback,
         milliseconds(inference_max_ns), static_cast<unsigned long>(watchdog_timeouts),
         static_cast<unsigned long>(stale_feedback));

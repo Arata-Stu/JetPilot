@@ -68,6 +68,19 @@ rclcpp_components_register_node(${PROJECT_NAME}_latent_state_manager_node
   EXECUTABLE latent_state_manager_node
 )
 
+if(BUILD_TESTING)
+  add_executable(event_tensor_cuda_backend_test
+    test/event_tensor_cuda_backend_test.cpp
+  )
+  target_compile_features(event_tensor_cuda_backend_test PUBLIC cxx_std_17)
+  target_include_directories(event_tensor_cuda_backend_test PRIVATE include)
+  target_link_libraries(event_tensor_cuda_backend_test
+    ${PROJECT_NAME}_event_tensor_encoder_node
+    CUDA::cudart
+  )
+  add_test(NAME event_tensor_cuda_backend_test COMMAND event_tensor_cuda_backend_test)
+endif()
+
 set_target_properties(
   ${PROJECT_NAME}_control_decoder_node
   ${PROJECT_NAME}_trajectory_decoder_node

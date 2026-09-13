@@ -1211,8 +1211,8 @@ class AnalysisOptions:
     event_tensor_preview: bool = False
     event_topic: str = "/event_camera/events"
     event_bins: int = 10
-    event_window_ms: float = 50.0
-    event_stride_ms: float = 10.0
+    event_window_ms: float = 40.0
+    event_stride_ms: float = 4.0
     event_linear_interpolation: bool = False
     event_output_width: int = 212
     event_output_height: int = 120
@@ -2444,8 +2444,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--event-tensor-preview", action="store_true")
     parser.add_argument("--event-topic", default="/event_camera/events")
     parser.add_argument("--event-bins", type=int, default=10)
-    parser.add_argument("--event-window-ms", type=float, default=50.0)
-    parser.add_argument("--event-stride-ms", type=float, default=10.0)
+    parser.add_argument("--event-window-ms", type=float, default=40.0)
+    parser.add_argument("--event-stride-ms", type=float, default=4.0)
     parser.add_argument("--event-linear-interpolation", action="store_true")
     parser.add_argument("--event-output-width", type=int, default=212)
     parser.add_argument("--event-output-height", type=int, default=120)

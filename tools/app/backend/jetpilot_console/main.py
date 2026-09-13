@@ -1822,8 +1822,8 @@ find {shlex.quote(record_root)} -name metadata.yaml -printf '%TY-%Tm-%Td %TH:%TM
                 event_tensor_preview=event_tensor_preview,
                 event_topic=str(resolved.get("event_topic") or "/event_camera/events"),
                 event_bins=int(resolved.get("event_bins") or 10),
-                event_window_ms=float(resolved.get("event_window_ms") or 50.0),
-                event_stride_ms=float(resolved.get("event_stride_ms") or 10.0),
+                event_window_ms=float(resolved.get("event_window_ms") or 40.0),
+                event_stride_ms=float(resolved.get("event_stride_ms") or 4.0),
                 event_linear_interpolation=bool(
                     resolved.get("event_linear_interpolation", False)
                 ),

@@ -53,7 +53,7 @@ private:
   void on_packet(EventPacket::UniquePtr packet);
   void process_events(const std::vector<Metavision::EventCD> & events);
   void flush_cuda_events();
-  void maybe_publish_cuda_snapshot();
+  void maybe_publish_cuda_snapshot(Timestamp window_end_us);
   void on_inference_output(TensorList::ConstSharedPtr message);
   void on_cuda_timer();
   void publish_window(Timestamp window_end_us, const std::string & frame_id);
@@ -76,8 +76,8 @@ private:
   std::int64_t bins_{10};
   std::int64_t width_{0};
   std::int64_t height_{0};
-  std::int64_t window_us_{50000};
-  std::int64_t stride_us_{5000};
+  std::int64_t window_us_{40000};
+  std::int64_t stride_us_{4000};
   std::string polarity_mode_{"separate"};
   std::string polarity_layout_{"polarity_major"};
   std::string temporal_interpolation_{"none"};
@@ -121,7 +121,9 @@ private:
   std::string frame_id_;
   std::chrono::steady_clock::time_point last_cuda_flush_time_;
   std::chrono::steady_clock::time_point last_event_arrival_time_;
+  std::chrono::steady_clock::time_point last_event_sensor_update_time_;
   bool has_last_event_arrival_{false};
+  bool has_last_event_sensor_update_{false};
   std::chrono::steady_clock::time_point in_flight_started_;
   std::int64_t in_flight_timestamp_ns_{0};
   std::int64_t last_snapshot_event_timestamp_us_{0};
@@ -153,6 +155,7 @@ private:
   std::atomic<std::uint64_t> inference_feedback_count_{0};
   std::atomic<std::uint64_t> stale_feedback_count_{0};
   std::atomic<std::uint64_t> watchdog_timeout_count_{0};
+  std::atomic<std::uint64_t> fixed_rate_skipped_windows_{0};
   std::atomic<std::uint64_t> cuda_flush_count_{0};
   std::atomic<std::uint64_t> cuda_flush_events_{0};
   std::atomic<std::uint64_t> cuda_flush_time_ns_{0};

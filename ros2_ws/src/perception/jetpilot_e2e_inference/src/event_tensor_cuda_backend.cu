@@ -21,7 +21,7 @@ void check_cuda(const cudaError_t result, const char * operation)
 }
 
 __global__ void clear_time_slot(
-  float * ring, const std::size_t pixels, const std::size_t bins,
+  float * ring, const std::size_t pixels, const std::size_t ring_bins,
   const std::size_t slot, const bool separate, const bool polarity_major)
 {
   const auto index = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
@@ -33,14 +33,15 @@ __global__ void clear_time_slot(
   const auto polarity = index / pixels;
   const auto pixel = index % pixels;
   const auto channel = separate ?
-    (polarity_major ? polarity * bins + slot : slot * 2U + polarity) : slot;
+    (polarity_major ? polarity * ring_bins + slot : slot * 2U + polarity) : slot;
   ring[channel * pixels + pixel] = 0.0F;
 }
 
 __global__ void accumulate_events(
   const CudaEvent * events, const std::size_t count, float * ring,
-  const std::size_t width, const std::size_t height, const std::size_t bins,
-  const std::int64_t bin_width_us, const std::int64_t oldest_bin,
+  const std::size_t width, const std::size_t height, const std::size_t ring_bins,
+  const std::int64_t origin_timestamp_us, const std::int64_t bin_width_us,
+  const std::int64_t oldest_bin,
   const bool separate, const bool polarity_major)
 {
   const auto index = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
@@ -48,17 +49,21 @@ __global__ void accumulate_events(
     return;
   }
   const auto event = events[index];
-  if (event.timestamp_us < 0 || event.x >= width || event.y >= height) {
+  if (
+    event.timestamp_us < origin_timestamp_us || event.x >= width ||
+    event.y >= height)
+  {
     return;
   }
-  const auto global_bin = event.timestamp_us / bin_width_us;
+  const auto global_bin = (event.timestamp_us - origin_timestamp_us) / bin_width_us;
   if (global_bin < oldest_bin) {
     return;
   }
-  const auto slot = static_cast<std::size_t>(global_bin % static_cast<std::int64_t>(bins));
+  const auto slot = static_cast<std::size_t>(
+    global_bin % static_cast<std::int64_t>(ring_bins));
   const auto polarity = event.polarity != 0 ? 0U : 1U;
   const auto channel = separate ?
-    (polarity_major ? polarity * bins + slot : slot * 2U + polarity) : slot;
+    (polarity_major ? polarity * ring_bins + slot : slot * 2U + polarity) : slot;
   const auto pixel = static_cast<std::size_t>(event.y) * width + event.x;
   const auto value = !separate && event.polarity == 0 ? -1.0F : 1.0F;
   atomicAdd(ring + channel * width * height + pixel, value);
@@ -66,8 +71,9 @@ __global__ void accumulate_events(
 
 __global__ void make_snapshot(
   const float * ring, float * output, const float * means, const float * stddevs,
-  const std::size_t pixels, const std::size_t bins, const std::size_t channels,
-  const std::int64_t newest_bin, const bool separate, const bool polarity_major)
+  const std::size_t pixels, const std::size_t bins, const std::size_t ring_bins,
+  const std::size_t channels, const std::int64_t stored_newest_bin,
+  const std::int64_t window_end_bin, const bool separate, const bool polarity_major)
 {
   const auto index = static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   const auto count = channels * pixels;
@@ -87,14 +93,19 @@ __global__ void make_snapshot(
       temporal_bin = output_channel / 2U;
     }
   }
-  const auto global_bin = newest_bin - static_cast<std::int64_t>(bins - 1U) +
+  // window_end_bin is exclusive, matching [window_end - window, window_end).
+  const auto global_bin = window_end_bin - static_cast<std::int64_t>(bins) +
     static_cast<std::int64_t>(temporal_bin);
   const auto slot = static_cast<std::size_t>(
-    (global_bin % static_cast<std::int64_t>(bins) + static_cast<std::int64_t>(bins)) %
-    static_cast<std::int64_t>(bins));
+    (global_bin % static_cast<std::int64_t>(ring_bins) +
+    static_cast<std::int64_t>(ring_bins)) % static_cast<std::int64_t>(ring_bins));
   const auto input_channel = separate ?
-    (polarity_major ? polarity * bins + slot : slot * 2U + polarity) : slot;
-  output[index] = (ring[input_channel * pixels + pixel] - means[output_channel]) /
+    (polarity_major ? polarity * ring_bins + slot : slot * 2U + polarity) : slot;
+  const auto stored_oldest_bin =
+    stored_newest_bin - static_cast<std::int64_t>(ring_bins - 1U);
+  const auto value = global_bin >= stored_oldest_bin && global_bin <= stored_newest_bin ?
+    ring[input_channel * pixels + pixel] : 0.0F;
+  output[index] = (value - means[output_channel]) /
     stddevs[output_channel];
 }
 
@@ -111,15 +122,20 @@ public:
   : width_(width), height_(height), bins_(bins), separate_(separate),
     polarity_major_(polarity_major), window_us_(window_us),
     bin_width_us_(window_us / static_cast<std::int64_t>(bins)),
+    // Keep one full output window plus one window of look-ahead. Packet decode
+    // can deliver events just beyond a scheduled boundary before the timer
+    // snapshots that boundary; those events must not overwrite its oldest bin.
+    ring_bins_(bins * 2U),
     channels_(bins * (separate ? 2U : 1U)), pixels_(width * height),
     tensor_bytes_(channels_ * pixels_ * sizeof(float)),
+    ring_bytes_(ring_bins_ * (separate ? 2U : 1U) * pixels_ * sizeof(float)),
     batch_capacity_(std::max<std::size_t>(1U, batch_capacity))
   {
     if (window_us_ <= 0 || window_us_ % static_cast<std::int64_t>(bins_) != 0) {
       throw std::invalid_argument("CUDA rolling ring requires window_us divisible by bins");
     }
-    check_cuda(cudaMalloc(&ring_, tensor_bytes_), "cudaMalloc rolling ring");
-    check_cuda(cudaMemset(ring_, 0, tensor_bytes_), "cudaMemset rolling ring");
+    check_cuda(cudaMalloc(&ring_, ring_bytes_), "cudaMalloc rolling ring");
+    check_cuda(cudaMemset(ring_, 0, ring_bytes_), "cudaMemset rolling ring");
 
     std::vector<float> means(channels_);
     std::vector<float> stddevs(channels_);
@@ -169,9 +185,9 @@ public:
   void reset(const cudaStream_t stream)
   {
     last_stream_ = stream;
-    check_cuda(cudaMemsetAsync(ring_, 0, tensor_bytes_, stream), "reset rolling ring");
+    check_cuda(cudaMemsetAsync(ring_, 0, ring_bytes_, stream), "reset rolling ring");
     initialized_ = false;
-    first_timestamp_us_ = 0;
+    origin_timestamp_us_ = 0;
     latest_timestamp_us_ = 0;
     accepted_events_ = 0;
     discarded_events_ = 0;
@@ -188,32 +204,34 @@ public:
       discarded_events_ += events.size();
       return;
     }
-    const auto newest_bin = newest_timestamp / bin_width_us_;
+    if (!initialized_) {
+      origin_timestamp_us_ = events.front().timestamp_us;
+    }
+    const auto newest_bin = (newest_timestamp - origin_timestamp_us_) / bin_width_us_;
     if (!initialized_ || newest_bin < newest_bin_) {
-      check_cuda(cudaMemsetAsync(ring_, 0, tensor_bytes_, stream), "initialize rolling ring");
+      check_cuda(cudaMemsetAsync(ring_, 0, ring_bytes_, stream), "initialize rolling ring");
       initialized_ = true;
       newest_bin_ = newest_bin;
-      first_timestamp_us_ = events.front().timestamp_us;
     } else if (newest_bin > newest_bin_) {
       const auto advance = newest_bin - newest_bin_;
-      if (advance >= static_cast<std::int64_t>(bins_)) {
-        check_cuda(cudaMemsetAsync(ring_, 0, tensor_bytes_, stream), "clear stale rolling ring");
+      if (advance >= static_cast<std::int64_t>(ring_bins_)) {
+        check_cuda(cudaMemsetAsync(ring_, 0, ring_bytes_, stream), "clear stale rolling ring");
       } else {
         constexpr std::size_t threads = 256U;
         const auto clear_count = pixels_ * (separate_ ? 2U : 1U);
         const auto blocks = static_cast<unsigned int>((clear_count + threads - 1U) / threads);
         for (auto global_bin = newest_bin_ + 1; global_bin <= newest_bin; ++global_bin) {
           const auto slot = static_cast<std::size_t>(
-            global_bin % static_cast<std::int64_t>(bins_));
+            global_bin % static_cast<std::int64_t>(ring_bins_));
           clear_time_slot<<<blocks, threads, 0, stream>>>(
-            ring_, pixels_, bins_, slot, separate_, polarity_major_);
+            ring_, pixels_, ring_bins_, slot, separate_, polarity_major_);
         }
         check_cuda(cudaGetLastError(), "launch rolling slot clear kernel");
       }
       newest_bin_ = newest_bin;
     }
 
-    const auto oldest_bin = newest_bin_ - static_cast<std::int64_t>(bins_ - 1U);
+    const auto oldest_bin = newest_bin_ - static_cast<std::int64_t>(ring_bins_ - 1U);
     constexpr std::size_t threads = 256U;
     std::size_t offset = 0U;
     while (offset < events.size()) {
@@ -230,8 +248,8 @@ public:
         "copy new events to GPU");
       const auto blocks = static_cast<unsigned int>((count + threads - 1U) / threads);
       accumulate_events<<<blocks, threads, 0, stream>>>(
-        slot.device, count, ring_, width_, height_, bins_, bin_width_us_, oldest_bin,
-        separate_, polarity_major_);
+        slot.device, count, ring_, width_, height_, ring_bins_, origin_timestamp_us_,
+        bin_width_us_, oldest_bin, separate_, polarity_major_);
       check_cuda(cudaGetLastError(), "launch event accumulation kernel");
       check_cuda(cudaEventRecord(slot.complete, stream), "record event staging completion");
       slot.pending = true;
@@ -241,24 +259,36 @@ public:
     accepted_events_ += events.size();
   }
 
-  void snapshot(float * output, const cudaStream_t stream)
+  void snapshot(
+    float * output, const std::int64_t window_end_us, const cudaStream_t stream)
   {
     if (!initialized_) {
       throw std::runtime_error("CUDA rolling ring is not initialized");
     }
+    const auto elapsed_us = window_end_us - origin_timestamp_us_;
+    if (elapsed_us < window_us_ || elapsed_us % bin_width_us_ != 0) {
+      throw std::invalid_argument("CUDA snapshot end is not aligned to the event-bin clock");
+    }
+    const auto window_end_bin = elapsed_us / bin_width_us_;
     last_stream_ = stream;
     constexpr std::size_t threads = 256U;
     const auto count = channels_ * pixels_;
     const auto blocks = static_cast<unsigned int>((count + threads - 1U) / threads);
     make_snapshot<<<blocks, threads, 0, stream>>>(
-      ring_, output, means_, stddevs_, pixels_, bins_, channels_, newest_bin_,
-      separate_, polarity_major_);
+      ring_, output, means_, stddevs_, pixels_, bins_, ring_bins_, channels_, newest_bin_,
+      window_end_bin, separate_, polarity_major_);
     check_cuda(cudaGetLastError(), "launch event snapshot kernel");
   }
 
   bool ready() const
   {
-    return initialized_ && latest_timestamp_us_ - first_timestamp_us_ >= window_us_;
+    return initialized_;
+  }
+
+  std::int64_t latest_window_end_us() const
+  {
+    return initialized_ && newest_bin_ + 1 >= static_cast<std::int64_t>(bins_) ?
+      origin_timestamp_us_ + (newest_bin_ + 1) * bin_width_us_ : 0;
   }
 
   struct TransferSlot
@@ -276,9 +306,11 @@ public:
   bool polarity_major_;
   std::int64_t window_us_;
   std::int64_t bin_width_us_;
+  std::size_t ring_bins_;
   std::size_t channels_;
   std::size_t pixels_;
   std::size_t tensor_bytes_;
+  std::size_t ring_bytes_;
   std::size_t batch_capacity_;
   float * ring_{nullptr};
   float * means_{nullptr};
@@ -287,8 +319,8 @@ public:
   std::size_t next_transfer_slot_{0};
   cudaStream_t last_stream_{nullptr};
   bool initialized_{false};
+  std::int64_t origin_timestamp_us_{0};
   std::int64_t newest_bin_{0};
-  std::int64_t first_timestamp_us_{0};
   std::int64_t latest_timestamp_us_{0};
   std::uint64_t accepted_events_{0};
   std::uint64_t discarded_events_{0};
@@ -315,15 +347,20 @@ void EventTensorCudaBackend::update(
   impl_->update(events, stream);
 }
 
-void EventTensorCudaBackend::snapshot(float * output, const cudaStream_t stream)
+void EventTensorCudaBackend::snapshot(
+  float * output, const std::int64_t window_end_us, const cudaStream_t stream)
 {
-  impl_->snapshot(output, stream);
+  impl_->snapshot(output, window_end_us, stream);
 }
 
 bool EventTensorCudaBackend::ready() const {return impl_->ready();}
 std::int64_t EventTensorCudaBackend::latest_timestamp_us() const
 {
   return impl_->latest_timestamp_us_;
+}
+std::int64_t EventTensorCudaBackend::latest_window_end_us() const
+{
+  return impl_->latest_window_end_us();
 }
 std::uint64_t EventTensorCudaBackend::accepted_events() const {return impl_->accepted_events_;}
 std::uint64_t EventTensorCudaBackend::discarded_events() const {return impl_->discarded_events_;}

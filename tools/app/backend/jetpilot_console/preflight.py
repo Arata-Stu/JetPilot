@@ -537,8 +537,8 @@ def _analyze_rosbag_preflight(
             report.resolved["event_topic"] = event_topic
         numeric_specs = (
             ("event_bins", 10, 1.0, 64.0, True),
-            ("event_window_ms", 50.0, 0.001, 10_000.0, False),
-            ("event_stride_ms", 10.0, 0.001, 10_000.0, False),
+            ("event_window_ms", 40.0, 0.001, 10_000.0, False),
+            ("event_stride_ms", 4.0, 0.001, 10_000.0, False),
             ("event_output_width", 212, 1.0, 4096.0, True),
             ("event_output_height", 120, 1.0, 4096.0, True),
         )

@@ -36,10 +36,11 @@ public:
 
   void reset(cudaStream_t stream);
   void update(const std::vector<CudaEvent> & events, cudaStream_t stream);
-  void snapshot(float * output, cudaStream_t stream);
+  void snapshot(float * output, std::int64_t window_end_us, cudaStream_t stream);
 
   bool ready() const;
   std::int64_t latest_timestamp_us() const;
+  std::int64_t latest_window_end_us() const;
   std::uint64_t accepted_events() const;
   std::uint64_t discarded_events() const;
 

@@ -435,8 +435,8 @@ const state = {
     eventTensorPreview: false,
     eventTopic: "/event_camera/events",
     eventBins: 10,
-    eventWindowMs: 50,
-    eventStrideMs: 10,
+    eventWindowMs: 40,
+    eventStrideMs: 4,
     eventLinearInterpolation: false,
   },
 };
@@ -3205,8 +3205,8 @@ function e2eAnalysisPayload() {
     event_tensor_preview: Boolean(analysis.eventTensorPreview),
     event_topic: analysis.eventTopic || "/event_camera/events",
     event_bins: Number(analysis.eventBins) || 10,
-    event_window_ms: Number(analysis.eventWindowMs) || 50,
-    event_stride_ms: Number(analysis.eventStrideMs) || 10,
+    event_window_ms: Number(analysis.eventWindowMs) || 40,
+    event_stride_ms: Number(analysis.eventStrideMs) || 4,
     event_linear_interpolation: Boolean(analysis.eventLinearInterpolation),
     event_output_width: 212,
     event_output_height: 120,
@@ -3216,7 +3216,7 @@ function e2eAnalysisPayload() {
 function updateE2EOption(key, value) {
   if (!(key in state.analysis)) return;
   if (["e2eManualOnly", "eventTensorPreview", "eventLinearInterpolation"].includes(key)) state.analysis[key] = Boolean(value);
-  else if (["e2eDeadlineMs", "maxFps", "eventBins", "eventWindowMs", "eventStrideMs"].includes(key)) state.analysis[key] = Number(value) || ({ maxFps: 10, e2eDeadlineMs: 33.3, eventBins: 10, eventWindowMs: 50, eventStrideMs: 10 }[key]);
+  else if (["e2eDeadlineMs", "maxFps", "eventBins", "eventWindowMs", "eventStrideMs"].includes(key)) state.analysis[key] = Number(value) || ({ maxFps: 10, e2eDeadlineMs: 33.3, eventBins: 10, eventWindowMs: 40, eventStrideMs: 4 }[key]);
   else state.analysis[key] = String(value ?? "");
   render();
   scheduleE2EPreflight();
