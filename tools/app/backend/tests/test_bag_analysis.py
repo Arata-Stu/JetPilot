@@ -520,7 +520,15 @@ class AnalysisScriptTests(unittest.TestCase):
             )
 
             self.assertIn("--event-tensor-preview", script)
-            self.assertIn("/opt/env/bin/python -X faulthandler -m jetpilot_console.analysis_worker", script)
+            self.assertIn(
+                'event_analysis_python="${JETPILOT_EVENT_ANALYSIS_PYTHON:-/usr/bin/python3}"',
+                script,
+            )
+            self.assertIn(
+                '"$event_analysis_python" -X faulthandler -m jetpilot_console.analysis_worker',
+                script,
+            )
+            self.assertIn("event_camera_py requires NumPy 1.x", script)
             self.assertIn("--event-topic /event_camera/events", script)
             self.assertIn("--event-bins 10", script)
             self.assertIn("--event-window-ms 50", script)

@@ -1233,14 +1233,30 @@ class _EventTensorPreview:
     ) -> None:
         try:
             import numpy as np
-            from event_camera_py import Decoder
+            import event_camera_py
         except ImportError as error:
             raise RuntimeError(
                 "イベントTensorプレビューにはevent_camera_pyが必要です。"
                 "ROS環境へros-${ROS_DISTRO}-event-camera-pyを導入してください。"
             ) from error
+        try:
+            numpy_major = int(np.__version__.split(".", 1)[0])
+        except (AttributeError, TypeError, ValueError):
+            numpy_major = 0
+        # event_camera_py exposes a pybind11-backed structured array. Its
+        # released ROS binary is not compatible with NumPy 2.x: field access
+        # may return corrupt values or terminate the process in native code.
+        # Keep this check before Decoder construction so analysis fails with an
+        # actionable message instead of an uncatchable segmentation fault.
+        if numpy_major >= 2 and getattr(event_camera_py, "__file__", None):
+            raise RuntimeError(
+                "イベントTensorプレビューを実行できません: event_camera_pyはNumPy 2.xと"
+                "互換性がありません。JETPILOT_EVENT_ANALYSIS_PYTHONにNumPy 1.xの"
+                "ROS system Python（通常は/usr/bin/python3）を指定してください。"
+                f" 現在のNumPy: {np.__version__}"
+            )
         self.np = np
-        self.decoder = Decoder()
+        self.decoder = event_camera_py.Decoder()
         self.bins = bins
         self.window_ns = int(round(window_ms * 1_000_000.0))
         self.stride_ns = int(round(stride_ms * 1_000_000.0))
@@ -1268,10 +1284,10 @@ class _EventTensorPreview:
         if decoded_events is None or len(decoded_events) == 0:
             return
         np = self.np
-        # Do not copy the complete pybind structured array: some Jetson
-        # event_camera_py / NumPy ABI combinations segfault in that path. Cast
-        # and copy each plain field while the decoder-owned view is still valid.
-        sensor_us = np.asarray(decoded_events["t"], dtype=np.int64).copy()
+        # Do not retain the decoder-owned structured array. Copy each field to
+        # plain owned storage before decoding the next packet. Converting the
+        # int32 timestamp field to int64 already allocates its output.
+        sensor_us = np.asarray(decoded_events["t"], dtype=np.int64)
         source_x = np.asarray(decoded_events["x"], dtype=np.int32).copy()
         source_y = np.asarray(decoded_events["y"], dtype=np.int32).copy()
         polarity = np.asarray(decoded_events["p"], dtype=np.bool_).copy()

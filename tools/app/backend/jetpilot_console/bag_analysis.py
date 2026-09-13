@@ -567,6 +567,30 @@ def build_analysis_script(
         "trap analysis_exit EXIT",
         _source_ros_setup(config),
     ]
+    analysis_worker_python = _q(config.python_bin)
+    if event_tensor_preview:
+        # event_camera_py is an apt/ROS pybind11 module and its released binary
+        # is incompatible with NumPy 2.x. The general ML environment in
+        # /opt/env intentionally uses NumPy 2, so decode/extraction runs in the
+        # ROS system interpreter while later model evaluation stays in
+        # config.python_bin. The environment variable remains an escape hatch
+        # for images whose compatible ROS interpreter lives elsewhere.
+        lines.extend(
+            [
+                'event_analysis_python="${JETPILOT_EVENT_ANALYSIS_PYTHON:-/usr/bin/python3}"',
+                'test -x "$event_analysis_python" || { echo "Event analysis Python is missing: $event_analysis_python"; exit 1; }',
+                (
+                    '"$event_analysis_python" -c '
+                    + _q(
+                        "import cv2, event_camera_py, numpy, rosbag2_py; "
+                        "major=int(numpy.__version__.split('.', 1)[0]); "
+                        "assert major < 2, "
+                        "f'event_camera_py requires NumPy 1.x; found {numpy.__version__}'"
+                    )
+                ),
+            ]
+        )
+        analysis_worker_python = '"$event_analysis_python"'
 
     if trajectory_mode == "offline":
         if topic_config is None:
@@ -857,7 +881,7 @@ def build_analysis_script(
         )
 
     worker = [
-        _q(config.python_bin),
+        analysis_worker_python,
         "-X",
         "faulthandler",
         "-m",

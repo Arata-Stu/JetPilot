@@ -28,6 +28,26 @@ from jetpilot_console.map_detail import directory_fingerprint
 
 
 class SnapshotTrajectoryTests(unittest.TestCase):
+    def test_event_tensor_preview_rejects_numpy_two_before_native_decode(self) -> None:
+        fake_numpy = SimpleNamespace(__version__="2.4.6")
+        fake_event_camera = SimpleNamespace(
+            __file__="/opt/ros/jazzy/lib/python3.12/site-packages/event_camera_py.so",
+            Decoder=lambda: self.fail("Decoder must not be constructed with NumPy 2.x"),
+        )
+        with mock.patch.dict(
+            sys.modules,
+            {"numpy": fake_numpy, "event_camera_py": fake_event_camera},
+        ):
+            with self.assertRaisesRegex(RuntimeError, "NumPy 2.x"):
+                _EventTensorPreview(
+                    bins=10,
+                    window_ms=50.0,
+                    stride_ms=10.0,
+                    output_width=212,
+                    output_height=120,
+                    linear_interpolation=False,
+                )
+
     def test_event_tensor_preview_renders_polarity_bins_without_tensor_files(self) -> None:
         try:
             import numpy as np
