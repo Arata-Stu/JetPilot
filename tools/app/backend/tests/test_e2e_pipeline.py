@@ -217,6 +217,44 @@ class E2EPipelineTests(unittest.TestCase):
         self.assertIn("experiment=event_tensor_pilotnet", train.command)
         self.assertIn("model.steering_only=false", train.command)
 
+    def test_async_rgb_evs_dataset_and_training_contract(self) -> None:
+        preprocess = build_preprocess_task(
+            self.config,
+            {
+                "rosbag": str(self.bag), "dataset_name": "async-rgb-evs",
+                "image_topic": "/realsense/color/image_raw",
+                "control_topic": "/teleop/control_cmd", "modality": "rgb_event_async",
+                "event_topic": "/event_camera/events", "event_sample_hz": 100,
+                "rollout_steps": 8,
+            },
+        )
+        script = preprocess.command[-1]
+        self.assertIn("--dataset-mode rgb_event_async", script)
+        self.assertIn("--event-sample-hz 100.0", script)
+        self.assertIn("--rollout-steps 8", script)
+
+        dataset = self.training / "datasets" / "async-rgb-evs"
+        dataset.mkdir(parents=True)
+        (dataset / "samples.csv").write_text(
+            "image_path,next_image_path,event_tensor_paths,event_delta_t,event_controls\n"
+            "images/0.jpg,images/1.jpg,[],[],[]\n"
+        )
+        (dataset / "metadata.yaml").write_text(json.dumps({
+            "task": "control", "modality": "rgb_event_async", "input_width": 212,
+            "input_height": 120, "input_channels": 3, "event_channels": 20,
+            "rollout_steps": 8, "event_mean": [0.0], "event_std": [1.0],
+        }))
+        train = build_train_task(self.config, {
+            "dataset_dir": str(dataset), "run_name": "async-run",
+            "experiment": "async_rgb_evs_control",
+        })
+        self.assertIn("experiment=async_rgb_evs_control", train.command)
+        with self.assertRaisesRegex(ValueError, "requires a image dataset"):
+            build_train_task(self.config, {
+                "dataset_dir": str(dataset), "run_name": "wrong-async-run",
+                "experiment": "pilotnet_scratch",
+            })
+
     def test_train_and_export_tasks_preserve_selected_configuration(self) -> None:
         dataset = self._dataset()
         train = build_train_task(

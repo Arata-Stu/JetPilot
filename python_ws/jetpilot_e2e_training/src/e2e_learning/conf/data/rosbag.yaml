@@ -39,6 +39,10 @@ event_polarity_mode: separate
 event_polarity_layout: polarity_major
 event_temporal_interpolation: none
 sample_hz: 10.0
+event_sample_hz: 100.0
+rollout_steps: 8
+event_mean: [0.0]
+event_std: [1.0]
 
 fraction: 1.0
 mean: [0.485, 0.456, 0.406]

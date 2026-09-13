@@ -1,0 +1,11 @@
+name: async_rgb_evs_control
+task: control
+input_channels: 3
+event_channels: 20
+state_dim: 128
+event_feature_dim: 64
+rollout_steps: 8
+steering_only: false
+control_loss_weight: 1.0
+latent_loss_weight: 0.25
+smooth_loss_weight: 0.02

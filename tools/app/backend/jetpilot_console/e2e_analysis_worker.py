@@ -148,10 +148,133 @@ def _event_tensor_dataset(
     return dataset, rows, [int(row["stamp"]) for row in rows]
 
 
+def _async_dataset(metadata: Mapping[str, Any]) -> tuple[Path | None, list[dict[str, str]]]:
+    dataset_value = metadata.get("source_dataset")
+    if not dataset_value and isinstance(metadata.get("config"), dict):
+        dataset_value = metadata["config"].get("data", {}).get("dataset_dir")
+    dataset = Path(str(dataset_value or "")).expanduser()
+    samples_path = dataset / "samples.csv"
+    if not samples_path.is_file():
+        return None, []
+    with samples_path.open(newline="", encoding="utf-8", errors="replace") as handle:
+        rows = [row for row in csv.DictReader(handle) if row.get("event_tensor_paths")]
+    return dataset, rows
+
+
+def _async_rgb_evs_predictions(
+    analysis_dir: Path, timeline: dict[str, Any], metadata: Mapping[str, Any],
+    session: Any, deadline_ms: float, manual_only: bool, progress: Progress,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    import cv2
+    import numpy as np
+
+    dataset, rows = _async_dataset(metadata)
+    if dataset is None or not rows:
+        raise RuntimeError("Async RGB-EVS evaluation requires its source training dataset")
+    dataset_metadata = load_yaml(dataset / "metadata.yaml")
+    manifest = json.loads((analysis_dir / "manifest.json").read_text(encoding="utf-8"))
+    if Path(str(dataset_metadata.get("bag_path") or "")).resolve(strict=False) != Path(
+        str(manifest.get("rosbag", {}).get("path") or "")
+    ).resolve(strict=False):
+        raise RuntimeError("The async RGB-EVS model and analysis must use the same rosbag")
+    bag_start_ns = int(manifest.get("start_time_ns") or 0)
+    timestamp_source = str(dataset_metadata.get("timestamp_source") or "bag")
+    inputs = session.get_inputs()
+    input_meta = metadata.get("inputs") if isinstance(metadata.get("inputs"), list) else []
+    rgb_meta = input_meta[0] if input_meta else metadata.get("input", {})
+    event_meta = input_meta[1] if len(input_meta) > 1 else {}
+    rollout_steps = int(inputs[1].shape[1])
+    frames = _timed(timeline.get("frames"))
+    frame_stamps = [_timestamp_ns(frame) for frame in frames]
+    modes = _timed(timeline.get("modes")); mode_times = [float(item["t"]) for item in modes]
+    records: list[dict[str, Any]] = []
+    interval_inference_times: list[float] = []
+    update_inference_times: list[float] = []
+    excluded = 0
+    for row_index, row in enumerate(rows):
+        image = cv2.imread(str(dataset / row["image_path"]), cv2.IMREAD_COLOR)
+        if image is None:
+            continue
+        rgb = _preprocess(image, rgb_meta)
+        paths = json.loads(row["event_tensor_paths"])
+        deltas = [float(value) for value in json.loads(row["event_delta_t"])]
+        labels = json.loads(row["event_controls"])
+        stamps = [int(value) for value in json.loads(row["event_stamps"])]
+        event_values = [_preprocess_event_tensor(dataset / path, event_meta)[0] for path in paths[:rollout_steps]]
+        if not event_values:
+            continue
+        shape = event_values[0].shape
+        valid_count = len(event_values)
+        while len(event_values) < rollout_steps:
+            event_values.append(np.zeros(shape, dtype=np.float32)); deltas.append(0.0)
+        mask = np.zeros((1, rollout_steps), dtype=np.float32); mask[0, :valid_count] = 1.0
+        started = time.perf_counter_ns()
+        outputs = session.run(None, {
+            inputs[0].name: rgb,
+            inputs[1].name: np.stack(event_values)[None].astype(np.float32),
+            inputs[2].name: np.asarray(deltas[:rollout_steps], dtype=np.float32)[None],
+            inputs[3].name: mask,
+        })
+        elapsed_ms = (time.perf_counter_ns() - started) / 1.0e6
+        interval_inference_times.append(elapsed_ms)
+        update_inference_ms = elapsed_ms / valid_count
+        update_inference_times.append(update_inference_ms)
+        controls = np.asarray(outputs[0], dtype=np.float32)[0]
+        anchor_stamp = int(row["stamp"])
+        frame_position = bisect.bisect_left(frame_stamps, anchor_stamp)
+        candidates = [value for value in (frame_position - 1, frame_position) if 0 <= value < len(frames)]
+        anchor_t = float(frames[min(candidates, key=lambda value: abs(frame_stamps[value] - anchor_stamp))]["t"]) if candidates else 0.0
+        for step in range(min(valid_count, len(labels), len(stamps))):
+            sample_t = (
+                (stamps[step] - bag_start_ns) / 1.0e9
+                if timestamp_source == "bag" and bag_start_ns > 0
+                else anchor_t + (stamps[step] - anchor_stamp) / 1.0e9
+            )
+            mode = _nearest(modes, mode_times, sample_t, 0.2)
+            if manual_only and modes and _mode_name(mode) != "MANUAL":
+                excluded += 1; continue
+            steering, throttle = float(controls[step, 0]), float(controls[step, 1])
+            steering_gt, throttle_gt = float(labels[step][0]), float(labels[step][1])
+            records.append({
+                "t": round(sample_t, 9), "stamp": str(stamps[step]), "mode": _mode_name(mode),
+                "steering_pred": steering, "throttle_pred": throttle,
+                "steering_gt": steering_gt, "throttle_gt": throttle_gt,
+                "steering_error": steering - steering_gt, "throttle_error": throttle - throttle_gt,
+                "inference_ms": update_inference_ms, "total_ms": update_inference_ms,
+                "missed_deadline": update_inference_ms > deadline_ms,
+            })
+        if row_index and row_index % 100 == 0:
+            progress.update("e2e_inference", 0.82 + 0.15 * row_index / max(1, len(rows)),
+                            f"RGB-EVS推論 {row_index:,}/{len(rows):,} intervals")
+    metrics = {
+        "sample_count": len(records), "interval_count": len(rows),
+        "excluded_non_manual": excluded, "missing_teacher": 0,
+        "steering": control_error_summary(records, "steering"),
+        "throttle": control_error_summary(records, "throttle"),
+        # Keep the common inference_ms card comparable with the EVS output rate.
+        # One ONNX call evaluates an RGB interval, so retain its actual latency too.
+        "inference_ms": finite_summary(update_inference_times),
+        "interval_inference_ms": finite_summary(interval_inference_times),
+        "total_ms": finite_summary(item["total_ms"] for item in records),
+        "deadline_ms": deadline_ms,
+        "deadline_miss_count": sum(bool(item["missed_deadline"]) for item in records),
+        "deadline_miss_rate": sum(bool(item["missed_deadline"]) for item in records) / max(1, len(records)),
+        "task": "control", "async_rgb_evs": True,
+    }
+    if is_steering_only(dict(metadata)):
+        _exclude_throttle_metrics(metrics)
+    return records, metrics
+
+
 def _preprocess_event_tensor(path: Path, model_input: Mapping[str, Any]) -> Any:
     import numpy as np
 
-    tensor = np.load(path, allow_pickle=False).astype(np.float32, copy=False)
+    loaded = np.load(path, allow_pickle=False)
+    tensor = (loaded["tensor"] if isinstance(loaded, np.lib.npyio.NpzFile) else loaded).astype(
+        np.float32, copy=False
+    )
+    if isinstance(loaded, np.lib.npyio.NpzFile):
+        loaded.close()
     shape = model_input.get("shape") if isinstance(model_input.get("shape"), list) else []
     if tensor.ndim != 3 or (len(shape) >= 4 and list(tensor.shape) != list(shape[-3:])):
         raise RuntimeError(
@@ -279,6 +402,10 @@ def _supervised_predictions(
     session_init_ms = (time.perf_counter_ns() - session_started) / 1.0e6
     session_inputs = session.get_inputs()
     input_name = session_inputs[0].name
+    if modality == "rgb_event_async":
+        return _async_rgb_evs_predictions(
+            analysis_dir, timeline, metadata, session, deadline_ms, manual_only, progress
+        )
     event_dataset, event_rows, event_times = _event_tensor_dataset(metadata)
     if modality == "event_tensor" and (event_dataset is None or not event_rows):
         raise RuntimeError(

@@ -20,6 +20,14 @@ from .security import (
 
 NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 EXPERIMENTS = {
+    "async_rgb_evs_control": {
+        "label": "Async RGB + Raw EVS 20ch · Control",
+        "stages": 1, "task": "control", "family": "rgb_evs",
+        "target": "control", "modality": "rgb_event_async",
+        "name_prefix": "async-rgb-evs-control", "name_prefix_base": "async-rgb-evs",
+        "output_targets": ["control", "steer"], "input_width": 212,
+        "input_height": 120, "recommended_batch_size": 8,
+    },
     "event_tensor_pilotnet": {
         "label": "Raw EVS 20ch · PilotNet",
         "stages": 1,
@@ -307,6 +315,8 @@ def scan_datasets(config: Any) -> list[dict[str, Any]]:
                 "event_bins": int(metadata.get("event_bins") or 0),
                 "event_window_ms": float(metadata.get("event_window_ms") or 0.0),
                 "event_stride_ms": float(metadata.get("event_stride_ms") or 0.0),
+                "event_sample_hz": float(metadata.get("event_sample_hz") or 0.0),
+                "rollout_steps": int(metadata.get("rollout_steps") or 0),
                 "trajectory_points": int(metadata.get("trajectory_points") or 0),
                 "trajectory_horizon_sec": float(metadata.get("trajectory_horizon_sec") or 0.0),
                 "input_width": int(metadata.get("input_width") or 0),
@@ -457,8 +467,8 @@ def build_preprocess_task(config: Any, body: dict[str, Any]) -> PipelineTaskSpec
     imu_window = _number(body.get("imu_window_sec", 0.5), label="IMU window", minimum=0.01, maximum=10.0)
     jpeg_quality = _integer(body.get("jpeg_quality", 92), label="JPEG quality", minimum=1, maximum=100)
     modality = str(body.get("modality") or "image")
-    if modality not in {"image", "event_tensor"}:
-        raise ValueError("modality must be image or event_tensor")
+    if modality not in {"image", "event_tensor", "rgb_event_async"}:
+        raise ValueError("modality must be image, event_tensor or rgb_event_async")
     event_bins = _integer(body.get("event_bins", 10), label="event bins", minimum=1, maximum=64)
     event_window_ms = _number(body.get("event_window_ms", 40.0), label="event window", minimum=0.1, maximum=10000.0)
     event_stride_ms = _number(body.get("event_stride_ms", 4.0), label="event stride", minimum=0.1, maximum=10000.0)
@@ -469,6 +479,8 @@ def build_preprocess_task(config: Any, body: dict[str, Any]) -> PipelineTaskSpec
     if event_temporal_interpolation not in {"none", "linear"}:
         raise ValueError("event temporal interpolation must be none or linear")
     sample_hz = _number(body.get("sample_hz", 10.0), label="sample rate", minimum=0.1, maximum=250.0)
+    event_sample_hz = _number(body.get("event_sample_hz", 100.0), label="event update rate", minimum=1.0, maximum=250.0)
+    rollout_steps = _integer(body.get("rollout_steps", 8), label="rollout steps", minimum=1, maximum=64)
     overrides = [
             f"data.bag_path={bag}",
             f"data.output_dir={output}",
@@ -497,7 +509,7 @@ def build_preprocess_task(config: Any, body: dict[str, Any]) -> PipelineTaskSpec
             f"data.event_temporal_interpolation={event_temporal_interpolation}",
             f"data.sample_hz={sample_hz}",
         ]
-    if modality == "event_tensor":
+    if modality in {"event_tensor", "rgb_event_async"}:
         if task != "control":
             raise ValueError("the first raw event tensor pipeline supports control learning only")
         repo_root = Path(getattr(config, "repo_root", training_root(config).parents[1]))
@@ -518,6 +530,9 @@ def build_preprocess_task(config: Any, body: dict[str, Any]) -> PipelineTaskSpec
             "--temporal-interpolation", event_temporal_interpolation,
             "--sample-hz", str(sample_hz), "--max-control-dt-sec", str(max_dt),
             "--timestamp-source", timestamp_source,
+            "--dataset-mode", modality,
+            "--event-sample-hz", str(event_sample_hz),
+            "--rollout-steps", str(rollout_steps),
         ]
         python_path = os.pathsep.join((str(backend_root), str(source_root)))
         script = "\n".join(
@@ -669,6 +684,10 @@ def build_train_task(config: Any, body: dict[str, Any]) -> PipelineTaskSpec:
         "event_polarity_mode",
         "event_polarity_layout",
         "event_temporal_interpolation",
+        "event_sample_hz",
+        "rollout_steps",
+        "event_mean",
+        "event_std",
         "input_channels",
         "mean",
         "std",
@@ -755,6 +774,10 @@ def build_deploy_task(config: Any, body: dict[str, Any]) -> PipelineTaskSpec:
         raise ValueError("model must be an exported model.onnx from an E2E training run")
 
     metadata = _read_json(allowed.parent / "metadata.json")
+    if str(metadata.get("modality") or "") == "rgb_event_async":
+        raise ValueError(
+            "async RGB-EVS export is for offline evaluation; split TensorRT deployment is not implemented yet"
+        )
     architecture = metadata.get("architecture") if isinstance(metadata.get("architecture"), dict) else {}
     if architecture.get("stateful_step"):
         raise ValueError(

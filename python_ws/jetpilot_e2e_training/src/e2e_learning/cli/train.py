@@ -14,7 +14,7 @@ from torch.utils.data import DataLoader, Subset
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
-from e2e_learning.data.dataset import E2EDataset
+from e2e_learning.data.dataset import AsyncRgbEvsDataset, E2EDataset
 from e2e_learning.models.factory import build_model
 from e2e_learning.utils.io import ensure_dir, write_json, write_yaml
 
@@ -52,6 +52,10 @@ def apply_dataset_metadata(cfg: DictConfig) -> None:
         "event_polarity_mode",
         "event_polarity_layout",
         "event_temporal_interpolation",
+        "event_sample_hz",
+        "rollout_steps",
+        "event_mean",
+        "event_std",
         "input_channels",
         "mean",
         "std",
@@ -73,6 +77,9 @@ def apply_dataset_metadata(cfg: DictConfig) -> None:
         cfg.data.input_height = int(fixed_input_height)
     if str(getattr(metadata, "modality", "image")) == "event_tensor":
         cfg.model.input_channels = int(getattr(metadata, "input_channels", 20))
+    if str(getattr(metadata, "modality", "image")) == "rgb_event_async":
+        cfg.model.event_channels = int(getattr(metadata, "event_channels", 20))
+        cfg.model.rollout_steps = int(getattr(metadata, "rollout_steps", 8))
     if str(cfg.model.name) == "fusion":
         if getattr(metadata, "trajectory_points", None) is not None:
             cfg.model.trajectory_points = int(metadata.trajectory_points)
@@ -187,6 +194,72 @@ def train_wam_epoch(model, loader, optimizer, device, model_cfg) -> dict[str, fl
     return {key: value / max(count, 1) for key, value in totals.items()}
 
 
+def _async_rgb_evs_losses(model, batch, device, model_cfg):
+    rgb = batch["rgb"].to(device)
+    next_rgb = batch["next_rgb"].to(device)
+    events = batch["events"].to(device)
+    delta_t = batch["delta_t"].to(device)
+    mask = batch["mask"].to(device)
+    targets = batch["controls"].to(device)
+    controls, final_state = model.rollout(rgb, events, delta_t, mask)
+    with torch.no_grad():
+        target_state = model.encode_rgb(next_rgb)
+    learned = slice(0, 1) if model.steering_only else slice(0, 2)
+    error = (controls[:, :, learned] - targets[:, :, learned]).square().mean(dim=-1)
+    denominator = mask.sum().clamp_min(1.0)
+    control_loss = (error * mask).sum() / denominator
+    latent_loss = (1.0 - nn.functional.cosine_similarity(final_state, target_state, dim=-1)).mean()
+    if controls.shape[1] > 1:
+        pair_mask = mask[:, 1:] * mask[:, :-1]
+        smooth_error = (controls[:, 1:, learned] - controls[:, :-1, learned]).square().mean(dim=-1)
+        smooth_loss = (smooth_error * pair_mask).sum() / pair_mask.sum().clamp_min(1.0)
+    else:
+        smooth_loss = control_loss.new_zeros(())
+    loss = (
+        float(getattr(model_cfg, "control_loss_weight", 1.0)) * control_loss
+        + float(getattr(model_cfg, "latent_loss_weight", 0.25)) * latent_loss
+        + float(getattr(model_cfg, "smooth_loss_weight", 0.02)) * smooth_loss
+    )
+    absolute = (controls - targets).abs() * mask[:, :, None]
+    return loss, {
+        "control_loss": control_loss,
+        "latent_loss": latent_loss,
+        "smooth_loss": smooth_loss,
+        "steering_abs": absolute[:, :, 0].sum(),
+        "throttle_abs": absolute[:, :, 1].sum(),
+        "valid_steps": mask.sum(),
+    }
+
+
+def run_async_rgb_evs_epoch(model, loader, device, model_cfg, optimizer=None) -> dict[str, float]:
+    model.train(optimizer is not None)
+    totals = {key: 0.0 for key in ("loss", "control_loss", "latent_loss", "smooth_loss")}
+    steering_abs = throttle_abs = valid_steps = 0.0
+    for batch in tqdm(loader, desc="train" if optimizer else "validate", leave=False):
+        if optimizer is not None:
+            optimizer.zero_grad(set_to_none=True)
+        with torch.set_grad_enabled(optimizer is not None):
+            loss, parts = _async_rgb_evs_losses(model, batch, device, model_cfg)
+            if optimizer is not None:
+                loss.backward()
+                optimizer.step()
+        batch_size = int(batch["rgb"].shape[0])
+        totals["loss"] += float(loss.detach().cpu()) * batch_size
+        for key in ("control_loss", "latent_loss", "smooth_loss"):
+            totals[key] += float(parts[key].detach().cpu()) * batch_size
+        steering_abs += float(parts["steering_abs"].detach().cpu())
+        throttle_abs += float(parts["throttle_abs"].detach().cpu())
+        valid_steps += float(parts["valid_steps"].detach().cpu())
+    samples = max(1, len(loader.dataset))
+    result = {
+        **{key: value / samples for key, value in totals.items()},
+        "steering_mae": steering_abs / max(valid_steps, 1.0),
+    }
+    if not model.steering_only:
+        result["throttle_mae"] = throttle_abs / max(valid_steps, 1.0)
+    return result
+
+
 @torch.no_grad()
 def evaluate_wam(model, loader, device, model_cfg) -> dict[str, float]:
     model.eval()
@@ -292,7 +365,10 @@ def train_stage(
         loss_fn = SteeringLoss()
     best_metrics: dict[str, float] = {}
     for epoch in range(1, int(stage.epochs) + 1):
-        if model_name == "wam_dinov3_vits16":
+        if model_name == "async_rgb_evs_control":
+            train_metrics = run_async_rgb_evs_epoch(model, train_loader, device, cfg.model, optimizer)
+            val_metrics = run_async_rgb_evs_epoch(model, val_loader, device, cfg.model)
+        elif model_name == "wam_dinov3_vits16":
             train_metrics = train_wam_epoch(model, train_loader, optimizer, device, cfg.model)
             val_metrics = evaluate_wam(model, val_loader, device, cfg.model)
         else:
@@ -374,7 +450,17 @@ def main(cfg: DictConfig) -> None:
     use_imu = bool(getattr(cfg.model, "use_imu", False))
     trajectory_points = int(getattr(cfg.model, "trajectory_points", getattr(cfg.data, "trajectory_points", 10)))
     trajectory_scale_m = float(getattr(cfg.model, "trajectory_scale_m", getattr(cfg.data, "trajectory_scale_m", 5.0)))
-    dataset = E2EDataset(
+    dataset = AsyncRgbEvsDataset(
+        dataset_dir=cfg.data.dataset_dir,
+        input_width=int(cfg.data.input_width),
+        input_height=int(cfg.data.input_height),
+        mean=tuple(float(v) for v in cfg.data.mean),
+        std=tuple(float(v) for v in cfg.data.std),
+        rollout_steps=int(getattr(cfg.model, "rollout_steps", 8)),
+        event_mean=tuple(float(v) for v in getattr(cfg.data, "event_mean", [0.0])),
+        event_std=tuple(float(v) for v in getattr(cfg.data, "event_std", [1.0])),
+        data_fraction=float(cfg.data.fraction),
+    ) if model_name == "async_rgb_evs_control" else E2EDataset(
         dataset_dir=cfg.data.dataset_dir,
         input_width=int(cfg.data.input_width),
         input_height=int(cfg.data.input_height),

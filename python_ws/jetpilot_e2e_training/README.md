@@ -238,13 +238,6 @@ RGB topicを10 Hzの基準clockとして使い、`/event_camera/events`から因
 最新windowを`[2B,H,W]`へ変換します。tensor本体はrosbagへ追加せず、dataset内へ
 FP16 `.npy`として保存します。channel順、mean/std、window、stride、補間方式は
 `metadata.yaml`から学習checkpointと`metadata.json`まで引き継がれます。
-raw eventのdecodeだけは`event_camera_py`互換性のためROS system Pythonで実行します。
-別のNumPy 1.x環境を使う場合は`JETPILOT_EVENT_ANALYSIS_PYTHON`を指定してください。
-
-最初の検証には`B=10 / window=40 ms / stride=4 ms / polarity_major / None`を推奨します。
-これはJetsonのCUDA rolling histogramとbin幅4 msで一致し、250 Hz出力が可能です。
-`window=50 ms / B=10 / stride=4 ms`はstrideが5 ms bin境界に揃わないため、厳密な
-CUDA rolling histogramではなくCPU backendが選択されます。
 
 学習では`Raw EVS 20ch · PilotNet`を選択します。学習後は`Export ONNX`、
 `Use in offline eval`、`Deploy to Jetson`の順で同じ画面から進められます。Jetsonでは
@@ -259,6 +252,30 @@ CUDA rolling histogramではなくCPU backendが選択されます。
 ```
 
 実行時の生成rateと前処理時間は`/e2e/event_tensor/diagnostics`で確認します。
+
+### Async RGB + Raw EVS 20ch（offline検証版）
+
+Consoleの`Input representation`で`Async RGB + Raw EVS 20ch`を選ぶと、RGB間隔を
+1 sampleとし、その間のrolling 20ch tensorと教師controlを時刻順にまとめます。
+既定はRGB 30 Hz、EVS update 100 Hz、最大8 stepです。EVS tensorは容量を抑えるため
+FP16圧縮NPZで保存します。250 Hzを試す場合は`EVS update Hz=250`とし、RGB 30 Hzなら
+`Max rollout=12`以上を指定してください。
+
+`async_rgb_evs_control`はRGB PilotNet encoderのlatentを初期stateとし、小型EVS CNNと
+GRUCellで更新します。全EVS stepのcontrol loss、次RGB latentとのcosine loss、弱い
+control smoothness lossを同時に学習します。現段階のONNXはrolloutを一体化した
+Offline Analysis専用モデルで、分割TensorRT配備は明示的に拒否します。
+
+学習後は通常どおり`Export ONNX`、`Use in offline eval`を選び、学習元と同じrosbagで
+`Offline teacher comparison`を実行します。タイムラインにはRGB frameより高頻度の
+EVS更新ごとのModel output、教師control、誤差が表示されます。
+raw eventのdecodeだけは`event_camera_py`互換性のためROS system Pythonで実行します。
+別のNumPy 1.x環境を使う場合は`JETPILOT_EVENT_ANALYSIS_PYTHON`を指定してください。
+
+最初の検証には`B=10 / window=40 ms / stride=4 ms / polarity_major / None`を推奨します。
+これはJetsonのCUDA rolling histogramとbin幅4 msで一致し、250 Hz出力が可能です。
+`window=50 ms / B=10 / stride=4 ms`はstrideが5 ms bin境界に揃わないため、厳密な
+CUDA rolling histogramではなくCPU backendが選択されます。
 
 ## 出力物
 

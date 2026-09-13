@@ -1,0 +1,13 @@
+# @package _global_
+defaults:
+  - override /model: async_rgb_evs_control
+  - override /train: default
+data:
+  modality: rgb_event_async
+  input_width: 212
+  input_height: 120
+model:
+  event_channels: 20
+  rollout_steps: 8
+run:
+  name: async_rgb_evs_control

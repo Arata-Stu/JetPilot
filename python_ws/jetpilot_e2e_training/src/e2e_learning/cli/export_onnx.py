@@ -54,6 +54,7 @@ def main(cfg: DictConfig) -> None:
     modality = str(getattr(run_cfg.data, "modality", "image"))
     image_input_name = str(cfg.export.input_name)
     is_wam = model_name == "wam_dinov3_vits16"
+    is_async_rgb_evs = model_name == "async_rgb_evs_control"
     if model_name == "fusion" and sequence_length > 1:
         dummy_images = torch.randn(1, sequence_length, input_channels, input_height, input_width)
     else:
@@ -78,7 +79,25 @@ def main(cfg: DictConfig) -> None:
     ]
     export_model = model
     output_names = ["trajectory" if task == "trajectory" else str(cfg.export.output_name)]
-    if is_wam:
+    if is_async_rgb_evs:
+        rollout_steps = int(getattr(run_cfg.model, "rollout_steps", 8))
+        event_channels = int(getattr(run_cfg.model, "event_channels", 20))
+        dummy_events = torch.zeros(1, rollout_steps, event_channels, input_height, input_width)
+        dummy_delta_t = torch.full((1, rollout_steps), float(getattr(run_cfg.data, "event_stride_ms", 4.0)) / 1000.0)
+        dummy_mask = torch.ones(1, rollout_steps)
+        inputs = (dummy_images, dummy_events, dummy_delta_t, dummy_mask)
+        input_names = ["rgb", "event_tensors", "delta_t", "event_mask"]
+        input_metadata = [
+            {"name": "rgb", "kind": "image", "shape": list(dummy_images.shape), "layout": "NCHW",
+             "color_order": "rgb", "mean": [float(v) for v in run_cfg.data.mean], "std": [float(v) for v in run_cfg.data.std]},
+            {"name": "event_tensors", "kind": "event_tensor_sequence", "shape": list(dummy_events.shape),
+             "layout": "NTCHW", "mean": [float(v) for v in run_cfg.data.event_mean],
+             "std": [float(v) for v in run_cfg.data.event_std]},
+            {"name": "delta_t", "kind": "time_delta_sequence", "shape": list(dummy_delta_t.shape), "layout": "NT"},
+            {"name": "event_mask", "kind": "sequence_mask", "shape": list(dummy_mask.shape), "layout": "NT"},
+        ]
+        output_names = ["control_sequence"]
+    elif is_wam:
         hidden_dim = int(getattr(run_cfg.model, "hidden_dim", 256))
         dummy_hidden = torch.zeros(1, hidden_dim)
         dummy_action = torch.zeros(1, 2)
@@ -134,7 +153,13 @@ def main(cfg: DictConfig) -> None:
         external_data=False,
     )
 
-    if task == "trajectory":
+    if is_async_rgb_evs:
+        output_metadata = {
+            "name": output_name, "task": "control", "shape": [1, int(run_cfg.model.rollout_steps), 2],
+            "fields": ["steering", "throttle"], "sequence": True,
+            "activations": ["tanh", "sigmoid"],
+        }
+    elif task == "trajectory":
         trajectory_points = int(getattr(run_cfg.model, "trajectory_points", 10))
         trajectory_scale_m = float(getattr(run_cfg.model, "trajectory_scale_m", 5.0))
         output_metadata = {
@@ -184,7 +209,8 @@ def main(cfg: DictConfig) -> None:
         "model_name": str(run_cfg.run.name),
         "image_topic": str(run_cfg.data.image_topic),
         "modality": (
-            "event_tensor" if modality == "event_tensor"
+            "rgb_event_async" if modality == "rgb_event_async"
+            else "event_tensor" if modality == "event_tensor"
             else "event_image" if str(run_cfg.data.image_topic).endswith("/event_image")
             else "rgb"
         ),
@@ -199,6 +225,8 @@ def main(cfg: DictConfig) -> None:
             "future_horizon": int(getattr(run_cfg.model, "future_horizon", 0)),
             "future_stride": int(getattr(run_cfg.model, "future_stride", 1)),
             "stateful_step": is_wam,
+            "async_rgb_evs": is_async_rgb_evs,
+            "rollout_steps": int(getattr(run_cfg.model, "rollout_steps", 1)),
         },
         "checkpoint": str(checkpoint_path),
         "source_dataset": str(run_cfg.data.dataset_dir),
@@ -221,11 +249,11 @@ def main(cfg: DictConfig) -> None:
         },
         "config": OmegaConf.to_container(run_cfg, resolve=True),
     }
-    if modality == "event_tensor":
+    if modality in {"event_tensor", "rgb_event_async"}:
         metadata["event_representation"] = {
             "event_topic": str(getattr(run_cfg.data, "event_topic", "/event_camera/events")),
             "bins": int(getattr(run_cfg.data, "event_bins", input_channels // 2)),
-            "channels": input_channels,
+            "channels": int(getattr(run_cfg.model, "event_channels", input_channels)),
             "window_ms": float(getattr(run_cfg.data, "event_window_ms", 40.0)),
             "stride_ms": float(getattr(run_cfg.data, "event_stride_ms", 4.0)),
             "polarity_mode": str(getattr(run_cfg.data, "event_polarity_mode", "separate")),

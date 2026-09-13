@@ -191,3 +191,78 @@ class E2EDataset(Dataset):
 
 # Kept for external imports that used the first control-only dataset name.
 ControlImageDataset = E2EDataset
+
+
+class AsyncRgbEvsDataset(Dataset):
+    """One RGB interval with a padded sequence of causal EVS updates."""
+
+    def __init__(self, dataset_dir: str | Path, input_width: int, input_height: int,
+                 mean: tuple[float, ...], std: tuple[float, ...], rollout_steps: int,
+                 event_mean: tuple[float, ...], event_std: tuple[float, ...],
+                 data_fraction: float = 1.0) -> None:
+        self.dataset_dir = Path(dataset_dir)
+        self.transform = ImageTransform(input_width, input_height, mean, std)
+        self.rollout_steps = int(rollout_steps)
+        self.event_mean = np.asarray(event_mean, dtype=np.float32)
+        self.event_std = np.asarray(event_std, dtype=np.float32)
+        # Adjacent intervals share their boundary RGB frame; leave a one-row
+        # gap between temporal training and validation partitions.
+        self.future_horizon = 1
+        self.future_stride = 1
+        with (self.dataset_dir / "samples.csv").open(newline="") as handle:
+            self.rows = list(csv.DictReader(handle))
+        keep = max(1, int(len(self.rows) * data_fraction))
+        self.rows = self.rows[:keep]
+        if not self.rows:
+            raise RuntimeError("No asynchronous RGB-EVS samples were found")
+
+    def __len__(self) -> int:
+        return len(self.rows)
+
+    def _rgb(self, relative: str) -> torch.Tensor:
+        image = cv2.imread(str(self.dataset_dir / relative), cv2.IMREAD_COLOR)
+        if image is None:
+            raise RuntimeError(f"Failed to read RGB image: {relative}")
+        return torch.from_numpy(self.transform(image))
+
+    def _event(self, relative: str) -> torch.Tensor:
+        loaded = np.load(self.dataset_dir / relative, allow_pickle=False)
+        tensor = (loaded["tensor"] if isinstance(loaded, np.lib.npyio.NpzFile) else loaded).astype(np.float32)
+        if isinstance(loaded, np.lib.npyio.NpzFile):
+            loaded.close()
+        if tensor.ndim != 3:
+            raise RuntimeError(f"Event tensor must be CHW, got {tensor.shape}: {relative}")
+        channels = tensor.shape[0]
+        if self.event_mean.size not in {1, channels} or self.event_std.size not in {1, channels}:
+            raise RuntimeError(
+                f"Event normalization does not match {channels} channels: {relative}"
+            )
+        mean = self.event_mean if self.event_mean.size == channels else np.repeat(self.event_mean, channels)
+        std = self.event_std if self.event_std.size == channels else np.repeat(self.event_std, channels)
+        if np.any(std == 0):
+            raise RuntimeError(f"Event normalization std contains zero: {relative}")
+        return torch.from_numpy(np.ascontiguousarray((tensor - mean[:, None, None]) / std[:, None, None]))
+
+    def __getitem__(self, index: int):
+        row = self.rows[index]
+        paths = json.loads(row["event_tensor_paths"])
+        delta_t = [float(value) for value in json.loads(row["event_delta_t"])]
+        controls = json.loads(row["event_controls"])
+        tensors = [self._event(path) for path in paths[:self.rollout_steps]]
+        if not tensors:
+            raise RuntimeError("RGB-EVS interval has no event tensors")
+        event_shape = tensors[0].shape
+        mask = [1.0] * len(tensors)
+        while len(tensors) < self.rollout_steps:
+            tensors.append(torch.zeros(event_shape, dtype=torch.float32))
+            delta_t.append(0.0)
+            controls.append(controls[-1])
+            mask.append(0.0)
+        return {
+            "rgb": self._rgb(row["image_path"]),
+            "next_rgb": self._rgb(row["next_image_path"]),
+            "events": torch.stack(tensors),
+            "delta_t": torch.tensor(delta_t[:self.rollout_steps], dtype=torch.float32),
+            "mask": torch.tensor(mask[:self.rollout_steps], dtype=torch.float32),
+            "controls": torch.tensor(controls[:self.rollout_steps], dtype=torch.float32),
+        }

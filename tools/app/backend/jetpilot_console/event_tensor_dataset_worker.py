@@ -10,7 +10,9 @@ from typing import Any
 import numpy as np
 
 from e2e_learning.data.event_tensor import EventTensorAccumulator, EventTensorConfig
-from .analysis_worker import _control_payload, _deserializers, _open_reader, _stamp_ns
+from .analysis_worker import (
+    _control_payload, _decode_image, _deserializers, _open_reader, _stamp_ns, _write_jpeg,
+)
 
 
 def _timestamp(message: Any, bag_ns: int, source: str) -> int:
@@ -32,7 +34,170 @@ def _nearest_control(
     return controls[selected] if abs(times[selected] - stamp_ns) <= max_dt_ns else None
 
 
+def _limited_indices(count: int, maximum: int) -> list[int]:
+    if count <= maximum:
+        return list(range(count))
+    if maximum == 1:
+        return [count - 1]
+    return sorted({round(index * (count - 1) / (maximum - 1)) for index in range(maximum)})
+
+
+def _build_async_dataset(args: argparse.Namespace) -> dict[str, object]:
+    import event_camera_py
+
+    numpy_major = int(np.__version__.split(".", 1)[0])
+    if numpy_major >= 2 and getattr(event_camera_py, "__file__", None):
+        raise RuntimeError(f"event_camera_py requires NumPy 1.x; found {np.__version__}")
+
+    bag = Path(args.rosbag).expanduser().resolve()
+    output = Path(args.output).expanduser().resolve()
+    if output.exists() and any(output.iterdir()):
+        raise RuntimeError(f"dataset output is not empty: {output}")
+    image_dir, tensor_dir = output / "images", output / "tensors"
+    image_dir.mkdir(parents=True, exist_ok=True)
+    tensor_dir.mkdir(parents=True, exist_ok=True)
+    config = EventTensorConfig(
+        bins=args.bins, window_ms=args.window_ms, stride_ms=args.stride_ms,
+        width=args.width, height=args.height, polarity_layout=args.polarity_layout,
+        temporal_interpolation=args.temporal_interpolation,
+    )
+    accumulator = EventTensorAccumulator(config)
+    decoder = event_camera_py.Decoder()
+    reader, topic_types = _open_reader(bag)
+    for topic in (args.event_topic, args.reference_topic, args.control_topic):
+        if topic not in topic_types:
+            raise RuntimeError(f"required topic was not found: {topic}")
+    deserialize, get_message = _deserializers()
+    classes = {topic: get_message(topic_types[topic]) for topic in (
+        args.event_topic, args.reference_topic, args.control_topic
+    )}
+    controls: list[tuple[int, dict[str, object]]] = []
+    rgb_frames: list[dict[str, object]] = []
+    events: list[dict[str, object]] = []
+    decoded_events = 0
+    next_rgb_bag_ns: int | None = None
+    next_event_bag_ns: int | None = None
+    last_event_end_ns: int | None = None
+    rgb_interval_ns = max(1, round(1.0e9 / args.sample_hz))
+    event_interval_ns = max(1, round(1.0e9 / args.event_sample_hz))
+    while reader.has_next():
+        topic, serialized, bag_ns = reader.read_next()
+        if topic not in classes:
+            continue
+        message = deserialize(serialized, classes[topic])
+        if topic == args.control_topic:
+            controls.append((_timestamp(message, bag_ns, args.timestamp_source), _control_payload(message)))
+        elif topic == args.reference_topic:
+            if next_rgb_bag_ns is not None and int(bag_ns) < next_rgb_bag_ns:
+                continue
+            relative = Path("images") / f"{len(rgb_frames):08d}.jpg"
+            _write_jpeg(output / relative, _decode_image(message, topic), 92)
+            rgb_frames.append({"stamp": _timestamp(message, bag_ns, args.timestamp_source), "path": relative.as_posix()})
+            if next_rgb_bag_ns is None:
+                next_rgb_bag_ns = int(bag_ns) + rgb_interval_ns
+            else:
+                while next_rgb_bag_ns <= int(bag_ns):
+                    next_rgb_bag_ns += rgb_interval_ns
+        else:
+            decoded_events += accumulator.add_packet(decoder, message)
+            if next_event_bag_ns is not None and int(bag_ns) < next_event_bag_ns:
+                continue
+            snapshot = accumulator.snapshot()
+            if snapshot is None:
+                continue
+            tensor, info = snapshot
+            end_ns = int(info["window_end_sensor_ns"])
+            if end_ns == last_event_end_ns:
+                continue
+            relative = Path("tensors") / f"{len(events):08d}.npz"
+            np.savez_compressed(output / relative, tensor=tensor.astype(np.float16))
+            events.append({
+                "stamp": _timestamp(message, bag_ns, args.timestamp_source),
+                "path": relative.as_posix(), "events": int(info["events"]),
+                "sum": tensor.sum(axis=(1, 2), dtype=np.float64),
+                "square_sum": np.square(tensor, dtype=np.float64).sum(axis=(1, 2)),
+            })
+            if next_event_bag_ns is None:
+                next_event_bag_ns = int(bag_ns) + event_interval_ns
+            else:
+                while next_event_bag_ns <= int(bag_ns):
+                    next_event_bag_ns += event_interval_ns
+            last_event_end_ns = end_ns
+
+    controls.sort(key=lambda item: item[0])
+    rgb_frames.sort(key=lambda item: int(item["stamp"]))
+    events.sort(key=lambda item: int(item["stamp"]))
+    control_times = [value[0] for value in controls]
+    event_times = [int(value["stamp"]) for value in events]
+    max_control_dt_ns = round(args.max_control_dt_sec * 1.0e9)
+    rows: list[dict[str, object]] = []
+    sums = np.zeros(config.channels, dtype=np.float64)
+    square_sums = np.zeros(config.channels, dtype=np.float64)
+    value_count = 0
+    for first, second in zip(rgb_frames, rgb_frames[1:]):
+        start_stamp, end_stamp = int(first["stamp"]), int(second["stamp"])
+        begin = bisect.bisect_right(event_times, start_stamp)
+        end = bisect.bisect_right(event_times, end_stamp)
+        interval_events = events[begin:end]
+        selected = [interval_events[index] for index in _limited_indices(len(interval_events), args.rollout_steps)]
+        aligned = []
+        for event in selected:
+            control = _nearest_control(controls, control_times, int(event["stamp"]), max_control_dt_ns)
+            if control is not None:
+                aligned.append((event, control))
+        if not aligned:
+            continue
+        previous_stamp = start_stamp
+        paths, deltas, labels, stamps = [], [], [], []
+        for event, control in aligned:
+            stamp = int(event["stamp"])
+            paths.append(event["path"])
+            deltas.append(max(0.0, (stamp - previous_stamp) / 1.0e9))
+            labels.append([float(control[1].get("steering", 0.0)), float(control[1].get("throttle", 0.0))])
+            stamps.append(stamp)
+            previous_stamp = stamp
+            sums += event["sum"]
+            square_sums += event["square_sum"]
+            value_count += args.width * args.height
+        rows.append({
+            "sequence_id": bag.name, "image_path": first["path"],
+            "next_image_path": second["path"], "stamp": start_stamp,
+            "next_stamp": end_stamp, "event_tensor_paths": json.dumps(paths),
+            "event_stamps": json.dumps(stamps), "event_delta_t": json.dumps(deltas),
+            "event_controls": json.dumps(labels), "event_steps": len(paths),
+        })
+    if not rows:
+        raise RuntimeError("no RGB intervals with aligned EVS tensors and controls were found")
+    with (output / "samples.csv").open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+        writer.writeheader(); writer.writerows(rows)
+    mean = sums / max(value_count, 1)
+    std = np.sqrt(np.maximum(square_sums / max(value_count, 1) - mean * mean, 0.0))
+    std[std < 1.0e-6] = 1.0
+    metadata = {
+        "bag_path": str(bag), "task": "control", "modality": "rgb_event_async",
+        "image_topic": args.reference_topic, "event_topic": args.event_topic,
+        "control_topic": args.control_topic, "input_width": args.width,
+        "input_height": args.height, "input_channels": 3, "event_channels": config.channels,
+        "sample_count": len(rows), "sample_hz": args.sample_hz,
+        "event_sample_hz": args.event_sample_hz, "rollout_steps": args.rollout_steps,
+        "timestamp_source": args.timestamp_source, "event_bins": args.bins,
+        "event_window_ms": args.window_ms, "event_stride_ms": args.stride_ms,
+        "event_polarity_mode": "separate", "event_polarity_layout": args.polarity_layout,
+        "event_temporal_interpolation": args.temporal_interpolation,
+        "mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225],
+        "event_mean": mean.tolist(), "event_std": std.tolist(),
+        "decoded_events": decoded_events, "rgb_frame_count": len(rgb_frames),
+        "event_tensor_count": len(events), "timestamp_resets": accumulator.timestamp_resets,
+    }
+    (output / "metadata.yaml").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+    print(json.dumps(metadata, indent=2))
+    return metadata
+
+
 def build_dataset(args: argparse.Namespace) -> dict[str, object]:
+    if args.dataset_mode == "rgb_event_async":
+        return _build_async_dataset(args)
     import event_camera_py
 
     numpy_major = int(np.__version__.split(".", 1)[0])
@@ -206,6 +371,9 @@ def main() -> None:
     parser.add_argument("--sample-hz", type=float, required=True)
     parser.add_argument("--max-control-dt-sec", type=float, required=True)
     parser.add_argument("--timestamp-source", choices=("bag", "header"), required=True)
+    parser.add_argument("--dataset-mode", choices=("event_tensor", "rgb_event_async"), default="event_tensor")
+    parser.add_argument("--event-sample-hz", type=float, default=100.0)
+    parser.add_argument("--rollout-steps", type=int, default=8)
     build_dataset(parser.parse_args())
 
 

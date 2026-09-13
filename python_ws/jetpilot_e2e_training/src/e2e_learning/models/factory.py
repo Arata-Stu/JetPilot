@@ -12,6 +12,7 @@ from e2e_learning.models.dinov3_vit import (
     load_dinov3_backbone_weights,
 )
 from e2e_learning.models.wam import DinoV3TinyWAM
+from e2e_learning.models.async_rgb_evs import AsyncRgbEvsControl
 
 
 class TorchvisionEncoderHead(nn.Module):
@@ -59,6 +60,13 @@ class TorchvisionEncoderHead(nn.Module):
 def build_model(config: Any) -> nn.Module:
     name = str(config.name)
     output_dim = int(getattr(config, "output_dim", 2))
+    if name == "async_rgb_evs_control":
+        return AsyncRgbEvsControl(
+            event_channels=int(getattr(config, "event_channels", 20)),
+            state_dim=int(getattr(config, "state_dim", 128)),
+            event_feature_dim=int(getattr(config, "event_feature_dim", 64)),
+            steering_only=bool(getattr(config, "steering_only", False)),
+        )
     if name == "pilotnet":
         return PilotNet(
             input_channels=int(getattr(config, "input_channels", 3)),
