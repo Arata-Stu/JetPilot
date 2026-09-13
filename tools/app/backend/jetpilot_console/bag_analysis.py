@@ -858,6 +858,8 @@ def build_analysis_script(
 
     worker = [
         _q(config.python_bin),
+        "-X",
+        "faulthandler",
         "-m",
         "jetpilot_console.analysis_worker",
         "--rosbag",

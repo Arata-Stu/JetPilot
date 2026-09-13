@@ -1263,10 +1263,14 @@ class _EventTensorPreview:
             str(message.encoding), int(message.width), int(message.height),
             int(message.time_base), bytes(message.events),
         )
-        events = self.decoder.get_cd_events()
-        if events is None or len(events) == 0:
+        decoded_events = self.decoder.get_cd_events()
+        if decoded_events is None or len(decoded_events) == 0:
             return
         np = self.np
+        # Detach immediately from the pybind decoder's reusable native buffer.
+        # This prevents subsequent packet decodes from invalidating NumPy views
+        # while the offline RGB loop still owns the event chunk.
+        events = np.array(decoded_events, copy=True)
         sensor_us = np.asarray(events["t"], dtype=np.int64)
         # Match the runtime encoder's representation path: windowing and binning
         # stay entirely in the continuous event-sensor clock. Per-packet ROS/bag
