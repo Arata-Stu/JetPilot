@@ -1268,11 +1268,13 @@ class _EventTensorPreview:
         if decoded_events is None or len(decoded_events) == 0:
             return
         np = self.np
-        # Detach immediately from the pybind decoder's reusable native buffer.
-        # This prevents subsequent packet decodes from invalidating NumPy views
-        # while the offline RGB loop still owns the event chunk.
-        events = np.array(decoded_events, copy=True)
-        sensor_us = np.asarray(events["t"], dtype=np.int64)
+        # Do not copy the complete pybind structured array: some Jetson
+        # event_camera_py / NumPy ABI combinations segfault in that path. Cast
+        # and copy each plain field while the decoder-owned view is still valid.
+        sensor_us = np.asarray(decoded_events["t"], dtype=np.int64).copy()
+        source_x = np.asarray(decoded_events["x"], dtype=np.int32).copy()
+        source_y = np.asarray(decoded_events["y"], dtype=np.int32).copy()
+        polarity = np.asarray(decoded_events["p"], dtype=np.bool_).copy()
         # Match the runtime encoder's representation path: windowing and binning
         # stay entirely in the continuous event-sensor clock. Per-packet ROS/bag
         # arrival jitter must never be injected into 5 ms temporal bins.
@@ -1288,9 +1290,9 @@ class _EventTensorPreview:
         self.chunks.append(
             (
                 event_ns,
-                np.asarray(events["x"], dtype=np.int32).copy(),
-                np.asarray(events["y"], dtype=np.int32).copy(),
-                np.asarray(events["p"], dtype=np.bool_).copy(),
+                source_x,
+                source_y,
+                polarity,
             )
         )
         if self.first_event_ns is None:
