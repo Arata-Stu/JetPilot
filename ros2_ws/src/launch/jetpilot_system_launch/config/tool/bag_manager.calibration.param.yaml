@@ -6,6 +6,7 @@ bag_manager_node:
     # to live VSLAM but are intentionally excluded from the bag.
     topics:
       - /joy
+      - /joy/diagnostics
       - /teleop/control_cmd
       - /vehicle/control_cmd
       - /operation_mode/request

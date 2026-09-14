@@ -415,6 +415,9 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('joy_deadzone', '0.05', cli=True)
     args.add_arg('joy_device_path', '', cli=True)
     args.add_arg('joy_prefer_evdev', False, cli=True)
+    args.add_arg('joy_statistics_interval_s', '1.0', cli=True)
+    args.add_arg('joy_debug', False, cli=True)
+    args.add_arg('joy_diagnostics_topic', '/joy/diagnostics', cli=True)
 
     args.add_arg('enable_operation', True, cli=True)
     args.add_arg(
@@ -930,6 +933,9 @@ def generate_launch_description() -> lut.LaunchDescription:
                 'joy_deadzone': args.joy_deadzone,
                 'joy_device_path': args.joy_device_path,
                 'joy_prefer_evdev': args.joy_prefer_evdev,
+                'joy_statistics_interval_s': args.joy_statistics_interval_s,
+                'joy_debug': args.joy_debug,
+                'joy_diagnostics_topic': args.joy_diagnostics_topic,
                 'enable_vslam_snapshot': args.enable_vslam_snapshot,
                 'vslam_snapshot_output': args.vslam_snapshot_output,
                 'vslam_snapshot_path_topic': args.vslam_snapshot_path_topic,

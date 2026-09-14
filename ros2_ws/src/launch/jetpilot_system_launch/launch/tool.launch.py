@@ -50,6 +50,9 @@ def add_nodes(args: lu.ArgumentContainer):
                 'publish_rate_hz': args.joy_autorepeat_rate,
                 'deadzone': args.joy_deadzone,
                 'prefer_evdev': lu.is_true(args.joy_prefer_evdev),
+                'statistics_interval_s': args.joy_statistics_interval_s,
+                'debug': lu.is_true(args.joy_debug),
+                'diagnostics_topic': args.joy_diagnostics_topic,
                 'use_sim_time': use_sim_time,
             }],
         ))
@@ -190,6 +193,9 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('joy_deadzone', '0.05', cli=True)
     args.add_arg('joy_device_path', '', cli=True)
     args.add_arg('joy_prefer_evdev', False, cli=True)
+    args.add_arg('joy_statistics_interval_s', '1.0', cli=True)
+    args.add_arg('joy_debug', False, cli=True)
+    args.add_arg('joy_diagnostics_topic', '/joy/diagnostics', cli=True)
     args.add_arg('enable_vslam_snapshot', False, cli=True)
     args.add_arg(
         'vslam_snapshot_output',

@@ -6,6 +6,7 @@ bag_manager_node:
     topics:
       ## Control and operation state.
       - /joy
+      - /joy/diagnostics
       - /rc/channels
       - /teleop/control_cmd
       - /propo/control_cmd
