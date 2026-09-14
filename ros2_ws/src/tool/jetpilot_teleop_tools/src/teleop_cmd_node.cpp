@@ -187,7 +187,11 @@ void TeleopCmdNode::adjust_throttle_scale(const double direction)
   if (!result.successful)
   {
     RCLCPP_WARN(get_logger(), "Failed to change throttle scale: %s", result.reason.c_str());
+    return;
   }
+  RCLCPP_INFO(
+    get_logger(), "Throttle scale adjusted: %.3f -> %.3f (step %.3f)",
+    previous, requested, throttle_scale_step_);
 }
 
 rcl_interfaces::msg::SetParametersResult TeleopCmdNode::handle_parameters(

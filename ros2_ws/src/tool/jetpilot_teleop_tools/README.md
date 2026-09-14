@@ -56,6 +56,8 @@ axis、deadman、scaleは[`config/teleop_cmd.param.yaml`](config/teleop_cmd.para
 
 `/speed_offset_inc` または `/speed_offset_dec` に `std_msgs/msg/Bool(data=true)` を1回送ると、`throttle_scale_step` ずつスロットルスケールを変更します。範囲は `throttle_scale_min` から `throttle_scale_max` までに制限され、現在値は `ros2 param get /teleop_cmd_node throttle_scale` で確認できます。既定のD-pad割り当ては、上がスケール増加、下が減少です。左右は従来どおりsteering offsetを調整します。
 
+スケール変更に成功すると、`teleop_cmd_node`は変更前・変更後・刻み幅をINFOログへ出力します。上下限で値が変わらなかった場合も、現在値とともに上限・下限到達を通知します。
+
 `speed_offset_inc_uses_localization_button=true`の場合は、通常localization triggerに使うボタンを一時的に`/speed_offset_inc`へ割り当てます。`calibration` presetがこの切替を使用し、通常presetではlocalization triggerの割り当てを維持します。
 
 たとえば、初期値を0.10にして10秒ごとに4回増加させ、最終的に0.30にする場合は次のように実行します。
