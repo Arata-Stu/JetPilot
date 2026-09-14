@@ -97,7 +97,7 @@ private:
   bool debug_{false};
   double statistics_interval_s_{1.0};
   std::int64_t cuda_update_us_{1000};
-  std::int64_t timestamp_backward_tolerance_us_{1000};
+  std::int64_t timestamp_backward_tolerance_us_{4000};
   std::size_t cuda_events_per_transfer_{8192};
   double inference_watchdog_ms_{100.0};
   std::size_t channels_{20};

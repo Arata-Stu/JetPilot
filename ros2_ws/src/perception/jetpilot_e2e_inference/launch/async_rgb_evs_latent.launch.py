@@ -245,7 +245,7 @@ def generate_launch_description():
         DeclareLaunchArgument("event_inference_policy", default_value="periodic"),
         DeclareLaunchArgument("event_cuda_update_us", default_value="1000"),
         DeclareLaunchArgument(
-            "event_timestamp_backward_tolerance_us", default_value="1000"),
+            "event_timestamp_backward_tolerance_us", default_value="4000"),
         DeclareLaunchArgument("event_cuda_events_per_transfer", default_value="8192"),
         DeclareLaunchArgument("event_mean", default_value="[0.0]"),
         DeclareLaunchArgument("event_stddev", default_value="[1.0]"),

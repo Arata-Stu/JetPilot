@@ -580,7 +580,7 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('e2e_event_representation_backend', 'cuda', cli=True)
     args.add_arg('e2e_event_inference_policy', 'periodic', cli=True)
     args.add_arg('e2e_event_cuda_update_us', '1000', cli=True)
-    args.add_arg('e2e_event_timestamp_backward_tolerance_us', '1000', cli=True)
+    args.add_arg('e2e_event_timestamp_backward_tolerance_us', '4000', cli=True)
     args.add_arg('e2e_event_cuda_events_per_transfer', '8192', cli=True)
     args.add_arg('e2e_event_inference_watchdog_ms', '100.0', cli=True)
     args.add_arg('e2e_event_tensor_mean', '[0.0]', cli=True)

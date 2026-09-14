@@ -71,7 +71,7 @@ EventTensorEncoderNode::EventTensorEncoderNode(const rclcpp::NodeOptions & optio
   inference_policy_ = declare_parameter<std::string>("inference_policy", "periodic");
   cuda_update_us_ = declare_parameter<std::int64_t>("cuda_update_us", 1000);
   timestamp_backward_tolerance_us_ = declare_parameter<std::int64_t>(
-    "timestamp_backward_tolerance_us", 1000);
+    "timestamp_backward_tolerance_us", 4000);
   const auto cuda_events_per_transfer =
     declare_parameter<std::int64_t>("cuda_events_per_transfer", 8192);
   inference_watchdog_ms_ = declare_parameter<double>("inference_watchdog_ms", 100.0);
