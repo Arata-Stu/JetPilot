@@ -178,6 +178,20 @@ class E2EModelSelectionTests(unittest.TestCase):
         self.assertIn('"event_inference_policy", default_value="periodic"', launch_source)
         self.assertIn('"event_cuda_events_per_transfer", default_value="8192"', launch_source)
 
+    def test_event_image_bringup_does_not_read_unset_event_channels(self):
+        result = subprocess.run([
+            "bash", str(ROOT / "scripts/bringup.sh"), "e2e", "--dry-run",
+            "--e2e-model", str(self.root / "event_control"),
+            "--set", "e2e_event_image_mode:=true",
+        ], text=True, capture_output=True, check=True)
+        self.assertIn("e2e_event_image_mode:=true", result.stdout)
+        self.assertNotIn("unbound variable", result.stderr)
+
+    def test_tui_offers_raw_event_tensor_separately_from_async_rgb_evs(self):
+        source = (ROOT / "scripts/bringup.sh").read_text()
+        self.assertIn("event_tensor  Raw EVS 20ch", source)
+        self.assertIn("rgb_event_async  RGB + Raw EVS", source)
+
     def test_async_rgb_evs_bringup_selects_cuda_pipeline(self):
         path = self.root / "rgb_event_async_control"
         record = inspect_model(path, "rgb-event", False, event_tensor_channels=20)
