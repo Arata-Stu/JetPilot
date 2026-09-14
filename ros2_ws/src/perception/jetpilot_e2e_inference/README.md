@@ -205,6 +205,13 @@ event_async_deadline_ms:=4.0
 `packet_queue_wait_ms_*`、`gpu_queue_wait_ms_*`、worker busy率、
 `event_state_age_ms(_max)`、`reused_event_state_snapshots`、
 `fixed_rate_skipped_windows`、`deadline_misses`、`memory_pool_exhaustions`を確認します。
+decode診断では`decode_ms_*`がdecoder callbackまで、`decode_handoff_ms_*`が
+vector handoffとqueue投入、`decode_service_ms_*`がworkerのpacket処理全体を示します。
+`decode_worker_busy_pct`はfull serviceのwall時間、`decode_thread_cpu_busy_pct`は
+threadが実際にCPU上で実行された時間です。両者の差は
+`decode_scheduling_delay_ms_*`として表示されます。CPU migration数と、診断周期で
+sampleしたdecode CPUのcurrent/min/max周波数も出力します。周波数は1 Hz程度の
+sampleであり、数msの瞬間的なDVFS変化を完全には捕捉しません。
 既定では20 msを超えてqueueに滞留した古いpacket/event batchを破棄し、遅れたstateを
 後から推論へ流しません。この上限は`event_async_max_queue_age_ms`で変更できます。
 診断の文字列生成とpublishは既定1 Hzのtimer側でのみ行い、packet callbackの

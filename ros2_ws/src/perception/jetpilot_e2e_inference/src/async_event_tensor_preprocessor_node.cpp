@@ -4,10 +4,16 @@
 
 #include <algorithm>
 #include <cmath>
+#include <ctime>
+#include <fstream>
 #include <functional>
 #include <limits>
 #include <stdexcept>
 #include <utility>
+
+#ifdef __linux__
+#include <sched.h>
+#endif
 
 #include "diagnostic_msgs/msg/diagnostic_status.hpp"
 #include "diagnostic_msgs/msg/key_value.hpp"
@@ -53,6 +59,41 @@ double milliseconds(const std::uint64_t nanoseconds)
 std::int64_t steady_nanoseconds(const std::chrono::steady_clock::time_point time)
 {
   return std::chrono::duration_cast<std::chrono::nanoseconds>(time.time_since_epoch()).count();
+}
+
+std::uint64_t thread_cpu_nanoseconds()
+{
+#ifdef CLOCK_THREAD_CPUTIME_ID
+  timespec time{};
+  if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &time) == 0) {
+    return static_cast<std::uint64_t>(time.tv_sec) * 1000000000ULL +
+           static_cast<std::uint64_t>(time.tv_nsec);
+  }
+#endif
+  return 0U;
+}
+
+int current_cpu()
+{
+#ifdef __linux__
+  return sched_getcpu();
+#else
+  return -1;
+#endif
+}
+
+std::int64_t read_cpu_frequency_khz(const int cpu, const char * file)
+{
+  if (cpu < 0) {
+    return -1;
+  }
+  std::ifstream input(
+    "/sys/devices/system/cpu/cpu" + std::to_string(cpu) + "/cpufreq/" + file);
+  std::int64_t frequency_khz{-1};
+  if (input >> frequency_khz) {
+    return frequency_khz;
+  }
+  return -1;
 }
 
 }  // namespace
@@ -285,6 +326,29 @@ void AsyncEventTensorPreprocessorNode::decode_loop()
 void AsyncEventTensorPreprocessorNode::decode_packet(PacketWork work)
 {
   const auto started = std::chrono::steady_clock::now();
+  const auto thread_cpu_started_ns = thread_cpu_nanoseconds();
+  const auto cpu_started = current_cpu();
+  const auto record_service = [this, started, thread_cpu_started_ns, cpu_started]() {
+      const auto finished = std::chrono::steady_clock::now();
+      const auto service_ns = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(finished - started).count());
+      const auto thread_cpu_finished_ns = thread_cpu_nanoseconds();
+      const auto thread_cpu_ns = thread_cpu_finished_ns >= thread_cpu_started_ns ?
+        thread_cpu_finished_ns - thread_cpu_started_ns : 0U;
+      const auto scheduling_delay_ns = service_ns > thread_cpu_ns ? service_ns - thread_cpu_ns : 0U;
+      const auto cpu_finished = current_cpu();
+      decode_service_calls_.fetch_add(1, std::memory_order_relaxed);
+      decode_service_time_ns_.fetch_add(service_ns, std::memory_order_relaxed);
+      update_max(decode_service_time_max_ns_, service_ns);
+      decode_thread_cpu_time_ns_.fetch_add(thread_cpu_ns, std::memory_order_relaxed);
+      update_max(decode_thread_cpu_time_max_ns_, thread_cpu_ns);
+      decode_scheduling_delay_ns_.fetch_add(scheduling_delay_ns, std::memory_order_relaxed);
+      update_max(decode_scheduling_delay_max_ns_, scheduling_delay_ns);
+      if (cpu_started >= 0 && cpu_finished >= 0 && cpu_started != cpu_finished) {
+        decode_cpu_migrations_.fetch_add(1, std::memory_order_relaxed);
+      }
+      decode_last_cpu_.store(cpu_finished, std::memory_order_relaxed);
+    };
   const auto wait_ns = static_cast<std::uint64_t>(
     std::chrono::duration_cast<std::chrono::nanoseconds>(
       started - work.enqueued_at).count());
@@ -293,11 +357,13 @@ void AsyncEventTensorPreprocessorNode::decode_packet(PacketWork work)
 
   auto & packet = work.packet;
   if (!packet) {
+    record_service();
     return;
   }
   if (milliseconds(wait_ns) > max_queue_age_ms_) {
     stale_packet_queue_packets_.fetch_add(1, std::memory_order_relaxed);
     dropped_packet_queue_bytes_.fetch_add(packet->events.size(), std::memory_order_relaxed);
+    record_service();
     return;
   }
   decode_scratch_.clear();
@@ -332,8 +398,10 @@ void AsyncEventTensorPreprocessorNode::decode_packet(PacketWork work)
   update_max(decode_time_max_ns_, elapsed_ns);
 
   if (decode_scratch_.empty() && !decode_reset_pending_) {
+    record_service();
     return;
   }
+  const auto handoff_started = std::chrono::steady_clock::now();
   auto events = std::make_shared<std::vector<CudaEvent>>(std::move(decode_scratch_));
   decode_scratch_.clear();
   decode_scratch_.reserve(gpu_chunk_events_ * 2U);
@@ -345,6 +413,12 @@ void AsyncEventTensorPreprocessorNode::decode_packet(PacketWork work)
   enqueue_decoded(DecodedWork{
       std::move(events), 0U, packet->header.frame_id, sensor_to_ros_offset_ns,
       work.enqueued_at, finished_at, decode_reset_pending_});
+  const auto handoff_ns = static_cast<std::uint64_t>(
+    std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::steady_clock::now() - handoff_started).count());
+  decode_handoff_time_ns_.fetch_add(handoff_ns, std::memory_order_relaxed);
+  update_max(decode_handoff_time_max_ns_, handoff_ns);
+  record_service();
 }
 
 void AsyncEventTensorPreprocessorNode::enqueue_decoded(DecodedWork work)
@@ -679,6 +753,22 @@ void AsyncEventTensorPreprocessorNode::publish_diagnostics()
   const auto decode_errors = decode_errors_.exchange(0, std::memory_order_relaxed);
   const auto decode_ns = decode_time_ns_.exchange(0, std::memory_order_relaxed);
   const auto decode_max_ns = decode_time_max_ns_.exchange(0, std::memory_order_relaxed);
+  const auto decode_service_calls = decode_service_calls_.exchange(0, std::memory_order_relaxed);
+  const auto decode_service_ns = decode_service_time_ns_.exchange(0, std::memory_order_relaxed);
+  const auto decode_service_max_ns =
+    decode_service_time_max_ns_.exchange(0, std::memory_order_relaxed);
+  const auto decode_handoff_ns = decode_handoff_time_ns_.exchange(0, std::memory_order_relaxed);
+  const auto decode_handoff_max_ns =
+    decode_handoff_time_max_ns_.exchange(0, std::memory_order_relaxed);
+  const auto decode_thread_cpu_ns =
+    decode_thread_cpu_time_ns_.exchange(0, std::memory_order_relaxed);
+  const auto decode_thread_cpu_max_ns =
+    decode_thread_cpu_time_max_ns_.exchange(0, std::memory_order_relaxed);
+  const auto decode_scheduling_ns =
+    decode_scheduling_delay_ns_.exchange(0, std::memory_order_relaxed);
+  const auto decode_scheduling_max_ns =
+    decode_scheduling_delay_max_ns_.exchange(0, std::memory_order_relaxed);
+  const auto decode_cpu_migrations = decode_cpu_migrations_.exchange(0, std::memory_order_relaxed);
   const auto decode_wait_ns = decode_queue_wait_ns_.exchange(0, std::memory_order_relaxed);
   const auto decode_wait_max_ns = decode_queue_wait_max_ns_.exchange(0, std::memory_order_relaxed);
   const auto decoded_drops = dropped_decoded_batches_.exchange(0, std::memory_order_relaxed);
@@ -718,6 +808,10 @@ void AsyncEventTensorPreprocessorNode::publish_diagnostics()
   const auto packet_age_ms = packet_arrival_ns > 0 ?
     milliseconds(static_cast<std::uint64_t>(steady_nanoseconds(now_steady) - packet_arrival_ns)) :
     -1.0;
+  const auto decode_cpu = decode_last_cpu_.load(std::memory_order_relaxed);
+  const auto decode_cpu_cur_khz = read_cpu_frequency_khz(decode_cpu, "scaling_cur_freq");
+  const auto decode_cpu_min_khz = read_cpu_frequency_khz(decode_cpu, "scaling_min_freq");
+  const auto decode_cpu_max_khz = read_cpu_frequency_khz(decode_cpu, "scaling_max_freq");
 
   const bool healthy =
     packet_drops == 0 && stale_packets == 0 && decoded_drops == 0 &&
@@ -753,7 +847,40 @@ void AsyncEventTensorPreprocessorNode::publish_diagnostics()
     number("packet_queue_wait_ms_max", milliseconds(decode_wait_max_ns)),
     number("decode_ms_avg", decoded_packets == 0 ? 0.0 : milliseconds(decode_ns) / decoded_packets),
     number("decode_ms_max", milliseconds(decode_max_ns)),
-    number("decode_worker_busy_pct", 100.0 * decode_ns / (elapsed_s * 1.0e9)),
+    number("decode_ns_per_event", events == 0 ? 0.0 : static_cast<double>(decode_ns) / events),
+    number(
+      "decode_handoff_ms_avg", decoded_packets == 0 ? 0.0 :
+      milliseconds(decode_handoff_ns) / decoded_packets),
+    number("decode_handoff_ms_max", milliseconds(decode_handoff_max_ns)),
+    number("decode_service_calls", decode_service_calls),
+    number(
+      "decode_service_ms_avg", decode_service_calls == 0 ? 0.0 :
+      milliseconds(decode_service_ns) / decode_service_calls),
+    number("decode_service_ms_max", milliseconds(decode_service_max_ns)),
+    number(
+      "decode_service_ns_per_event", events == 0 ? 0.0 :
+      static_cast<double>(decode_service_ns) / events),
+    number(
+      "decode_thread_cpu_ms_avg", decode_service_calls == 0 ? 0.0 :
+      milliseconds(decode_thread_cpu_ns) / decode_service_calls),
+    number("decode_thread_cpu_ms_max", milliseconds(decode_thread_cpu_max_ns)),
+    number(
+      "decode_scheduling_delay_ms_avg", decode_service_calls == 0 ? 0.0 :
+      milliseconds(decode_scheduling_ns) / decode_service_calls),
+    number("decode_scheduling_delay_ms_max", milliseconds(decode_scheduling_max_ns)),
+    number(
+      "decode_scheduling_delay_pct", decode_service_ns == 0 ? 0.0 :
+      100.0 * static_cast<double>(decode_scheduling_ns) / decode_service_ns),
+    number("decoder_callback_busy_pct", 100.0 * decode_ns / (elapsed_s * 1.0e9)),
+    number("decode_worker_busy_pct", 100.0 * decode_service_ns / (elapsed_s * 1.0e9)),
+    number("decode_thread_cpu_busy_pct", 100.0 * decode_thread_cpu_ns / (elapsed_s * 1.0e9)),
+    value("decode_busy_definition", "full_service_wall_time"),
+    number("decode_cpu_migrations", decode_cpu_migrations),
+    number("decode_last_cpu", decode_cpu),
+    number("decode_cpu_scaling_cur_khz", decode_cpu_cur_khz),
+    number("decode_cpu_scaling_min_khz", decode_cpu_min_khz),
+    number("decode_cpu_scaling_max_khz", decode_cpu_max_khz),
+    value("decode_cpu_frequency_sampling", "diagnostics_interval"),
     number("decode_errors", decode_errors),
     number("decoded_queue_depth", decoded_queue_depth_.load(std::memory_order_relaxed)),
     number("decoded_queue_depth_max", decoded_depth_max),

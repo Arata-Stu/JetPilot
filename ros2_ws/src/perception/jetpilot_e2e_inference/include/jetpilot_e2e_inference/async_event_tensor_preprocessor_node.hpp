@@ -162,6 +162,17 @@ private:
   std::atomic<std::uint64_t> decode_errors_{0};
   std::atomic<std::uint64_t> decode_time_ns_{0};
   std::atomic<std::uint64_t> decode_time_max_ns_{0};
+  std::atomic<std::uint64_t> decode_service_calls_{0};
+  std::atomic<std::uint64_t> decode_service_time_ns_{0};
+  std::atomic<std::uint64_t> decode_service_time_max_ns_{0};
+  std::atomic<std::uint64_t> decode_handoff_time_ns_{0};
+  std::atomic<std::uint64_t> decode_handoff_time_max_ns_{0};
+  std::atomic<std::uint64_t> decode_thread_cpu_time_ns_{0};
+  std::atomic<std::uint64_t> decode_thread_cpu_time_max_ns_{0};
+  std::atomic<std::uint64_t> decode_scheduling_delay_ns_{0};
+  std::atomic<std::uint64_t> decode_scheduling_delay_max_ns_{0};
+  std::atomic<std::uint64_t> decode_cpu_migrations_{0};
+  std::atomic<int> decode_last_cpu_{-1};
   std::atomic<std::uint64_t> decode_queue_wait_ns_{0};
   std::atomic<std::uint64_t> decode_queue_wait_max_ns_{0};
   std::atomic<std::uint64_t> dropped_decoded_batches_{0};
