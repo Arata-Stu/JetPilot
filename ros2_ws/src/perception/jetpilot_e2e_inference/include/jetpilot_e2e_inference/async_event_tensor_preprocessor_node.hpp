@@ -81,6 +81,7 @@ private:
   void publish_snapshot(std::int64_t window_end_us, SteadyTime scheduled_at);
   void publish_diagnostics();
   void request_decode_reset();
+  void rebuild_coordinate_luts(std::uint32_t packet_width, std::uint32_t packet_height);
   std::int64_t ros_timestamp_ns(std::int64_t sensor_timestamp_us) const;
 
   std::int64_t bins_{10};
@@ -127,6 +128,8 @@ private:
 
   // Decode-thread-owned scratch and timestamp state used by EventProcessor callbacks.
   std::vector<CudaEvent> decode_scratch_;
+  std::vector<std::uint16_t> output_x_lut_;
+  std::vector<std::uint16_t> output_y_lut_;
   std::uint32_t packet_width_{0U};
   std::uint32_t packet_height_{0U};
   std::int64_t decode_last_event_us_{0};
@@ -195,6 +198,7 @@ private:
   std::atomic<std::uint64_t> packet_queue_depth_max_{0};
   std::atomic<std::uint64_t> decoded_queue_depth_{0};
   std::atomic<std::uint64_t> decoded_queue_depth_max_{0};
+  std::atomic<std::uint64_t> coordinate_lut_rebuilds_{0};
   std::atomic<std::uint64_t> state_age_ns_{0};
   std::atomic<std::uint64_t> state_age_max_ns_{0};
 };

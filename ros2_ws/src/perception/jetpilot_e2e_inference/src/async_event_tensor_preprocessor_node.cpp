@@ -302,14 +302,12 @@ void AsyncEventTensorPreprocessorNode::decode_packet(PacketWork work)
   }
   decode_scratch_.clear();
   decode_reset_pending_ = false;
-  if (
-    packet_width_ != 0U && packet_height_ != 0U &&
-    (packet_width_ != packet->width || packet_height_ != packet->height))
-  {
-    request_decode_reset();
+  if (packet_width_ != packet->width || packet_height_ != packet->height) {
+    if (packet_width_ != 0U || packet_height_ != 0U) {
+      request_decode_reset();
+    }
+    rebuild_coordinate_luts(packet->width, packet->height);
   }
-  packet_width_ = packet->width;
-  packet_height_ = packet->height;
   try {
     auto * decoder = decoder_factory_->getInstance(*packet);
     if (decoder == nullptr) {
@@ -582,7 +580,7 @@ void AsyncEventTensorPreprocessorNode::eventCD(
   const std::uint64_t sensor_time, const std::uint16_t x, const std::uint16_t y,
   const std::uint8_t polarity)
 {
-  if (packet_width_ == 0U || packet_height_ == 0U || x >= packet_width_ || y >= packet_height_) {
+  if (x >= output_x_lut_.size() || y >= output_y_lut_.size()) {
     out_of_bounds_events_.fetch_add(1, std::memory_order_relaxed);
     return;
   }
@@ -599,16 +597,33 @@ void AsyncEventTensorPreprocessorNode::eventCD(
     request_decode_reset();
   }
   decode_last_event_us_ = timestamp_us;
-  const auto output_x = std::min<std::uint32_t>(
-    static_cast<std::uint32_t>(width_ - 1),
-    static_cast<std::uint32_t>(static_cast<std::uint64_t>(x) * width_ / packet_width_));
-  const auto output_y = std::min<std::uint32_t>(
-    static_cast<std::uint32_t>(height_ - 1),
-    static_cast<std::uint32_t>(static_cast<std::uint64_t>(y) * height_ / packet_height_));
   decode_scratch_.push_back(CudaEvent{
-      timestamp_us, static_cast<std::uint16_t>(output_x),
-      static_cast<std::uint16_t>(output_y), static_cast<std::uint8_t>(polarity != 0),
+      timestamp_us, output_x_lut_[x], output_y_lut_[y],
+      static_cast<std::uint8_t>(polarity != 0),
       {0, 0, 0}});
+}
+
+void AsyncEventTensorPreprocessorNode::rebuild_coordinate_luts(
+  const std::uint32_t packet_width, const std::uint32_t packet_height)
+{
+  packet_width_ = packet_width;
+  packet_height_ = packet_height;
+  output_x_lut_.resize(packet_width_);
+  output_y_lut_.resize(packet_height_);
+
+  for (std::uint32_t x = 0; x < packet_width_; ++x) {
+    const auto scaled = static_cast<std::uint64_t>(x) * static_cast<std::uint64_t>(width_) /
+      packet_width_;
+    output_x_lut_[x] = static_cast<std::uint16_t>(std::min<std::uint64_t>(
+          static_cast<std::uint64_t>(width_ - 1), scaled));
+  }
+  for (std::uint32_t y = 0; y < packet_height_; ++y) {
+    const auto scaled = static_cast<std::uint64_t>(y) * static_cast<std::uint64_t>(height_) /
+      packet_height_;
+    output_y_lut_[y] = static_cast<std::uint16_t>(std::min<std::uint64_t>(
+          static_cast<std::uint64_t>(height_ - 1), scaled));
+  }
+  coordinate_lut_rebuilds_.fetch_add(1, std::memory_order_relaxed);
 }
 
 void AsyncEventTensorPreprocessorNode::request_decode_reset()
@@ -778,6 +793,8 @@ void AsyncEventTensorPreprocessorNode::publish_diagnostics()
     number("max_backward_jump_us", backward_max),
     number("timestamp_backward_tolerance_us", timestamp_backward_tolerance_us_),
     number("last_packet_arrival_age_ms", packet_age_ms),
+    value("coordinate_mapping", "lookup_table"),
+    number("coordinate_lut_rebuilds", coordinate_lut_rebuilds_.load(std::memory_order_relaxed)),
     number("bins", bins_),
     number("channels", channels_),
     number("window_ms", window_us_ / 1000.0),
