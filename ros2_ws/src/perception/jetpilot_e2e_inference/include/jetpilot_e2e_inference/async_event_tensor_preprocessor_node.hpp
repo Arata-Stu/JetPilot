@@ -62,7 +62,7 @@ private:
 
   struct DecodedWork
   {
-    std::shared_ptr<std::vector<CudaEvent>> events;
+    std::unique_ptr<std::vector<CudaEvent>> events;
     std::size_t offset{0U};
     std::string frame_id;
     std::int64_t sensor_to_ros_offset_ns{0};
@@ -75,6 +75,8 @@ private:
   void decode_loop();
   void gpu_loop();
   void decode_packet(PacketWork work);
+  std::unique_ptr<std::vector<CudaEvent>> acquire_decode_buffer();
+  void release_decode_buffer(std::unique_ptr<std::vector<CudaEvent>> buffer);
   void enqueue_decoded(DecodedWork work);
   bool pop_decoded(DecodedWork & work);
   void apply_chunk(DecodedWork & work);
@@ -95,6 +97,9 @@ private:
   std::size_t packet_queue_capacity_{64U};
   std::size_t decoded_queue_capacity_{64U};
   std::size_t gpu_chunk_events_{8192U};
+  std::size_t decode_buffer_initial_events_{16384U};
+  std::size_t decode_buffer_pool_capacity_{4U};
+  std::size_t decode_buffer_pool_max_events_{524288U};
   double max_queue_age_ms_{20.0};
   std::string polarity_mode_{"separate"};
   std::string polarity_layout_{"polarity_major"};
@@ -125,9 +130,11 @@ private:
   std::mutex decoded_mutex_;
   std::condition_variable decoded_cv_;
   std::deque<DecodedWork> decoded_queue_;
+  std::mutex decode_buffer_pool_mutex_;
+  std::vector<std::unique_ptr<std::vector<CudaEvent>>> decode_buffer_pool_;
 
   // Decode-thread-owned scratch and timestamp state used by EventProcessor callbacks.
-  std::vector<CudaEvent> decode_scratch_;
+  std::unique_ptr<std::vector<CudaEvent>> decode_scratch_;
   std::vector<std::uint16_t> output_x_lut_;
   std::vector<std::uint16_t> output_y_lut_;
   std::uint32_t packet_width_{0U};
@@ -176,6 +183,15 @@ private:
   std::atomic<std::uint64_t> decode_buffer_growth_events_max_{0};
   std::atomic<std::uint64_t> decode_buffer_capacity_before_events_{0};
   std::atomic<std::uint64_t> decode_buffer_capacity_after_events_max_{0};
+  std::atomic<std::uint64_t> decode_buffer_pool_acquires_{0};
+  std::atomic<std::uint64_t> decode_buffer_pool_hits_{0};
+  std::atomic<std::uint64_t> decode_buffer_pool_misses_{0};
+  std::atomic<std::uint64_t> decode_buffer_pool_returns_{0};
+  std::atomic<std::uint64_t> decode_buffer_pool_discarded_full_{0};
+  std::atomic<std::uint64_t> decode_buffer_pool_discarded_oversize_{0};
+  std::atomic<std::uint64_t> decode_buffer_pool_depth_{0};
+  std::atomic<std::uint64_t> decode_buffer_pool_depth_max_{0};
+  std::atomic<std::uint64_t> decode_buffer_pool_retained_events_{0};
   std::atomic<std::uint64_t> decode_service_calls_{0};
   std::atomic<std::uint64_t> decode_service_time_ns_{0};
   std::atomic<std::uint64_t> decode_service_time_max_ns_{0};

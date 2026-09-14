@@ -586,6 +586,8 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('e2e_event_async_gpu_chunk_events', '8192', cli=True)
     args.add_arg('e2e_event_async_packet_queue_capacity', '64', cli=True)
     args.add_arg('e2e_event_async_decoded_queue_capacity', '64', cli=True)
+    args.add_arg('e2e_event_async_decode_buffer_pool_capacity', '4', cli=True)
+    args.add_arg('e2e_event_async_decode_buffer_pool_max_events', '524288', cli=True)
     args.add_arg('e2e_event_async_max_queue_age_ms', '20.0', cli=True)
     args.add_arg('e2e_event_async_memory_pool_num_blocks', '16', cli=True)
     args.add_arg('e2e_event_async_deadline_ms', '4.0', cli=True)
@@ -1102,6 +1104,10 @@ def generate_launch_description() -> lut.LaunchDescription:
                     args.e2e_event_async_packet_queue_capacity,
                 'event_async_decoded_queue_capacity':
                     args.e2e_event_async_decoded_queue_capacity,
+                'event_async_decode_buffer_pool_capacity':
+                    args.e2e_event_async_decode_buffer_pool_capacity,
+                'event_async_decode_buffer_pool_max_events':
+                    args.e2e_event_async_decode_buffer_pool_max_events,
                 'event_async_max_queue_age_ms': args.e2e_event_async_max_queue_age_ms,
                 'event_async_memory_pool_num_blocks':
                     args.e2e_event_async_memory_pool_num_blocks,
@@ -1171,6 +1177,10 @@ def generate_launch_description() -> lut.LaunchDescription:
                     args.e2e_event_async_packet_queue_capacity,
                 'event_async_decoded_queue_capacity':
                     args.e2e_event_async_decoded_queue_capacity,
+                'event_async_decode_buffer_pool_capacity':
+                    args.e2e_event_async_decode_buffer_pool_capacity,
+                'event_async_decode_buffer_pool_max_events':
+                    args.e2e_event_async_decode_buffer_pool_max_events,
                 'event_async_max_queue_age_ms': args.e2e_event_async_max_queue_age_ms,
                 'event_async_memory_pool_num_blocks':
                     args.e2e_event_async_memory_pool_num_blocks,

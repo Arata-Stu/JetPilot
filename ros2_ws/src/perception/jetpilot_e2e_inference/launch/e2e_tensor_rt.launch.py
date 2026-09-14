@@ -196,6 +196,10 @@ def generate_launch_description():
                 LaunchConfiguration("event_async_packet_queue_capacity"), value_type=int),
             "decoded_queue_capacity": ParameterValue(
                 LaunchConfiguration("event_async_decoded_queue_capacity"), value_type=int),
+            "decode_buffer_pool_capacity": ParameterValue(
+                LaunchConfiguration("event_async_decode_buffer_pool_capacity"), value_type=int),
+            "decode_buffer_pool_max_events": ParameterValue(
+                LaunchConfiguration("event_async_decode_buffer_pool_max_events"), value_type=int),
             "max_queue_age_ms": ParameterValue(
                 LaunchConfiguration("event_async_max_queue_age_ms"), value_type=float),
             "deadline_ms": ParameterValue(
@@ -304,6 +308,10 @@ def generate_launch_description():
             DeclareLaunchArgument("event_async_gpu_chunk_events", default_value="8192"),
             DeclareLaunchArgument("event_async_packet_queue_capacity", default_value="64"),
             DeclareLaunchArgument("event_async_decoded_queue_capacity", default_value="64"),
+            DeclareLaunchArgument("event_async_decode_buffer_pool_capacity", default_value="4"),
+            DeclareLaunchArgument(
+                "event_async_decode_buffer_pool_max_events", default_value="524288"
+            ),
             DeclareLaunchArgument("event_async_max_queue_age_ms", default_value="20.0"),
             DeclareLaunchArgument("event_async_memory_pool_num_blocks", default_value="16"),
             DeclareLaunchArgument("event_async_deadline_ms", default_value="4.0"),

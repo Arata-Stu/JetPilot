@@ -132,6 +132,10 @@ AsyncEventTensorPreprocessorNode::AsyncEventTensorPreprocessorNode(
     declare_parameter<std::int64_t>("packet_queue_capacity", 64);
   const auto decoded_queue_capacity =
     declare_parameter<std::int64_t>("decoded_queue_capacity", 64);
+  const auto decode_buffer_pool_capacity =
+    declare_parameter<std::int64_t>("decode_buffer_pool_capacity", 4);
+  const auto decode_buffer_pool_max_events =
+    declare_parameter<std::int64_t>("decode_buffer_pool_max_events", 524288);
   max_queue_age_ms_ = declare_parameter<double>("max_queue_age_ms", 20.0);
   const auto subscription_depth = declare_parameter<std::int64_t>("subscription_depth", 16);
   const auto publisher_depth = declare_parameter<std::int64_t>("publisher_depth", 8);
@@ -161,6 +165,7 @@ AsyncEventTensorPreprocessorNode::AsyncEventTensorPreprocessorNode(
   if (
     transfer_events <= 0 || gpu_chunk_events <= 0 || packet_queue_capacity <= 0 ||
     decoded_queue_capacity <= 0 || subscription_depth <= 0 || publisher_depth <= 0 ||
+    decode_buffer_pool_capacity <= 0 || decode_buffer_pool_max_events <= 0 ||
     memory_pool_num_blocks <= 0 || timestamp_backward_tolerance_us_ < 0 ||
     !std::isfinite(statistics_interval_s_) || statistics_interval_s_ < 0.0 ||
     !std::isfinite(deadline_ms_) || deadline_ms_ <= 0.0 ||
@@ -187,6 +192,13 @@ AsyncEventTensorPreprocessorNode::AsyncEventTensorPreprocessorNode(
   packet_queue_capacity_ = static_cast<std::size_t>(packet_queue_capacity);
   decoded_queue_capacity_ = static_cast<std::size_t>(decoded_queue_capacity);
   gpu_chunk_events_ = static_cast<std::size_t>(gpu_chunk_events);
+  decode_buffer_initial_events_ = static_cast<std::size_t>(transfer_events) * 2U;
+  decode_buffer_pool_capacity_ = static_cast<std::size_t>(decode_buffer_pool_capacity);
+  decode_buffer_pool_max_events_ = static_cast<std::size_t>(decode_buffer_pool_max_events);
+  if (decode_buffer_pool_max_events_ < decode_buffer_initial_events_) {
+    throw std::invalid_argument(
+            "decode_buffer_pool_max_events must be at least twice cuda_events_per_transfer");
+  }
   channels_ = static_cast<std::size_t>(bins_) * (polarity_mode_ == "separate" ? 2U : 1U);
   const auto pixels = static_cast<std::size_t>(width_) * static_cast<std::size_t>(height_);
   if (pixels > std::numeric_limits<std::size_t>::max() / channels_) {
@@ -219,7 +231,6 @@ AsyncEventTensorPreprocessorNode::AsyncEventTensorPreprocessorNode(
     polarity_layout_ == "polarity_major", window_us_,
     static_cast<std::size_t>(transfer_events), channel_mean_, channel_stddev_);
   decoder_factory_ = std::make_unique<DecoderFactory>();
-  decode_scratch_.reserve(static_cast<std::size_t>(transfer_events) * 2U);
 
   rclcpp::SubscriptionOptions subscription_options;
   subscription_options.use_intra_process_comm = rclcpp::IntraProcessSetting::Enable;
@@ -252,9 +263,10 @@ AsyncEventTensorPreprocessorNode::AsyncEventTensorPreprocessorNode(
     get_logger(),
     "Asynchronous event tensor preprocessor: shape=[1,%zu,%ld,%ld], window=%.3fms, "
     "stride=%.3fms, output=%.1fHz, deadline=%.3fms, packet_queue=%zu, decoded_queue=%zu, "
-    "gpu_chunk=%zu",
+    "gpu_chunk=%zu, decode_buffer_pool=%zu x <=%zu events",
     channels_, height_, width_, window_ms, stride_ms, output_rate_hz, deadline_ms_,
-    packet_queue_capacity_, decoded_queue_capacity_, gpu_chunk_events_);
+    packet_queue_capacity_, decoded_queue_capacity_, gpu_chunk_events_,
+    decode_buffer_pool_capacity_, decode_buffer_pool_max_events_);
 }
 
 AsyncEventTensorPreprocessorNode::~AsyncEventTensorPreprocessorNode()
@@ -324,6 +336,84 @@ void AsyncEventTensorPreprocessorNode::decode_loop()
   }
 }
 
+std::unique_ptr<std::vector<CudaEvent>>
+AsyncEventTensorPreprocessorNode::acquire_decode_buffer()
+{
+  decode_buffer_pool_acquires_.fetch_add(1, std::memory_order_relaxed);
+  std::unique_ptr<std::vector<CudaEvent>> buffer;
+  {
+    std::lock_guard<std::mutex> lock(decode_buffer_pool_mutex_);
+    if (!decode_buffer_pool_.empty()) {
+      const auto largest = std::max_element(
+        decode_buffer_pool_.begin(), decode_buffer_pool_.end(),
+        [](const auto & left, const auto & right) {
+          return left->capacity() < right->capacity();
+        });
+      buffer = std::move(*largest);
+      decode_buffer_pool_.erase(largest);
+      decode_buffer_pool_depth_.store(decode_buffer_pool_.size(), std::memory_order_relaxed);
+      decode_buffer_pool_retained_events_.fetch_sub(
+        buffer->capacity(), std::memory_order_relaxed);
+    }
+  }
+  if (buffer) {
+    decode_buffer_pool_hits_.fetch_add(1, std::memory_order_relaxed);
+  } else {
+    decode_buffer_pool_misses_.fetch_add(1, std::memory_order_relaxed);
+    buffer = std::make_unique<std::vector<CudaEvent>>();
+  }
+  buffer->clear();
+  if (buffer->capacity() < decode_buffer_initial_events_) {
+    buffer->reserve(decode_buffer_initial_events_);
+  }
+  return buffer;
+}
+
+void AsyncEventTensorPreprocessorNode::release_decode_buffer(
+  std::unique_ptr<std::vector<CudaEvent>> buffer)
+{
+  if (!buffer) {
+    return;
+  }
+  decode_buffer_pool_returns_.fetch_add(1, std::memory_order_relaxed);
+  buffer->clear();
+  if (buffer->capacity() > decode_buffer_pool_max_events_) {
+    decode_buffer_pool_discarded_oversize_.fetch_add(1, std::memory_order_relaxed);
+    return;
+  }
+
+  std::unique_ptr<std::vector<CudaEvent>> discarded;
+  {
+    std::lock_guard<std::mutex> lock(decode_buffer_pool_mutex_);
+    if (decode_buffer_pool_.size() < decode_buffer_pool_capacity_) {
+      decode_buffer_pool_retained_events_.fetch_add(
+        buffer->capacity(), std::memory_order_relaxed);
+      decode_buffer_pool_.push_back(std::move(buffer));
+    } else {
+      const auto smallest = std::min_element(
+        decode_buffer_pool_.begin(), decode_buffer_pool_.end(),
+        [](const auto & left, const auto & right) {
+          return left->capacity() < right->capacity();
+        });
+      if ((*smallest)->capacity() < buffer->capacity()) {
+        decode_buffer_pool_retained_events_.fetch_sub(
+          (*smallest)->capacity(), std::memory_order_relaxed);
+        decode_buffer_pool_retained_events_.fetch_add(
+          buffer->capacity(), std::memory_order_relaxed);
+        discarded = std::move(*smallest);
+        *smallest = std::move(buffer);
+      } else {
+        discarded = std::move(buffer);
+      }
+    }
+    decode_buffer_pool_depth_.store(decode_buffer_pool_.size(), std::memory_order_relaxed);
+    update_max(decode_buffer_pool_depth_max_, decode_buffer_pool_.size());
+  }
+  if (discarded) {
+    decode_buffer_pool_discarded_full_.fetch_add(1, std::memory_order_relaxed);
+  }
+}
+
 void AsyncEventTensorPreprocessorNode::decode_packet(PacketWork work)
 {
   const auto started = std::chrono::steady_clock::now();
@@ -367,9 +457,10 @@ void AsyncEventTensorPreprocessorNode::decode_packet(PacketWork work)
     record_service();
     return;
   }
-  decode_scratch_.clear();
+  decode_scratch_ = acquire_decode_buffer();
+  decode_scratch_->clear();
   const auto decode_capacity_before =
-    static_cast<std::uint64_t>(decode_scratch_.capacity());
+    static_cast<std::uint64_t>(decode_scratch_->capacity());
   decode_buffer_capacity_before_events_.store(
     decode_capacity_before, std::memory_order_relaxed);
   decode_reset_pending_ = false;
@@ -397,9 +488,9 @@ void AsyncEventTensorPreprocessorNode::decode_packet(PacketWork work)
   const auto finished_at = std::chrono::steady_clock::now();
   const auto elapsed_ns = static_cast<std::uint64_t>(
     std::chrono::duration_cast<std::chrono::nanoseconds>(finished_at - started).count());
-  const auto packet_events = static_cast<std::uint64_t>(decode_scratch_.size());
+  const auto packet_events = static_cast<std::uint64_t>(decode_scratch_->size());
   const auto decode_capacity_after =
-    static_cast<std::uint64_t>(decode_scratch_.capacity());
+    static_cast<std::uint64_t>(decode_scratch_->capacity());
   decoded_packets_.fetch_add(1, std::memory_order_relaxed);
   decoded_events_.fetch_add(packet_events, std::memory_order_relaxed);
   decode_time_ns_.fetch_add(elapsed_ns, std::memory_order_relaxed);
@@ -426,14 +517,13 @@ void AsyncEventTensorPreprocessorNode::decode_packet(PacketWork work)
     update_max(decode_buffer_growth_events_max_, growth);
   }
 
-  if (decode_scratch_.empty() && !decode_reset_pending_) {
+  if (decode_scratch_->empty() && !decode_reset_pending_) {
+    release_decode_buffer(std::move(decode_scratch_));
     record_service();
     return;
   }
   const auto handoff_started = std::chrono::steady_clock::now();
-  auto events = std::make_shared<std::vector<CudaEvent>>(std::move(decode_scratch_));
-  decode_scratch_.clear();
-  decode_scratch_.reserve(gpu_chunk_events_ * 2U);
+  auto events = std::move(decode_scratch_);
   const auto packet_stamp_ns =
     static_cast<std::int64_t>(packet->header.stamp.sec) * 1000000000LL +
     static_cast<std::int64_t>(packet->header.stamp.nanosec);
@@ -460,15 +550,17 @@ void AsyncEventTensorPreprocessorNode::enqueue_decoded(DecodedWork work)
       dropped.events->size() - dropped.offset : 0U;
     dropped_decoded_batches_.fetch_add(1, std::memory_order_relaxed);
     dropped_decoded_events_.fetch_add(remaining, std::memory_order_relaxed);
+    release_decode_buffer(std::move(dropped.events));
     // A reset marker must survive queue overflow or two timestamp epochs could be mixed.
     if (dropped.reset_before) {
       work.reset_before = true;
-      for (const auto & queued : decoded_queue_) {
+      for (auto & queued : decoded_queue_) {
         const auto queued_remaining =
           queued.events && queued.offset < queued.events->size() ?
           queued.events->size() - queued.offset : 0U;
         dropped_decoded_batches_.fetch_add(1, std::memory_order_relaxed);
         dropped_decoded_events_.fetch_add(queued_remaining, std::memory_order_relaxed);
+        release_decode_buffer(std::move(queued.events));
       }
       decoded_queue_.clear();
     }
@@ -521,6 +613,9 @@ void AsyncEventTensorPreprocessorNode::gpu_loop()
     if (has_active) {
       apply_chunk(active);
       has_active = active.events && active.offset < active.events->size();
+      if (!has_active) {
+        release_decode_buffer(std::move(active.events));
+      }
       continue;
     }
 
@@ -700,7 +795,7 @@ void AsyncEventTensorPreprocessorNode::eventCD(
     request_decode_reset();
   }
   decode_last_event_us_ = timestamp_us;
-  decode_scratch_.push_back(CudaEvent{
+  decode_scratch_->push_back(CudaEvent{
       timestamp_us, output_x_lut_[x], output_y_lut_[y],
       static_cast<std::uint8_t>(polarity != 0),
       {0, 0, 0}});
@@ -733,7 +828,9 @@ void AsyncEventTensorPreprocessorNode::request_decode_reset()
 {
   decode_reset_pending_ = true;
   decode_last_event_us_ = 0;
-  decode_scratch_.clear();
+  if (decode_scratch_) {
+    decode_scratch_->clear();
+  }
 }
 
 bool AsyncEventTensorPreprocessorNode::eventExtTrigger(
@@ -810,6 +907,20 @@ void AsyncEventTensorPreprocessorNode::publish_diagnostics()
     decode_buffer_capacity_before_events_.load(std::memory_order_relaxed);
   const auto decode_buffer_capacity_after_events_max =
     decode_buffer_capacity_after_events_max_.exchange(0, std::memory_order_relaxed);
+  const auto decode_buffer_pool_acquires =
+    decode_buffer_pool_acquires_.exchange(0, std::memory_order_relaxed);
+  const auto decode_buffer_pool_hits =
+    decode_buffer_pool_hits_.exchange(0, std::memory_order_relaxed);
+  const auto decode_buffer_pool_misses =
+    decode_buffer_pool_misses_.exchange(0, std::memory_order_relaxed);
+  const auto decode_buffer_pool_returns =
+    decode_buffer_pool_returns_.exchange(0, std::memory_order_relaxed);
+  const auto decode_buffer_pool_discarded_full =
+    decode_buffer_pool_discarded_full_.exchange(0, std::memory_order_relaxed);
+  const auto decode_buffer_pool_discarded_oversize =
+    decode_buffer_pool_discarded_oversize_.exchange(0, std::memory_order_relaxed);
+  const auto decode_buffer_pool_depth_max =
+    decode_buffer_pool_depth_max_.exchange(0, std::memory_order_relaxed);
   const auto decode_service_calls = decode_service_calls_.exchange(0, std::memory_order_relaxed);
   const auto decode_service_ns = decode_service_time_ns_.exchange(0, std::memory_order_relaxed);
   const auto decode_service_max_ns =
@@ -944,6 +1055,28 @@ void AsyncEventTensorPreprocessorNode::publish_diagnostics()
     number("decode_buffer_growth_events_max", decode_buffer_growth_events_max),
     number("decode_buffer_capacity_before_events", decode_buffer_capacity_before_events),
     number("decode_buffer_capacity_after_events_max", decode_buffer_capacity_after_events_max),
+    number("decode_buffer_pool_acquires", decode_buffer_pool_acquires),
+    number("decode_buffer_pool_hits", decode_buffer_pool_hits),
+    number("decode_buffer_pool_misses", decode_buffer_pool_misses),
+    number(
+      "decode_buffer_pool_hit_pct", decode_buffer_pool_acquires == 0 ? 0.0 :
+      100.0 * static_cast<double>(decode_buffer_pool_hits) / decode_buffer_pool_acquires),
+    number("decode_buffer_pool_returns", decode_buffer_pool_returns),
+    number("decode_buffer_pool_discarded_full", decode_buffer_pool_discarded_full),
+    number("decode_buffer_pool_discarded_oversize", decode_buffer_pool_discarded_oversize),
+    number("decode_buffer_pool_depth", decode_buffer_pool_depth_.load(std::memory_order_relaxed)),
+    number("decode_buffer_pool_depth_max", decode_buffer_pool_depth_max),
+    number("decode_buffer_pool_capacity", decode_buffer_pool_capacity_),
+    number(
+      "decode_buffer_pool_retained_events",
+      decode_buffer_pool_retained_events_.load(std::memory_order_relaxed)),
+    number(
+      "decode_buffer_pool_retained_bytes",
+      decode_buffer_pool_retained_events_.load(std::memory_order_relaxed) * sizeof(CudaEvent)),
+    number("decode_buffer_pool_max_events", decode_buffer_pool_max_events_),
+    number(
+      "decode_buffer_pool_max_retained_bytes",
+      decode_buffer_pool_capacity_ * decode_buffer_pool_max_events_ * sizeof(CudaEvent)),
     number(
       "decode_handoff_ms_avg", decoded_packets == 0 ? 0.0 :
       milliseconds(decode_handoff_ns) / decoded_packets),

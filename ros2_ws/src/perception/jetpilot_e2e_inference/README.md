@@ -217,6 +217,13 @@ sampleであり、数msの瞬間的なDVFS変化を完全には捕捉しませ�
 `decode_ms_for_largest_event_packet`、`decode_event_count_time_correlation`により、
 packet内event数とdecode時間の関係を診断周期ごとに確認できます。相関係数は
 -1から1で、1に近いほどevent数の増加とdecode時間の増加が強く連動しています。
+decode済みvectorはGPU workerでpinned stagingへコピーした後、上限付きpoolへ返して
+次のpacketで再利用します。既定は4本、1本あたり最大524288 events（8 MiB）です。
+`event_async_decode_buffer_pool_capacity`と
+`event_async_decode_buffer_pool_max_events`で変更できます。診断の
+`decode_buffer_pool_hit_pct`、`decode_buffer_pool_misses`、
+`decode_buffer_pool_discarded_*`、`decode_buffer_pool_retained_events`で、warm-up後に
+再確保が抑えられているかと、poolが保持しているメモリ量を確認できます。
 既定では20 msを超えてqueueに滞留した古いpacket/event batchを破棄し、遅れたstateを
 後から推論へ流しません。この上限は`event_async_max_queue_age_ms`で変更できます。
 診断の文字列生成とpublishは既定1 Hzのtimer側でのみ行い、packet callbackの
