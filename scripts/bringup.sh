@@ -312,8 +312,8 @@ set_base_args() {
   set_arg enable_sensor_kit false
   set_arg sensor_kit_rgb_fps 30
   set_arg sensor_kit_infra_fps 60
-  set_arg sensor_kit_enable_accel false
-  set_arg sensor_kit_enable_gyro false
+  set_arg sensor_kit_enable_accel true
+  set_arg sensor_kit_enable_gyro true
   set_arg enable_localization false
   set_arg enable_vslam true
   set_arg vslam_enable_slam true
@@ -1881,40 +1881,6 @@ configure_realsense_fps_interactively() {
   done
 }
 
-configure_realsense_imu_interactively() {
-  is_true "$(get_arg enable_sensor_kit)" || return 0
-  case "$(get_arg sensor_kit_interface_launch 2>/dev/null || printf 'launch/sensors/realsense.launch.py')" in
-    */realsense.launch.py|*/realsense_silky_evcam.launch.py|*/realsense_silky_flir.launch.py) ;;
-    *) return 0 ;;
-  esac
-
-  local sensor key current selection override explicit label
-  local options=()
-  for sensor in accel gyro; do
-    key="sensor_kit_enable_${sensor}"
-    explicit=false
-    if ((${#EXTRA_LAUNCH_ARGS[@]} > 0)); then
-      for override in "${EXTRA_LAUNCH_ARGS[@]}"; do
-        [[ "$override" == "$key:="* ]] && explicit=true
-      done
-    fi
-    [[ "$explicit" == 'false' ]] || continue
-
-    current="$(get_arg "$key")"
-    case "$sensor" in
-      accel) label='Accel' ;;
-      gyro) label='Gyro' ;;
-    esac
-    if is_true "$current"; then
-      options=('true ON（現在値）' 'false OFF')
-    else
-      options=('false OFF（現在値）' 'true ON')
-    fi
-    selection="$(choose_one "RealSense ${label}" "${options[@]}")" || exit $?
-    set_arg "$key" "${selection%%[[:space:]]*}"
-  done
-}
-
 configure_silky_evcam_fps_interactively() {
   is_true "$(get_arg enable_sensor_kit)" || return 0
   [[ "$(get_arg sensor_kit_interface_pkg 2>/dev/null || true)" == 'jetpilot_system_launch' ]] \
@@ -2744,7 +2710,6 @@ if [[ "$INTERACTIVE" == 'true' ]]; then
   configure_recording_interactively
   configure_fixed_throttle_interactively
   configure_realsense_fps_interactively
-  configure_realsense_imu_interactively
   configure_silky_evcam_fps_interactively
   configure_offline_origin_test_interactively
   configure_localization_init_interactively

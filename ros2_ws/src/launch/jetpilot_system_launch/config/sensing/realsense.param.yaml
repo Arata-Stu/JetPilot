@@ -30,10 +30,12 @@
     enable_color: true
     enable_depth: false
     enable_rgbd: false
-    enable_accel: false
-    enable_gyro: false
+    enable_accel: true
+    enable_gyro: true
     # 0: disabled, 1: copy latest accel, 2: interpolate accel at gyro stamps.
-    unite_imu_method: 0
+    unite_imu_method: 2
+    accel_fps: 250
+    gyro_fps: 200
     enable_sync: false
 
     # Independent RGB / stereo infrared rates; selectable in bringup TUI.

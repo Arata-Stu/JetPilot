@@ -505,7 +505,7 @@ def test_invalid_vslam_tracking_mode_is_rejected() -> None:
     assert "VSLAM mode must be vo or vio" in result.stderr
 
 
-def test_realsense_imu_defaults_off_and_d455_mount_offset_is_configured() -> None:
+def test_realsense_imu_defaults_on_and_d455_mount_offset_is_configured() -> None:
     realsense_source = (
         PROJECT_ROOT
         / "ros2_ws/src/launch/jetpilot_system_launch/launch/sensors/realsense.launch.py"
@@ -519,9 +519,14 @@ def test_realsense_imu_defaults_off_and_d455_mount_offset_is_configured() -> Non
         PROJECT_ROOT
         / "ros2_ws/src/launch/jetpilot_system_launch/config/sensing/realsense.param.yaml"
     ).read_text(encoding="utf-8")
-    for key, value in (("enable_accel", "false"), ("enable_gyro", "false"), ("unite_imu_method", "0")):
+    for key, value in (("enable_accel", "true"), ("enable_gyro", "true"),
+                       ("unite_imu_method", "2"), ("accel_fps", "250"),
+                       ("gyro_fps", "200")):
         assert f"{key}: {value}" in realsense_config
-        assert f"'{key}':" not in realsense_source
+    assert "args.add_arg('enable_accel', True)" in realsense_source
+    assert "args.add_arg('enable_gyro', True)" in realsense_source
+    assert "args.add_arg('sensor_kit_enable_accel', True" in bringup_source
+    assert "args.add_arg('sensor_kit_enable_gyro', True" in bringup_source
     assert "args.add_arg('vslam_imu_topic', '/realsense/imu'" in bringup_source
     assert "args.add_arg('vehicle_description_camera_y', '0.0115'" in bringup_source
 
