@@ -192,6 +192,12 @@ packetをbounded queueへ移動するだけにし、decode workerとGPU/snapshot
 内部に持ちます。GPU workerはeventを`event_async_gpu_chunk_events`単位で処理し、
 chunk間で4 msのsnapshot期限を優先します。
 
+`event_async_output_rate_hz`は表現の`event_stride_ms`以下の任意の出力頻度を指定できます。
+たとえば40 ms / 10 bins / 4 ms strideの20ch表現を200 Hzで出力する場合、5 msの
+wall-clock周期を維持しながら、snapshot終端は学習時と同じ4 msの表現境界へ丸めます。
+このためTensorのbin定義は変わらず、境界間隔は4 msと8 msが規則的に混在します。
+診断の`snapshot_schedule=nearest_representation_stride`でこの動作を確認できます。
+
 既定値は互換性維持のため`legacy`です。250 Hz評価時は次を追加します。
 
 ```bash

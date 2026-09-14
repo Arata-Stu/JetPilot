@@ -175,17 +175,17 @@ AsyncEventTensorPreprocessorNode::AsyncEventTensorPreprocessorNode(
   }
 
   window_us_ = static_cast<std::int64_t>(std::llround(window_ms * 1000.0));
-  const auto stride_us = static_cast<std::int64_t>(std::llround(stride_ms * 1000.0));
+  stride_us_ = static_cast<std::int64_t>(std::llround(stride_ms * 1000.0));
   output_period_us_ = static_cast<std::int64_t>(std::llround(1.0e6 / output_rate_hz));
   if (window_us_ % bins_ != 0) {
     throw std::invalid_argument("window_us must be divisible by bins");
   }
   const auto bin_width_us = window_us_ / bins_;
-  if (stride_us % bin_width_us != 0 || output_period_us_ % bin_width_us != 0) {
+  if (stride_us_ % bin_width_us != 0) {
     throw std::invalid_argument(
-            "stride and output period must be integer multiples of window_us/bins");
+            "stride must be an integer multiple of window_us/bins");
   }
-  if (output_period_us_ < stride_us) {
+  if (output_period_us_ < stride_us_) {
     throw std::invalid_argument("output_rate_hz cannot exceed the event representation stride rate");
   }
 
@@ -598,11 +598,13 @@ void AsyncEventTensorPreprocessorNode::gpu_loop()
         skipped_windows_.fetch_add(due - 1U, std::memory_order_relaxed);
         deadline_misses_.fetch_add(due - 1U, std::memory_order_relaxed);
       }
-      const auto publish_end = next_window_end_us_ +
+      const auto publish_target = next_window_target_us_ +
         static_cast<std::int64_t>(due - 1U) * output_period_us_;
+      const auto publish_end = aligned_window_end(publish_target);
       const auto scheduled_at = next_snapshot_at_ + period * static_cast<std::int64_t>(due - 1U);
       publish_snapshot(publish_end, scheduled_at);
-      next_window_end_us_ += static_cast<std::int64_t>(due) * output_period_us_;
+      next_window_target_us_ += static_cast<std::int64_t>(due) * output_period_us_;
+      next_window_end_us_ = aligned_window_end(next_window_target_us_);
       next_snapshot_at_ += period * static_cast<std::int64_t>(due);
       continue;
     }
@@ -636,6 +638,8 @@ void AsyncEventTensorPreprocessorNode::apply_chunk(DecodedWork & work)
 {
   if (work.reset_before) {
     cuda_backend_->reset(*cuda_stream_);
+    publish_schedule_origin_us_ = 0;
+    next_window_target_us_ = 0;
     next_window_end_us_ = 0;
     last_header_timestamp_ns_ = 0;
     snapshot_event_version_ = applied_event_version_;
@@ -688,6 +692,8 @@ void AsyncEventTensorPreprocessorNode::apply_chunk(DecodedWork & work)
   if (next_window_end_us_ == 0) {
     const auto ready_end = cuda_backend_->latest_window_end_us();
     if (ready_end > 0) {
+      publish_schedule_origin_us_ = ready_end;
+      next_window_target_us_ = ready_end;
       next_window_end_us_ = ready_end;
       next_snapshot_at_ = finished_at;
     }
@@ -851,6 +857,17 @@ std::int64_t AsyncEventTensorPreprocessorNode::ros_timestamp_ns(
   const std::int64_t sensor_timestamp_us) const
 {
   return sensor_timestamp_us * 1000LL + sensor_to_ros_offset_ns_;
+}
+
+std::int64_t AsyncEventTensorPreprocessorNode::aligned_window_end(
+  const std::int64_t target_us) const
+{
+  if (publish_schedule_origin_us_ == 0 || target_us <= publish_schedule_origin_us_) {
+    return publish_schedule_origin_us_;
+  }
+  const auto target_offset = target_us - publish_schedule_origin_us_;
+  const auto stride_steps = (target_offset + stride_us_ / 2) / stride_us_;
+  return publish_schedule_origin_us_ + stride_steps * stride_us_;
 }
 
 void AsyncEventTensorPreprocessorNode::publish_diagnostics()
@@ -1154,7 +1171,9 @@ void AsyncEventTensorPreprocessorNode::publish_diagnostics()
     number("bins", bins_),
     number("channels", channels_),
     number("window_ms", window_us_ / 1000.0),
+    number("representation_stride_ms", stride_us_ / 1000.0),
     number("target_output_hz", 1.0e6 / output_period_us_),
+    value("snapshot_schedule", "nearest_representation_stride"),
     number("gpu_chunk_events", gpu_chunk_events_),
     number("tensor_bytes", tensor_bytes_),
     value("polarity_mode", polarity_mode_),

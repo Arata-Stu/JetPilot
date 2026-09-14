@@ -85,11 +85,13 @@ private:
   void request_decode_reset();
   void rebuild_coordinate_luts(std::uint32_t packet_width, std::uint32_t packet_height);
   std::int64_t ros_timestamp_ns(std::int64_t sensor_timestamp_us) const;
+  std::int64_t aligned_window_end(std::int64_t target_us) const;
 
   std::int64_t bins_{10};
   std::int64_t width_{212};
   std::int64_t height_{120};
   std::int64_t window_us_{40000};
+  std::int64_t stride_us_{4000};
   std::int64_t output_period_us_{4000};
   std::int64_t timestamp_backward_tolerance_us_{4000};
   std::size_t channels_{20U};
@@ -145,6 +147,8 @@ private:
   // GPU-thread-owned state.
   std::string frame_id_;
   std::int64_t sensor_to_ros_offset_ns_{0};
+  std::int64_t publish_schedule_origin_us_{0};
+  std::int64_t next_window_target_us_{0};
   std::int64_t next_window_end_us_{0};
   std::int64_t last_header_timestamp_ns_{0};
   SteadyTime next_snapshot_at_{};
