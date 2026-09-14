@@ -193,19 +193,21 @@ public:
     discarded_events_ = 0;
   }
 
-  void update(const std::vector<CudaEvent> & events, const cudaStream_t stream)
+  void update(
+    const CudaEvent * const events, const std::size_t event_count,
+    const cudaStream_t stream)
   {
-    if (events.empty()) {
+    if (events == nullptr || event_count == 0U) {
       return;
     }
     last_stream_ = stream;
-    const auto newest_timestamp = events.back().timestamp_us;
+    const auto newest_timestamp = events[event_count - 1U].timestamp_us;
     if (newest_timestamp < 0) {
-      discarded_events_ += events.size();
+      discarded_events_ += event_count;
       return;
     }
     if (!initialized_) {
-      origin_timestamp_us_ = events.front().timestamp_us;
+      origin_timestamp_us_ = events[0].timestamp_us;
     }
     const auto newest_bin = (newest_timestamp - origin_timestamp_us_) / bin_width_us_;
     if (!initialized_ || newest_bin < newest_bin_) {
@@ -234,14 +236,14 @@ public:
     const auto oldest_bin = newest_bin_ - static_cast<std::int64_t>(ring_bins_ - 1U);
     constexpr std::size_t threads = 256U;
     std::size_t offset = 0U;
-    while (offset < events.size()) {
-      const auto count = std::min(batch_capacity_, events.size() - offset);
+    while (offset < event_count) {
+      const auto count = std::min(batch_capacity_, event_count - offset);
       auto & slot = transfer_slots_[next_transfer_slot_];
       next_transfer_slot_ = (next_transfer_slot_ + 1U) % transfer_slots_.size();
       if (slot.pending) {
         check_cuda(cudaEventSynchronize(slot.complete), "wait for event staging slot");
       }
-      std::memcpy(slot.host, events.data() + offset, count * sizeof(CudaEvent));
+      std::memcpy(slot.host, events + offset, count * sizeof(CudaEvent));
       check_cuda(
         cudaMemcpyAsync(
           slot.device, slot.host, count * sizeof(CudaEvent), cudaMemcpyHostToDevice, stream),
@@ -256,7 +258,7 @@ public:
       offset += count;
     }
     latest_timestamp_us_ = newest_timestamp;
-    accepted_events_ += events.size();
+    accepted_events_ += event_count;
   }
 
   void snapshot(
@@ -344,7 +346,13 @@ void EventTensorCudaBackend::reset(const cudaStream_t stream) {impl_->reset(stre
 void EventTensorCudaBackend::update(
   const std::vector<CudaEvent> & events, const cudaStream_t stream)
 {
-  impl_->update(events, stream);
+  impl_->update(events.data(), events.size(), stream);
+}
+
+void EventTensorCudaBackend::update(
+  const CudaEvent * const events, const std::size_t count, const cudaStream_t stream)
+{
+  impl_->update(events, count, stream);
 }
 
 void EventTensorCudaBackend::snapshot(

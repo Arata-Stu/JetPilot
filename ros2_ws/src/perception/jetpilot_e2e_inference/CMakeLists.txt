@@ -15,6 +15,7 @@ find_package(ament_cmake_auto REQUIRED)
 find_package(ament_cmake_python REQUIRED)
 find_package(CUDAToolkit REQUIRED)
 find_package(MetavisionSDK COMPONENTS base REQUIRED)
+find_package(Threads REQUIRED)
 ament_auto_find_build_dependencies()
 
 ament_auto_add_library(${PROJECT_NAME}_control_decoder_node SHARED
@@ -58,6 +59,29 @@ rclcpp_components_register_node(${PROJECT_NAME}_event_tensor_encoder_node
   EXECUTABLE event_tensor_encoder_node
 )
 
+# Keep the original encoder available while the fixed-rate asynchronous design
+# is evaluated on Jetson.  The new plugin is one ROS node, but owns dedicated
+# decode and GPU/snapshot workers internally.
+ament_auto_add_library(${PROJECT_NAME}_async_event_tensor_preprocessor_node SHARED
+  src/async_event_tensor_preprocessor_node.cpp
+  src/event_tensor_cuda_backend.cu
+)
+target_compile_features(${PROJECT_NAME}_async_event_tensor_preprocessor_node PUBLIC cxx_std_17)
+set_target_properties(${PROJECT_NAME}_async_event_tensor_preprocessor_node PROPERTIES
+  CUDA_STANDARD 17
+  CUDA_STANDARD_REQUIRED ON
+  CUDA_SEPARABLE_COMPILATION ON
+)
+target_link_libraries(${PROJECT_NAME}_async_event_tensor_preprocessor_node
+  CUDA::cudart
+  MetavisionSDK::base
+  Threads::Threads
+)
+rclcpp_components_register_node(${PROJECT_NAME}_async_event_tensor_preprocessor_node
+  PLUGIN "jetpilot_e2e_inference::AsyncEventTensorPreprocessorNode"
+  EXECUTABLE async_event_tensor_preprocessor_node
+)
+
 ament_auto_add_library(${PROJECT_NAME}_latent_state_manager_node SHARED
   src/latent_state_manager_node.cpp
 )
@@ -85,6 +109,7 @@ set_target_properties(
   ${PROJECT_NAME}_control_decoder_node
   ${PROJECT_NAME}_trajectory_decoder_node
   ${PROJECT_NAME}_event_tensor_encoder_node
+  ${PROJECT_NAME}_async_event_tensor_preprocessor_node
   ${PROJECT_NAME}_latent_state_manager_node
   PROPERTIES
     BUILD_WITH_INSTALL_RPATH TRUE

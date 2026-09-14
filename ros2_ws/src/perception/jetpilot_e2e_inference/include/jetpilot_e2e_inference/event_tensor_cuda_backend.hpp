@@ -36,6 +36,7 @@ public:
 
   void reset(cudaStream_t stream);
   void update(const std::vector<CudaEvent> & events, cudaStream_t stream);
+  void update(const CudaEvent * events, std::size_t count, cudaStream_t stream);
   void snapshot(float * output, std::int64_t window_end_us, cudaStream_t stream);
 
   bool ready() const;

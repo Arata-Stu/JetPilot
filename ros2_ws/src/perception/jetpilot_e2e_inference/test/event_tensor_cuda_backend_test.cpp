@@ -55,13 +55,14 @@ int main()
 
   // Origin is 1000 us. The 3000 us event belongs to the following half-open
   // window and must not overwrite the oldest bin needed by [1000, 3000).
-  backend.update(
-    std::vector<jetpilot_e2e_inference::CudaEvent>{
+  const std::vector<jetpilot_e2e_inference::CudaEvent> events{
       {1000, 1, 1, 1, {0, 0, 0}},
       {1500, 2, 1, 0, {0, 0, 0}},
       {2000, 3, 2, 1, {0, 0, 0}},
       {3000, 0, 0, 0, {0, 0, 0}},
-    }, stream);
+  };
+  // The asynchronous preprocessor sends bounded slices of a decoded packet.
+  backend.update(events.data(), events.size(), stream);
 
   std::vector<float> output(kElements, 0.0F);
   backend.snapshot(device_output, 3000, stream);

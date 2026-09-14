@@ -170,6 +170,60 @@ def generate_launch_description():
         extra_arguments=[{"use_intra_process_comms": True}],
     )
 
+    async_event_tensor_preprocessor = ComposableNode(
+        package="jetpilot_e2e_inference",
+        plugin="jetpilot_e2e_inference::AsyncEventTensorPreprocessorNode",
+        name="e2e_async_event_tensor_preprocessor",
+        namespace="",
+        parameters=[{
+            "bins": ParameterValue(LaunchConfiguration("event_bins"), value_type=int),
+            "width": ParameterValue(LaunchConfiguration("network_image_width"), value_type=int),
+            "height": ParameterValue(LaunchConfiguration("network_image_height"), value_type=int),
+            "window_ms": ParameterValue(LaunchConfiguration("event_window_ms"), value_type=float),
+            "stride_ms": ParameterValue(LaunchConfiguration("event_stride_ms"), value_type=float),
+            "output_rate_hz": ParameterValue(
+                LaunchConfiguration("event_async_output_rate_hz"), value_type=float),
+            "polarity_mode": LaunchConfiguration("event_polarity_mode"),
+            "polarity_layout": LaunchConfiguration("event_polarity_layout"),
+            "temporal_interpolation": LaunchConfiguration("event_temporal_interpolation"),
+            "timestamp_backward_tolerance_us": ParameterValue(
+                LaunchConfiguration("event_timestamp_backward_tolerance_us"), value_type=int),
+            "cuda_events_per_transfer": ParameterValue(
+                LaunchConfiguration("event_cuda_events_per_transfer"), value_type=int),
+            "gpu_chunk_events": ParameterValue(
+                LaunchConfiguration("event_async_gpu_chunk_events"), value_type=int),
+            "packet_queue_capacity": ParameterValue(
+                LaunchConfiguration("event_async_packet_queue_capacity"), value_type=int),
+            "decoded_queue_capacity": ParameterValue(
+                LaunchConfiguration("event_async_decoded_queue_capacity"), value_type=int),
+            "max_queue_age_ms": ParameterValue(
+                LaunchConfiguration("event_async_max_queue_age_ms"), value_type=float),
+            "deadline_ms": ParameterValue(
+                LaunchConfiguration("event_async_deadline_ms"), value_type=float),
+            "channel_mean": LaunchConfiguration("event_tensor_mean"),
+            "channel_stddev": LaunchConfiguration("event_tensor_stddev"),
+            "tensor_name": LaunchConfiguration("input_tensor_name"),
+            "publish_empty": ParameterValue(
+                LaunchConfiguration("event_tensor_publish_empty"), value_type=bool),
+            "debug": ParameterValue(LaunchConfiguration("event_tensor_debug"), value_type=bool),
+            "statistics_interval_s": ParameterValue(
+                LaunchConfiguration("event_tensor_statistics_interval_s"), value_type=float),
+            "subscription_depth": ParameterValue(
+                LaunchConfiguration("event_tensor_subscription_depth"), value_type=int),
+            "publisher_depth": ParameterValue(
+                LaunchConfiguration("event_tensor_publisher_depth"), value_type=int),
+            "memory_pool_num_blocks": ParameterValue(
+                LaunchConfiguration("event_async_memory_pool_num_blocks"), value_type=int),
+            "diagnostics_topic": LaunchConfiguration("event_tensor_diagnostics_topic"),
+            "use_sim_time": ParameterValue(LaunchConfiguration("use_sim_time"), value_type=bool),
+        }],
+        remappings=[
+            ("events", LaunchConfiguration("event_topic")),
+            ("tensor", LaunchConfiguration("tensor_input_topic")),
+        ],
+        extra_arguments=[{"use_intra_process_comms": True}],
+    )
+
     control_decoder = ComposableNode(
         package="jetpilot_e2e_inference",
         plugin="jetpilot_e2e_inference::E2EControlDecoderNode",
@@ -230,6 +284,7 @@ def generate_launch_description():
             DeclareLaunchArgument("use_sim_time", default_value="false"),
             DeclareLaunchArgument("event_image_mode", default_value="false"),
             DeclareLaunchArgument("event_tensor_mode", default_value="false"),
+            DeclareLaunchArgument("event_preprocessor_mode", default_value="legacy"),
             DeclareLaunchArgument("event_topic", default_value="/event_camera/events"),
             DeclareLaunchArgument("event_bins", default_value="10"),
             DeclareLaunchArgument("event_window_ms", default_value="40.0"),
@@ -245,6 +300,13 @@ def generate_launch_description():
                 "event_timestamp_backward_tolerance_us", default_value="4000"
             ),
             DeclareLaunchArgument("event_cuda_events_per_transfer", default_value="8192"),
+            DeclareLaunchArgument("event_async_output_rate_hz", default_value="250.0"),
+            DeclareLaunchArgument("event_async_gpu_chunk_events", default_value="8192"),
+            DeclareLaunchArgument("event_async_packet_queue_capacity", default_value="64"),
+            DeclareLaunchArgument("event_async_decoded_queue_capacity", default_value="64"),
+            DeclareLaunchArgument("event_async_max_queue_age_ms", default_value="20.0"),
+            DeclareLaunchArgument("event_async_memory_pool_num_blocks", default_value="16"),
+            DeclareLaunchArgument("event_async_deadline_ms", default_value="4.0"),
             DeclareLaunchArgument("event_inference_watchdog_ms", default_value="100.0"),
             DeclareLaunchArgument("event_tensor_mean", default_value="[0.0]"),
             DeclareLaunchArgument("event_tensor_stddev", default_value="[1.0]"),
@@ -391,7 +453,18 @@ def generate_launch_description():
             LoadComposableNodes(
                 target_container=container_name,
                 composable_node_descriptions=[event_tensor_encoder],
-                condition=IfCondition(LaunchConfiguration("event_tensor_mode")),
+                condition=IfCondition(PythonExpression([
+                    "'", LaunchConfiguration("event_tensor_mode"), "'.lower() == 'true' and '",
+                    LaunchConfiguration("event_preprocessor_mode"), "'.lower() != 'async'",
+                ])),
+            ),
+            LoadComposableNodes(
+                target_container=container_name,
+                composable_node_descriptions=[async_event_tensor_preprocessor],
+                condition=IfCondition(PythonExpression([
+                    "'", LaunchConfiguration("event_tensor_mode"), "'.lower() == 'true' and '",
+                    LaunchConfiguration("event_preprocessor_mode"), "'.lower() == 'async'",
+                ])),
             ),
             LoadComposableNodes(
                 target_container=container_name,

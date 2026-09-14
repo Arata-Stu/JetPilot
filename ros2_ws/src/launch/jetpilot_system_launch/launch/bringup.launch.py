@@ -569,6 +569,7 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('e2e_event_image_mode', False, cli=True)
     args.add_arg('e2e_event_tensor_mode', False, cli=True)
     args.add_arg('e2e_async_rgb_evs_mode', False, cli=True)
+    args.add_arg('e2e_event_preprocessor_mode', 'legacy', cli=True)
     args.add_arg('e2e_event_topic', '/event_camera/events', cli=True)
     args.add_arg('e2e_event_bins', '10', cli=True)
     args.add_arg('e2e_event_window_ms', '40.0', cli=True)
@@ -582,6 +583,12 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('e2e_event_cuda_update_us', '1000', cli=True)
     args.add_arg('e2e_event_timestamp_backward_tolerance_us', '4000', cli=True)
     args.add_arg('e2e_event_cuda_events_per_transfer', '8192', cli=True)
+    args.add_arg('e2e_event_async_gpu_chunk_events', '8192', cli=True)
+    args.add_arg('e2e_event_async_packet_queue_capacity', '64', cli=True)
+    args.add_arg('e2e_event_async_decoded_queue_capacity', '64', cli=True)
+    args.add_arg('e2e_event_async_max_queue_age_ms', '20.0', cli=True)
+    args.add_arg('e2e_event_async_memory_pool_num_blocks', '16', cli=True)
+    args.add_arg('e2e_event_async_deadline_ms', '4.0', cli=True)
     args.add_arg('e2e_event_inference_watchdog_ms', '100.0', cli=True)
     args.add_arg('e2e_event_tensor_mean', '[0.0]', cli=True)
     args.add_arg('e2e_event_tensor_stddev', '[1.0]', cli=True)
@@ -1074,6 +1081,7 @@ def generate_launch_description() -> lut.LaunchDescription:
                 'fixed_throttle': args.fixed_throttle,
                 'event_image_mode': args.e2e_event_image_mode,
                 'event_tensor_mode': args.e2e_event_tensor_mode,
+                'event_preprocessor_mode': args.e2e_event_preprocessor_mode,
                 'event_topic': args.e2e_event_topic,
                 'event_bins': args.e2e_event_bins,
                 'event_window_ms': args.e2e_event_window_ms,
@@ -1088,6 +1096,16 @@ def generate_launch_description() -> lut.LaunchDescription:
                 'event_timestamp_backward_tolerance_us':
                     args.e2e_event_timestamp_backward_tolerance_us,
                 'event_cuda_events_per_transfer': args.e2e_event_cuda_events_per_transfer,
+                'event_async_output_rate_hz': args.e2e_async_event_output_rate_hz,
+                'event_async_gpu_chunk_events': args.e2e_event_async_gpu_chunk_events,
+                'event_async_packet_queue_capacity':
+                    args.e2e_event_async_packet_queue_capacity,
+                'event_async_decoded_queue_capacity':
+                    args.e2e_event_async_decoded_queue_capacity,
+                'event_async_max_queue_age_ms': args.e2e_event_async_max_queue_age_ms,
+                'event_async_memory_pool_num_blocks':
+                    args.e2e_event_async_memory_pool_num_blocks,
+                'event_async_deadline_ms': args.e2e_event_async_deadline_ms,
                 'event_inference_watchdog_ms': args.e2e_event_inference_watchdog_ms,
                 'event_tensor_mean': args.e2e_event_tensor_mean,
                 'event_tensor_stddev': args.e2e_event_tensor_stddev,
@@ -1133,6 +1151,7 @@ def generate_launch_description() -> lut.LaunchDescription:
                 'rgb_mean': args.e2e_async_rgb_mean,
                 'rgb_stddev': args.e2e_async_rgb_stddev,
                 'event_topic': args.e2e_event_topic,
+                'event_preprocessor_mode': args.e2e_event_preprocessor_mode,
                 'event_bins': args.e2e_event_bins,
                 'event_window_ms': args.e2e_event_window_ms,
                 'event_stride_ms': args.e2e_event_stride_ms,
@@ -1147,6 +1166,15 @@ def generate_launch_description() -> lut.LaunchDescription:
                 'event_timestamp_backward_tolerance_us':
                     args.e2e_event_timestamp_backward_tolerance_us,
                 'event_cuda_events_per_transfer': args.e2e_event_cuda_events_per_transfer,
+                'event_async_gpu_chunk_events': args.e2e_event_async_gpu_chunk_events,
+                'event_async_packet_queue_capacity':
+                    args.e2e_event_async_packet_queue_capacity,
+                'event_async_decoded_queue_capacity':
+                    args.e2e_event_async_decoded_queue_capacity,
+                'event_async_max_queue_age_ms': args.e2e_event_async_max_queue_age_ms,
+                'event_async_memory_pool_num_blocks':
+                    args.e2e_event_async_memory_pool_num_blocks,
+                'event_async_deadline_ms': args.e2e_event_async_deadline_ms,
                 'event_mean': args.e2e_event_tensor_mean,
                 'event_stddev': args.e2e_event_tensor_stddev,
                 'inference_watchdog_ms': args.e2e_event_inference_watchdog_ms,

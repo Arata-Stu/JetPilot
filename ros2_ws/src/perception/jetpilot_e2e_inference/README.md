@@ -15,6 +15,7 @@ TensorRT経路に加えて、`sensor_msgs/Image`を直接受信するPyTorch経�
 | `e2e_pytorch_inference` | `jetpilot_e2e_inference` | ROS ImageからPyTorchで制御指令を推論する |
 | `e2e_image_encoder` | `isaac_ros_dnn_image_encoder` | ImageをTensorRT入力tensorへ変換する |
 | `e2e_event_tensor_encoder` | `jetpilot_e2e_inference` | 生eventを時系列binのNCHW tensorへ変換する |
+| `e2e_async_event_tensor_preprocessor` | `jetpilot_e2e_inference` | 受信・decode・CUDA更新・250 Hz snapshotを1 node内の専用workerへ分離する |
 | `latent_state_manager` | `jetpilot_e2e_inference` | RGB latentとEVS tensorを非同期調停し、GPU上のstateを再利用する |
 | `e2e_tensor_rt` | `isaac_ros_tensor_rt` | ONNX/TensorRT engineを実行する |
 | `e2e_control_decoder` | `jetpilot_e2e_inference` | tensorを正規化制御指令へ変換する |
@@ -30,6 +31,7 @@ TensorRT経路に加えて、`sensor_msgs/Image`を直接受信するPyTorch経�
 | `e2e_image_encoder` | `/realsense/color/image_raw` | `sensor_msgs/msg/Image` | Best Effort / Volatile | TensorRT経路のcamera入力 |
 | `e2e_image_encoder` | `/realsense/color/camera_info` | `sensor_msgs/msg/CameraInfo` | Best Effort / Volatile | camera calibration |
 | `e2e_event_tensor_encoder` | `/event_camera/events` | `event_camera_msgs/msg/EventPacket` | Best Effort / Volatile | OpenEBの圧縮済み生event packet |
+| `e2e_async_event_tensor_preprocessor` | `/event_camera/events` | `event_camera_msgs/msg/EventPacket` | Best Effort / Volatile | OpenEB packet（ROS callbackではqueue投入のみ） |
 | `e2e_event_tensor_encoder` | `/e2e/tensor_output` | `isaac_ros_tensor_list_interfaces/msg/TensorList` | Reliable / Volatile | consumer-driven用TensorRT完了feedback |
 | `e2e_tensor_rt` | `/e2e/tensor_input` | `isaac_ros_tensor_list_interfaces/msg/TensorList` | Best Effort / Volatile | encoder出力tensor |
 | `e2e_control_decoder` | `/e2e/tensor_output` | `isaac_ros_tensor_list_interfaces/msg/TensorList` | Reliable / Volatile | control model出力tensor |
@@ -43,6 +45,8 @@ TensorRT経路に加えて、`sensor_msgs/Image`を直接受信するPyTorch経�
 | `e2e_image_encoder` | `/e2e/tensor_input` | `isaac_ros_tensor_list_interfaces/msg/TensorList` | Best Effort / Volatile | 前処理済み入力tensor |
 | `e2e_event_tensor_encoder` | `/e2e/tensor_input` | `isaac_ros_tensor_list_interfaces/msg/TensorList` | Reliable / Volatile | CUDA memory上のevent NCHW float32 tensor |
 | `e2e_event_tensor_encoder` | `/e2e/event_tensor/diagnostics` | `diagnostic_msgs/msg/DiagnosticArray` | Reliable / Volatile | event rate、処理時間、増分再利用状態 |
+| `e2e_async_event_tensor_preprocessor` | `/e2e/tensor_input` | `isaac_ros_tensor_list_interfaces/msg/TensorList` | Reliable / Volatile | 非同期workerで生成したCUDA event tensor |
+| `e2e_async_event_tensor_preprocessor` | `/e2e/event_tensor/diagnostics` | `diagnostic_msgs/msg/DiagnosticArray` | Reliable / Volatile | queue、worker、deadline、state age、drop状況 |
 | `e2e_tensor_rt` | `/e2e/tensor_output` | `isaac_ros_tensor_list_interfaces/msg/TensorList` | Reliable / Volatile | TensorRT推論出力 |
 | `e2e_control_decoder` | `/auto/control_cmd` | `jetpilot_msgs/msg/ControlCommand` | Reliable / Volatile | TensorRT direct control出力 |
 | `e2e_control_decoder` | `/e2e/diagnostics` | `diagnostic_msgs/msg/DiagnosticArray` | Reliable / Volatile | 推論deadlineとdecoder状態 |
@@ -178,6 +182,33 @@ CUDA backendは現在、厳密なrolling histogramである
 `temporal_interpolation:=none`に対応します。線形補間が必要な場合は
 `event_representation_backend:=cpu`を指定します。CUDAでは`window/B`が整数µsで、
 `stride`がそのbin幅の整数倍になる設定が必要です。
+
+#### 単一node非同期preprocessor
+
+`event_preprocessor_mode:=async`を指定すると、従来の
+`EventTensorEncoderNode`を残したまま、新しい
+`AsyncEventTensorPreprocessorNode`へ切り替えます。このnodeはROS callbackでは
+packetをbounded queueへ移動するだけにし、decode workerとGPU/snapshot workerを
+内部に持ちます。GPU workerはeventを`event_async_gpu_chunk_events`単位で処理し、
+chunk間で4 msのsnapshot期限を優先します。
+
+既定値は互換性維持のため`legacy`です。250 Hz評価時は次を追加します。
+
+```bash
+event_preprocessor_mode:=async \
+event_async_output_rate_hz:=250.0 \
+event_async_deadline_ms:=4.0
+```
+
+診断topicは従来と同じ`/e2e/event_tensor/diagnostics`です。非同期nodeでは特に
+`packet_queue_depth(_max)`、`decoded_queue_depth(_max)`、各queueのdrop、
+`packet_queue_wait_ms_*`、`gpu_queue_wait_ms_*`、worker busy率、
+`event_state_age_ms(_max)`、`reused_event_state_snapshots`、
+`fixed_rate_skipped_windows`、`deadline_misses`、`memory_pool_exhaustions`を確認します。
+既定では20 msを超えてqueueに滞留した古いpacket/event batchを破棄し、遅れたstateを
+後から推論へ流しません。この上限は`event_async_max_queue_age_ms`で変更できます。
+診断の文字列生成とpublishは既定1 Hzのtimer側でのみ行い、packet callbackの
+hot pathではatomic counter更新だけを行います。
 
 ### RGB-EVS非同期latent state更新
 
