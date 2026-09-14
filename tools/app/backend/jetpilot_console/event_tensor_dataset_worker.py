@@ -66,7 +66,11 @@ class DatasetProgress:
         elif stage == "aligning":
             progress = 0.97
             status = "running"
-            message = "Aligning tensors with RGB and teacher control."
+            message = (
+                "Aligning tensors with causal teacher control."
+                if self.mode == "event_tensor"
+                else "Aligning tensors with RGB and teacher control."
+            )
         else:
             progress = min(0.96, bag_progress * 0.96)
             status = "running"
@@ -116,6 +120,17 @@ def _nearest_control(
         return None
     selected = min(candidates, key=lambda candidate: abs(times[candidate] - stamp_ns))
     return controls[selected] if abs(times[selected] - stamp_ns) <= max_dt_ns else None
+
+
+def _causal_control(
+    controls: list[tuple[int, dict[str, object]]], times: list[int], stamp_ns: int, max_dt_ns: int
+) -> tuple[int, dict[str, object]] | None:
+    """Return the newest teacher command at or before the tensor timestamp."""
+    position = bisect.bisect_right(times, stamp_ns) - 1
+    if position < 0:
+        return None
+    control = controls[position]
+    return control if 0 <= stamp_ns - control[0] <= max_dt_ns else None
 
 
 def _limited_indices(count: int, maximum: int) -> list[int]:
@@ -364,20 +379,28 @@ def build_dataset(args: argparse.Namespace) -> dict[str, object]:
     accumulator = EventTensorAccumulator(config)
     decoder = event_camera_py.Decoder()
     reader, topic_types = _open_reader(bag)
-    for topic in (args.event_topic, args.reference_topic, args.control_topic):
+    for topic in (args.event_topic, args.control_topic):
         if topic not in topic_types:
             raise RuntimeError(f"required topic was not found: {topic}")
     deserialize, get_message = _deserializers()
-    classes = {
-        topic: get_message(topic_types[topic])
-        for topic in (args.event_topic, args.reference_topic, args.control_topic)
-    }
+    selected_topics = [args.event_topic, args.control_topic]
+    if args.reference_topic in topic_types:
+        selected_topics.append(args.reference_topic)
+    classes = {topic: get_message(topic_types[topic]) for topic in selected_topics}
     controls: list[tuple[int, dict[str, object]]] = []
     candidates: list[dict[str, object]] = []
     decoded_events = 0
     reference_messages = 0
-    last_sample_bag_ns: int | None = None
     sample_interval_ns = max(1, int(round(1.0e9 / args.sample_hz)))
+    native_interval_ns = accumulator.stride_ns
+    if sample_interval_ns < native_interval_ns:
+        raise ValueError(
+            f"sample_hz={args.sample_hz:g} exceeds the event representation boundary "
+            f"rate {1.0e9 / native_interval_ns:g} Hz"
+        )
+    next_boundary_sensor_ns: int | None = None
+    next_sample_due_sensor_ns: int | None = None
+    observed_timestamp_resets = 0
     message_count = 0
     latest_bag_ns: int | None = None
     while reader.has_next():
@@ -397,27 +420,56 @@ def build_dataset(args: argparse.Namespace) -> dict[str, object]:
             continue
         if topic == args.event_topic:
             decoded_events += accumulator.add_packet(decoder, message)
+            if accumulator.timestamp_resets != observed_timestamp_resets:
+                next_boundary_sensor_ns = None
+                next_sample_due_sensor_ns = None
+                observed_timestamp_resets = accumulator.timestamp_resets
+            if accumulator.first_event_ns is None or accumulator.latest_event_ns is None:
+                continue
+            available_end_ns = accumulator.first_event_ns + (
+                (accumulator.latest_event_ns - accumulator.first_event_ns)
+                // native_interval_ns
+            ) * native_interval_ns
+            if next_boundary_sensor_ns is None:
+                minimum_steps = (
+                    accumulator.window_ns + native_interval_ns - 1
+                ) // native_interval_ns
+                next_boundary_sensor_ns = (
+                    accumulator.first_event_ns + minimum_steps * native_interval_ns
+                )
+                next_sample_due_sensor_ns = next_boundary_sensor_ns
+            packet_stamp = _timestamp(message, bag_ns, args.timestamp_source)
+            latest_sensor_ns = accumulator.latest_event_ns
+            while next_boundary_sensor_ns <= available_end_ns:
+                boundary_ns = next_boundary_sensor_ns
+                next_boundary_sensor_ns += native_interval_ns
+                if (
+                    next_sample_due_sensor_ns is not None
+                    and boundary_ns < next_sample_due_sensor_ns
+                ):
+                    continue
+                snapshot = accumulator.snapshot_at(boundary_ns)
+                if snapshot is None:
+                    continue
+                tensor, event_info = snapshot
+                tensor_path = tensor_dir / f"{len(candidates):08d}.npy"
+                np.save(tensor_path, tensor.astype(np.float16))
+                representation_stamp = packet_stamp - latest_sensor_ns + boundary_ns
+                candidates.append(
+                    {
+                        "tensor_path": tensor_path,
+                        "stamp": representation_stamp,
+                        "event_count": int(event_info["events"]),
+                        "event_window_end_sensor_ns": boundary_ns,
+                        "sum": tensor.sum(axis=(1, 2), dtype=np.float64),
+                        "square_sum": np.square(tensor, dtype=np.float64).sum(axis=(1, 2)),
+                    }
+                )
+                if next_sample_due_sensor_ns is not None:
+                    while next_sample_due_sensor_ns <= boundary_ns:
+                        next_sample_due_sensor_ns += sample_interval_ns
             continue
         reference_messages += 1
-        if last_sample_bag_ns is not None and int(bag_ns) - last_sample_bag_ns < sample_interval_ns:
-            continue
-        snapshot = accumulator.snapshot()
-        if snapshot is None:
-            continue
-        tensor, event_info = snapshot
-        tensor_path = tensor_dir / f"{len(candidates):08d}.npy"
-        np.save(tensor_path, tensor.astype(np.float16))
-        candidates.append(
-            {
-                "tensor_path": tensor_path,
-                "stamp": _timestamp(message, bag_ns, args.timestamp_source),
-                "event_count": int(event_info["events"]),
-                "event_window_end_sensor_ns": int(event_info["window_end_sensor_ns"]),
-                "sum": tensor.sum(axis=(1, 2), dtype=np.float64),
-                "square_sum": np.square(tensor, dtype=np.float64).sum(axis=(1, 2)),
-            }
-        )
-        last_sample_bag_ns = int(bag_ns)
 
     progress.update(
         stage="aligning", bag_ns=latest_bag_ns, tensor_count=len(candidates),
@@ -432,7 +484,7 @@ def build_dataset(args: argparse.Namespace) -> dict[str, object]:
     values_per_channel = 0
     for candidate in candidates:
         stamp_ns = int(candidate["stamp"])
-        control = _nearest_control(controls, control_times, stamp_ns, max_control_dt_ns)
+        control = _causal_control(controls, control_times, stamp_ns, max_control_dt_ns)
         if control is None:
             continue
         sums += candidate["sum"]
@@ -446,7 +498,7 @@ def build_dataset(args: argparse.Namespace) -> dict[str, object]:
                 "image_path": "",
                 "stamp": stamp_ns,
                 "control_stamp": control[0],
-                "control_dt_sec": f"{abs(stamp_ns - control[0]) / 1.0e9:.6f}",
+                "control_dt_sec": f"{(stamp_ns - control[0]) / 1.0e9:.6f}",
                 "steering": f"{float(value.get('steering', 0.0)):.8f}",
                 "throttle": f"{float(value.get('throttle', 0.0)):.8f}",
                 "trajectory": "[]",
@@ -470,12 +522,23 @@ def build_dataset(args: argparse.Namespace) -> dict[str, object]:
     variance = np.maximum(square_sums / max(values_per_channel, 1) - mean * mean, 0.0)
     std = np.sqrt(variance)
     std[std < 1.0e-6] = 1.0
+    event_span_sec = (
+        (
+            int(candidates[-1]["event_window_end_sensor_ns"])
+            - int(candidates[0]["event_window_end_sensor_ns"])
+        ) / 1.0e9
+        if len(candidates) > 1 else 0.0
+    )
+    effective_event_sample_hz = (
+        (len(candidates) - 1) / event_span_sec if event_span_sec > 0.0 else 0.0
+    )
     metadata = {
         "bag_path": str(bag),
         "task": "control",
         "modality": "event_tensor",
-        "image_topic": args.reference_topic,
-        "reference_clock_topic": args.reference_topic,
+        "image_topic": "",
+        "reference_image_topic": args.reference_topic,
+        "reference_clock_topic": args.event_topic,
         "event_topic": args.event_topic,
         "control_topic": args.control_topic,
         "input_width": args.width,
@@ -483,6 +546,7 @@ def build_dataset(args: argparse.Namespace) -> dict[str, object]:
         "input_channels": config.channels,
         "sample_count": len(rows),
         "sample_hz": args.sample_hz,
+        "event_sample_hz": args.sample_hz,
         "timestamp_source": args.timestamp_source,
         "event_bins": args.bins,
         "event_window_ms": args.window_ms,
@@ -490,14 +554,16 @@ def build_dataset(args: argparse.Namespace) -> dict[str, object]:
         "event_polarity_mode": "separate",
         "event_polarity_layout": args.polarity_layout,
         "event_temporal_interpolation": args.temporal_interpolation,
-        "event_clock_source": "sensor_time_latest_causal_at_reference",
+        "event_clock_source": "fixed_event_sensor_time",
         "tensor_dtype": "float16",
         "tensor_layout": "CHW",
         "mean": [float(value) for value in mean],
         "std": [float(value) for value in std],
         "decoded_events": decoded_events,
+        "control_message_count": len(controls),
         "reference_message_count": reference_messages,
         "candidate_count": len(candidates),
+        "effective_event_sample_hz": effective_event_sample_hz,
         "dropped_without_control": len(candidates) - len(rows),
         "timestamp_resets": accumulator.timestamp_resets,
     }

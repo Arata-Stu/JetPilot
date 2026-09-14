@@ -528,7 +528,11 @@ def build_preprocess_task(config: Any, body: dict[str, Any]) -> PipelineTaskSpec
     if event_temporal_interpolation not in {"none", "linear"}:
         raise ValueError("event temporal interpolation must be none or linear")
     sample_hz = _number(
-        body.get("sample_hz", 30.0 if modality == "rgb_event_async" else 10.0),
+        body.get(
+            "sample_hz",
+            min(250.0, 1000.0 / event_stride_ms) if modality == "event_tensor"
+            else 30.0 if modality == "rgb_event_async" else 10.0,
+        ),
         label="sample rate", minimum=0.1, maximum=250.0,
     )
     event_sample_hz = _number(
@@ -539,6 +543,11 @@ def build_preprocess_task(config: Any, body: dict[str, Any]) -> PipelineTaskSpec
         body.get("rollout_steps", 32 if modality == "rgb_event_async" else 8),
         label="rollout steps", minimum=1, maximum=64,
     )
+    if modality == "event_tensor" and sample_hz > 1000.0 / event_stride_ms + 1.0e-6:
+        raise ValueError(
+            "event tensor sample rate cannot exceed 1000 / event stride; "
+            "reduce Tensor Hz or event stride"
+        )
     if modality == "rgb_event_async":
         minimum_rollout = max(1, int(event_sample_hz / sample_hz + 0.999999))
         if minimum_rollout > 64:

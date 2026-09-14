@@ -220,6 +220,35 @@ class E2EPipelineTests(unittest.TestCase):
         self.assertIn("--sample-hz 10.0", script)
         self.assertIn("/usr/bin/python3 -X faulthandler", script)
 
+        dense = build_preprocess_task(
+            self.config,
+            {
+                "rosbag": str(self.bag),
+                "dataset_name": "evs20-dense",
+                "image_topic": "/realsense/color/image_raw",
+                "control_topic": "/teleop/control_cmd",
+                "modality": "event_tensor",
+                "event_topic": "/event_camera/events",
+                "event_stride_ms": 4,
+            },
+        )
+        self.assertIn("--sample-hz 250.0", dense.command[-1])
+
+        with self.assertRaisesRegex(ValueError, "cannot exceed"):
+            build_preprocess_task(
+                self.config,
+                {
+                    "rosbag": str(self.bag),
+                    "dataset_name": "evs20-invalid-rate",
+                    "image_topic": "/realsense/color/image_raw",
+                    "control_topic": "/teleop/control_cmd",
+                    "modality": "event_tensor",
+                    "event_topic": "/event_camera/events",
+                    "event_stride_ms": 10,
+                    "sample_hz": 250,
+                },
+            )
+
     def test_event_tensor_dataset_only_accepts_event_tensor_experiment(self) -> None:
         dataset = self.training / "datasets" / "evs20"
         dataset.mkdir(parents=True)

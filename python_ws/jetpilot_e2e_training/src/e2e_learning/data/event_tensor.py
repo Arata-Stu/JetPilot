@@ -78,9 +78,14 @@ class EventTensorAccumulator:
         if self.first_event_ns is None:
             self.first_event_ns = int(event_ns[0])
         self.latest_event_ns = int(event_ns[-1])
-        oldest = self.latest_event_ns - self.window_ns - self.stride_ns
-        while self.chunks and int(self.chunks[0][0][-1]) < oldest:
-            self.chunks.popleft()
+        # Keep everything needed by the next not-yet-rendered boundary.  A
+        # packet may cross several stride boundaries, so pruning relative to
+        # the packet's latest event would make earlier fixed-rate snapshots
+        # incomplete before the caller has a chance to render them.
+        if self.previous_window_end_ns is not None:
+            oldest = self.previous_window_end_ns - self.window_ns - self.stride_ns
+            while self.chunks and int(self.chunks[0][0][-1]) < oldest:
+                self.chunks.popleft()
 
     def add_packet(self, decoder: Any, message: Any) -> int:
         decoder.decode_bytes(
@@ -102,6 +107,21 @@ class EventTensorAccumulator:
         window_end_ns = self.first_event_ns + (
             (self.latest_event_ns - self.first_event_ns) // self.stride_ns
         ) * self.stride_ns
+        return self.snapshot_at(window_end_ns)
+
+    def snapshot_at(
+        self, window_end_ns: int
+    ) -> tuple[np.ndarray, dict[str, int | float]] | None:
+        """Render one completed sensor-time boundary.
+
+        This is used by offline extraction to emit every fixed-rate boundary
+        crossed by a packet, including when packet delivery is bursty.
+        """
+        if self.latest_event_ns is None or self.first_event_ns is None:
+            return None
+        window_end_ns = int(window_end_ns)
+        if window_end_ns > self.latest_event_ns:
+            return None
         if window_end_ns - self.first_event_ns < self.window_ns:
             return None
         start_ns = window_end_ns - self.window_ns
