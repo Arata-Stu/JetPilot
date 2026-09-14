@@ -42,6 +42,8 @@ const state = {
     datasetName: "",
     datasetDir: "",
     datasetBagPaths: [],
+    datasetBagSelectionTouched: false,
+    collapsedRosbagGroups: {},
     trainDatasetDirs: [],
     validationDatasetDirs: [],
     splitMode: "temporal",
@@ -3433,6 +3435,97 @@ function updateE2EPipelineList(key, select) {
   render();
 }
 
+function e2eSelectedRosbagPaths() {
+  const selected = state.e2ePipeline.datasetBagPaths;
+  if (state.e2ePipeline.datasetBagSelectionTouched || selected.length) return [...selected];
+  return state.analysis.selectedBagPath ? [state.analysis.selectedBagPath] : [];
+}
+
+function e2eRosbagGroups(items = state.rosbags) {
+  const groups = new Map();
+  items.forEach((item) => {
+    const parts = rosbagRelativePath(item).split("/").filter(Boolean);
+    parts.pop();
+    const groupPath = parts.join("/");
+    if (!groups.has(groupPath)) groups.set(groupPath, []);
+    groups.get(groupPath).push(item);
+  });
+  return [...groups.entries()].map(([path, rosbags]) => ({ path, rosbags }));
+}
+
+function setE2ERosbagSelection(nextSelection) {
+  const selected = new Set(nextSelection);
+  state.e2ePipeline.datasetBagSelectionTouched = true;
+  state.e2ePipeline.datasetBagPaths = state.rosbags
+    .map((item) => String(item.path || ""))
+    .filter((path) => path && selected.has(path));
+  render();
+}
+
+function updateE2ERosbagSelection(path, checked) {
+  const selected = new Set(e2eSelectedRosbagPaths());
+  if (checked) selected.add(path);
+  else selected.delete(path);
+  setE2ERosbagSelection(selected);
+}
+
+function updateE2ERosbagGroup(groupPath, checked) {
+  const selected = new Set(e2eSelectedRosbagPaths());
+  const group = e2eRosbagGroups().find((item) => item.path === groupPath);
+  (group?.rosbags || []).forEach((item) => {
+    const path = String(item.path || "");
+    if (!path) return;
+    if (checked) selected.add(path);
+    else selected.delete(path);
+  });
+  setE2ERosbagSelection(selected);
+}
+
+function clearE2ERosbagSelection() {
+  setE2ERosbagSelection([]);
+}
+
+function toggleE2ERosbagGroup(groupPath, open) {
+  state.e2ePipeline.collapsedRosbagGroups[groupPath] = !open;
+}
+
+function renderE2ERosbagPicker() {
+  const selected = new Set(e2eSelectedRosbagPaths());
+  const groups = e2eRosbagGroups();
+  if (!groups.length) return `<div class="empty compact">Rosbagがありません。</div>`;
+  return `
+    <div class="e2e-rosbag-picker">
+      <div class="e2e-rosbag-picker-summary">
+        <span><strong>${selected.size}</strong> / ${state.rosbags.length} selected</span>
+        <button type="button" class="link-button" onclick="clearE2ERosbagSelection()" ${selected.size ? "" : "disabled"}>全解除</button>
+      </div>
+      <div class="e2e-rosbag-groups">
+        ${groups.map((group) => {
+          const groupPaths = group.rosbags.map((item) => String(item.path || "")).filter(Boolean);
+          const selectedCount = groupPaths.filter((path) => selected.has(path)).length;
+          const collapsed = Boolean(state.e2ePipeline.collapsedRosbagGroups[group.path]);
+          const groupLabel = group.path
+            ? `record / ${group.path.split("/").filter(Boolean).join(" / ")}`
+            : "record";
+          return `
+            <details class="e2e-rosbag-group" ${collapsed ? "" : "open"} ontoggle="toggleE2ERosbagGroup(${js(group.path)}, this.open)">
+              <summary><span class="e2e-rosbag-group-path" title="${esc(groupLabel)}">${esc(groupLabel)}</span><strong>${selectedCount}/${groupPaths.length}</strong></summary>
+              <div class="e2e-rosbag-group-actions">
+                <label><input type="checkbox" ${selectedCount === groupPaths.length ? "checked" : ""} onchange="updateE2ERosbagGroup(${js(group.path)}, this.checked)" />グループ内をすべて選択</label>
+              </div>
+              <div class="e2e-rosbag-checklist">
+                ${group.rosbags.map((item) => {
+                  const path = String(item.path || "");
+                  const label = String(item.display_name || item.label || item.name || shortName(path));
+                  return `<label class="e2e-rosbag-choice" title="${esc(path)}"><input type="checkbox" value="${esc(path)}" ${selected.has(path) ? "checked" : ""} onchange="updateE2ERosbagSelection(${js(path)}, this.checked)" /><span>${esc(label)}</span></label>`;
+                }).join("")}
+              </div>
+            </details>`;
+        }).join("")}
+      </div>
+    </div>`;
+}
+
 function recommendedE2EDeployPreset(run) {
   if (!run) return "";
   if (run.architecture?.stateful_step) return "";
@@ -3503,9 +3596,7 @@ async function startE2EPipelineTask(action, endpoint, title, target, payload) {
 
 function createE2EDataset() {
   const pipeline = state.e2ePipeline;
-  const rosbags = pipeline.datasetBagPaths.length
-    ? pipeline.datasetBagPaths
-    : state.analysis.selectedBagPath ? [state.analysis.selectedBagPath] : [];
+  const rosbags = e2eSelectedRosbagPaths();
   return startE2EPipelineTask(
     "e2e-pipeline:dataset",
     "/api/e2e/datasets/create",
@@ -3671,7 +3762,7 @@ function renderE2EPipeline() {
         <div class="e2e-pipeline-grid">
           <article class="e2e-pipeline-stage">
             <header><span>01</span><div><strong>Create dataset</strong><small>Images + control / future trajectory + causal IMU</small></div></header>
-            <div class="field"><label>Rosbags（複数選択可）</label><select multiple size="5" onchange="updateE2EPipelineList('datasetBagPaths', this)">${state.rosbags.map((item) => { const path = String(item.path || ""); const selected = pipeline.datasetBagPaths.length ? pipeline.datasetBagPaths.includes(path) : path === state.analysis.selectedBagPath; return `<option value="${esc(path)}" ${selected ? "selected" : ""}>${esc(item.label || item.name || shortName(path))}</option>`; }).join("")}</select><div class="field-hint">複数選択時はbagごとに独立したdatasetを連続生成します。topic構成は同一である必要があります。</div></div>
+            <div class="field"><label>Rosbags（複数選択可）</label>${renderE2ERosbagPicker()}<div class="field-hint">親pathごとに選択できます。複数選択時はbagごとに独立したdatasetを連続生成し、topic構成は同一である必要があります。</div></div>
             <div class="field"><label>Dataset name</label><input value="${esc(pipeline.datasetName)}" onchange="updateE2EPipelineOption('datasetName', this.value)" /><div class="field-hint">${esc(pipeline.datasetRoot)} · <button type="button" class="link-button" onclick="applyE2ENameSuggestion('dataset')">現在日時で再提案</button></div></div>
             <div class="field"><label>Learning task</label><select onchange="updateE2EPipelineOption('datasetTask', this.value)">${[["control","Control (steering + throttle)"],["trajectory","Trajectory (future odometry)"]].map(([value,label]) => `<option value="${value}" ${pipeline.datasetTask === value ? "selected" : ""}>${label}</option>`).join("")}</select></div>
             <div class="field"><label>Input representation</label><select onchange="updateE2EPipelineOption('datasetModality', this.value)">${[["image","RGB / 3ch image"],["event_tensor","Raw EVS 20ch tensor"],["rgb_event_async","Async RGB + Raw EVS 20ch"]].map(([value,label]) => `<option value="${value}" ${pipeline.datasetModality === value ? "selected" : ""}>${label}</option>`).join("")}</select></div>
@@ -3683,7 +3774,7 @@ function renderE2EPipeline() {
             <div class="e2e-compact-fields"><label>Width<input type="number" min="32" value="${esc(pipeline.inputWidth)}" onchange="updateE2EPipelineOption('inputWidth', this.value)" /></label><label>Height<input type="number" min="32" value="${esc(pipeline.inputHeight)}" onchange="updateE2EPipelineOption('inputHeight', this.value)" /></label><label>Max Δt (s)<input type="number" min="0.001" step="0.01" value="${esc(pipeline.maxControlDtSec)}" onchange="updateE2EPipelineOption('maxControlDtSec', this.value)" /></label></div>
             ${pipeline.datasetTask === "trajectory" ? `<div class="e2e-compact-fields"><label>Points<input type="number" min="2" value="${esc(pipeline.trajectoryPoints)}" onchange="updateE2EPipelineOption('trajectoryPoints', this.value)" /></label><label>Horizon (s)<input type="number" min="0.1" step="0.1" value="${esc(pipeline.trajectoryHorizonSec)}" onchange="updateE2EPipelineOption('trajectoryHorizonSec', this.value)" /></label><label>Scale (m)<input type="number" min="0.1" step="0.1" value="${esc(pipeline.trajectoryScaleM)}" onchange="updateE2EPipelineOption('trajectoryScaleM', this.value)" /></label></div>` : ""}
             <details><summary>Alignment & IMU</summary><div class="field"><label>Alignment clock</label><select onchange="updateE2EPipelineOption('timestampSource', this.value)">${[["bag", "Bag recording time (same as Offline Analysis)"], ["header", "Header stamp (synchronized sensors only)"]].map(([value, label]) => `<option value="${value}" ${pipeline.timestampSource === value ? "selected" : ""}>${esc(label)}</option>`).join("")}</select></div><div class="e2e-compact-fields"><label>Odom Δt<input type="number" min="0.001" step="0.01" value="${esc(pipeline.maxOdometryDtSec)}" onchange="updateE2EPipelineOption('maxOdometryDtSec', this.value)" /></label><label>IMU window (s)<input type="number" min="0.01" step="0.1" value="${esc(pipeline.imuWindowSec)}" onchange="updateE2EPipelineOption('imuWindowSec', this.value)" /></label><label>IMU samples<input type="number" min="1" value="${esc(pipeline.imuSamples)}" onchange="updateE2EPipelineOption('imuSamples', this.value)" /></label></div></details>
-            <button class="primary ${actionBusy("e2e-pipeline:dataset") ? "is-busy" : ""}" onclick="createE2EDataset()" ${(pipeline.datasetBagPaths.length || state.analysis.selectedBagPath) && imageTopic && (pipeline.datasetTask === "trajectory" ? pipeline.odometryTopic : pipeline.controlTopic) ? "" : "disabled"} ${actionButtonAttrs("e2e-pipeline:dataset", "Dataset creation is starting...")}>${esc(actionButtonLabel("e2e-pipeline:dataset", "Create dataset", "Starting..."))}</button>
+            <button class="primary ${actionBusy("e2e-pipeline:dataset") ? "is-busy" : ""}" onclick="createE2EDataset()" ${e2eSelectedRosbagPaths().length && imageTopic && (pipeline.datasetTask === "trajectory" ? pipeline.odometryTopic : pipeline.controlTopic) ? "" : "disabled"} ${actionButtonAttrs("e2e-pipeline:dataset", "Dataset creation is starting...")}>${esc(actionButtonLabel("e2e-pipeline:dataset", "Create dataset", "Starting..."))}</button>
           </article>
           <article class="e2e-pipeline-stage">
             <header><span>02</span><div><strong>Train model</strong><small>Adjust repeatable training parameters</small></div></header>
@@ -15989,6 +16080,10 @@ window.updateE2EPipelineOption = updateE2EPipelineOption;
 window.createE2EDataset = createE2EDataset;
 window.trainE2EModel = trainE2EModel;
 window.updateE2EPipelineList = updateE2EPipelineList;
+window.updateE2ERosbagSelection = updateE2ERosbagSelection;
+window.updateE2ERosbagGroup = updateE2ERosbagGroup;
+window.clearE2ERosbagSelection = clearE2ERosbagSelection;
+window.toggleE2ERosbagGroup = toggleE2ERosbagGroup;
 window.exportE2EOnnx = exportE2EOnnx;
 window.deployE2EModel = deployE2EModel;
 window.useE2ERunForOfflineEval = useE2ERunForOfflineEval;

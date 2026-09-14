@@ -3254,6 +3254,113 @@ tr:last-child td {
 .e2e-pipeline-stage > header small { margin-top: 2px; color: var(--muted); font-size: 11px; }
 .e2e-pipeline-stage > button { margin-top: auto; }
 
+.e2e-rosbag-picker {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #0c1014;
+}
+
+.e2e-rosbag-picker-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border-bottom: 1px solid var(--line);
+  padding: 8px 10px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.e2e-rosbag-picker-summary strong { color: var(--text); }
+
+.e2e-rosbag-picker-summary .link-button {
+  min-height: 0;
+  border: 0;
+  background: transparent;
+  color: var(--blue);
+  padding: 0;
+  font-size: 11px;
+  text-decoration: underline;
+}
+
+.e2e-rosbag-groups {
+  display: grid;
+  gap: 6px;
+  max-height: 310px;
+  overflow-y: auto;
+  padding: 7px;
+}
+
+.e2e-rosbag-group {
+  overflow: hidden;
+  border: 1px solid #28313a;
+  border-radius: 6px;
+  background: #11171d;
+}
+
+.e2e-rosbag-group > summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  cursor: pointer;
+  padding: 8px 9px;
+  color: var(--soft);
+  font-size: 11px;
+}
+
+.e2e-rosbag-group > summary::before {
+  content: "▸";
+  color: var(--muted);
+  transition: transform 120ms ease;
+}
+
+.e2e-rosbag-group[open] > summary::before { transform: rotate(90deg); }
+.e2e-rosbag-group > summary:hover { background: rgba(90, 168, 255, 0.07); }
+.e2e-rosbag-group > summary strong { color: var(--cyan); font: 700 10px ui-monospace, monospace; }
+
+.e2e-rosbag-group-path {
+  overflow: hidden;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.e2e-rosbag-group-actions {
+  border-top: 1px solid #252d35;
+  border-bottom: 1px solid #252d35;
+  padding: 6px 9px;
+}
+
+.e2e-rosbag-group-actions label,
+.e2e-rosbag-choice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.e2e-rosbag-group-actions input,
+.e2e-rosbag-choice input {
+  flex: 0 0 auto;
+  width: auto;
+}
+
+.e2e-rosbag-checklist { display: grid; gap: 2px; padding: 5px; }
+
+.e2e-rosbag-choice {
+  min-width: 0;
+  border-radius: 4px;
+  padding: 6px 5px;
+}
+
+.e2e-rosbag-choice:hover { background: rgba(90, 168, 255, 0.08); }
+.e2e-rosbag-choice:has(input:checked) { background: rgba(87, 199, 194, 0.1); color: var(--text); }
+.e2e-rosbag-choice span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 .e2e-compact-fields {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
