@@ -549,7 +549,7 @@ def test_image_processing_components_share_one_top_level_container() -> None:
     assert bringup_source.count("'run_standalone': False") >= 4
 
 
-def test_openeb_raw_recording_follows_bag_manager_session() -> None:
+def test_openeb_raw_recording_integration_is_available_but_disabled() -> None:
     project_root = LAUNCHER.parents[1]
     bringup_source = (
         project_root
@@ -582,6 +582,7 @@ def test_openeb_raw_recording_follows_bag_manager_session() -> None:
     assert '"--max-bag-duration"' in bag_manager_source
     assert "self.handle_scheduled_raw_split" in bag_manager_source
     assert "recording_split_duration_s: 0" in bag_manager_config
+    assert 'raw_recording_request_topic: ""' in bag_manager_config
     assert "max_bag_duration:" not in bag_manager_config
     assert "sensor_kit_silky_evcam_raw_recording_split_duration_s" not in (
         bringup_source

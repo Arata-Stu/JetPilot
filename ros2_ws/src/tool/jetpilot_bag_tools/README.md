@@ -86,7 +86,7 @@ to the remaining error.
 
 `record_all=true` の場合は `-a` で全 topic を記録します。`record_all=false` の場合は `topics` parameter に列挙された topic だけを記録します。既定の `topics` は、制御、operation、vehicle feedback、TF、localization、RealSense、event camera を offline 解析しやすいようにまとめています。診断情報は`/diagnostics`へ集約せず、発行元別のtopicを記録します。
 
-`raw_recording_request_topic` を空文字にするとOpenEB連携を無効化できます。`recording_start_timeout_s` は、rosbag出力directoryの生成を待つ上限時間です。連携時のOpenEB RAWとsidecar metadataはMCAPおよび`metadata.yaml`と同じsession directoryへ保存されます。
+`raw_recording_request_topic` を空文字にするとOpenEB連携を無効化できます。現在の既定値は一時的に空文字としており、rosbagのみを記録します。再度連携する場合は`/event_camera/raw_recording/request`へ戻してください。`recording_start_timeout_s` は、rosbag出力directoryの生成を待つ上限時間です。連携時のOpenEB RAWとsidecar metadataはMCAPおよび`metadata.yaml`と同じsession directoryへ保存されます。
 
 duration分割は`recording_split_duration_s`だけで設定します。この1つの値がrosbagの`--max-bag-duration`とOpenEBへの周期SPLITの両方に使われます。`max_bag_duration`や`extra_args`からの個別上書きはエラーになります。`0`は両方のduration分割を無効化します。手動の`BagRequest.SPLIT`は境界の不一致を防ぐため無視されます。
 

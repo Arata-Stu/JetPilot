@@ -113,7 +113,7 @@ camera_mount_link -> d455_link -> realsense_camera_link`で接続します。
 `/localization/vgl/diagnostics`です。Localization Managerは
 `/localization/vslam/diagnostics`を購読します。
 
-SilkyEvCam/OpenEBを含むsensor kitでは、RAW記録機能が既定で待機状態になります。Bag Managerを有効にして `/bag/request` へSTARTを送ると、rosbag directoryの生成後に `/event_camera/raw_recording/request` へ同じ開始要求が転送され、MCAP、RAW、`*.raw.metadata.yaml` が同じsession directoryへ保存されます。STOPも同じトリガーでRAW停止要求を先に送ってからrosbagを終了します。カメラ起動直後の自動RAW記録は無効です。
+SilkyEvCam/OpenEBを含むsensor kitでは、RAW記録機能自体は待機状態になりますが、Bag Managerからの連携は現在一時的に無効です。この状態では`/bag/request`へSTARTを送ってもrosbagだけを記録します。再度連携する場合は`config/tool/bag_manager.param.yaml`の`raw_recording_request_topic`を`/event_camera/raw_recording/request`へ戻してください。連携時はrosbag directoryの生成後に同じ開始要求が転送され、MCAP、RAW、`*.raw.metadata.yaml`が同じsession directoryへ保存されます。カメラ起動直後の自動RAW記録は無効です。
 
 MCAPとRAWのduration分割は`config/tool/bag_manager.param.yaml`の`recording_split_duration_s`で一括指定します。統合launchにはRAW専用の分割引数を公開していないため、異なるdurationは指定できません。`0`は分割無効、例えば`600`は両方を約10分周期で分割します。
 
