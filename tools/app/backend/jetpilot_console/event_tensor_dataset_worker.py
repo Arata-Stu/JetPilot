@@ -80,6 +80,14 @@ def _build_async_dataset(args: argparse.Namespace) -> dict[str, object]:
     last_event_end_ns: int | None = None
     rgb_interval_ns = max(1, round(1.0e9 / args.sample_hz))
     event_interval_ns = max(1, round(1.0e9 / args.event_sample_hz))
+    # When the requested update period is the representation stride (250 Hz
+    # for a 4 ms stride), every packet must reach snapshot(). Applying another
+    # bag-time rate limiter at the same nominal frequency drops updates whenever
+    # packet arrival jitter places one just before the next deadline. The
+    # accumulator already de-duplicates packets that do not cross a new sensor
+    # time boundary. Keep bag-time throttling only for an explicitly slower
+    # requested output rate.
+    throttle_event_packets = event_interval_ns > accumulator.stride_ns
     while reader.has_next():
         topic, serialized, bag_ns = reader.read_next()
         if topic not in classes:
@@ -100,7 +108,11 @@ def _build_async_dataset(args: argparse.Namespace) -> dict[str, object]:
                     next_rgb_bag_ns += rgb_interval_ns
         else:
             decoded_events += accumulator.add_packet(decoder, message)
-            if next_event_bag_ns is not None and int(bag_ns) < next_event_bag_ns:
+            if (
+                throttle_event_packets
+                and next_event_bag_ns is not None
+                and int(bag_ns) < next_event_bag_ns
+            ):
                 continue
             snapshot = accumulator.snapshot()
             if snapshot is None:
@@ -124,11 +136,12 @@ def _build_async_dataset(args: argparse.Namespace) -> dict[str, object]:
                 "sum": tensor.sum(axis=(1, 2), dtype=np.float64),
                 "square_sum": np.square(tensor, dtype=np.float64).sum(axis=(1, 2)),
             })
-            if next_event_bag_ns is None:
-                next_event_bag_ns = int(bag_ns) + event_interval_ns
-            else:
-                while next_event_bag_ns <= int(bag_ns):
-                    next_event_bag_ns += event_interval_ns
+            if throttle_event_packets:
+                if next_event_bag_ns is None:
+                    next_event_bag_ns = int(bag_ns) + event_interval_ns
+                else:
+                    while next_event_bag_ns <= int(bag_ns):
+                        next_event_bag_ns += event_interval_ns
             last_event_end_ns = end_ns
 
     controls.sort(key=lambda item: item[0])
@@ -188,6 +201,13 @@ def _build_async_dataset(args: argparse.Namespace) -> dict[str, object]:
     mean = sums / max(value_count, 1)
     std = np.sqrt(np.maximum(square_sums / max(value_count, 1) - mean * mean, 0.0))
     std[std < 1.0e-6] = 1.0
+    event_span_sec = (
+        (int(events[-1]["sensor_stamp"]) - int(events[0]["sensor_stamp"])) / 1.0e9
+        if len(events) > 1 else 0.0
+    )
+    effective_event_sample_hz = (
+        (len(events) - 1) / event_span_sec if event_span_sec > 0.0 else 0.0
+    )
     metadata = {
         "bag_path": str(bag), "task": "control", "modality": "rgb_event_async",
         "image_topic": args.reference_topic, "event_topic": args.event_topic,
@@ -202,7 +222,9 @@ def _build_async_dataset(args: argparse.Namespace) -> dict[str, object]:
         "mean": [0.485, 0.456, 0.406], "std": [0.229, 0.224, 0.225],
         "event_mean": mean.tolist(), "event_std": std.tolist(),
         "decoded_events": decoded_events, "rgb_frame_count": len(rgb_frames),
-        "event_tensor_count": len(events), "timestamp_resets": accumulator.timestamp_resets,
+        "event_tensor_count": len(events),
+        "effective_event_sample_hz": effective_event_sample_hz,
+        "timestamp_resets": accumulator.timestamp_resets,
     }
     (output / "metadata.yaml").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
     print(json.dumps(metadata, indent=2))
