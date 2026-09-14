@@ -1699,6 +1699,10 @@ find {shlex.quote(record_root)} -name metadata.yaml -printf '%TY-%Tm-%Td %TH:%TM
             e2e_model = (
                 Path(str(resolved["model_path"])) if resolved.get("model_path") else None
             )
+            e2e_dataset = (
+                Path(str(resolved["evaluation_dataset"]))
+                if resolved.get("evaluation_dataset") else None
+            )
             e2e_provider = str(resolved.get("inference_provider") or "auto")
             e2e_deadline_ms = float(resolved.get("deadline_ms") or 33.3)
             e2e_manual_only = bool(resolved.get("manual_only", True))
@@ -1731,6 +1735,7 @@ find {shlex.quote(record_root)} -name metadata.yaml -printf '%TY-%Tm-%Td %TH:%TM
             "analysis_kind",
             "e2e_mode",
             "model_path",
+            "evaluation_dataset",
             "teacher_control_topic",
             "prediction_control_topic",
             "applied_control_topic",
@@ -1813,6 +1818,7 @@ find {shlex.quote(record_root)} -name metadata.yaml -printf '%TY-%Tm-%Td %TH:%TM
                 e2e_imu_topic=str(resolved.get("e2e_imu_topic") or ""),
                 e2e_mode=e2e_mode,
                 e2e_model=e2e_model,
+                e2e_dataset=e2e_dataset,
                 e2e_provider=e2e_provider,
                 e2e_teacher_topic=str(resolved.get("teacher_control_topic") or ""),
                 e2e_prediction_topic=str(resolved.get("prediction_control_topic") or ""),

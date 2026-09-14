@@ -445,6 +445,45 @@ def pipeline_catalog(config: Any) -> dict[str, Any]:
 
 
 def build_preprocess_task(config: Any, body: dict[str, Any]) -> PipelineTaskSpec:
+    requested_bags = body.get("rosbags")
+    if isinstance(requested_bags, list) and requested_bags:
+        bag_values = list(dict.fromkeys(str(value) for value in requested_bags if str(value)))
+        if len(bag_values) > 32:
+            raise ValueError("at most 32 rosbags may be processed in one dataset task")
+        if len(bag_values) == 1:
+            body = {**body, "rosbag": bag_values[0]}
+            body.pop("rosbags", None)
+        elif len(bag_values) > 1:
+            requested_name = str(body.get("dataset_name") or "").strip()
+            base_name = _name(
+                requested_name or suggest_dataset_name(), label="dataset name"
+            )
+            child_specs: list[PipelineTaskSpec] = []
+            for index, bag_value in enumerate(bag_values, start=1):
+                bag_label = re.sub(
+                    r"[^A-Za-z0-9_.-]+", "-", Path(bag_value).name
+                ).strip("-._")[:32]
+                suffix = f"-{index:02d}-{bag_label or 'bag'}"
+                child_name = f"{base_name[:max(1, 64 - len(suffix))]}{suffix}"
+                child_body = {**body, "rosbag": bag_value, "dataset_name": child_name}
+                child_body.pop("rosbags", None)
+                child_specs.append(build_preprocess_task(config, child_body))
+            script_lines = ["set -euo pipefail", f"cd {shlex.quote(str(training_root(config)))}"]
+            for index, spec in enumerate(child_specs, start=1):
+                script_lines.append(
+                    f"echo {shlex.quote(f'[dataset {index}/{len(child_specs)}] {spec.title}')}"
+                )
+                script_lines.append(shlex.join(spec.command))
+            return PipelineTaskSpec(
+                kind="e2e-preprocess",
+                title=f"Create {len(child_specs)} E2E datasets: {base_name}",
+                command=["bash", "-lc", "\n".join(script_lines)],
+                cwd=str(training_root(config)),
+                artifacts=[artifact for spec in child_specs for artifact in spec.artifacts],
+                resource_keys=list(dict.fromkeys(
+                    key for spec in child_specs for key in spec.resource_keys
+                )),
+            )
     bag = resolve_under_root(
         str(body.get("rosbag") or ""),
         Path(config.record_root),
@@ -597,15 +636,36 @@ def build_preprocess_task(config: Any, body: dict[str, Any]) -> PipelineTaskSpec
 
 
 def build_train_task(config: Any, body: dict[str, Any]) -> PipelineTaskSpec:
-    dataset = resolve_under_root(
-        str(body.get("dataset_dir") or ""),
-        dataset_root(config),
-        label="dataset",
-        require_exists=True,
-        require_directory=True,
-    )
-    if not (dataset / "samples.csv").is_file():
-        raise ValueError(f"dataset has no samples.csv: {dataset}")
+    split_mode = str(body.get("split_mode") or "temporal").strip().lower()
+    if split_mode not in {"temporal", "explicit"}:
+        raise ValueError("split mode must be temporal or explicit")
+    requested_train = body.get("dataset_dirs")
+    if not isinstance(requested_train, list) or not requested_train:
+        requested_train = [body.get("dataset_dir")]
+    requested_validation = body.get("validation_dataset_dirs")
+    if not isinstance(requested_validation, list):
+        requested_validation = []
+
+    def resolve_datasets(values: list[object], label: str) -> list[Path]:
+        resolved_values: list[Path] = []
+        for value in dict.fromkeys(str(item or "") for item in values):
+            directory = resolve_under_root(
+                value, dataset_root(config), label=label,
+                require_exists=True, require_directory=True,
+            )
+            if not (directory / "samples.csv").is_file():
+                raise ValueError(f"dataset has no samples.csv: {directory}")
+            resolved_values.append(directory)
+        return resolved_values
+
+    datasets = resolve_datasets(requested_train, "training dataset")
+    validation_datasets = resolve_datasets(requested_validation, "validation dataset")
+    if split_mode == "explicit" and not validation_datasets:
+        raise ValueError("explicit split requires at least one validation dataset")
+    overlap = set(datasets).intersection(validation_datasets)
+    if overlap:
+        raise ValueError("training and validation datasets must be different")
+    dataset = datasets[0]
     experiment = str(body.get("experiment") or "pilotnet_scratch")
     if experiment not in EXPERIMENTS:
         raise ValueError(f"unsupported experiment: {experiment}")
@@ -642,6 +702,9 @@ def build_train_task(config: Any, body: dict[str, Any]) -> PipelineTaskSpec:
     device = str(body.get("device") or "").strip().lower()
     if device not in {"", "cpu", "cuda", "mps"}:
         raise ValueError("device must be auto, cpu, cuda or mps")
+    rgb_feature_mode = str(body.get("rgb_feature_mode") or "image").strip().lower()
+    if rgb_feature_mode not in {"image", "cache"}:
+        raise ValueError("RGB feature mode must be image or cache")
     dataset_metadata = load_yaml(dataset / "metadata.yaml") if (dataset / "metadata.yaml").is_file() else {}
     dataset_task = str(dataset_metadata.get("task") or "control")
     dataset_modality = str(dataset_metadata.get("modality") or "image")
@@ -655,6 +718,31 @@ def build_train_task(config: Any, body: dict[str, Any]) -> PipelineTaskSpec:
         raise ValueError(
             f"{experiment} requires a {experiment_modality} dataset, but "
             f"{dataset.name} is {dataset_modality}"
+        )
+    for candidate in [*datasets[1:], *validation_datasets]:
+        candidate_metadata = (
+            load_yaml(candidate / "metadata.yaml")
+            if (candidate / "metadata.yaml").is_file() else {}
+        )
+        candidate_task = str(candidate_metadata.get("task") or "control")
+        candidate_modality = str(candidate_metadata.get("modality") or "image")
+        if candidate_task != dataset_task or candidate_modality != dataset_modality:
+            raise ValueError(
+                "all training and validation datasets must use the same task and modality"
+            )
+        for key in (
+            "input_width", "input_height", "input_channels", "event_channels",
+            "event_bins", "event_window_ms", "event_stride_ms",
+            "event_polarity_layout", "event_temporal_interpolation", "rollout_steps",
+            "event_sample_hz",
+        ):
+            primary_value = dataset_metadata.get(key)
+            candidate_value = candidate_metadata.get(key)
+            if primary_value is not None and candidate_value is not None and candidate_value != primary_value:
+                raise ValueError(f"dataset representation mismatch for {key}: {candidate}")
+    if rgb_feature_mode == "cache" and experiment != "async_rgb_evs_dinov3_control":
+        raise ValueError(
+            "RGB feature cache is only available for Async frozen DINOv3 RGB + Raw EVS"
         )
     fixed_input_width = EXPERIMENTS[experiment].get("input_width")
     fixed_input_height = EXPERIMENTS[experiment].get("input_height")
@@ -673,6 +761,9 @@ def build_train_task(config: Any, body: dict[str, Any]) -> PipelineTaskSpec:
     overrides = [
         f"experiment={experiment}",
         f"data.dataset_dir={dataset}",
+        f"data.dataset_dirs={json.dumps([str(value) for value in datasets])}",
+        f"data.validation_dataset_dirs={json.dumps([str(value) for value in validation_datasets])}",
+        f"data.split_mode={split_mode}",
         f"data.input_width={width}",
         f"data.input_height={height}",
         f"data.fraction={fraction}",
@@ -686,6 +777,7 @@ def build_train_task(config: Any, body: dict[str, Any]) -> PipelineTaskSpec:
         f"train.device={device}",
         f"train.stages.0.epochs={epochs}",
         f"train.stages.0.lr={learning_rate}",
+        f"data.rgb_feature_cache={'true' if rgb_feature_mode == 'cache' else 'false'}",
     ]
     if experiment_task == "control":
         overrides.append(f"model.steering_only={'true' if output_target == 'steer' else 'false'}")
@@ -755,7 +847,10 @@ def build_train_task(config: Any, body: dict[str, Any]) -> PipelineTaskSpec:
             {"name": "metrics", "path": str(output / "metrics.json")},
             {"name": "progress", "path": str(output / "progress.json")},
         ],
-        resource_keys=[f"e2e-dataset:{dataset}", f"e2e-run:{output}"],
+        resource_keys=[
+            *[f"e2e-dataset:{value}" for value in [*datasets, *validation_datasets]],
+            f"e2e-run:{output}",
+        ],
     )
 
 

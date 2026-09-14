@@ -148,6 +148,45 @@ class E2EPipelineTests(unittest.TestCase):
             "wam-dinov3-vits16-gru-control-frozen_0910-1800",
         )
 
+    def test_multiple_bags_create_independent_datasets_in_one_task(self) -> None:
+        second_bag = self.record_root / "bag-b"
+        second_bag.mkdir()
+        (second_bag / "metadata.yaml").write_text("rosbag2_bagfile_information:\n  version: 8\n")
+        spec = build_preprocess_task(self.config, {
+            "rosbags": [str(self.bag), str(second_bag)],
+            "dataset_name": "multi",
+            "image_topic": "/camera/image",
+            "control_topic": "/teleop/control_cmd",
+        })
+        self.assertIn("Create 2 E2E datasets", spec.title)
+        self.assertIn("multi-01-bag-a", spec.command[-1])
+        self.assertIn("multi-02-bag-b", spec.command[-1])
+        self.assertEqual(sum(item["name"] == "dataset" for item in spec.artifacts), 2)
+
+    def test_explicit_train_validation_datasets_are_separate(self) -> None:
+        train_dataset = self._dataset()
+        validation_dataset = self.training / "datasets" / "dataset-validation"
+        validation_dataset.mkdir(parents=True)
+        (validation_dataset / "samples.csv").write_text(
+            "image_path,steering,throttle\nimages/000.jpg,0.1,0.2\n"
+        )
+        (validation_dataset / "metadata.yaml").write_text(
+            "task: control\nmodality: image\ninput_width: 212\ninput_height: 120\n"
+        )
+        spec = build_train_task(self.config, {
+            "dataset_dirs": [str(train_dataset)],
+            "validation_dataset_dirs": [str(validation_dataset)],
+            "split_mode": "explicit",
+            "run_name": "strict-run",
+            "experiment": "pilotnet_scratch",
+        })
+        self.assertIn("data.split_mode=explicit", spec.command)
+        self.assertTrue(any(str(validation_dataset) in value for value in spec.command))
+        with self.assertRaisesRegex(ValueError, "requires at least one validation"):
+            build_train_task(self.config, {
+                "dataset_dirs": [str(train_dataset)], "split_mode": "explicit",
+                "run_name": "invalid-strict-run", "experiment": "pilotnet_scratch",
+            })
     def test_preprocess_timestamp_source_override_and_validation(self) -> None:
         body = {"rosbag": str(self.bag), "dataset_name": "clock-test", "image_topic": "/event_camera/event_image"}
         spec = build_preprocess_task(self.config, {**body, "timestamp_source": "header"})
@@ -251,9 +290,17 @@ class E2EPipelineTests(unittest.TestCase):
         train = build_train_task(self.config, {
             "dataset_dir": str(dataset), "run_name": "async-run",
             "experiment": "async_rgb_evs_dinov3_control",
+            "rgb_feature_mode": "cache",
         })
         self.assertIn("experiment=async_rgb_evs_dinov3_control", train.command)
         self.assertIn("data.event_sample_hz=250", train.command)
+        self.assertIn("data.rgb_feature_cache=true", train.command)
+        conventional = build_train_task(self.config, {
+            "dataset_dir": str(dataset), "run_name": "async-run-image",
+            "experiment": "async_rgb_evs_dinov3_control",
+            "rgb_feature_mode": "image",
+        })
+        self.assertIn("data.rgb_feature_cache=false", conventional.command)
         with self.assertRaisesRegex(ValueError, "requires a image dataset"):
             build_train_task(self.config, {
                 "dataset_dir": str(dataset), "run_name": "wrong-async-run",

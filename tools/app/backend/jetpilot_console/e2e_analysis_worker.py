@@ -368,6 +368,7 @@ def _supervised_predictions(
     manual_only: bool,
     deadline_ms: float,
     progress: Progress,
+    dataset_path: Path | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     import cv2
     import numpy as np
@@ -387,6 +388,8 @@ def _supervised_predictions(
     trajectory_times = [float(item["t"]) for item in trajectory]
     imu_times = [float(item["t"]) for item in imu_records]
     metadata = _metadata(model_path)
+    if dataset_path is not None:
+        metadata = {**metadata, "source_dataset": str(dataset_path)}
     modality = str(metadata.get("modality") or "rgb")
     steering_only = is_steering_only(metadata)
     task = str(metadata.get("task") or metadata.get("output", {}).get("task") or "control")
@@ -1168,6 +1171,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             args.manual_only,
             args.deadline_ms,
             progress,
+            Path(args.dataset).expanduser().resolve() if args.dataset else None,
         )
     else:
         diagnostics = _timed(timeline.get("e2e_diagnostics"))
@@ -1284,6 +1288,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--analysis-dir", required=True)
     parser.add_argument("--mode", choices=("supervised", "offline_localization", "recorded_localization"), required=True)
     parser.add_argument("--model", default="")
+    parser.add_argument(
+        "--dataset", default="",
+        help="Dataset extracted from the evaluation rosbag for raw-event models.",
+    )
     parser.add_argument("--provider", choices=("auto", "cpu", "cuda"), default="auto")
     parser.add_argument("--map-dir", default="")
     parser.add_argument("--teacher-topic", default="")

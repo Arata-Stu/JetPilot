@@ -1,6 +1,11 @@
 bag_path: ""
 output_dir: datasets/e2e/default
 dataset_dir: datasets/e2e/default
+# temporal: split every selected dataset by time. explicit: use the separate
+# validation_dataset_dirs without taking validation samples from training bags.
+dataset_dirs: []
+validation_dataset_dirs: []
+split_mode: temporal
 
 image_topic: /realsense/color/image_raw
 control_topic: /teleop/control_cmd
@@ -51,6 +56,9 @@ timing_jitter_fraction: 0.15
 event_update_drop_probability: 0.05
 rgb_update_drop_probability: 0.10
 max_rgb_interval_multiplier: 2
+# false: decode RGB and run frozen DINOv3 every epoch (legacy behavior).
+# true: cache the frozen CLS feature once per image and reuse it across runs.
+rgb_feature_cache: false
 event_mean: [0.0]
 event_std: [1.0]
 

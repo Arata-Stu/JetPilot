@@ -1010,6 +1010,42 @@ def _analyze_e2e_preflight(
                 "The selected ONNX model is available for offline inference.",
                 details={"path": str(model_path), "metadata": bool(metadata)},
             )
+        evaluation_dataset_value = str(payload.get("evaluation_dataset") or "").strip()
+        if evaluation_dataset_value:
+            configured_root = os.environ.get("JETPILOT_E2E_DATASET_ROOT", "")
+            datasets_root = (
+                Path(configured_root).expanduser().resolve(strict=False)
+                if configured_root else
+                (Path(config.python_ws) / "jetpilot_e2e_training" / "datasets").resolve(strict=False)
+            )
+            try:
+                evaluation_dataset = resolve_under_root(
+                    evaluation_dataset_value, datasets_root,
+                    label="evaluation dataset", require_exists=True, require_directory=True,
+                )
+                evaluation_metadata = load_yaml(evaluation_dataset / "metadata.yaml")
+                if not (evaluation_dataset / "samples.csv").is_file():
+                    raise ValueError("evaluation dataset has no samples.csv")
+                evaluation_bag = Path(str(evaluation_metadata.get("bag_path") or "")).resolve(strict=False)
+                if evaluation_bag != bag_path.resolve(strict=False):
+                    raise ValueError("evaluation dataset was not created from the selected rosbag")
+                model_modality = str(metadata.get("modality") or "image")
+                dataset_modality = str(evaluation_metadata.get("modality") or "image")
+                if model_modality != dataset_modality:
+                    raise ValueError(
+                        f"model modality {model_modality} does not match dataset {dataset_modality}"
+                    )
+                report.resolved["evaluation_dataset"] = str(evaluation_dataset)
+                report.add(
+                    "e2e.evaluation_dataset", "Evaluation dataset", PASS,
+                    "The selected dataset belongs only to this evaluation rosbag.",
+                    details={"path": str(evaluation_dataset)},
+                )
+            except (OSError, ValueError) as exc:
+                report.add(
+                    "e2e.evaluation_dataset", "Evaluation dataset", BLOCKED, str(exc),
+                    remediation="Create a dataset from the selected evaluation rosbag and select it.",
+                )
         output_metadata = metadata.get("output") if isinstance(metadata.get("output"), Mapping) else {}
         model_task = str(metadata.get("task") or output_metadata.get("task") or "control")
         resolved_teacher = _analysis_topic(

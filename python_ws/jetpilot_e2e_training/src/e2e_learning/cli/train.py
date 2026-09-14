@@ -1,24 +1,154 @@
 from __future__ import annotations
 
+import csv
+import hashlib
 import json
 import random
 from pathlib import Path
 from typing import Any
 
+import cv2
 import hydra
 import numpy as np
 import torch
 from omegaconf import DictConfig, OmegaConf
 from torch import nn
-from torch.utils.data import DataLoader, Subset
+from torch.utils.data import ConcatDataset, DataLoader, Dataset, Subset
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 from e2e_learning.data.dataset import AsyncRgbEvsDataset, E2EDataset
+from e2e_learning.data.transforms import ImageTransform
 from e2e_learning.models.factory import build_model
 from e2e_learning.utils.io import ensure_dir, write_json, write_yaml
 
 ASYNC_RGB_EVS_MODELS = {"async_rgb_evs_control", "async_rgb_evs_dinov3_control"}
+
+
+def prepare_dinov3_rgb_feature_cache(
+    cfg: DictConfig, model: nn.Module, device: torch.device, dataset_dir: Path
+) -> Path:
+    """Cache frozen DINOv3 CLS features without changing the deployed graph."""
+    samples_path = dataset_dir / "samples.csv"
+    with samples_path.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    relative_paths = sorted({
+        str(row[key])
+        for row in rows
+        for key in ("image_path", "next_image_path")
+        if str(row.get(key) or "").strip()
+    })
+    weights_path = Path(str(getattr(cfg.model, "weights_path", ""))).expanduser()
+    weights_identity: dict[str, Any] = {"path": str(weights_path)}
+    if weights_path.is_file():
+        stat = weights_path.stat()
+        weights_identity.update({"size": stat.st_size, "mtime_ns": stat.st_mtime_ns})
+    backbone_fields = (
+        "image_size", "input_channels", "patch_size", "embed_dim", "depth",
+        "num_heads", "ffn_ratio", "storage_tokens", "layer_scale", "rope_base",
+        "rope_rescale_coords",
+    )
+    resolved_model = OmegaConf.to_container(cfg.model, resolve=True)
+    signature = {
+        "format": 1,
+        "backbone": {
+            key: resolved_model.get(key)
+            for key in backbone_fields
+        },
+        "input_width": int(cfg.data.input_width),
+        "input_height": int(cfg.data.input_height),
+        "mean": [float(value) for value in cfg.data.mean],
+        "std": [float(value) for value in cfg.data.std],
+        "weights": weights_identity,
+    }
+    digest = hashlib.sha256(
+        json.dumps(signature, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()[:16]
+    cache_dir = dataset_dir / ".feature_cache" / f"dinov3-vits16-{digest}"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    transform = ImageTransform(
+        int(cfg.data.input_width), int(cfg.data.input_height),
+        tuple(float(value) for value in cfg.data.mean),
+        tuple(float(value) for value in cfg.data.std),
+    )
+    batch_size = max(1, int(cfg.train.batch_size))
+    missing = [
+        relative for relative in relative_paths
+        if not (cache_dir / relative).with_suffix(".npy").is_file()
+    ]
+    print(
+        f"[rgb-feature-cache] path={cache_dir} images={len(relative_paths)} "
+        f"missing={len(missing)}"
+    )
+    model.rgb_backbone.eval()
+    with torch.inference_mode():
+        for offset in tqdm(range(0, len(missing), batch_size), desc="cache RGB", leave=False):
+            paths = missing[offset:offset + batch_size]
+            images = []
+            for relative in paths:
+                image = cv2.imread(str(dataset_dir / relative), cv2.IMREAD_COLOR)
+                if image is None:
+                    raise RuntimeError(f"Failed to read RGB image for cache: {relative}")
+                images.append(torch.from_numpy(transform(image)))
+            inputs = torch.stack(images).to(device)
+            features = model.rgb_backbone.forward_features(inputs)["x_norm_clstoken"]
+            values = features.detach().to(dtype=torch.float32, device="cpu").numpy()
+            for relative, value in zip(paths, values):
+                destination = (cache_dir / relative).with_suffix(".npy")
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                temporary = destination.with_suffix(".npy.tmp")
+                with temporary.open("wb") as handle:
+                    np.save(handle, value, allow_pickle=False)
+                temporary.replace(destination)
+    manifest = {**signature, "images": len(relative_paths), "dtype": "float32"}
+    (cache_dir / "manifest.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    return cache_dir
+
+
+def combine_datasets(datasets: list[Dataset]) -> Dataset:
+    if not datasets:
+        raise RuntimeError("At least one dataset is required")
+    return datasets[0] if len(datasets) == 1 else ConcatDataset(datasets)
+
+
+def apply_combined_event_normalization(cfg: DictConfig, dataset_dirs: list[Path]) -> None:
+    """Use training bags only to derive one normalization for every split."""
+    if len(dataset_dirs) < 2 or str(getattr(cfg.data, "modality", "image")) not in {
+        "event_tensor", "rgb_event_async",
+    }:
+        return
+    weighted_sum: np.ndarray | None = None
+    weighted_square_sum: np.ndarray | None = None
+    total_weight = 0.0
+    for directory in dataset_dirs:
+        metadata = OmegaConf.load(directory / "metadata.yaml")
+        mean = np.asarray(getattr(metadata, "event_mean", []), dtype=np.float64)
+        std = np.asarray(getattr(metadata, "event_std", []), dtype=np.float64)
+        if mean.size == 0 or mean.shape != std.shape:
+            raise RuntimeError(f"Dataset has invalid event normalization: {directory}")
+        weight = float(
+            getattr(metadata, "normalization_tensor_count", 0)
+            or getattr(metadata, "event_tensor_count", 0)
+            or getattr(metadata, "sample_count", 1)
+        )
+        weighted_sum = mean * weight if weighted_sum is None else weighted_sum + mean * weight
+        second_moment = std.square() + mean.square()
+        weighted_square_sum = (
+            second_moment * weight
+            if weighted_square_sum is None
+            else weighted_square_sum + second_moment * weight
+        )
+        total_weight += weight
+    combined_mean = weighted_sum / max(total_weight, 1.0)
+    combined_variance = np.maximum(
+        weighted_square_sum / max(total_weight, 1.0) - combined_mean.square(), 0.0
+    )
+    combined_std = np.sqrt(combined_variance)
+    combined_std[combined_std < 1.0e-6] = 1.0
+    cfg.data.event_mean = combined_mean.tolist()
+    cfg.data.event_std = combined_std.tolist()
 
 
 def set_seed(seed: int) -> None:
@@ -452,6 +582,31 @@ def main(cfg: DictConfig) -> None:
     use_imu = bool(getattr(cfg.model, "use_imu", False))
     trajectory_points = int(getattr(cfg.model, "trajectory_points", getattr(cfg.data, "trajectory_points", 10)))
     trajectory_scale_m = float(getattr(cfg.model, "trajectory_scale_m", getattr(cfg.data, "trajectory_scale_m", 5.0)))
+    device = torch.device(
+        str(cfg.train.device)
+        if str(cfg.train.device)
+        else "cuda" if torch.cuda.is_available() else "cpu"
+    )
+    model = build_model(cfg.model).to(device)
+    train_dataset_dirs = [
+        Path(str(value)) for value in getattr(cfg.data, "dataset_dirs", []) if str(value)
+    ] or [Path(str(cfg.data.dataset_dir))]
+    validation_dataset_dirs = [
+        Path(str(value))
+        for value in getattr(cfg.data, "validation_dataset_dirs", []) if str(value)
+    ]
+    split_mode = str(getattr(cfg.data, "split_mode", "temporal"))
+    if split_mode not in {"temporal", "explicit"}:
+        raise RuntimeError("data.split_mode must be temporal or explicit")
+    if split_mode == "explicit" and not validation_dataset_dirs:
+        raise RuntimeError("explicit split requires validation_dataset_dirs")
+    if set(path.resolve() for path in train_dataset_dirs).intersection(
+        path.resolve() for path in validation_dataset_dirs
+    ):
+        raise RuntimeError("training and validation datasets must be different")
+    apply_combined_event_normalization(cfg, train_dataset_dirs)
+    # Persist the resolved multi-dataset split and training-only normalization.
+    write_yaml(output_dir / "run.yaml", cfg)
     if model_name in ASYNC_RGB_EVS_MODELS:
         timing_augmentation = bool(getattr(cfg.data, "timing_augmentation", True))
         timing_max_hz = float(getattr(cfg.data, "timing_max_hz", 250.0))
@@ -461,8 +616,16 @@ def main(cfg: DictConfig) -> None:
                 f"250 Hz timing augmentation requires a dataset extracted at >= "
                 f"{timing_max_hz:g} Hz; this dataset is {source_event_hz:g} Hz"
             )
+        use_rgb_feature_cache = bool(getattr(cfg.data, "rgb_feature_cache", False))
+        if use_rgb_feature_cache and model_name != "async_rgb_evs_dinov3_control":
+            raise RuntimeError(
+                "RGB feature cache is only supported by async_rgb_evs_dinov3_control"
+            )
+        cache_dirs = {
+            path: prepare_dinov3_rgb_feature_cache(cfg, model, device, path)
+            for path in [*train_dataset_dirs, *validation_dataset_dirs]
+        } if use_rgb_feature_cache else {}
         async_dataset_args = {
-            "dataset_dir": cfg.data.dataset_dir,
             "input_width": int(cfg.data.input_width),
             "input_height": int(cfg.data.input_height),
             "mean": tuple(float(v) for v in cfg.data.mean),
@@ -470,7 +633,6 @@ def main(cfg: DictConfig) -> None:
             "rollout_steps": int(getattr(cfg.model, "rollout_steps", 32)),
             "event_mean": tuple(float(v) for v in getattr(cfg.data, "event_mean", [0.0])),
             "event_std": tuple(float(v) for v in getattr(cfg.data, "event_std", [1.0])),
-            "data_fraction": float(cfg.data.fraction),
             "timing_min_hz": float(getattr(cfg.data, "timing_min_hz", 100.0)),
             "timing_max_hz": timing_max_hz,
             "timing_jitter_fraction": float(
@@ -486,43 +648,83 @@ def main(cfg: DictConfig) -> None:
                 getattr(cfg.data, "max_rgb_interval_multiplier", 2)
             ),
         }
-        train_dataset = AsyncRgbEvsDataset(
-            **async_dataset_args, augment_timing=timing_augmentation
-        )
-        validation_dataset = AsyncRgbEvsDataset(
-            **async_dataset_args, augment_timing=False
-        )
-        train_set, _ = split_dataset(
-            train_dataset, float(cfg.train.val_fraction), int(cfg.train.seed)
-        )
-        _, val_set = split_dataset(
-            validation_dataset, float(cfg.train.val_fraction), int(cfg.train.seed)
-        )
+        def make_async(path: Path, *, augment: bool, fraction: float) -> AsyncRgbEvsDataset:
+            return AsyncRgbEvsDataset(
+                **async_dataset_args, dataset_dir=path, data_fraction=fraction,
+                augment_timing=augment, rgb_feature_cache_dir=cache_dirs.get(path),
+            )
+
+        if split_mode == "explicit":
+            train_set = combine_datasets([
+                make_async(path, augment=timing_augmentation, fraction=float(cfg.data.fraction))
+                for path in train_dataset_dirs
+            ])
+            val_set = combine_datasets([
+                make_async(path, augment=False, fraction=1.0)
+                for path in validation_dataset_dirs
+            ])
+        else:
+            train_parts: list[Dataset] = []
+            val_parts: list[Dataset] = []
+            for path in train_dataset_dirs:
+                train_dataset = make_async(
+                    path, augment=timing_augmentation, fraction=float(cfg.data.fraction)
+                )
+                validation_dataset = make_async(
+                    path, augment=False, fraction=float(cfg.data.fraction)
+                )
+                train_part, _ = split_dataset(
+                    train_dataset, float(cfg.train.val_fraction), int(cfg.train.seed)
+                )
+                _, val_part = split_dataset(
+                    validation_dataset, float(cfg.train.val_fraction), int(cfg.train.seed)
+                )
+                train_parts.append(train_part)
+                val_parts.append(val_part)
+            train_set = combine_datasets(train_parts)
+            val_set = combine_datasets(val_parts)
     else:
-        dataset = E2EDataset(
-            dataset_dir=cfg.data.dataset_dir,
-            input_width=int(cfg.data.input_width),
-            input_height=int(cfg.data.input_height),
-            mean=tuple(float(v) for v in cfg.data.mean),
-            std=tuple(float(v) for v in cfg.data.std),
-            task=task,
-            sequence_length=int(getattr(cfg.model, "sequence_length", 1)),
-            frame_stride=int(getattr(cfg.model, "frame_stride", 1)),
-            trajectory_points=trajectory_points,
-            trajectory_scale_m=trajectory_scale_m,
-            imu_samples=int(getattr(cfg.model, "imu_samples", getattr(cfg.data, "imu_samples", 10))),
-            imu_features=int(getattr(cfg.model, "imu_features", 7)),
-            data_fraction=float(cfg.data.fraction),
-            future_horizon=(
-                int(getattr(cfg.model, "future_horizon", 0))
-                if model_name == "wam_dinov3_vits16"
-                else 0
-            ),
-            future_stride=int(getattr(cfg.model, "future_stride", 1)),
-        )
-        train_set, val_set = split_dataset(
-            dataset, float(cfg.train.val_fraction), int(cfg.train.seed)
-        )
+        def make_standard(path: Path, fraction: float) -> E2EDataset:
+            return E2EDataset(
+                dataset_dir=path,
+                input_width=int(cfg.data.input_width),
+                input_height=int(cfg.data.input_height),
+                mean=tuple(float(v) for v in cfg.data.mean),
+                std=tuple(float(v) for v in cfg.data.std),
+                task=task,
+                sequence_length=int(getattr(cfg.model, "sequence_length", 1)),
+                frame_stride=int(getattr(cfg.model, "frame_stride", 1)),
+                trajectory_points=trajectory_points,
+                trajectory_scale_m=trajectory_scale_m,
+                imu_samples=int(getattr(cfg.model, "imu_samples", getattr(cfg.data, "imu_samples", 10))),
+                imu_features=int(getattr(cfg.model, "imu_features", 7)),
+                data_fraction=fraction,
+                future_horizon=(
+                    int(getattr(cfg.model, "future_horizon", 0))
+                    if model_name == "wam_dinov3_vits16" else 0
+                ),
+                future_stride=int(getattr(cfg.model, "future_stride", 1)),
+            )
+
+        if split_mode == "explicit":
+            train_set = combine_datasets([
+                make_standard(path, float(cfg.data.fraction)) for path in train_dataset_dirs
+            ])
+            val_set = combine_datasets([
+                make_standard(path, 1.0) for path in validation_dataset_dirs
+            ])
+        else:
+            train_parts = []
+            val_parts = []
+            for path in train_dataset_dirs:
+                dataset = make_standard(path, float(cfg.data.fraction))
+                train_part, val_part = split_dataset(
+                    dataset, float(cfg.train.val_fraction), int(cfg.train.seed)
+                )
+                train_parts.append(train_part)
+                val_parts.append(val_part)
+            train_set = combine_datasets(train_parts)
+            val_set = combine_datasets(val_parts)
     train_loader = DataLoader(
         train_set,
         batch_size=int(cfg.train.batch_size),
@@ -538,8 +740,6 @@ def main(cfg: DictConfig) -> None:
         pin_memory=torch.cuda.is_available(),
     )
 
-    device = torch.device(str(cfg.train.device) if str(cfg.train.device) else "cuda" if torch.cuda.is_available() else "cpu")
-    model = build_model(cfg.model).to(device)
     writer = SummaryWriter(log_dir=str(output_dir / "tensorboard"))
     best_loss = float("inf")
     best_metrics: dict[str, float] = {}
@@ -580,6 +780,9 @@ def main(cfg: DictConfig) -> None:
             "stateful_step": model_name == "wam_dinov3_vits16",
         },
         "dataset_dir": str(cfg.data.dataset_dir),
+        "dataset_dirs": [str(value) for value in train_dataset_dirs],
+        "validation_dataset_dirs": [str(value) for value in validation_dataset_dirs],
+        "split_mode": split_mode,
         "data_fraction": float(cfg.data.fraction),
         "best": best_metrics,
         "history": history,

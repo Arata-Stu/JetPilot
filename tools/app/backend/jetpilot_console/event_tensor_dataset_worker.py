@@ -223,6 +223,7 @@ def _build_async_dataset(args: argparse.Namespace) -> dict[str, object]:
         "event_mean": mean.tolist(), "event_std": std.tolist(),
         "decoded_events": decoded_events, "rgb_frame_count": len(rgb_frames),
         "event_tensor_count": len(events),
+        "normalization_tensor_count": value_count // (args.width * args.height),
         "effective_event_sample_hz": effective_event_sample_hz,
         "timestamp_resets": accumulator.timestamp_resets,
     }

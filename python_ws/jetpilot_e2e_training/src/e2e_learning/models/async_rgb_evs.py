@@ -107,6 +107,7 @@ class AsyncDinoRgbEvsControl(nn.Module):
         self.steering_only = steering_only
         self.nominal_delta_t_s = float(nominal_delta_t_s)
         self.max_delta_t_s = float(max_delta_t_s)
+        self.rgb_feature_dim = int(embed_dim)
         self.rgb_backbone = DinoV3ViTSmallBackbone(
             image_size=image_size,
             input_height=input_height,
@@ -161,6 +162,16 @@ class AsyncDinoRgbEvsControl(nn.Module):
         return self
 
     def encode_rgb(self, rgb: torch.Tensor) -> torch.Tensor:
+        # Cached training supplies the frozen backbone's CLS feature directly.
+        # Runtime/export still supplies NCHW RGB and therefore follows the
+        # original backbone path.
+        if rgb.ndim == 2:
+            if rgb.shape[1] != self.rgb_feature_dim:
+                raise ValueError(
+                    f"cached RGB feature has {rgb.shape[1]} values; "
+                    f"expected {self.rgb_feature_dim}"
+                )
+            return self.rgb_adapter(rgb)
         with torch.no_grad():
             feature = self.rgb_backbone.forward_features(rgb)["x_norm_clstoken"]
         return self.rgb_adapter(feature)

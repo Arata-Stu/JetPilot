@@ -69,6 +69,7 @@ def _model_record(path: Path, root: Path) -> dict[str, Any]:
         "name": str(metadata.get("model_name") or path.parent.name),
         "kind": str(metadata.get("model_kind") or "e2e_control"),
         "task": str(metadata.get("task") or model_output.get("task") or "control"),
+        "modality": str(metadata.get("modality") or "image"),
         "steering_only": is_steering_only(metadata),
         "architecture": metadata.get("architecture") if isinstance(metadata.get("architecture"), dict) else {},
         "root": str(root),

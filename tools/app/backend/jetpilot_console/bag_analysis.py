@@ -443,6 +443,7 @@ def build_analysis_script(
     e2e_imu_topic: str = "",
     e2e_mode: str = "",
     e2e_model: Path | None = None,
+    e2e_dataset: Path | None = None,
     e2e_provider: str = "auto",
     e2e_teacher_topic: str = "",
     e2e_prediction_topic: str = "",
@@ -958,6 +959,7 @@ def build_analysis_script(
         ]
         for option, value in (
             ("--model", str(e2e_model) if e2e_model is not None else ""),
+            ("--dataset", str(e2e_dataset) if e2e_dataset is not None else ""),
             ("--map-dir", str(map_dir) if map_dir is not None else ""),
             ("--teacher-topic", e2e_teacher_topic),
             ("--prediction-topic", e2e_prediction_topic),

@@ -41,6 +41,10 @@ const state = {
     runRoot: "",
     datasetName: "",
     datasetDir: "",
+    datasetBagPaths: [],
+    trainDatasetDirs: [],
+    validationDatasetDirs: [],
+    splitMode: "temporal",
     runName: "",
     runDir: "",
     deployRunDir: "",
@@ -87,6 +91,7 @@ const state = {
     weightDecay: 0.0001,
     seed: 42,
     device: "",
+    rgbFeatureMode: "cache",
     deployProfile: "",
     deployPreset: "",
     deployHost: "",
@@ -432,6 +437,7 @@ const state = {
     jetsonSelectedSeries: [],
     e2eMode: "supervised",
     e2eModelPath: "",
+    e2eEvaluationDataset: "",
     e2eProvider: "auto",
     e2eTeacherTopic: "/teleop/control_cmd",
     e2ePredictionTopic: "/auto/control_cmd",
@@ -1399,6 +1405,16 @@ async function refreshAll() {
   state.e2ePipeline.runRoot = e2ePipeline.run_root || "";
   if (!state.e2ePipeline.datasetDir && state.e2ePipeline.datasets[0]) {
     state.e2ePipeline.datasetDir = state.e2ePipeline.datasets[0].path || "";
+  }
+  const availableDatasetPaths = new Set(state.e2ePipeline.datasets.map((item) => item.path));
+  state.e2ePipeline.trainDatasetDirs = state.e2ePipeline.trainDatasetDirs.filter(
+    (path) => availableDatasetPaths.has(path),
+  );
+  state.e2ePipeline.validationDatasetDirs = state.e2ePipeline.validationDatasetDirs.filter(
+    (path) => availableDatasetPaths.has(path),
+  );
+  if (!state.e2ePipeline.trainDatasetDirs.length && state.e2ePipeline.datasetDir) {
+    state.e2ePipeline.trainDatasetDirs = [state.e2ePipeline.datasetDir];
   }
   const activeDataset = state.e2ePipeline.datasets.find(
     (item) => item.path === state.e2ePipeline.datasetDir,
@@ -3211,6 +3227,7 @@ function e2eAnalysisPayload() {
     map_dir: mode === "supervised" ? "" : analysis.selectedMapPath,
     topic_config: analysis.topicConfigPath,
     model_path: mode === "supervised" ? analysis.e2eModelPath : "",
+    evaluation_dataset: mode === "supervised" ? analysis.e2eEvaluationDataset : "",
     inference_provider: analysis.e2eProvider,
     manual_only: Boolean(analysis.e2eManualOnly),
     deadline_ms: Number(analysis.e2eDeadlineMs) || 33.3,
@@ -3405,6 +3422,17 @@ function updateE2EPipelineOption(key, value) {
   render();
 }
 
+function updateE2EPipelineList(key, select) {
+  if (!(key in state.e2ePipeline)) return;
+  state.e2ePipeline[key] = Array.from(select.selectedOptions || []).map((option) => option.value);
+  if (key === "trainDatasetDirs") {
+    state.e2ePipeline.datasetDir = state.e2ePipeline[key][0] || "";
+    updateE2EPipelineOption("datasetDir", state.e2ePipeline.datasetDir);
+    return;
+  }
+  render();
+}
+
 function recommendedE2EDeployPreset(run) {
   if (!run) return "";
   if (run.architecture?.stateful_step) return "";
@@ -3418,7 +3446,8 @@ function recommendedE2EDeployPreset(run) {
 }
 
 function selectedE2EDataset() {
-  return state.e2ePipeline.datasets.find((item) => item.path === state.e2ePipeline.datasetDir) || null;
+  const path = state.e2ePipeline.trainDatasetDirs[0] || state.e2ePipeline.datasetDir;
+  return state.e2ePipeline.datasets.find((item) => item.path === path) || null;
 }
 
 function selectedE2ERun() {
@@ -3474,13 +3503,17 @@ async function startE2EPipelineTask(action, endpoint, title, target, payload) {
 
 function createE2EDataset() {
   const pipeline = state.e2ePipeline;
+  const rosbags = pipeline.datasetBagPaths.length
+    ? pipeline.datasetBagPaths
+    : state.analysis.selectedBagPath ? [state.analysis.selectedBagPath] : [];
   return startE2EPipelineTask(
     "e2e-pipeline:dataset",
     "/api/e2e/datasets/create",
     "Create E2E dataset",
     pipeline.datasetName,
     {
-      rosbag: state.analysis.selectedBagPath,
+      rosbag: rosbags[0] || "",
+      rosbags,
       dataset_name: pipeline.datasetName,
       image_topic: pipeline.imageTopic || state.analysis.imageTopic,
       control_topic: pipeline.controlTopic,
@@ -3520,7 +3553,12 @@ function trainE2EModel() {
     "Train E2E model",
     pipeline.runName,
     {
-      dataset_dir: pipeline.datasetDir,
+      dataset_dir: pipeline.trainDatasetDirs[0] || pipeline.datasetDir,
+      dataset_dirs: pipeline.trainDatasetDirs.length
+        ? pipeline.trainDatasetDirs : [pipeline.datasetDir].filter(Boolean),
+      validation_dataset_dirs: pipeline.splitMode === "explicit"
+        ? pipeline.validationDatasetDirs : [],
+      split_mode: pipeline.splitMode,
       run_name: pipeline.runName,
       experiment: pipeline.experiment,
       output_target: pipeline.outputTarget,
@@ -3535,6 +3573,8 @@ function trainE2EModel() {
       weight_decay: pipeline.weightDecay,
       seed: pipeline.seed,
       device: pipeline.device,
+      rgb_feature_mode: pipeline.experiment === "async_rgb_evs_dinov3_control"
+        ? pipeline.rgbFeatureMode : "image",
       wam_context_length: pipeline.wamContextLength,
       wam_future_horizon: pipeline.wamFutureHorizon,
       wam_future_stride: pipeline.wamFutureStride,
@@ -3631,7 +3671,7 @@ function renderE2EPipeline() {
         <div class="e2e-pipeline-grid">
           <article class="e2e-pipeline-stage">
             <header><span>01</span><div><strong>Create dataset</strong><small>Images + control / future trajectory + causal IMU</small></div></header>
-            <div class="field"><label>Rosbag</label><select onchange="selectAnalysisBag(this.value)"><option value="">Select rosbag</option>${renderRosbagOptions(state.analysis.selectedBagPath)}</select></div>
+            <div class="field"><label>Rosbags（複数選択可）</label><select multiple size="5" onchange="updateE2EPipelineList('datasetBagPaths', this)">${state.rosbags.map((item) => { const path = String(item.path || ""); const selected = pipeline.datasetBagPaths.length ? pipeline.datasetBagPaths.includes(path) : path === state.analysis.selectedBagPath; return `<option value="${esc(path)}" ${selected ? "selected" : ""}>${esc(item.label || item.name || shortName(path))}</option>`; }).join("")}</select><div class="field-hint">複数選択時はbagごとに独立したdatasetを連続生成します。topic構成は同一である必要があります。</div></div>
             <div class="field"><label>Dataset name</label><input value="${esc(pipeline.datasetName)}" onchange="updateE2EPipelineOption('datasetName', this.value)" /><div class="field-hint">${esc(pipeline.datasetRoot)} · <button type="button" class="link-button" onclick="applyE2ENameSuggestion('dataset')">現在日時で再提案</button></div></div>
             <div class="field"><label>Learning task</label><select onchange="updateE2EPipelineOption('datasetTask', this.value)">${[["control","Control (steering + throttle)"],["trajectory","Trajectory (future odometry)"]].map(([value,label]) => `<option value="${value}" ${pipeline.datasetTask === value ? "selected" : ""}>${label}</option>`).join("")}</select></div>
             <div class="field"><label>Input representation</label><select onchange="updateE2EPipelineOption('datasetModality', this.value)">${[["image","RGB / 3ch image"],["event_tensor","Raw EVS 20ch tensor"],["rgb_event_async","Async RGB + Raw EVS 20ch"]].map(([value,label]) => `<option value="${value}" ${pipeline.datasetModality === value ? "selected" : ""}>${label}</option>`).join("")}</select></div>
@@ -3643,19 +3683,22 @@ function renderE2EPipeline() {
             <div class="e2e-compact-fields"><label>Width<input type="number" min="32" value="${esc(pipeline.inputWidth)}" onchange="updateE2EPipelineOption('inputWidth', this.value)" /></label><label>Height<input type="number" min="32" value="${esc(pipeline.inputHeight)}" onchange="updateE2EPipelineOption('inputHeight', this.value)" /></label><label>Max Δt (s)<input type="number" min="0.001" step="0.01" value="${esc(pipeline.maxControlDtSec)}" onchange="updateE2EPipelineOption('maxControlDtSec', this.value)" /></label></div>
             ${pipeline.datasetTask === "trajectory" ? `<div class="e2e-compact-fields"><label>Points<input type="number" min="2" value="${esc(pipeline.trajectoryPoints)}" onchange="updateE2EPipelineOption('trajectoryPoints', this.value)" /></label><label>Horizon (s)<input type="number" min="0.1" step="0.1" value="${esc(pipeline.trajectoryHorizonSec)}" onchange="updateE2EPipelineOption('trajectoryHorizonSec', this.value)" /></label><label>Scale (m)<input type="number" min="0.1" step="0.1" value="${esc(pipeline.trajectoryScaleM)}" onchange="updateE2EPipelineOption('trajectoryScaleM', this.value)" /></label></div>` : ""}
             <details><summary>Alignment & IMU</summary><div class="field"><label>Alignment clock</label><select onchange="updateE2EPipelineOption('timestampSource', this.value)">${[["bag", "Bag recording time (same as Offline Analysis)"], ["header", "Header stamp (synchronized sensors only)"]].map(([value, label]) => `<option value="${value}" ${pipeline.timestampSource === value ? "selected" : ""}>${esc(label)}</option>`).join("")}</select></div><div class="e2e-compact-fields"><label>Odom Δt<input type="number" min="0.001" step="0.01" value="${esc(pipeline.maxOdometryDtSec)}" onchange="updateE2EPipelineOption('maxOdometryDtSec', this.value)" /></label><label>IMU window (s)<input type="number" min="0.01" step="0.1" value="${esc(pipeline.imuWindowSec)}" onchange="updateE2EPipelineOption('imuWindowSec', this.value)" /></label><label>IMU samples<input type="number" min="1" value="${esc(pipeline.imuSamples)}" onchange="updateE2EPipelineOption('imuSamples', this.value)" /></label></div></details>
-            <button class="primary ${actionBusy("e2e-pipeline:dataset") ? "is-busy" : ""}" onclick="createE2EDataset()" ${state.analysis.selectedBagPath && imageTopic && (pipeline.datasetTask === "trajectory" ? pipeline.odometryTopic : pipeline.controlTopic) ? "" : "disabled"} ${actionButtonAttrs("e2e-pipeline:dataset", "Dataset creation is starting...")}>${esc(actionButtonLabel("e2e-pipeline:dataset", "Create dataset", "Starting..."))}</button>
+            <button class="primary ${actionBusy("e2e-pipeline:dataset") ? "is-busy" : ""}" onclick="createE2EDataset()" ${(pipeline.datasetBagPaths.length || state.analysis.selectedBagPath) && imageTopic && (pipeline.datasetTask === "trajectory" ? pipeline.odometryTopic : pipeline.controlTopic) ? "" : "disabled"} ${actionButtonAttrs("e2e-pipeline:dataset", "Dataset creation is starting...")}>${esc(actionButtonLabel("e2e-pipeline:dataset", "Create dataset", "Starting..."))}</button>
           </article>
           <article class="e2e-pipeline-stage">
             <header><span>02</span><div><strong>Train model</strong><small>Adjust repeatable training parameters</small></div></header>
-            <div class="field"><label>Dataset</label><select onchange="updateE2EPipelineOption('datasetDir', this.value)"><option value="">Select dataset</option>${pipeline.datasets.map((item) => `<option value="${esc(item.path)}" ${item.path === pipeline.datasetDir ? "selected" : ""}>${esc(item.modality === "event_tensor" ? `${item.input_channels}ch EVS` : item.modality === "rgb_event_async" ? "RGB+20ch EVS" : item.task)} · ${esc(item.name)} — ${esc(item.sample_count)} samples</option>`).join("")}</select></div>
+            <div class="field"><label>Dataset split</label><select onchange="updateE2EPipelineOption('splitMode', this.value)">${[["temporal","簡易：train dataset内を時系列分割"],["explicit","厳密：train / validationを別datasetに固定"]].map(([value,label]) => `<option value="${value}" ${value === pipeline.splitMode ? "selected" : ""}>${label}</option>`).join("")}</select></div>
+            <div class="field"><label>Train datasets（複数選択可）</label><select multiple size="5" onchange="updateE2EPipelineList('trainDatasetDirs', this)">${pipeline.datasets.map((item) => `<option value="${esc(item.path)}" ${pipeline.trainDatasetDirs.includes(item.path) ? "selected" : ""}>${esc(item.modality === "event_tensor" ? `${item.input_channels}ch EVS` : item.modality === "rgb_event_async" ? "RGB+20ch EVS" : item.task)} · ${esc(item.name)} — ${esc(item.sample_count)} samples</option>`).join("")}</select><div class="field-hint">簡易モードでは、選択した各datasetの末尾をvalidationに使います。</div></div>
+            ${pipeline.splitMode === "explicit" ? `<div class="field"><label>Validation datasets（Trainとは別）</label><select multiple size="5" onchange="updateE2EPipelineList('validationDatasetDirs', this)">${pipeline.datasets.filter((item) => !pipeline.trainDatasetDirs.includes(item.path)).map((item) => `<option value="${esc(item.path)}" ${pipeline.validationDatasetDirs.includes(item.path) ? "selected" : ""}>${esc(item.modality === "event_tensor" ? `${item.input_channels}ch EVS` : item.modality === "rgb_event_async" ? "RGB+20ch EVS" : item.task)} · ${esc(item.name)} — ${esc(item.sample_count)} samples</option>`).join("")}</select><div class="field-hint">このdatasetは学習更新に一切使用せず、model選択用のvalidationだけに使います。</div></div>` : ""}
             <div class="field"><label>Model architecture / training</label><select onchange="updateE2EPipelineOption('experiment', this.value)">${experiments.map((item) => `<option value="${esc(item.id)}" ${item.id === pipeline.experiment ? "selected" : ""}>${esc(e2eExperimentOptionLabel(item))}</option>`).join("")}</select></div>
             <div class="field"><label>Model output</label><select onchange="updateE2EPipelineOption('outputTarget', this.value)">${outputTargets.map((value) => `<option value="${esc(value)}" ${value === pipeline.outputTarget ? "selected" : ""}>${esc(value === "steer" ? "Steer only（throttleは0固定）" : value === "control" ? "Control（steering + throttle）" : "Trajectory")}</option>`).join("")}</select><div class="field-hint">モデル構造とは独立して学習出力を選択します。</div></div>
             <div class="field"><label>Model / run name</label><input value="${esc(pipeline.runName)}" onchange="updateE2EPipelineOption('runName', this.value)" /><div class="field-hint">${esc(pipeline.runRoot)} · architecture変更時に自動更新 · <button type="button" class="link-button" onclick="applyE2ENameSuggestion('run')">現在日時で再提案</button></div></div>
             <div class="e2e-compact-fields"><label>Epochs<input type="number" min="1" value="${esc(pipeline.epochs)}" onchange="updateE2EPipelineOption('epochs', this.value)" /></label><label>Learning rate<input type="number" min="0.00000001" step="0.0001" value="${esc(pipeline.learningRate)}" onchange="updateE2EPipelineOption('learningRate', this.value)" /></label><label>Batch<input type="number" min="1" value="${esc(pipeline.batchSize)}" onchange="updateE2EPipelineOption('batchSize', this.value)" /></label></div>
+            ${selectedExperiment?.id === "async_rgb_evs_dinov3_control" ? `<div class="field"><label>RGB backbone計算</label><select onchange="updateE2EPipelineOption('rgbFeatureMode', this.value)">${[["cache","特徴キャッシュ（高速・推奨）"],["image","RGBから毎epoch計算（従来モード）"]].map(([value,label]) => `<option value="${value}" ${value === pipeline.rgbFeatureMode ? "selected" : ""}>${label}</option>`).join("")}</select><div class="field-hint">特徴キャッシュは固定DINOv3出力をdataset内に一度だけ保存します。学習結果とTensorRT exportの構造は変わりません。</div></div>` : ""}
             ${selectedExperiment?.family === "wam" ? `<div class="e2e-compact-fields"><label>Context frames<input type="number" min="1" max="32" value="${esc(pipeline.wamContextLength)}" onchange="updateE2EPipelineOption('wamContextLength', this.value)" /></label><label>Future steps<input type="number" min="1" max="32" value="${esc(pipeline.wamFutureHorizon)}" onchange="updateE2EPipelineOption('wamFutureHorizon', this.value)" /></label><label>Future stride<input type="number" min="1" max="10" value="${esc(pipeline.wamFutureStride)}" onchange="updateE2EPipelineOption('wamFutureStride', this.value)" /></label></div><div class="field-hint">未来DINO latentと未来のsteering/throttleを同時に学習します。TensorRT出力は明示的なhidden stateを持つ1-step graphです。</div>` : ""}
             ${hasTwoStages ? `<div class="e2e-compact-fields"><label>Fine-tune epochs<input type="number" min="1" value="${esc(pipeline.finetuneEpochs)}" onchange="updateE2EPipelineOption('finetuneEpochs', this.value)" /></label><label>Fine-tune LR<input type="number" min="0.00000001" step="0.0001" value="${esc(pipeline.finetuneLearningRate)}" onchange="updateE2EPipelineOption('finetuneLearningRate', this.value)" /></label></div>` : ""}
             <details><summary>Advanced parameters</summary><div class="e2e-compact-fields"><label>Data fraction<input type="number" min="0.001" max="1" step="0.05" value="${esc(pipeline.fraction)}" onchange="updateE2EPipelineOption('fraction', this.value)" /></label><label>Validation<input type="number" min="0.01" max="0.9" step="0.05" value="${esc(pipeline.valFraction)}" onchange="updateE2EPipelineOption('valFraction', this.value)" /></label><label>Workers<input type="number" min="0" value="${esc(pipeline.numWorkers)}" onchange="updateE2EPipelineOption('numWorkers', this.value)" /></label><label>Weight decay<input type="number" min="0" max="1" step="0.0001" value="${esc(pipeline.weightDecay)}" onchange="updateE2EPipelineOption('weightDecay', this.value)" /></label><label>Seed<input type="number" min="0" value="${esc(pipeline.seed)}" onchange="updateE2EPipelineOption('seed', this.value)" /></label><label>Device<select onchange="updateE2EPipelineOption('device', this.value)">${[["","Auto"],["cuda","CUDA"],["mps","Apple MPS"],["cpu","CPU"]].map(([value,label]) => `<option value="${value}" ${pipeline.device === value ? "selected" : ""}>${label}</option>`).join("")}</select></label></div></details>
-            <button class="primary ${actionBusy("e2e-pipeline:train") ? "is-busy" : ""}" onclick="trainE2EModel()" ${pipeline.datasetDir ? "" : "disabled"} ${actionButtonAttrs("e2e-pipeline:train", "Training is starting...")}>${esc(actionButtonLabel("e2e-pipeline:train", "Start training", "Starting..."))}</button>
+            <button class="primary ${actionBusy("e2e-pipeline:train") ? "is-busy" : ""}" onclick="trainE2EModel()" ${pipeline.trainDatasetDirs.length && (pipeline.splitMode !== "explicit" || pipeline.validationDatasetDirs.length) ? "" : "disabled"} ${actionButtonAttrs("e2e-pipeline:train", "Training is starting...")}>${esc(actionButtonLabel("e2e-pipeline:train", "Start training", "Starting..."))}</button>
           </article>
           <article class="e2e-pipeline-stage">
             <header><span>03</span><div><strong>Evaluate & export</strong><small>Checkpoint → ONNX → offline eval</small></div></header>
@@ -4269,6 +4312,7 @@ function renderE2EAnalysisForm() {
       <div class="field full"><label>3. Image topics</label>${renderAnalysisImageTopicsSelector()}</div>
       ${mode === "supervised" ? `
         <div class="field full"><label for="e2e-model">ONNX model</label><select id="e2e-model" onchange="updateE2EOption('e2eModelPath', this.value)"><option value="">Select model</option>${state.e2eModels.map((model) => `<option value="${esc(model.path)}" ${model.path === analysis.e2eModelPath ? "selected" : ""}>${esc(model.task || model.output?.task || "control")} · ${esc(model.name)} — ${esc(model.relative_path || model.path)}</option>`).join("")}</select><div class="field-hint">${state.e2eModels.length ? `${state.e2eModels.length} exported model(s) found. Trajectory models use recorded odometry as GT.` : "No model.onnx was found under the configured outputs folders."}</div></div>
+        ${["event_tensor","rgb_event_async"].includes(String(state.e2eModels.find((item) => item.path === analysis.e2eModelPath)?.modality || "")) ? `<div class="field full"><label>Evaluation dataset（未知bag用）</label><select onchange="updateE2EOption('e2eEvaluationDataset', this.value)"><option value="">Use training-source dataset（同一bagのみ）</option>${state.e2ePipeline.datasets.filter((item) => item.bag_path === analysis.selectedBagPath).map((item) => `<option value="${esc(item.path)}" ${item.path === analysis.e2eEvaluationDataset ? "selected" : ""}>${esc(item.name)} — ${esc(item.sample_count)} samples</option>`).join("")}</select><div class="field-hint">未知コースでは、そのrosbagから同じ設定で作成したdatasetを選びます。学習には追加されません。</div></div>` : ""}
         <div class="field"><label>Teacher control</label><select onchange="updateE2EOption('e2eTeacherTopic', this.value)">${analysisTopicOptions("control", analysis.e2eTeacherTopic)}</select></div>
         <div class="field"><label>Inference provider</label><select onchange="updateE2EOption('e2eProvider', this.value)">${[["auto","Auto (CUDA, then CPU)"],["cuda","CUDA"],["cpu","CPU"]].map(([value,label]) => `<option value="${value}" ${analysis.e2eProvider === value ? "selected" : ""}>${label}</option>`).join("")}</select></div>
         <label class="field full check-row"><input type="checkbox" ${analysis.e2eManualOnly ? "checked" : ""} onchange="updateE2EOption('e2eManualOnly', this.checked)" /><span>Evaluate MANUAL sections only</span></label>
@@ -15944,6 +15988,7 @@ window.updateE2EOption = updateE2EOption;
 window.updateE2EPipelineOption = updateE2EPipelineOption;
 window.createE2EDataset = createE2EDataset;
 window.trainE2EModel = trainE2EModel;
+window.updateE2EPipelineList = updateE2EPipelineList;
 window.exportE2EOnnx = exportE2EOnnx;
 window.deployE2EModel = deployE2EModel;
 window.useE2ERunForOfflineEval = useE2ERunForOfflineEval;

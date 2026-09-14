@@ -205,7 +205,8 @@ class AsyncRgbEvsDataset(Dataset):
                  timing_jitter_fraction: float = 0.15,
                  event_update_drop_probability: float = 0.05,
                  rgb_update_drop_probability: float = 0.10,
-                 max_rgb_interval_multiplier: int = 2) -> None:
+                 max_rgb_interval_multiplier: int = 2,
+                 rgb_feature_cache_dir: str | Path | None = None) -> None:
         self.dataset_dir = Path(dataset_dir)
         self.transform = ImageTransform(input_width, input_height, mean, std)
         self.rollout_steps = int(rollout_steps)
@@ -218,6 +219,9 @@ class AsyncRgbEvsDataset(Dataset):
         self.event_update_drop_probability = float(event_update_drop_probability)
         self.rgb_update_drop_probability = float(rgb_update_drop_probability)
         self.max_rgb_interval_multiplier = int(max_rgb_interval_multiplier)
+        self.rgb_feature_cache_dir = (
+            Path(rgb_feature_cache_dir) if rgb_feature_cache_dir is not None else None
+        )
         if self.rollout_steps < 1:
             raise ValueError("rollout_steps must be positive")
         if self.timing_min_hz <= 0.0 or self.timing_max_hz < self.timing_min_hz:
@@ -245,6 +249,17 @@ class AsyncRgbEvsDataset(Dataset):
         return len(self.rows)
 
     def _rgb(self, relative: str) -> torch.Tensor:
+        if self.rgb_feature_cache_dir is not None:
+            feature_path = (self.rgb_feature_cache_dir / relative).with_suffix(".npy")
+            if not feature_path.is_file():
+                raise RuntimeError(f"Cached RGB feature was not found: {feature_path}")
+            feature = np.load(feature_path, allow_pickle=False).astype(np.float32, copy=False)
+            if feature.ndim != 1:
+                raise RuntimeError(
+                    f"Cached RGB feature must be one-dimensional, got {feature.shape}: "
+                    f"{feature_path}"
+                )
+            return torch.from_numpy(np.ascontiguousarray(feature))
         image = cv2.imread(str(self.dataset_dir / relative), cv2.IMREAD_COLOR)
         if image is None:
             raise RuntimeError(f"Failed to read RGB image: {relative}")

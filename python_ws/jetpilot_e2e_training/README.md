@@ -276,8 +276,15 @@ augmentationを適用しないため、元の250 Hz性能とlossを比較でき�
 Offline Analysis用`model.onnx`に加えて、ROS 2/TensorRT用の`rgb_encoder.onnx`と
 `event_updater.onnx`を同時に出力します。後者はstateを明示的な入出力として扱います。
 
-学習後は通常どおり`Export ONNX`、`Use in offline eval`を選び、学習元と同じrosbagで
-`Offline teacher comparison`を実行します。タイムラインにはRGB frameより高頻度の
+Dataset作成では複数rosbagを選択でき、bagごとに独立したdatasetを一括生成します。
+学習の`Dataset split`は、各train datasetの末尾をvalidationにする簡易モードと、
+train/validationのdataset群を完全に分離する厳密モードを選択できます。複数train bagの
+event正規化統計はtrain側だけから統合し、validation側の統計は混ぜません。
+
+学習後は通常どおり`Export ONNX`、`Use in offline eval`を選びます。未知rosbagを評価する
+場合は、同じ表現設定でそのbag専用datasetを作り、Offline Analysisの
+`Evaluation dataset`で選択します。このdatasetが学習へ追加されることはありません。
+タイムラインにはRGB frameより高頻度の
 EVS更新ごとのModel output、教師control、誤差が表示されます。
 raw eventのdecodeだけは`event_camera_py`互換性のためROS system Pythonで実行します。
 別のNumPy 1.x環境を使う場合は`JETPILOT_EVENT_ANALYSIS_PYTHON`を指定してください。
