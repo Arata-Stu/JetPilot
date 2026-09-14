@@ -52,8 +52,9 @@ def launch_realsense(args: lu.ArgumentContainer) -> list[lut.Action]:
         # IMU streams are disabled by default in realsense.param.yaml.
         'rgb_camera.color_profile': f'424x240x{rgb_fps or 30}',
         'depth_module.infra_profile': f'424x240x{infra_fps or 60}',
-        # Do not synchronize streams running at different frame rates.
-        'enable_sync': rgb_fps > 0 and infra_fps > 0 and rgb_fps == infra_fps,
+        # Keep wrapper-level frame synchronization disabled while evaluating
+        # high-FPS UVC stream stability.
+        'enable_sync': False,
         'align_depth.enable': False,
         'colorizer.enable': False,
         'decimation_filter.enable': False,

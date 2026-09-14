@@ -2375,7 +2375,7 @@ def test_realsense_disabled_streams_keep_valid_driver_profiles() -> None:
         assert values["enable_infra1"] == values["enable_infra2"] == (infra > 0)
         assert not values["rgb_camera.color_profile"].endswith("x0")
         assert not values["depth_module.infra_profile"].endswith("x0")
-        assert values["enable_sync"] == (rgb > 0 and infra > 0 and rgb == infra)
+        assert values["enable_sync"] is False
 
 
 def test_live_bag_manager_defaults_on_and_can_be_disabled() -> None:
