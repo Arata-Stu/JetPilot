@@ -96,6 +96,9 @@ def generate_launch_description():
             "inference_policy": LaunchConfiguration("event_inference_policy"),
             "cuda_update_us": ParameterValue(
                 LaunchConfiguration("event_cuda_update_us"), value_type=int),
+            "timestamp_backward_tolerance_us": ParameterValue(
+                LaunchConfiguration("event_timestamp_backward_tolerance_us"),
+                value_type=int),
             "cuda_events_per_transfer": ParameterValue(
                 LaunchConfiguration("event_cuda_events_per_transfer"), value_type=int),
             "inference_watchdog_ms": ParameterValue(
@@ -241,6 +244,8 @@ def generate_launch_description():
         DeclareLaunchArgument("event_representation_backend", default_value="cuda"),
         DeclareLaunchArgument("event_inference_policy", default_value="periodic"),
         DeclareLaunchArgument("event_cuda_update_us", default_value="1000"),
+        DeclareLaunchArgument(
+            "event_timestamp_backward_tolerance_us", default_value="1000"),
         DeclareLaunchArgument("event_cuda_events_per_transfer", default_value="8192"),
         DeclareLaunchArgument("event_mean", default_value="[0.0]"),
         DeclareLaunchArgument("event_stddev", default_value="[1.0]"),

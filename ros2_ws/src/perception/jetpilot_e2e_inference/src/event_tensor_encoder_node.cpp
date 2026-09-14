@@ -70,6 +70,8 @@ EventTensorEncoderNode::EventTensorEncoderNode(const rclcpp::NodeOptions & optio
   representation_backend_ = declare_parameter<std::string>("representation_backend", "cpu");
   inference_policy_ = declare_parameter<std::string>("inference_policy", "periodic");
   cuda_update_us_ = declare_parameter<std::int64_t>("cuda_update_us", 1000);
+  timestamp_backward_tolerance_us_ = declare_parameter<std::int64_t>(
+    "timestamp_backward_tolerance_us", 1000);
   const auto cuda_events_per_transfer =
     declare_parameter<std::int64_t>("cuda_events_per_transfer", 8192);
   inference_watchdog_ms_ = declare_parameter<double>("inference_watchdog_ms", 100.0);
@@ -145,6 +147,7 @@ EventTensorEncoderNode::EventTensorEncoderNode(const rclcpp::NodeOptions & optio
   }
   if (
     cuda_update_us_ <= 0 || cuda_events_per_transfer <= 0 ||
+    timestamp_backward_tolerance_us_ < 0 ||
     !std::isfinite(inference_watchdog_ms_) || inference_watchdog_ms_ <= 0.0)
   {
     throw std::invalid_argument("CUDA update, transfer size, and watchdog must be positive");
@@ -316,11 +319,12 @@ EventTensorEncoderNode::EventTensorEncoderNode(const rclcpp::NodeOptions & optio
     get_logger(),
     "Event tensor encoder: shape=[1,%zu,%ld,%ld], bins=%ld, window=%.3fms, "
     "stride=%.3fms, output_rate=%.3fHz, backend=%s, policy=%s, interpolation=%s, "
-    "incremental=%s (shift=%zu)",
+    "incremental=%s (shift=%zu), timestamp_backward_tolerance=%ldus",
     channels_, height_, width_, bins_, window_ms, stride_ms,
     output_rate_hz_ > 0.0 ? output_rate_hz_ : 1.0e6 / stride_us_,
     representation_backend_.c_str(), inference_policy_.c_str(), temporal_interpolation_.c_str(),
-    reported_incremental ? "enabled" : "disabled", reported_shift_bins);
+    reported_incremental ? "enabled" : "disabled", reported_shift_bins,
+    timestamp_backward_tolerance_us_);
 }
 
 EventTensorEncoderNode::~EventTensorEncoderNode()
@@ -480,10 +484,9 @@ void EventTensorEncoderNode::process_events(
 {
   if (representation_backend_ == "cuda") {
     for (const auto & event : events) {
-      if (last_event_us_ != 0 && event.t < last_event_us_) {
-        reset_state("event timestamp moved backwards");
+      if (!accept_event_timestamp(event.t)) {
+        continue;
       }
-      last_event_us_ = event.t;
       if (next_publish_us_ == 0) {
         initialize_publish_schedule(event.t);
       }
@@ -503,10 +506,9 @@ void EventTensorEncoderNode::process_events(
   }
 
   for (const auto & event : events) {
-    if (last_event_us_ != 0 && event.t < last_event_us_) {
-      reset_state("event timestamp moved backwards");
+    if (!accept_event_timestamp(event.t)) {
+      continue;
     }
-    last_event_us_ = event.t;
     if (next_publish_us_ == 0) {
       initialize_publish_schedule(event.t);
     }
@@ -932,7 +934,26 @@ void EventTensorEncoderNode::prepare_staging_buffer(std::vector<float> & output)
   }
 }
 
-void EventTensorEncoderNode::reset_state(const char * reason)
+bool EventTensorEncoderNode::accept_event_timestamp(const Timestamp event_us)
+{
+  if (last_event_us_ != 0 && event_us < last_event_us_) {
+    const auto backward_us = static_cast<std::uint64_t>(last_event_us_ - event_us);
+    out_of_order_events_.fetch_add(1, std::memory_order_relaxed);
+    update_max(backward_jump_max_us_, backward_us);
+    if (backward_us <= static_cast<std::uint64_t>(timestamp_backward_tolerance_us_)) {
+      dropped_out_of_order_events_.fetch_add(1, std::memory_order_relaxed);
+      return false;
+    }
+    timestamp_reset_count_.fetch_add(1, std::memory_order_relaxed);
+    reset_state(
+      "event timestamp moved backwards by " + std::to_string(backward_us) +
+      " us (tolerance=" + std::to_string(timestamp_backward_tolerance_us_) + " us)");
+  }
+  last_event_us_ = event_us;
+  return true;
+}
+
+void EventTensorEncoderNode::reset_state(const std::string & reason)
 {
   window_events_.clear();
   cuda_pending_events_.clear();
@@ -953,7 +974,7 @@ void EventTensorEncoderNode::reset_state(const char * reason)
   inference_in_flight_ = false;
   cuda_events_since_snapshot_ = 0;
   queued_events_gauge_.store(0, std::memory_order_relaxed);
-  RCLCPP_WARN(get_logger(), "Event tensor state reset: %s", reason);
+  RCLCPP_WARN(get_logger(), "Event tensor state reset: %s", reason.c_str());
 }
 
 void EventTensorEncoderNode::publish_diagnostics()
@@ -1005,10 +1026,26 @@ void EventTensorEncoderNode::publish_diagnostics()
   const auto sensor_age_samples =
     output_sensor_age_samples_.exchange(0, std::memory_order_relaxed);
   const auto out_of_bounds = out_of_bounds_events_.exchange(0, std::memory_order_relaxed);
+  const auto out_of_order = out_of_order_events_.exchange(0, std::memory_order_relaxed);
+  const auto dropped_out_of_order =
+    dropped_out_of_order_events_.exchange(0, std::memory_order_relaxed);
+  const auto timestamp_resets =
+    timestamp_reset_count_.exchange(0, std::memory_order_relaxed);
+  const auto backward_jump_max_us =
+    backward_jump_max_us_.exchange(0, std::memory_order_relaxed);
   const auto empty = empty_windows_.exchange(0, std::memory_order_relaxed);
   const auto last_event_arrival_age_ms = has_last_event_arrival_ ?
     std::chrono::duration<double, std::milli>(now_steady - last_event_arrival_time_).count() :
     -1.0;
+
+  if (dropped_out_of_order > 0) {
+    RCLCPP_WARN(
+      get_logger(),
+      "Dropped %lu out-of-order events during the last %.3fs; "
+      "maximum backward jump=%lu us, reset threshold=%ld us",
+      static_cast<unsigned long>(dropped_out_of_order), elapsed_s,
+      static_cast<unsigned long>(backward_jump_max_us), timestamp_backward_tolerance_us_);
+  }
 
   diagnostic_msgs::msg::DiagnosticArray array;
   array.header.stamp = now();
@@ -1017,12 +1054,13 @@ void EventTensorEncoderNode::publish_diagnostics()
   status.hardware_id = "event_camera";
   status.level =
     errors == 0 && publish_errors == 0 && watchdog_timeouts == 0 &&
-    fixed_rate_skipped == 0 ?
+    fixed_rate_skipped == 0 && timestamp_resets == 0 ?
     diagnostic_msgs::msg::DiagnosticStatus::OK :
     diagnostic_msgs::msg::DiagnosticStatus::WARN;
   status.message =
     errors == 0 && publish_errors == 0 && watchdog_timeouts == 0 &&
-    fixed_rate_skipped == 0 ? "OK" : "event tensor deadline or processing issue detected";
+    fixed_rate_skipped == 0 && timestamp_resets == 0 ?
+    "OK" : "event tensor deadline, timestamp, or processing issue detected";
   status.values = {
     diagnostic_number("packets_per_s", packets / elapsed_s),
     diagnostic_number("events_per_s", events / elapsed_s),
@@ -1049,6 +1087,11 @@ void EventTensorEncoderNode::publish_diagnostics()
     diagnostic_number("decode_errors", errors),
     diagnostic_number("publish_errors", publish_errors),
     diagnostic_number("out_of_bounds_events", out_of_bounds),
+    diagnostic_number("out_of_order_events", out_of_order),
+    diagnostic_number("dropped_out_of_order_events", dropped_out_of_order),
+    diagnostic_number("timestamp_resets", timestamp_resets),
+    diagnostic_number("max_backward_jump_us", backward_jump_max_us),
+    diagnostic_number("timestamp_backward_tolerance_us", timestamp_backward_tolerance_us_),
     diagnostic_value("representation_backend", representation_backend_),
     diagnostic_value("inference_policy", inference_policy_),
     diagnostic_number("cuda_updates", cuda_flushes),

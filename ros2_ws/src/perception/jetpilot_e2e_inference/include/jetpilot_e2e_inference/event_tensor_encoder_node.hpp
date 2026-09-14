@@ -67,7 +67,8 @@ private:
     Timestamp window_end_us, std::vector<float> & tensor) const;
   std::size_t channel_index(std::size_t bin, bool positive) const;
   void prepare_staging_buffer(std::vector<float> & output) const;
-  void reset_state(const char * reason);
+  bool accept_event_timestamp(Timestamp event_us);
+  void reset_state(const std::string & reason);
   void publish_diagnostics();
   void initialize_publish_schedule(Timestamp first_event_us);
   void advance_publish_schedule();
@@ -96,6 +97,7 @@ private:
   bool debug_{false};
   double statistics_interval_s_{1.0};
   std::int64_t cuda_update_us_{1000};
+  std::int64_t timestamp_backward_tolerance_us_{1000};
   std::size_t cuda_events_per_transfer_{8192};
   double inference_watchdog_ms_{100.0};
   std::size_t channels_{20};
@@ -174,6 +176,10 @@ private:
   std::atomic<std::uint64_t> output_sensor_age_max_ns_{0};
   std::atomic<std::uint64_t> output_sensor_age_samples_{0};
   std::atomic<std::uint64_t> out_of_bounds_events_{0};
+  std::atomic<std::uint64_t> out_of_order_events_{0};
+  std::atomic<std::uint64_t> dropped_out_of_order_events_{0};
+  std::atomic<std::uint64_t> timestamp_reset_count_{0};
+  std::atomic<std::uint64_t> backward_jump_max_us_{0};
   std::atomic<std::uint64_t> published_tensors_{0};
   std::atomic<std::uint64_t> empty_windows_{0};
   std::atomic<std::uint64_t> full_windows_{0};

@@ -162,6 +162,13 @@ GPUへ送り、GPU常駐ringを更新します。`periodic`方式ではsensor時
 再送ではなく、古いbinが順に抜けて最終的にゼロになるため、E2E更新周期を一定に保てます。
 timer遅延で周期を飛ばした回数は`fixed_rate_skipped_windows`へ出力されます。
 
+デコード後のevent時刻が直前より戻った場合、既定では1 ms以下の局所的な逆行を
+out-of-order eventとして破棄し、rolling stateは維持します。1 msを超える逆行だけを
+sensor clockの再初期化とみなしてstateをresetします。閾値は
+`event_timestamp_backward_tolerance_us`で変更できます。診断topicには
+`out_of_order_events`、`dropped_out_of_order_events`、`timestamp_resets`、
+`max_backward_jump_us`を出力します。
+
 `consumer_driven`を明示した場合はTensorRTのraw出力を前回推論の完了通知として使います。
 同時in-flight推論は1件で、古いsnapshotをqueueしません。raw出力が来ない場合はwatchdogで
 復旧します。現行NITROS TensorListとの互換性のためsnapshotはFP32とし、TensorRT engine
@@ -381,6 +388,7 @@ ros2 launch jetpilot_e2e_inference e2e_tensor_rt.launch.py \
   event_representation_backend:=cuda \
   event_inference_policy:=periodic \
   event_cuda_update_us:=1000 \
+  event_timestamp_backward_tolerance_us:=1000 \
   event_cuda_events_per_transfer:=8192 \
   event_tensor_debug:=true \
   model_root:=/workspaces/ros2_ws/models/e2e/<event-tensor-run>
@@ -396,6 +404,7 @@ bringup全体から使う場合は同じ設定を`e2e_` prefix付きで指定し
   --set e2e_event_bins:=10 \
   --set e2e_event_window_ms:=40.0 \
   --set e2e_event_stride_ms:=4.0 \
+  --set e2e_event_timestamp_backward_tolerance_us:=1000 \
   --set e2e_event_inference_policy:=periodic
 ```
 
