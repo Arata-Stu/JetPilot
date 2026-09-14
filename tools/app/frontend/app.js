@@ -45,7 +45,6 @@ const state = {
     runDir: "",
     deployRunDir: "",
     deployName: "",
-    buildEngine: true,
     experiment: "pilotnet_scratch",
     outputTarget: "control",
     datasetTask: "control",
@@ -3571,7 +3570,6 @@ function deployE2EModel() {
       host: pipeline.deployHost,
       remote_root: pipeline.remoteRoot,
       deploy_name: pipeline.deployName,
-      build_engine: pipeline.buildEngine,
     },
   );
 }
@@ -3666,14 +3664,14 @@ function renderE2EPipeline() {
             <div class="button-stack"><button class="primary ${actionBusy("e2e-pipeline:export") ? "is-busy" : ""}" onclick="exportE2EOnnx()" ${run?.best_checkpoint ? "" : "disabled"} ${actionButtonAttrs("e2e-pipeline:export", "ONNX export is starting...")}>${esc(actionButtonLabel("e2e-pipeline:export", "Export ONNX", "Starting..."))}</button><button onclick="useE2ERunForOfflineEval()" ${run?.onnx_path ? "" : "disabled"}>Use in offline eval</button></div>
           </article>
           <article class="e2e-pipeline-stage">
-            <header><span>04</span><div><strong>Deploy to Jetson</strong><small>Select ONNX → transfer → build TensorRT</small></div></header>
+            <header><span>04</span><div><strong>Deploy to Jetson</strong><small>Select ONNX → transfer model files</small></div></header>
             <div class="field"><label>ONNX model to deploy</label><select onchange="updateE2EPipelineOption('deployRunDir', this.value)"><option value="">Select exported run</option>${pipeline.runs.filter((item) => item.onnx_path).map((item) => `<option value="${esc(item.path)}" ${item.path === pipeline.deployRunDir ? "selected" : ""}>${esc(item.task)} · ${esc(item.name)}</option>`).join("")}</select></div>
             <div class="field"><label>Connection profile</label><select onchange="updateE2EPipelineOption('deployProfile', this.value)">${pipeline.deployProfiles.map((item) => `<option value="${esc(item.id)}" ${item.id === pipeline.deployProfile ? "selected" : ""}>${esc(item.label)} — ${esc(item.host === "__manual__" ? "manual" : item.host)}</option>`).join("")}</select></div>
             <div class="e2e-compact-fields"><label>SSH user<input value="${esc(pipeline.deployUser || profile?.user || "")}" onchange="updateE2EPipelineOption('deployUser', this.value)" /></label><label>Host<input value="${esc(pipeline.deployHost || (profile?.host === "__manual__" ? "" : profile?.host) || "")}" onchange="updateE2EPipelineOption('deployHost', this.value)" /></label></div>
             <div class="field"><label>Model name on Jetson</label><input value="${esc(pipeline.deployName)}" onchange="updateE2EPipelineOption('deployName', this.value)" /><div class="field-hint">${esc(deployment?.label || (deployRun ? "No compatible deployment preset" : "Select an exported run"))} · ${esc(deployment?.model_name || "")}</div></div>
-            <label class="check"><input type="checkbox" ${pipeline.buildEngine ? "checked" : ""} onchange="state.e2ePipeline.buildEngine=this.checked; render()" /> 転送後、選択したモデルのTensorRT engineをJetsonで生成</label>
+            <div class="notice compact">TensorRT engineは転送しません。Jetsonの実行用Docker環境内で生成してください。</div>
             <div class="field-hint">${esc(pipeline.remoteRoot || profile?.remote_root || "")}</div>
-            <button class="primary ${actionBusy("e2e-pipeline:deploy") ? "is-busy" : ""}" onclick="deployE2EModel()" ${deployRun?.onnx_path && pipeline.deployName && deployment ? "" : "disabled"} ${actionButtonAttrs("e2e-pipeline:deploy", "Deployment is starting...")}>${esc(actionButtonLabel("e2e-pipeline:deploy", pipeline.buildEngine ? "Transfer & build" : "Transfer model", "Starting..."))}</button>
+            <button class="primary ${actionBusy("e2e-pipeline:deploy") ? "is-busy" : ""}" onclick="deployE2EModel()" ${deployRun?.onnx_path && pipeline.deployName && deployment ? "" : "disabled"} ${actionButtonAttrs("e2e-pipeline:deploy", "Deployment is starting...")}>${esc(actionButtonLabel("e2e-pipeline:deploy", "Transfer model", "Starting..."))}</button>
           </article>
         </div>
         <details class="e2e-pipeline-tasks" ${pipelineTasks.some(isActiveTask) ? "open" : ""}><summary>Pipeline tasks (${pipelineTasks.length})</summary>${renderTaskTable(pipelineTasks)}</details>

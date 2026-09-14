@@ -229,8 +229,8 @@ ros2 run jetpilot_e2e_inference run_async_rgb_evs.sh \
 
 学習側の`Export ONNX`はoffline評価用`model.onnx`に加えて、オンライン用の
 `rgb_encoder.onnx`と`event_updater.onnx`を生成します。Consoleの`Deploy to Jetson`で
-`Async RGB + Raw EVS 20ch Control`を選ぶと3ファイルを一括転送し、build指定時は
-`rgb_encoder.plan`と`event_updater.plan`を生成します。手動でengineを作る場合:
+`Async RGB + Raw EVS 20ch Control`を選ぶと3ファイルを一括転送します。
+engineはJetsonの実行用Docker環境内で生成します:
 
 ```bash
 ros2 run jetpilot_e2e_inference build_async_rgb_evs_engines.sh \
@@ -242,6 +242,13 @@ polarity、補間方式、入力寸法、topicと`event_sample_hz`を読み取�
 オンライン時の前処理条件を手入力せず一致させます。たとえば`stride=4 ms`で100 Hz学習したモデルは、4 msの
 bin境界上で8/12 msを交互に選び、長期平均100 Hzでstateを更新します。250 Hz学習時は
 4 msごとに更新します。
+
+JetPilot全体のTUIから起動するときは`e2e`、sensor kitに
+`realsense-silky`、E2E inputに`RGB + Raw EVS（非同期latent）`を選択し、
+対応モデルを選びます。metadataの250 Hz表現設定が自動適用され、
+Silky/OpenEB、CUDA event tensor encoder、RGB encoder TensorRT、latent state manager、
+EVS updater TensorRT、control decoderが同一bringupで起動します。raw eventを
+使うため、不要なOpenEB event image生成は自動的に無効化します。
 
 診断は次の2 topicで確認できます。
 
@@ -311,9 +318,13 @@ RGB／EVSから選択できます。どちらか一方の入力で推論し、�
 実機にモデルが存在しない開発PCでの`--dry-run`では、明示したモデルが存在しない場合の
 内容検証は省略します。
 
-`e2e_trt.sh`は対象ディレクトリまたはONNXファイルの指定が必須です。
+`e2e_trt.sh`を引数なしで起動すると、`$ROS2_WS/models/e2e`以下の配備済み
+モデルを対話的に選択できます。`fzf`があれば検索式TUI、なければ番号選択です。
+非対話実行では対象ディレクトリまたはONNXファイルを明示します。
 
 ```bash
+/workspaces/scripts/e2e_trt.sh
+# または明示指定
 /workspaces/scripts/e2e_trt.sh /workspaces/ros2_ws/models/e2e/<run-name>
 ```
 

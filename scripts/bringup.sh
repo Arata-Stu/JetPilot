@@ -1663,7 +1663,7 @@ choose_preset_interactively() {
 configure_e2e_model() {
   is_true "$(get_arg enable_e2e_inference)" || return 0
   local sensor=rgb base=camera target=control selected records line choice key value current override explicit
-  local event_bins event_channels
+  local event_bins event_channels event_polarity_mode
   local model_root="${E2E_MODEL_BASE:-${ROS2_WS}/models/e2e}"
   local helper="${SCRIPT_DIR}/e2e_models.py"
   local options=() flags=() input_options=()
@@ -1672,16 +1672,28 @@ configure_e2e_model() {
   current="$(get_arg e2e_fixed_throttle_mode 2>/dev/null || true)"
   [[ -z "$current" ]] || auto_throttle=false
   if [[ "$INTERACTIVE" == true && -z "$(get_arg e2e_image_topic 2>/dev/null || true)" ]]; then
+    local has_rgb=false has_event=false
     if ((${#SENSOR_KIT_RTP_TOPICS[@]} > 0)); then
       for line in "${SENSOR_KIT_RTP_TOPICS[@]}"; do
         case "$line" in
-          */color/image_raw|*/event_image) input_options+=("$line") ;;
+          */color/image_raw) input_options+=("$line"); has_rgb=true ;;
+          */event_image) input_options+=("$line"); has_event=true ;;
         esac
       done
     fi
+    if [[ "$has_rgb" == true && "$has_event" == true ]]; then
+      input_options+=('rgb_event_async  RGB + Raw EVS（非同期latent、最大250 Hz）')
+    fi
     if ((${#input_options[@]} > 1)); then
       choice="$(choose_one 'E2E input (RGB / EVS)' "${input_options[@]}")" || exit $?
-      set_arg e2e_image_topic "$choice"
+      if [[ "$choice" == rgb_event_async* ]]; then
+        set_arg e2e_async_rgb_evs_mode true
+        set_arg e2e_event_image_mode false
+        set_arg e2e_event_tensor_mode false
+      else
+        set_arg e2e_async_rgb_evs_mode false
+        set_arg e2e_image_topic "$choice"
+      fi
       if [[ "$choice" == */event_image ]]; then
         set_arg e2e_event_image_mode true
       else
@@ -1689,12 +1701,28 @@ configure_e2e_model() {
       fi
     fi
   fi
-  if is_true "$(get_arg e2e_event_tensor_mode 2>/dev/null || printf false)"; then
+  if is_true "$(get_arg e2e_async_rgb_evs_mode 2>/dev/null || printf false)"; then
+    sensor=rgb-event
+    base=rgb_event_async
+    event_bins="$(get_arg e2e_event_bins 2>/dev/null || printf 10)"
+    event_polarity_mode="$(get_arg e2e_event_polarity_mode 2>/dev/null || printf separate)"
+    set_arg e2e_event_bins "$event_bins"
+    set_arg e2e_event_polarity_mode "$event_polarity_mode"
+    [[ "$event_bins" =~ ^[1-9][0-9]*$ ]] || die 'e2e_event_bins must be a positive integer'
+    case "$event_polarity_mode" in
+      signed) event_channels="$event_bins" ;;
+      separate) event_channels="$((event_bins * 2))" ;;
+      *) die 'e2e_event_polarity_mode must be signed or separate' ;;
+    esac
+  elif is_true "$(get_arg e2e_event_tensor_mode 2>/dev/null || printf false)"; then
     sensor=event
     base=event_tensor
-    event_bins="$(get_arg e2e_event_bins)"
+    event_bins="$(get_arg e2e_event_bins 2>/dev/null || printf 10)"
+    event_polarity_mode="$(get_arg e2e_event_polarity_mode 2>/dev/null || printf separate)"
+    set_arg e2e_event_bins "$event_bins"
+    set_arg e2e_event_polarity_mode "$event_polarity_mode"
     [[ "$event_bins" =~ ^[1-9][0-9]*$ ]] || die 'e2e_event_bins must be a positive integer'
-    case "$(get_arg e2e_event_polarity_mode)" in
+    case "$event_polarity_mode" in
       signed) event_channels="$event_bins" ;;
       separate) event_channels="$((event_bins * 2))" ;;
       *) die 'e2e_event_polarity_mode must be signed or separate' ;;
@@ -1749,6 +1777,9 @@ configure_e2e_model() {
       || die "$key=$current does not match model metadata ($value)"
     set_arg "$key" "$value"
   done <<< "$records"
+  if is_true "$(get_arg e2e_async_rgb_evs_mode 2>/dev/null || true)"; then
+    set_arg sensor_kit_silky_evcam_event_image_enabled false
+  fi
   if is_true "$(get_arg e2e_fixed_throttle_mode 2>/dev/null || true)"; then
     current="$(get_arg fixed_throttle 2>/dev/null || true)"
     set_arg fixed_throttle "${current:-0.2}"
@@ -2431,7 +2462,13 @@ print_summary() {
   printf '  control      : %s\n' "$(get_arg enable_control)"
   printf '  E2E inference: %s\n' "$(get_arg enable_e2e_inference)"
   if is_true "$(get_arg enable_e2e_inference)"; then
-    printf '  E2E input    : %s\n' "$(get_arg e2e_image_topic 2>/dev/null || printf /realsense/color/image_raw)"
+    if is_true "$(get_arg e2e_async_rgb_evs_mode 2>/dev/null || true)"; then
+      printf '  E2E input    : RGB + Raw EVS（非同期、%s Hz、%s backend）\n' \
+        "$(get_arg e2e_async_event_output_rate_hz)" \
+        "$(get_arg e2e_event_representation_backend)"
+    else
+      printf '  E2E input    : %s\n' "$(get_arg e2e_image_topic 2>/dev/null || printf /realsense/color/image_raw)"
+    fi
     printf '  E2E model    : %s\n' "$(get_arg e2e_model_root)"
     if is_true "$(get_arg e2e_fixed_throttle_mode 2>/dev/null || true)"; then
       printf '  E2E throttle : 固定（ステアのみ推論）\n'

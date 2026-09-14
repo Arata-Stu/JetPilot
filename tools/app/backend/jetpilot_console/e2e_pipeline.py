@@ -883,8 +883,6 @@ def build_deploy_task(config: Any, body: dict[str, Any]) -> PipelineTaskSpec:
         deploy_name,
         "--yes",
     ]
-    if body.get("build_engine") is True:
-        command.append("--build-engine")
     return PipelineTaskSpec(
         kind="e2e-deploy",
         title=f"Deploy E2E model {deploy_name} to {target}",

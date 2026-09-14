@@ -568,6 +568,7 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('fixed_throttle', '0.2', cli=True)
     args.add_arg('e2e_event_image_mode', False, cli=True)
     args.add_arg('e2e_event_tensor_mode', False, cli=True)
+    args.add_arg('e2e_async_rgb_evs_mode', False, cli=True)
     args.add_arg('e2e_event_topic', '/event_camera/events', cli=True)
     args.add_arg('e2e_event_bins', '10', cli=True)
     args.add_arg('e2e_event_window_ms', '40.0', cli=True)
@@ -591,6 +592,11 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('e2e_event_tensor_memory_pool_num_blocks', '8', cli=True)
     args.add_arg(
         'e2e_event_tensor_diagnostics_topic', '/e2e/event_tensor/diagnostics', cli=True)
+    args.add_arg('e2e_async_event_output_rate_hz', '250.0', cli=True)
+    args.add_arg('e2e_async_rgb_mean', '[0.485, 0.456, 0.406]', cli=True)
+    args.add_arg('e2e_async_rgb_stddev', '[0.229, 0.224, 0.225]', cli=True)
+    args.add_arg(
+        'e2e_async_state_diagnostics_topic', '/e2e/latent_state/diagnostics', cli=True)
     args.add_arg('e2e_image_topic', '/realsense/color/image_raw', cli=True)
     args.add_arg('e2e_camera_info_topic', '/realsense/color/camera_info', cli=True)
     args.add_arg('e2e_control_cmd_topic', '/auto/control_cmd', cli=True)
@@ -1102,7 +1108,53 @@ def generate_launch_description() -> lut.LaunchDescription:
                 'event_image_stddev': args.e2e_event_image_stddev,
                 'use_sim_time': args.use_sim_time,
             },
-            condition=IfCondition(args.enable_e2e_inference),
+            condition=IfCondition(lut.AndSubstitution(
+                lu.is_true(args.enable_e2e_inference),
+                lut.NotSubstitution(_LaunchBoolean(args.e2e_async_rgb_evs_mode)))),
+        ))
+
+    actions.append(
+        lu.include(
+            'jetpilot_e2e_inference',
+            'launch/async_rgb_evs_latent.launch.py',
+            launch_arguments={
+                'container_name': args.sensor_kit_container_name,
+                'run_standalone': False,
+                'model_root': args.e2e_model_root,
+                'rgb_image_topic': args.e2e_image_topic,
+                'rgb_camera_info_topic': args.e2e_camera_info_topic,
+                'rgb_input_width': args.e2e_input_image_width,
+                'rgb_input_height': args.e2e_input_image_height,
+                'network_width': args.e2e_network_image_width,
+                'network_height': args.e2e_network_image_height,
+                'rgb_mean': args.e2e_async_rgb_mean,
+                'rgb_stddev': args.e2e_async_rgb_stddev,
+                'event_topic': args.e2e_event_topic,
+                'event_bins': args.e2e_event_bins,
+                'event_window_ms': args.e2e_event_window_ms,
+                'event_stride_ms': args.e2e_event_stride_ms,
+                'event_output_rate_hz': args.e2e_async_event_output_rate_hz,
+                'event_polarity_mode': args.e2e_event_polarity_mode,
+                'event_polarity_layout': args.e2e_event_polarity_layout,
+                'event_temporal_interpolation': args.e2e_event_temporal_interpolation,
+                'event_incremental_mode': args.e2e_event_incremental_mode,
+                'event_representation_backend': args.e2e_event_representation_backend,
+                'event_inference_policy': args.e2e_event_inference_policy,
+                'event_cuda_update_us': args.e2e_event_cuda_update_us,
+                'event_cuda_events_per_transfer': args.e2e_event_cuda_events_per_transfer,
+                'event_mean': args.e2e_event_tensor_mean,
+                'event_stddev': args.e2e_event_tensor_stddev,
+                'inference_watchdog_ms': args.e2e_event_inference_watchdog_ms,
+                'statistics_interval_s': args.e2e_event_tensor_statistics_interval_s,
+                'debug': args.e2e_event_tensor_debug,
+                'event_diagnostics_topic': args.e2e_event_tensor_diagnostics_topic,
+                'state_diagnostics_topic': args.e2e_async_state_diagnostics_topic,
+                'control_cmd_topic': args.e2e_control_cmd_topic,
+                'use_sim_time': args.use_sim_time,
+            },
+            condition=IfCondition(lut.AndSubstitution(
+                lu.is_true(args.enable_e2e_inference),
+                _LaunchBoolean(args.e2e_async_rgb_evs_mode))),
         ))
 
     actions.append(

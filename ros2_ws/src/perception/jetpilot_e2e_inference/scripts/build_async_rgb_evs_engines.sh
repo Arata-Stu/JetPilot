@@ -3,6 +3,7 @@ set -euo pipefail
 
 MODEL_ROOT="${1:-}"
 TRTEXEC="${TRTEXEC:-/usr/src/tensorrt/bin/trtexec}"
+FP16="${E2E_TRT_FP16:-1}"
 
 if [[ -z "$MODEL_ROOT" ]]; then
   echo "Usage: build_async_rgb_evs_engines.sh MODEL_ROOT" >&2
@@ -22,11 +23,16 @@ fi
 build_engine() {
   local stem="$1"
   local building="${MODEL_ROOT}/${stem}.plan.building"
-  "$TRTEXEC" \
+  local args=(
+    "$TRTEXEC"
     "--onnx=${MODEL_ROOT}/${stem}.onnx" \
-    "--saveEngine=${building}" \
-    --fp16 \
-    2>&1 | tee "${MODEL_ROOT}/build_${stem}.log"
+    "--saveEngine=${building}"
+  )
+  if [[ "$FP16" == "1" || "$FP16" == "true" ]]; then
+    args+=(--fp16)
+  fi
+  rm -f -- "$building"
+  "${args[@]}" 2>&1 | tee "${MODEL_ROOT}/build_${stem}.log"
   mv -- "$building" "${MODEL_ROOT}/${stem}.plan"
 }
 

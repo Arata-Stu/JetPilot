@@ -308,12 +308,12 @@ ros2 run jetpilot_e2e_inference run_async_rgb_evs.sh \
 ```bash
 scripts/deploy_model.sh outputs/e2e/trajectory_run/model.onnx \
   --preset camera_trajectory \
-  --name trajectory_run \
-  --build-engine
+  --name trajectory_run
 ```
 
-配備先は`<remote-root>/<name>`です。`latest`リンクは更新しません。別途buildする場合も
-対象を明示します。
+配備先は`<remote-root>/<name>`です。`latest`リンクは更新しません。
+TensorRT engineはSSH転送中に生成せず、Jetsonの実行用Docker環境内で、
+対象ディレクトリを明示してbuildします。
 
 ```bash
 /workspaces/scripts/e2e_trt.sh \

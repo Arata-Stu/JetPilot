@@ -48,6 +48,38 @@ class E2EModelSelectionTests(unittest.TestCase):
                 "temporal_interpolation": "none",
             },
         }))
+        async_path = self.root / "rgb_event_async_control"
+        async_path.mkdir()
+        for filename in ("model.onnx", "rgb_encoder.onnx", "event_updater.onnx"):
+            (async_path / filename).write_bytes(b"test")
+        (async_path / "metadata.json").write_text(json.dumps({
+            "model_name": async_path.name,
+            "task": "control",
+            "steering_only": False,
+            "modality": "rgb_event_async",
+            "image_topic": "/realsense/color/image_raw",
+            "inputs": [
+                {
+                    "name": "rgb", "shape": [1, 3, 120, 212],
+                    "mean": [0.485, 0.456, 0.406],
+                    "std": [0.229, 0.224, 0.225],
+                },
+                {
+                    "name": "event_tensors", "shape": [1, 32, 20, 120, 212],
+                    "mean": [0.1] * 20, "std": [0.2] * 20,
+                },
+            ],
+            "event_representation": {
+                "event_topic": "/event_camera/events",
+                "bins": 10,
+                "window_ms": 40.0,
+                "stride_ms": 4.0,
+                "polarity_mode": "separate",
+                "polarity_layout": "polarity_major",
+                "temporal_interpolation": "none",
+            },
+            "config": {"data": {"event_sample_hz": 250.0}},
+        }))
 
     def test_candidates_match_both_sensor_and_learning_target(self):
         (self.root / "latest").symlink_to("camera_control")
@@ -146,14 +178,36 @@ class E2EModelSelectionTests(unittest.TestCase):
         self.assertIn('"event_inference_policy", default_value="periodic"', launch_source)
         self.assertIn('"event_cuda_events_per_transfer", default_value="8192"', launch_source)
 
-    def test_tensorrt_build_requires_explicit_model(self):
+    def test_async_rgb_evs_bringup_selects_cuda_pipeline(self):
+        path = self.root / "rgb_event_async_control"
+        record = inspect_model(path, "rgb-event", False, event_tensor_channels=20)
+        self.assertEqual(record["event_representation"]["output_rate_hz"], 250.0)
+        self.assertEqual(record["event_representation"]["backend"], "cuda")
+        self.assertFalse(record["engine"])
+
+        result = subprocess.run([
+            "bash", str(ROOT / "scripts/bringup.sh"), "e2e",
+            "--vehicle", "jpbb", "--sensor-kit", "realsense-silky", "--dry-run",
+            "--e2e-model", str(path),
+            "--set", "e2e_async_rgb_evs_mode:=true",
+        ], text=True, capture_output=True, check=True)
+        self.assertIn("e2e_async_rgb_evs_mode:=true", result.stdout)
+        self.assertIn("e2e_async_event_output_rate_hz:=250.0", result.stdout)
+        self.assertIn("e2e_event_representation_backend:=cuda", result.stdout)
+        self.assertIn("sensor_kit_silky_evcam_event_image_enabled:=false", result.stdout)
+
+    def test_tensorrt_build_requires_explicit_model_without_tty(self):
         result = subprocess.run(
             ["bash", str(ROOT / "scripts/e2e_trt.sh")],
             text=True,
             capture_output=True,
         )
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("Specify the model directory", result.stderr)
+        self.assertTrue(
+            "E2E model root was not found" in result.stderr
+            or "No deployed E2E ONNX model was found" in result.stderr
+            or "interactive terminal is unavailable" in result.stderr
+        )
 
     def test_async_rgb_evs_launch_preserves_state_feedback_contract(self):
         source = (
@@ -162,7 +216,7 @@ class E2EModelSelectionTests(unittest.TestCase):
         ).read_text()
         self.assertIn("jetpilot_e2e_inference::LatentStateManagerNode", source)
         self.assertIn("['state_in', 'event_tensor', 'delta_t']", source)
-        self.assertIn("['state_out', 'trajectory']", source)
+        self.assertIn("['state_out', 'control']", source)
         self.assertIn('(\"tensor_feedback\", LaunchConfiguration(\"event_feedback_topic\"))', source)
         self.assertIn('(\"updater_output\", LaunchConfiguration(\"updater_output_topic\"))', source)
 

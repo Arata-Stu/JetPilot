@@ -23,7 +23,6 @@ REMOTE_HOST="${E2E_REMOTE_HOST:-}"
 REMOTE_ROOT="${E2E_REMOTE_MODEL_ROOT:-}"
 DEPLOY_NAME="${E2E_DEPLOY_NAME:-}"
 ASSUME_YES=false
-BUILD_ENGINE=false
 
 PROFILE_IDS=()
 PROFILE_LABELS=()
@@ -54,7 +53,6 @@ usage() {
     "  --host HOST          Override the Jetson host" \
     "  --remote-root PATH   Override the remote model root" \
     "  --name NAME          Remote model directory name (defaults to the source run name)" \
-    "  --build-engine       Run trtexec on the Jetson after upload" \
     "  -y, --yes            Deploy without confirmation"
 }
 
@@ -73,7 +71,6 @@ parse_args() {
       --host) REMOTE_HOST="${2:?}"; shift 2 ;;
       --remote-root) REMOTE_ROOT="${2:?}"; shift 2 ;;
       --name) DEPLOY_NAME="${2:?}"; shift 2 ;;
-      --build-engine) BUILD_ENGINE=true; shift ;;
       -y|--yes) ASSUME_YES=true; shift ;;
       -h|--help) usage; exit 0 ;;
       --*) die "unknown option: $1" ;;
@@ -300,7 +297,6 @@ main() {
   echo "metadata   : ${metadata_path}$([[ -f "$metadata_path" ]] || printf ' (not found)')"
   echo "destination: ${remote_target}:${remote_model_dir}"
   echo "sha256     : ${checksum}"
-  echo "build TRT  : ${BUILD_ENGINE}"
 
   if [[ "$ASSUME_YES" == false ]]; then
     read -r -p "転送しますか？ [y/N]: " confirm
@@ -321,13 +317,6 @@ main() {
     ssh "$remote_target" "mv -- '$remote_model_dir/model.onnx.uploading' '$remote_model_dir/model.onnx'; echo '$checksum  $remote_model_dir/model.onnx' > '$remote_model_dir/model.onnx.sha256'; rm -f -- '$remote_model_dir/model.plan' '$remote_model_dir/metadata.json'"
   fi
 
-  if [[ "$BUILD_ENGINE" == true ]]; then
-    if [[ "${PRESET_MODALITIES[$preset_index]}" == "rgb_event_async" ]]; then
-      ssh "$remote_target" "set -e; /usr/src/tensorrt/bin/trtexec --onnx='$remote_model_dir/rgb_encoder.onnx' --saveEngine='$remote_model_dir/rgb_encoder.plan.building' --fp16 > '$remote_model_dir/build_rgb_engine.log' 2>&1; mv -- '$remote_model_dir/rgb_encoder.plan.building' '$remote_model_dir/rgb_encoder.plan'; /usr/src/tensorrt/bin/trtexec --onnx='$remote_model_dir/event_updater.onnx' --saveEngine='$remote_model_dir/event_updater.plan.building' --fp16 > '$remote_model_dir/build_event_updater_engine.log' 2>&1; mv -- '$remote_model_dir/event_updater.plan.building' '$remote_model_dir/event_updater.plan'"
-    else
-      ssh "$remote_target" "set -e; /usr/src/tensorrt/bin/trtexec --onnx='$remote_model_dir/model.onnx' --saveEngine='$remote_model_dir/model.plan.building' --fp16 > '$remote_model_dir/build_engine.log' 2>&1; mv -- '$remote_model_dir/model.plan.building' '$remote_model_dir/model.plan'"
-    fi
-  fi
   echo "転送が完了しました: ${remote_target}:${remote_model_dir}"
 }
 
