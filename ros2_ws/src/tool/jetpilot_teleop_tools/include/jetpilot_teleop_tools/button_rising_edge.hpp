@@ -44,6 +44,8 @@ struct ButtonManagerAssignments
   int bag_stop_button{-1};
   int steer_offset_inc_button{-1};
   int steer_offset_dec_button{-1};
+  int throttle_scale_inc_button{-1};
+  int throttle_scale_dec_button{-1};
 };
 
 inline std::optional<std::string_view> find_button_conflict(
@@ -75,6 +77,8 @@ inline std::optional<std::string_view> find_localization_button_conflict(
       {"bag_stop_button", assignments.bag_stop_button},
       {"steer_offset_inc_button", assignments.steer_offset_inc_button},
       {"steer_offset_dec_button", assignments.steer_offset_dec_button},
+      {"throttle_scale_inc_button", assignments.throttle_scale_inc_button},
+      {"throttle_scale_dec_button", assignments.throttle_scale_dec_button},
     });
 }
 

@@ -6,7 +6,12 @@ teleop_cmd_node:
     brake_button: 2
     deadman_button: 3
     steering_scale: 1.0
+    steering_offset: 0.0
+    steering_offset_step: 0.01
     throttle_scale: 1.0
+    throttle_scale_step: 0.05
+    throttle_scale_min: 0.0
+    throttle_scale_max: 1.0
     reverse_scale: 1.0
     brake_value: 1.0
     deadzone: 0.05

@@ -286,6 +286,19 @@
         </div>
         <div id="dpadFields"></div>
       </div>
+
+      <div class="panel">
+        <h2>Joy Adjustment / Joy調整</h2>
+        <div class="muted">左右でsteering offset、上下でthrottle scaleを変更するときの初期値と刻みです。</div>
+        <div class="form-grid">
+          <div class="field"><label>steering_offset</label><input type="number" min="-1" max="1" step="0.01" data-path="teleop.steering_offset"></div>
+          <div class="field"><label>steering_offset_step</label><input type="number" min="0" max="1" step="0.01" data-path="teleop.steering_offset_step"></div>
+          <div class="field"><label>throttle_scale</label><input type="number" min="0" max="1" step="0.05" data-path="teleop.throttle_scale"></div>
+          <div class="field"><label>throttle_scale_step</label><input type="number" min="0" max="1" step="0.01" data-path="teleop.throttle_scale_step"></div>
+          <div class="field"><label>throttle_scale_min</label><input type="number" min="0" max="1" step="0.05" data-path="teleop.throttle_scale_min"></div>
+          <div class="field"><label>throttle_scale_max</label><input type="number" min="0" max="1" step="0.05" data-path="teleop.throttle_scale_max"></div>
+        </div>
+      </div>
     </div>
   </section>
 
@@ -417,7 +430,7 @@
 <script>
 const buttonNames = [
   "cross", "circle", "triangle", "square", "l1", "r1", "share", "options", "ps", "l3", "r3",
-  "dpad_left", "dpad_right"
+  "dpad_left", "dpad_right", "dpad_up", "dpad_down"
 ];
 const buttonActions = [
   ["deadman_button", "Teleop deadman"],
@@ -429,6 +442,8 @@ const buttonActions = [
   ["bag_stop_button", "Bag stop"],
   ["steer_offset_inc_button", "Steer offset right"],
   ["steer_offset_dec_button", "Steer offset left"],
+  ["throttle_scale_inc_button", "Throttle scale up"],
+  ["throttle_scale_dec_button", "Throttle scale down"],
   ["localization_trigger_button", "Localization trigger"],
 ];
 const state = {
@@ -469,9 +484,19 @@ function emptyProfile() {
       bag_stop_button: "l1",
       steer_offset_inc_button: "dpad_right",
       steer_offset_dec_button: "dpad_left",
+      throttle_scale_inc_button: "dpad_up",
+      throttle_scale_dec_button: "dpad_down",
       localization_trigger_button: "options",
       localization_trigger_topic: "/localization/trigger",
       hold_time_s: 0.1
+    },
+    teleop: {
+      steering_offset: 0.0,
+      steering_offset_step: 0.01,
+      throttle_scale: 1.0,
+      throttle_scale_step: 0.05,
+      throttle_scale_min: 0.0,
+      throttle_scale_max: 1.0
     },
     idle_axes: {}
   };
@@ -640,6 +665,7 @@ const yamlFloatKeys = new Set([
   "esc_brake_duration_s",
   "esc_neutral_duration_s",
   "steering_offset",
+  "steering_offset_step",
   "throttle_offset",
   "offset_step",
   "neutral_stop_reverse_start",
@@ -726,12 +752,14 @@ function mergeProfile(input) {
     },
     dpad: {...base.dpad, ...(input.dpad || {})},
     button_mapping: {...base.button_mapping, ...(input.button_mapping || {})},
+    teleop: {...base.teleop, ...(input.teleop || {})},
     idle_axes: input.idle_axes || base.idle_axes
   };
 }
 
 function teleopCmdYaml(profile) {
   const mapping = profile.button_mapping || {};
+  const tuning = profile.teleop || {};
   const deadmanName = mapping.deadman_button || "l1";
   const triggerBounds = trigger => {
     const released = rawToJoyAxisValue(Number(trigger.released ?? 0));
@@ -753,10 +781,12 @@ function teleopCmdYaml(profile) {
         brake_button: profile.buttons.circle ?? -1,
         deadman_button: profile.buttons[deadmanName] ?? -1,
         steering_scale: profile.sticks.left.invert_x ? -1.0 : 1.0,
-        throttle_scale: 1.0,
-        throttle_scale_step: 0.05,
-        throttle_scale_min: 0.0,
-        throttle_scale_max: 1.0,
+        steering_offset: Number(tuning.steering_offset ?? 0.0),
+        steering_offset_step: Number(tuning.steering_offset_step ?? 0.01),
+        throttle_scale: Number(tuning.throttle_scale ?? 1.0),
+        throttle_scale_step: Number(tuning.throttle_scale_step ?? 0.05),
+        throttle_scale_min: Number(tuning.throttle_scale_min ?? 0.0),
+        throttle_scale_max: Number(tuning.throttle_scale_max ?? 1.0),
         reverse_scale: 1.0,
         brake_value: 1.0,
         deadzone: 0.05,
@@ -791,13 +821,31 @@ function buttonMappingYaml(profile) {
         axisValue: dpadRuntimeAxisValue(Number(profile.dpad.left_value ?? -32767)),
       };
     }
+    if (selectedName === "dpad_up" && profile.dpad?.type === "axis") {
+      return {
+        button: -1,
+        axis: Number(profile.dpad.y_axis ?? -1),
+        axisValue: dpadRuntimeAxisValue(Number(profile.dpad.up_value ?? -32767)),
+      };
+    }
+    if (selectedName === "dpad_down" && profile.dpad?.type === "axis") {
+      return {
+        button: -1,
+        axis: Number(profile.dpad.y_axis ?? -1),
+        axisValue: dpadRuntimeAxisValue(Number(profile.dpad.down_value ?? 32767)),
+      };
+    }
     if (selectedName === "dpad_right") return {button: Number(profile.dpad?.right ?? -1), axis: -1, axisValue: 1.0};
     if (selectedName === "dpad_left") return {button: Number(profile.dpad?.left ?? -1), axis: -1, axisValue: -1.0};
+    if (selectedName === "dpad_up") return {button: Number(profile.dpad?.up ?? -1), axis: -1, axisValue: -1.0};
+    if (selectedName === "dpad_down") return {button: Number(profile.dpad?.down ?? -1), axis: -1, axisValue: 1.0};
     return {button: Number(profile.buttons[selectedName] ?? -1), axis: -1, axisValue: 0.0};
   };
   const buttonIndex = (action, fallbackName) => binding(action, fallbackName).button;
   const steerInc = binding("steer_offset_inc_button", "dpad_right");
   const steerDec = binding("steer_offset_dec_button", "dpad_left");
+  const throttleInc = binding("throttle_scale_inc_button", "dpad_up");
+  const throttleDec = binding("throttle_scale_dec_button", "dpad_down");
   return {
     teleop_button_manager_node: {
       ros__parameters: {
@@ -814,6 +862,13 @@ function buttonMappingYaml(profile) {
         steer_offset_dec_axis: steerDec.axis,
         steer_offset_dec_axis_value: steerDec.axisValue,
         steer_offset_axis_threshold: 0.5,
+        throttle_scale_inc_button: throttleInc.button,
+        throttle_scale_dec_button: throttleDec.button,
+        throttle_scale_inc_axis: throttleInc.axis,
+        throttle_scale_inc_axis_value: throttleInc.axisValue,
+        throttle_scale_dec_axis: throttleDec.axis,
+        throttle_scale_dec_axis_value: throttleDec.axisValue,
+        throttle_scale_axis_threshold: 0.5,
         localization_trigger_button: buttonIndex("localization_trigger_button", "options"),
         localization_trigger_topic: String(mapping.localization_trigger_topic || "/localization/trigger"),
         hold_time_s: Number(mapping.hold_time_s ?? 0.1)
@@ -851,6 +906,12 @@ function renderEditor() {
     }
     if (selected === "dpad_left") {
       index = state.profile.dpad?.type === "axis" ? `axis ${state.profile.dpad?.x_axis ?? -1}` : state.profile.dpad?.left;
+    }
+    if (selected === "dpad_up") {
+      index = state.profile.dpad?.type === "axis" ? `axis ${state.profile.dpad?.y_axis ?? -1}` : state.profile.dpad?.up;
+    }
+    if (selected === "dpad_down") {
+      index = state.profile.dpad?.type === "axis" ? `axis ${state.profile.dpad?.y_axis ?? -1}` : state.profile.dpad?.down;
     }
     return `
       <tr>

@@ -13,6 +13,13 @@ teleop_button_manager_node:
     steer_offset_dec_axis: 6
     steer_offset_dec_axis_value: -1.0
     steer_offset_axis_threshold: 0.5
+    throttle_scale_inc_button: -1
+    throttle_scale_dec_button: -1
+    throttle_scale_inc_axis: 7
+    throttle_scale_inc_axis_value: -1.0
+    throttle_scale_dec_axis: 7
+    throttle_scale_dec_axis_value: 1.0
+    throttle_scale_axis_threshold: 0.5
     localization_trigger_button: 9
     localization_trigger_topic: /localization/trigger
     hold_time_s: 0.01

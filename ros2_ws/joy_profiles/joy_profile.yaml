@@ -65,5 +65,14 @@ button_mapping:
   bag_stop_button: l1
   steer_offset_inc_button: dpad_right
   steer_offset_dec_button: dpad_left
+  throttle_scale_inc_button: dpad_up
+  throttle_scale_dec_button: dpad_down
   hold_time_s: 0.01
+teleop:
+  steering_offset: 0.0
+  steering_offset_step: 0.01
+  throttle_scale: 1.0
+  throttle_scale_step: 0.05
+  throttle_scale_min: 0.0
+  throttle_scale_max: 1.0
 idle_axes:

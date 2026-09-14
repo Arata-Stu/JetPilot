@@ -23,6 +23,8 @@ TeleopCmdNode::TeleopCmdNode() : Node("teleop_cmd_node")
   }
   steering_scale_ = declare_numeric_parameter("steering_scale", 1.0);
   steering_offset_ = declare_numeric_parameter("steering_offset", 0.0);
+  steering_offset_step_ = std::max(
+    0.0, declare_numeric_parameter("steering_offset_step", 0.01));
   throttle_scale_step_ = std::max(0.0, declare_numeric_parameter("throttle_scale_step", 0.05));
   throttle_scale_min_ = std::clamp(
     declare_numeric_parameter("throttle_scale_min", 0.0), 0.0, 1.0);
@@ -59,6 +61,20 @@ TeleopCmdNode::TeleopCmdNode() : Node("teleop_cmd_node")
 
   joy_sub_ = create_subscription<sensor_msgs::msg::Joy>(
     "/joy", 10, [this](const sensor_msgs::msg::Joy::SharedPtr msg) { handle_joy(*msg); });
+  steer_offset_inc_sub_ = create_subscription<std_msgs::msg::Bool>(
+    "/steer_offset_inc", 10, [this](const std_msgs::msg::Bool::SharedPtr msg) {
+      if (msg->data)
+      {
+        adjust_steering_offset(1.0);
+      }
+    });
+  steer_offset_dec_sub_ = create_subscription<std_msgs::msg::Bool>(
+    "/steer_offset_dec", 10, [this](const std_msgs::msg::Bool::SharedPtr msg) {
+      if (msg->data)
+      {
+        adjust_steering_offset(-1.0);
+      }
+    });
   speed_offset_inc_sub_ = create_subscription<std_msgs::msg::Bool>(
     "/speed_offset_inc", 10, [this](const std_msgs::msg::Bool::SharedPtr msg) {
       if (msg->data)
@@ -121,6 +137,24 @@ bool TeleopCmdNode::has_button(const sensor_msgs::msg::Joy & joy, const int inde
 double TeleopCmdNode::apply_deadzone(const double value) const
 {
   return std::abs(value) < deadzone_ ? 0.0 : value;
+}
+
+void TeleopCmdNode::adjust_steering_offset(const double direction)
+{
+  const double previous = steering_offset_.load();
+  const double requested = std::clamp(
+    previous + direction * steering_offset_step_, -1.0, 1.0);
+  if (std::abs(requested - previous) < 1.0e-9)
+  {
+    RCLCPP_INFO(get_logger(), "Steering offset remains at limit %.3f", previous);
+    return;
+  }
+
+  const auto result = set_parameter(rclcpp::Parameter("steering_offset", requested));
+  if (!result.successful)
+  {
+    RCLCPP_WARN(get_logger(), "Failed to change steering offset: %s", result.reason.c_str());
+  }
 }
 
 double TeleopCmdNode::normalized_trigger(const sensor_msgs::msg::Joy & joy, const int axis,

@@ -23,6 +23,16 @@ TeleopButtonManagerNode::TeleopButtonManagerNode() : Node("teleop_button_manager
   steer_offset_dec_axis_value_ = declare_numeric_parameter("steer_offset_dec_axis_value", -1.0);
   steer_offset_axis_threshold_ = std::clamp(
     declare_numeric_parameter("steer_offset_axis_threshold", 0.5), 0.01, 1.0);
+  throttle_scale_inc_button_ = declare_parameter<int>("throttle_scale_inc_button", 12);
+  throttle_scale_dec_button_ = declare_parameter<int>("throttle_scale_dec_button", 13);
+  throttle_scale_inc_axis_ = declare_parameter<int>("throttle_scale_inc_axis", -1);
+  throttle_scale_dec_axis_ = declare_parameter<int>("throttle_scale_dec_axis", -1);
+  throttle_scale_inc_axis_value_ =
+    declare_numeric_parameter("throttle_scale_inc_axis_value", -1.0);
+  throttle_scale_dec_axis_value_ =
+    declare_numeric_parameter("throttle_scale_dec_axis_value", 1.0);
+  throttle_scale_axis_threshold_ = std::clamp(
+    declare_numeric_parameter("throttle_scale_axis_threshold", 0.5), 0.01, 1.0);
   const int localization_trigger_button = declare_parameter<int>("localization_trigger_button", -1);
   const bool speed_offset_inc_uses_localization_button =
     declare_parameter<bool>("speed_offset_inc_uses_localization_button", false);
@@ -44,6 +54,8 @@ TeleopButtonManagerNode::TeleopButtonManagerNode() : Node("teleop_button_manager
   button_assignments.bag_stop_button = bag_stop_button_;
   button_assignments.steer_offset_inc_button = steer_offset_inc_button_;
   button_assignments.steer_offset_dec_button = steer_offset_dec_button_;
+  button_assignments.throttle_scale_inc_button = throttle_scale_inc_button_;
+  button_assignments.throttle_scale_dec_button = throttle_scale_dec_button_;
   const auto localization_conflict =
     find_localization_button_conflict(localization_trigger_button, button_assignments);
   speed_offset_inc_button_.configure(
@@ -77,6 +89,7 @@ TeleopButtonManagerNode::TeleopButtonManagerNode() : Node("teleop_button_manager
   steer_offset_inc_pub_ = create_publisher<std_msgs::msg::Bool>("/steer_offset_inc", 10);
   steer_offset_dec_pub_ = create_publisher<std_msgs::msg::Bool>("/steer_offset_dec", 10);
   speed_offset_inc_pub_ = create_publisher<std_msgs::msg::Bool>("/speed_offset_inc", 10);
+  speed_offset_dec_pub_ = create_publisher<std_msgs::msg::Bool>("/speed_offset_dec", 10);
   localization_trigger_pub_ =
     create_publisher<std_msgs::msg::Bool>(localization_trigger_topic_, 10);
   joy_sub_ = create_subscription<sensor_msgs::msg::Joy>(
@@ -232,6 +245,22 @@ void TeleopButtonManagerNode::handle_joy(const sensor_msgs::msg::Joy & joy)
   if (pressed_once(states_, 3, steer_offset_dec))
   {
     publish_bool(steer_offset_dec_pub_);
+  }
+  const bool throttle_scale_inc = button_pressed(joy, throttle_scale_inc_button_) ||
+    axis_direction_pressed(
+    joy.axes, throttle_scale_inc_axis_, throttle_scale_inc_axis_value_,
+    throttle_scale_axis_threshold_);
+  const bool throttle_scale_dec = button_pressed(joy, throttle_scale_dec_button_) ||
+    axis_direction_pressed(
+    joy.axes, throttle_scale_dec_axis_, throttle_scale_dec_axis_value_,
+    throttle_scale_axis_threshold_);
+  if (pressed_once(states_, 4, throttle_scale_inc))
+  {
+    publish_bool(speed_offset_inc_pub_);
+  }
+  if (pressed_once(states_, 5, throttle_scale_dec))
+  {
+    publish_bool(speed_offset_dec_pub_);
   }
   if (localization_trigger_button_.update(joy.buttons))
   {

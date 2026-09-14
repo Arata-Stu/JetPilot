@@ -47,9 +47,16 @@ private:
   int steer_offset_dec_button_;
   int steer_offset_inc_axis_;
   int steer_offset_dec_axis_;
+  int throttle_scale_inc_button_;
+  int throttle_scale_dec_button_;
+  int throttle_scale_inc_axis_;
+  int throttle_scale_dec_axis_;
   double steer_offset_inc_axis_value_;
   double steer_offset_dec_axis_value_;
   double steer_offset_axis_threshold_;
+  double throttle_scale_inc_axis_value_;
+  double throttle_scale_dec_axis_value_;
+  double throttle_scale_axis_threshold_;
   std::string localization_trigger_topic_;
   HeldModeSelector held_mode_selector_;
   int last_held_mode_request_{-1};
@@ -61,6 +68,7 @@ private:
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr steer_offset_inc_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr steer_offset_dec_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr speed_offset_inc_pub_;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr speed_offset_dec_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr localization_trigger_pub_;
   rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr joy_sub_;
 };

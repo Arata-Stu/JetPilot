@@ -94,6 +94,12 @@ TEST(ButtonRisingEdgeTest, LocalizationConflictPolicyAllowsBackModifierSharing)
   const auto conflict = find_localization_button_conflict(7, assignments);
   ASSERT_TRUE(conflict.has_value());
   EXPECT_EQ(*conflict, "bag_start_button");
+
+  assignments.bag_start_button = 5;
+  assignments.throttle_scale_inc_button = 7;
+  const auto throttle_conflict = find_localization_button_conflict(7, assignments);
+  ASSERT_TRUE(throttle_conflict.has_value());
+  EXPECT_EQ(*throttle_conflict, "throttle_scale_inc_button");
 }
 
 TEST(HeldModeSelectorTest, AutoIsActiveOnlyWhileAutoButtonIsHeld)

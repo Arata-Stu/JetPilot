@@ -443,6 +443,14 @@ def build_profile(device: JoystickDevice, idle: JoyState) -> dict[str, Any]:
         "triggers": {},
         "sticks": {},
         "dpad": {},
+        "teleop": {
+            "steering_offset": 0.0,
+            "steering_offset_step": 0.01,
+            "throttle_scale": 1.0,
+            "throttle_scale_step": 0.05,
+            "throttle_scale_min": 0.0,
+            "throttle_scale_max": 1.0,
+        },
         "idle_axes": idle.axes,
     }
     total_steps = len(BUTTON_NAMES) + 2 + 2 + 4
@@ -822,6 +830,7 @@ def teleop_cmd_yaml(profile: dict[str, Any]) -> dict[str, Any]:
     sticks = profile["sticks"]
     triggers = profile["triggers"]
     buttons = profile["buttons"]
+    tuning = profile.get("teleop", {})
     return {
         "teleop_cmd_node": {
             "ros__parameters": {
@@ -831,10 +840,12 @@ def teleop_cmd_yaml(profile: dict[str, Any]) -> dict[str, Any]:
                 "brake_button": buttons.get("circle", -1),
                 "deadman_button": buttons.get("l1", -1),
                 "steering_scale": -1.0 if sticks["left"].get("invert_x") else 1.0,
-                "throttle_scale": 1.0,
-                "throttle_scale_step": 0.05,
-                "throttle_scale_min": 0.0,
-                "throttle_scale_max": 1.0,
+                "steering_offset": float(tuning.get("steering_offset", 0.0)),
+                "steering_offset_step": float(tuning.get("steering_offset_step", 0.01)),
+                "throttle_scale": float(tuning.get("throttle_scale", 1.0)),
+                "throttle_scale_step": float(tuning.get("throttle_scale_step", 0.05)),
+                "throttle_scale_min": float(tuning.get("throttle_scale_min", 0.0)),
+                "throttle_scale_max": float(tuning.get("throttle_scale_max", 1.0)),
                 "reverse_scale": 1.0,
                 "brake_value": 1.0,
                 "deadzone": 0.05,
@@ -883,6 +894,17 @@ def button_mapping_yaml(profile: dict[str, Any]) -> dict[str, Any]:
                     dpad_axis_value("left_value", -1.0) if dpad_is_axis else -1.0
                 ),
                 "steer_offset_axis_threshold": 0.5,
+                "throttle_scale_inc_button": -1 if dpad_is_axis else dpad.get("up", -1),
+                "throttle_scale_dec_button": -1 if dpad_is_axis else dpad.get("down", -1),
+                "throttle_scale_inc_axis": dpad.get("y_axis", -1) if dpad_is_axis else -1,
+                "throttle_scale_inc_axis_value": (
+                    dpad_axis_value("up_value", -1.0) if dpad_is_axis else -1.0
+                ),
+                "throttle_scale_dec_axis": dpad.get("y_axis", -1) if dpad_is_axis else -1,
+                "throttle_scale_dec_axis_value": (
+                    dpad_axis_value("down_value", 1.0) if dpad_is_axis else 1.0
+                ),
+                "throttle_scale_axis_threshold": 0.5,
                 "localization_trigger_button": buttons.get("options", -1),
                 "localization_trigger_topic": mapping.get(
                     "localization_trigger_topic", "/localization/trigger"
