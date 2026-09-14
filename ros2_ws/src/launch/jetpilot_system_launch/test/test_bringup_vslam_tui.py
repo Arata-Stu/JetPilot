@@ -28,7 +28,7 @@ class VslamTuiTest(unittest.TestCase):
         self.assertIn('TEST_INIT_MENU_SHOWN', output)
         self.assertNotIn('TEST_LINE_MENU_SHOWN', output)
 
-    def launch(self, mode='vo', overrides=(), preset='localization-only', init='pose-hint', line='current', closed=True, rgb='30', infra='60', multicam='1'):
+    def launch(self, mode='vo', overrides=(), preset='localization-only', init='pose-hint', line='current', closed=True, rgb='30', infra='60', accel='false', gyro='false', multicam='1'):
         with tempfile.TemporaryDirectory() as directory:
             if preset == 'tuning':
                 (Path(directory) / 'cuvslam_map').mkdir()
@@ -48,10 +48,21 @@ class VslamTuiTest(unittest.TestCase):
                 'import os, sys\n'
                 'options = sys.stdin.read().splitlines()\n'
                 'prompt = next(a for a in sys.argv if a.startswith("--prompt="))\n'
-                'if "JetPilot bringup preset" in prompt:\n'
+                'if "用途を選択" in prompt:\n'
+                '    preset = os.environ["TEST_PRESET"]\n'
+                '    group = (preset if preset in ("record", "e2e") else "driving"\n'
+                '             if preset in ("drive", "runtime", "competition") else "offline"\n'
+                '             if preset.startswith(("offline", "replay")) else "advanced")\n'
+                '    print(next(o for o in options if o.split()[0] == group))\n'
+                'elif "起動内容を選択" in prompt or "JetPilot bringup preset" in prompt:\n'
                 '    print(next(o for o in options if o.split()[0] == os.environ["TEST_PRESET"]))\n'
                 'elif "RealSense rgb Hz" in prompt or "RealSense infra Hz" in prompt:\n'
                 '    key = "TEST_RGB" if "rgb Hz" in prompt else "TEST_INFRA"\n'
+                '    print(key + "_MENU_SHOWN", file=sys.stderr)\n'
+                '    if os.environ[key] == "cancel": sys.exit(130)\n'
+                '    print(next(o for o in options if o.split()[0] == os.environ[key]))\n'
+                'elif "RealSense Accel" in prompt or "RealSense Gyro" in prompt:\n'
+                '    key = "TEST_ACCEL" if "Accel" in prompt else "TEST_GYRO"\n'
                 '    print(key + "_MENU_SHOWN", file=sys.stderr)\n'
                 '    if os.environ[key] == "cancel": sys.exit(130)\n'
                 '    print(next(o for o in options if o.split()[0] == os.environ[key]))\n'
@@ -73,7 +84,8 @@ class VslamTuiTest(unittest.TestCase):
             fake_fzf.chmod(0o755)
             env = dict(os.environ, PATH=f'{directory}:{os.environ["PATH"]}',
                        TEST_MODE=mode, TEST_PRESET=preset, TEST_INIT=init, TEST_LINE=line,
-                       TEST_RGB=rgb, TEST_INFRA=infra, TEST_MULTICAM=multicam)
+                       TEST_RGB=rgb, TEST_INFRA=infra, TEST_ACCEL=accel, TEST_GYRO=gyro,
+                       TEST_MULTICAM=multicam)
             master, slave = pty.openpty()
             process = subprocess.Popen(
                 ['bash', str(ROOT / 'scripts/bringup.sh'), '--dry-run', '--no-bag-manager',
@@ -158,6 +170,26 @@ class VslamTuiTest(unittest.TestCase):
         self.assertNotIn('TEST_RGB_MENU_SHOWN', output)
         self.assertIn('TEST_INFRA_MENU_SHOWN', output)
         self.assertIn('sensor_kit_rgb_fps:=60', output)
+
+    def test_realsense_imu_choices_reach_launch(self):
+        for accel, gyro in (('true', 'false'), ('false', 'true'), ('true', 'true')):
+            with self.subTest(accel=accel, gyro=gyro):
+                code, output = self.launch(
+                    preset='sensor', accel=accel, gyro=gyro)
+                self.assertEqual(code, 0, output)
+                self.assertIn('TEST_ACCEL_MENU_SHOWN', output)
+                self.assertIn('TEST_GYRO_MENU_SHOWN', output)
+                self.assertIn(f'sensor_kit_enable_accel:={accel}', output)
+                self.assertIn(f'sensor_kit_enable_gyro:={gyro}', output)
+
+    def test_realsense_imu_override_skips_its_menu(self):
+        code, output = self.launch(
+            preset='sensor', accel='cancel',
+            overrides=('--set', 'sensor_kit_enable_accel:=true'))
+        self.assertEqual(code, 0, output)
+        self.assertNotIn('TEST_ACCEL_MENU_SHOWN', output)
+        self.assertIn('TEST_GYRO_MENU_SHOWN', output)
+        self.assertIn('sensor_kit_enable_accel:=true', output)
 
     def test_camera_rates_skip_replay_and_cancel_cleanly(self):
         code, output = self.launch(preset='offline-vslam-map', rgb='cancel', infra='cancel',

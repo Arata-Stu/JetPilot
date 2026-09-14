@@ -2378,6 +2378,30 @@ def test_realsense_disabled_streams_keep_valid_driver_profiles() -> None:
         assert values["enable_sync"] is False
 
 
+def test_realsense_imu_streams_are_independently_selectable() -> None:
+    source = (PROJECT_ROOT / "ros2_ws/src/launch/jetpilot_system_launch/launch/sensors/realsense.launch.py").read_text()
+    tree = ast.parse(source)
+    params = next(node for node in ast.walk(tree) if isinstance(node, ast.Dict)
+                  and any(isinstance(key, ast.Constant) and key.value == "enable_accel" for key in node.keys))
+    from types import SimpleNamespace
+    for accel, gyro in ((False, False), (True, False), (False, True), (True, True)):
+        values = {}
+        env = {
+            "args": SimpleNamespace(enable_accel=accel, enable_gyro=gyro),
+            "lu": SimpleNamespace(is_true=bool),
+        }
+        for key, value in zip(params.keys, params.values):
+            if key.value in ("enable_accel", "enable_gyro", "accel_fps", "gyro_fps",
+                             "unite_imu_method"):
+                values[key.value] = eval(
+                    compile(ast.Expression(value), "parameters", "eval"), env)
+        assert values["enable_accel"] is accel
+        assert values["enable_gyro"] is gyro
+        assert values["accel_fps"] == 250
+        assert values["gyro_fps"] == 200
+        assert values["unite_imu_method"] == (2 if accel and gyro else 0)
+
+
 def test_live_bag_manager_defaults_on_and_can_be_disabled() -> None:
     for preset in ("record", "e2e", "drive", "teleop"):
         output = run_launcher(preset, "--dry-run").stdout

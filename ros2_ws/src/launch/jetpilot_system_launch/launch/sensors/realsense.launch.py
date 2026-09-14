@@ -48,8 +48,15 @@ def launch_realsense(args: lu.ArgumentContainer) -> list[lut.Action]:
         'enable_infra2': infra_fps > 0,
         'enable_depth': lu.is_true(args.enable_depth),
         'enable_color': lu.is_true(args.enable_color) and rgb_fps > 0,
+        'enable_accel': lu.is_true(args.enable_accel),
+        'enable_gyro': lu.is_true(args.enable_gyro),
+        'accel_fps': 250,
+        'gyro_fps': 200,
+        'unite_imu_method': (
+            2 if lu.is_true(args.enable_accel) and lu.is_true(args.enable_gyro) else 0
+        ),
         'enable_rgbd': False,
-        # IMU streams are disabled by default in realsense.param.yaml.
+        # IMU stream selection is supplied by the bringup sensor configuration.
         'rgb_camera.color_profile': f'424x240x{rgb_fps or 30}',
         'depth_module.infra_profile': f'424x240x{infra_fps or 60}',
         # Keep wrapper-level frame synchronization disabled while evaluating
@@ -142,6 +149,8 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('enable_color', True)
     args.add_arg('rgb_fps', '30')
     args.add_arg('infra_fps', '60')
+    args.add_arg('enable_accel', False)
+    args.add_arg('enable_gyro', False)
     args.add_arg('enable_rtp_stream', False)
     args.add_arg('rtp_image_topic', '/realsense/color/image_raw')
     args.add_arg('rtp_host', '')

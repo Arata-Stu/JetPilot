@@ -508,6 +508,8 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('sensor_kit_enable_color', True, cli=True)
     args.add_arg('sensor_kit_rgb_fps', '30', cli=True)
     args.add_arg('sensor_kit_infra_fps', '60', cli=True)
+    args.add_arg('sensor_kit_enable_accel', False, cli=True)
+    args.add_arg('sensor_kit_enable_gyro', False, cli=True)
     args.add_arg('sensor_kit_enable_rtp_stream', False, cli=True)
     args.add_arg('sensor_kit_rtp_image_topic', '/realsense/color/image_raw', cli=True)
     args.add_arg('sensor_kit_rtp_host', '', cli=True)
@@ -989,6 +991,8 @@ def generate_launch_description() -> lut.LaunchDescription:
                 'enable_color': args.sensor_kit_enable_color,
                 'rgb_fps': args.sensor_kit_rgb_fps,
                 'infra_fps': args.sensor_kit_infra_fps,
+                'enable_accel': args.sensor_kit_enable_accel,
+                'enable_gyro': args.sensor_kit_enable_gyro,
                 'enable_rtp_stream': args.sensor_kit_enable_rtp_stream,
                 'rtp_image_topic': args.sensor_kit_rtp_image_topic,
                 'rtp_host': args.sensor_kit_rtp_host,

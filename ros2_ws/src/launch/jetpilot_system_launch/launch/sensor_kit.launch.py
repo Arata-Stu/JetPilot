@@ -14,6 +14,8 @@ def add_sensor_interface(args: lu.ArgumentContainer):
         'enable_depth': str(lu.is_true(args.enable_depth)).lower(),
         'rgb_fps': args.rgb_fps,
         'infra_fps': args.infra_fps,
+        'enable_accel': str(lu.is_true(args.enable_accel)).lower(),
+        'enable_gyro': str(lu.is_true(args.enable_gyro)).lower(),
         'enable_color': str(lu.is_true(args.enable_color)).lower(),
         'enable_rtp_stream': str(lu.is_true(args.enable_rtp_stream)).lower(),
         'rtp_image_topic': args.rtp_image_topic,
@@ -92,6 +94,8 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('enable_color', True, cli=True)
     args.add_arg('rgb_fps', '30', cli=True)
     args.add_arg('infra_fps', '60', cli=True)
+    args.add_arg('enable_accel', False, cli=True)
+    args.add_arg('enable_gyro', False, cli=True)
     args.add_arg('enable_rtp_stream', False, cli=True)
     args.add_arg('rtp_image_topic', '/realsense/color/image_raw', cli=True)
     args.add_arg('rtp_host', '', cli=True)
