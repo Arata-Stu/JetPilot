@@ -1405,6 +1405,7 @@ async function refreshAll() {
   state.e2ePipeline.deployPresets = e2ePipeline.deploy_presets || [];
   state.e2ePipeline.datasetRoot = e2ePipeline.dataset_root || "";
   state.e2ePipeline.runRoot = e2ePipeline.run_root || "";
+  autoSelectE2EEvaluationDataset();
   if (!state.e2ePipeline.datasetDir && state.e2ePipeline.datasets[0]) {
     state.e2ePipeline.datasetDir = state.e2ePipeline.datasets[0].path || "";
   }
@@ -3245,11 +3246,44 @@ function e2eAnalysisPayload() {
   };
 }
 
+function normalizedLocalPath(value) {
+  return String(value || "").replace(/\/+$/, "");
+}
+
+function compatibleE2EEvaluationDatasets() {
+  const analysis = state.analysis;
+  const model = state.e2eModels.find((item) => item.path === analysis.e2eModelPath);
+  const modality = String(model?.modality || "");
+  if (!model || !["event_tensor", "rgb_event_async"].includes(modality)) return [];
+  const representation = model.event_representation || {};
+  const expectedChannels = Number(model.input?.channels || representation.channels || 0);
+  const close = (left, right) => !left || !right || Math.abs(Number(left) - Number(right)) < 1e-6;
+  return state.e2ePipeline.datasets.filter((dataset) => (
+    normalizedLocalPath(dataset.bag_path) === normalizedLocalPath(analysis.selectedBagPath)
+    && String(dataset.modality || "image") === modality
+    && (!expectedChannels || Number(dataset.input_channels || 0) === expectedChannels)
+    && close(representation.bins, dataset.event_bins)
+    && close(representation.window_ms, dataset.event_window_ms)
+    && close(representation.stride_ms, dataset.event_stride_ms)
+    && (!representation.polarity_mode || representation.polarity_mode === dataset.event_polarity_mode)
+    && (!representation.polarity_layout || representation.polarity_layout === dataset.event_polarity_layout)
+    && (!representation.temporal_interpolation || representation.temporal_interpolation === dataset.event_temporal_interpolation)
+  ));
+}
+
+function autoSelectE2EEvaluationDataset(force = false) {
+  const candidates = compatibleE2EEvaluationDatasets();
+  const currentIsValid = candidates.some((item) => item.path === state.analysis.e2eEvaluationDataset);
+  if (currentIsValid && !force) return;
+  state.analysis.e2eEvaluationDataset = candidates[0]?.path || "";
+}
+
 function updateE2EOption(key, value) {
   if (!(key in state.analysis)) return;
   if (["e2eManualOnly", "eventTensorPreview", "eventLinearInterpolation"].includes(key)) state.analysis[key] = Boolean(value);
   else if (["e2eDeadlineMs", "maxFps", "eventBins", "eventWindowMs", "eventStrideMs"].includes(key)) state.analysis[key] = Number(value) || ({ maxFps: 10, e2eDeadlineMs: 33.3, eventBins: 10, eventWindowMs: 40, eventStrideMs: 4 }[key]);
   else state.analysis[key] = String(value ?? "");
+  if (key === "e2eModelPath") autoSelectE2EEvaluationDataset(true);
   render();
   scheduleE2EPreflight();
 }
@@ -4412,7 +4446,7 @@ function renderE2EAnalysisForm() {
       <div class="field full"><label>3. Image topics</label>${renderAnalysisImageTopicsSelector()}</div>
       ${mode === "supervised" ? `
         <div class="field full"><label for="e2e-model">ONNX model</label><select id="e2e-model" onchange="updateE2EOption('e2eModelPath', this.value)"><option value="">Select model</option>${state.e2eModels.map((model) => `<option value="${esc(model.path)}" ${model.path === analysis.e2eModelPath ? "selected" : ""}>${esc(model.task || model.output?.task || "control")} · ${esc(model.name)} — ${esc(model.relative_path || model.path)}</option>`).join("")}</select><div class="field-hint">${state.e2eModels.length ? `${state.e2eModels.length} exported model(s) found. Trajectory models use recorded odometry as GT.` : "No model.onnx was found under the configured outputs folders."}</div></div>
-        ${["event_tensor","rgb_event_async"].includes(String(state.e2eModels.find((item) => item.path === analysis.e2eModelPath)?.modality || "")) ? `<div class="field full"><label>Evaluation dataset（未知bag用）</label><select onchange="updateE2EOption('e2eEvaluationDataset', this.value)"><option value="">Use training-source dataset（同一bagのみ）</option>${state.e2ePipeline.datasets.filter((item) => item.bag_path === analysis.selectedBagPath).map((item) => `<option value="${esc(item.path)}" ${item.path === analysis.e2eEvaluationDataset ? "selected" : ""}>${esc(item.name)} — ${esc(item.sample_count)} samples</option>`).join("")}</select><div class="field-hint">未知コースでは、そのrosbagから同じ設定で作成したdatasetを選びます。学習には追加されません。</div></div>` : ""}
+        ${["event_tensor","rgb_event_async"].includes(String(state.e2eModels.find((item) => item.path === analysis.e2eModelPath)?.modality || "")) ? `<div class="field full"><label>Evaluation dataset（20ch推論入力）</label><select onchange="updateE2EOption('e2eEvaluationDataset', this.value)"><option value="">一致するdatasetがありません</option>${compatibleE2EEvaluationDatasets().map((item) => `<option value="${esc(item.path)}" ${item.path === analysis.e2eEvaluationDataset ? "selected" : ""}>${esc(item.name)} — ${esc(item.sample_count)} samples</option>`).join("")}</select><div class="field-hint">選択したrosbagとモデルの20ch設定に一致するdatasetを自動選択します。未知コースのdatasetは評価専用で、学習には追加されません。</div></div>` : ""}
         <div class="field"><label>Teacher control</label><select onchange="updateE2EOption('e2eTeacherTopic', this.value)">${analysisTopicOptions("control", analysis.e2eTeacherTopic)}</select></div>
         <div class="field"><label>Inference provider</label><select onchange="updateE2EOption('e2eProvider', this.value)">${[["auto","Auto (CUDA, then CPU)"],["cuda","CUDA"],["cpu","CPU"]].map(([value,label]) => `<option value="${value}" ${analysis.e2eProvider === value ? "selected" : ""}>${label}</option>`).join("")}</select></div>
         <label class="field full check-row"><input type="checkbox" ${analysis.e2eManualOnly ? "checked" : ""} onchange="updateE2EOption('e2eManualOnly', this.checked)" /><span>Evaluate MANUAL sections only</span></label>
@@ -5138,6 +5172,7 @@ async function selectAnalysisBag(path) {
     event: state.analysis.eventTopic,
   };
   state.analysis.selectedBagPath = selectedPath;
+  if (changed) autoSelectE2EEvaluationDataset(true);
   state.analysis.bagDetail = null;
   state.analysis.bagDetailLoading = Boolean(selectedPath);
   if (changed) {

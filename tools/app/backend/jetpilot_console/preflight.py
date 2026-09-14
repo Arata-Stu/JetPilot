@@ -1011,13 +1011,14 @@ def _analyze_e2e_preflight(
                 details={"path": str(model_path), "metadata": bool(metadata)},
             )
         evaluation_dataset_value = str(payload.get("evaluation_dataset") or "").strip()
+        model_modality = str(metadata.get("modality") or "image")
+        configured_root = os.environ.get("JETPILOT_E2E_DATASET_ROOT", "")
+        datasets_root = (
+            Path(configured_root).expanduser().resolve(strict=False)
+            if configured_root else
+            (Path(config.python_ws) / "jetpilot_e2e_training" / "datasets").resolve(strict=False)
+        )
         if evaluation_dataset_value:
-            configured_root = os.environ.get("JETPILOT_E2E_DATASET_ROOT", "")
-            datasets_root = (
-                Path(configured_root).expanduser().resolve(strict=False)
-                if configured_root else
-                (Path(config.python_ws) / "jetpilot_e2e_training" / "datasets").resolve(strict=False)
-            )
             try:
                 evaluation_dataset = resolve_under_root(
                     evaluation_dataset_value, datasets_root,
@@ -1029,12 +1030,46 @@ def _analyze_e2e_preflight(
                 evaluation_bag = Path(str(evaluation_metadata.get("bag_path") or "")).resolve(strict=False)
                 if evaluation_bag != bag_path.resolve(strict=False):
                     raise ValueError("evaluation dataset was not created from the selected rosbag")
-                model_modality = str(metadata.get("modality") or "image")
                 dataset_modality = str(evaluation_metadata.get("modality") or "image")
                 if model_modality != dataset_modality:
                     raise ValueError(
                         f"model modality {model_modality} does not match dataset {dataset_modality}"
                     )
+                if model_modality in {"event_tensor", "rgb_event_async"}:
+                    representation = (
+                        metadata.get("event_representation")
+                        if isinstance(metadata.get("event_representation"), Mapping) else {}
+                    )
+                    expected = {
+                        "input_channels": representation.get("channels"),
+                        "event_bins": representation.get("bins"),
+                        "event_window_ms": representation.get("window_ms"),
+                        "event_stride_ms": representation.get("stride_ms"),
+                        "event_polarity_mode": representation.get("polarity_mode"),
+                        "event_polarity_layout": representation.get("polarity_layout"),
+                        "event_temporal_interpolation": representation.get("temporal_interpolation"),
+                    }
+                    mismatches: list[str] = []
+                    for key, expected_value in expected.items():
+                        if expected_value in (None, ""):
+                            continue
+                        actual_value = evaluation_metadata.get(key)
+                        if isinstance(expected_value, (int, float)):
+                            try:
+                                matches = math.isclose(float(expected_value), float(actual_value), abs_tol=1e-6)
+                            except (TypeError, ValueError):
+                                matches = False
+                        else:
+                            matches = str(expected_value) == str(actual_value)
+                        if not matches:
+                            mismatches.append(
+                                f"{key}: model={expected_value}, dataset={actual_value}"
+                            )
+                    if mismatches:
+                        raise ValueError(
+                            "evaluation dataset event representation does not match the model ("
+                            + "; ".join(mismatches) + ")"
+                        )
                 report.resolved["evaluation_dataset"] = str(evaluation_dataset)
                 report.add(
                     "e2e.evaluation_dataset", "Evaluation dataset", PASS,
@@ -1045,6 +1080,38 @@ def _analyze_e2e_preflight(
                 report.add(
                     "e2e.evaluation_dataset", "Evaluation dataset", BLOCKED, str(exc),
                     remediation="Create a dataset from the selected evaluation rosbag and select it.",
+                )
+        elif model_modality in {"event_tensor", "rgb_event_async"}:
+            source_value = str(metadata.get("source_dataset") or "").strip()
+            if not source_value and isinstance(metadata.get("config"), Mapping):
+                source_data = metadata["config"].get("data")
+                if isinstance(source_data, Mapping):
+                    source_value = str(source_data.get("dataset_dir") or "").strip()
+            try:
+                if not source_value:
+                    raise ValueError("model metadata does not identify its source dataset")
+                source_dataset = resolve_under_root(
+                    source_value, datasets_root,
+                    label="model source dataset", require_exists=True, require_directory=True,
+                )
+                source_metadata = load_yaml(source_dataset / "metadata.yaml")
+                source_bag = Path(str(source_metadata.get("bag_path") or "")).resolve(strict=False)
+                if source_bag != bag_path.resolve(strict=False):
+                    raise ValueError(
+                        "this raw-event model needs a dataset created from the selected evaluation rosbag"
+                    )
+                report.add(
+                    "e2e.evaluation_dataset", "Evaluation dataset", PASS,
+                    "The model source dataset matches the selected rosbag.",
+                    details={"path": str(source_dataset)},
+                )
+            except (OSError, ValueError) as exc:
+                report.add(
+                    "e2e.evaluation_dataset", "Evaluation dataset", BLOCKED, str(exc),
+                    remediation=(
+                        "Create a matching 20ch dataset from the selected rosbag, then select it "
+                        "in Evaluation dataset."
+                    ),
                 )
         output_metadata = metadata.get("output") if isinstance(metadata.get("output"), Mapping) else {}
         model_task = str(metadata.get("task") or output_metadata.get("task") or "control")

@@ -326,6 +326,11 @@ def scan_datasets(config: Any) -> list[dict[str, Any]]:
                 "event_window_ms": float(metadata.get("event_window_ms") or 0.0),
                 "event_stride_ms": float(metadata.get("event_stride_ms") or 0.0),
                 "event_sample_hz": float(metadata.get("event_sample_hz") or 0.0),
+                "event_polarity_mode": str(metadata.get("event_polarity_mode") or ""),
+                "event_polarity_layout": str(metadata.get("event_polarity_layout") or ""),
+                "event_temporal_interpolation": str(
+                    metadata.get("event_temporal_interpolation") or ""
+                ),
                 "rollout_steps": int(metadata.get("rollout_steps") or 0),
                 "trajectory_points": int(metadata.get("trajectory_points") or 0),
                 "trajectory_horizon_sec": float(metadata.get("trajectory_horizon_sec") or 0.0),

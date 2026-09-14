@@ -72,6 +72,11 @@ def _model_record(path: Path, root: Path) -> dict[str, Any]:
         "modality": str(metadata.get("modality") or "image"),
         "steering_only": is_steering_only(metadata),
         "architecture": metadata.get("architecture") if isinstance(metadata.get("architecture"), dict) else {},
+        "event_representation": (
+            metadata.get("event_representation")
+            if isinstance(metadata.get("event_representation"), dict) else {}
+        ),
+        "source_dataset": str(metadata.get("source_dataset") or ""),
         "root": str(root),
         "relative_path": str(path.relative_to(root)),
         "metadata_path": str(path.parent / METADATA_FILENAME) if metadata else "",
