@@ -98,6 +98,8 @@ install(PROGRAMS
   jetpilot_e2e_inference/event_image_adapter.py
   jetpilot_e2e_inference/e2e_pytorch_inference_node.py
   scripts/build_tensorrt_engine.sh
+  scripts/build_async_rgb_evs_engines.sh
+  scripts/run_async_rgb_evs.sh
   scripts/deploy_tensorrt_tui.sh
   DESTINATION lib/${PROJECT_NAME}
 )

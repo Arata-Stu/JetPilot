@@ -1,0 +1,25 @@
+# @package _global_
+defaults:
+  - override /model: async_rgb_evs_dinov3_control
+  - override /train: vit_frozen_head
+
+data:
+  modality: rgb_event_async
+  input_width: 212
+  input_height: 120
+  timing_augmentation: true
+  timing_min_hz: 100.0
+  timing_max_hz: 250.0
+  timing_jitter_fraction: 0.15
+  event_update_drop_probability: 0.05
+  rgb_update_drop_probability: 0.10
+  max_rgb_interval_multiplier: 2
+
+model:
+  event_channels: 20
+  rollout_steps: 32
+  weights_path: ${oc.env:DINOV3_VITS16_WEIGHTS,"weights/dinov3/dinov3_vits16_pretrain_lvd1689m-08c60483.pth"}
+  require_weights: true
+
+run:
+  name: async_rgb_evs_dinov3_control

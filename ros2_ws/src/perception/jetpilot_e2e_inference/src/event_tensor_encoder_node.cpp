@@ -61,6 +61,7 @@ EventTensorEncoderNode::EventTensorEncoderNode(const rclcpp::NodeOptions & optio
   height_ = declare_parameter<std::int64_t>("height", 120);
   const auto window_ms = declare_parameter<double>("window_ms", 40.0);
   const auto stride_ms = declare_parameter<double>("stride_ms", 4.0);
+  output_rate_hz_ = declare_parameter<double>("output_rate_hz", 0.0);
   polarity_mode_ = declare_parameter<std::string>("polarity_mode", "separate");
   polarity_layout_ = declare_parameter<std::string>("polarity_layout", "polarity_major");
   temporal_interpolation_ =
@@ -99,6 +100,7 @@ EventTensorEncoderNode::EventTensorEncoderNode(const rclcpp::NodeOptions & optio
   }
   if (
     !std::isfinite(window_ms) || !std::isfinite(stride_ms) ||
+    !std::isfinite(output_rate_hz_) || output_rate_hz_ < 0.0 || output_rate_hz_ > 1000.0 ||
     window_ms <= 0.0 || stride_ms <= 0.0 ||
     window_ms >= static_cast<double>(std::numeric_limits<std::int64_t>::max()) / 1000.0 ||
     stride_ms >= static_cast<double>(std::numeric_limits<std::int64_t>::max()) / 1000.0)
@@ -151,9 +153,15 @@ EventTensorEncoderNode::EventTensorEncoderNode(const rclcpp::NodeOptions & optio
 
   window_us_ = static_cast<std::int64_t>(std::llround(window_ms * 1000.0));
   stride_us_ = static_cast<std::int64_t>(std::llround(stride_ms * 1000.0));
+  publish_period_us_ = output_rate_hz_ > 0.0 ?
+    static_cast<std::int64_t>(std::llround(1.0e6 / output_rate_hz_)) : stride_us_;
+  if (output_rate_hz_ > 0.0 && output_rate_hz_ > 1.0e6 / stride_us_ + 1.0e-9) {
+    throw std::invalid_argument(
+            "output_rate_hz cannot exceed the representation boundary rate 1e6/stride_us");
+  }
   const auto polarities = polarity_mode_ == "separate" ? 2U : 1U;
   if (
-    window_us_ <= 0 || stride_us_ <= 0 ||
+    window_us_ <= 0 || stride_us_ <= 0 || publish_period_us_ <= 0 ||
     static_cast<std::uint64_t>(bins_) >
     static_cast<std::uint64_t>(std::numeric_limits<std::int32_t>::max()) / polarities)
   {
@@ -307,8 +315,10 @@ EventTensorEncoderNode::EventTensorEncoderNode(const rclcpp::NodeOptions & optio
   RCLCPP_INFO(
     get_logger(),
     "Event tensor encoder: shape=[1,%zu,%ld,%ld], bins=%ld, window=%.3fms, "
-    "stride=%.3fms, backend=%s, policy=%s, interpolation=%s, incremental=%s (shift=%zu)",
+    "stride=%.3fms, output_rate=%.3fHz, backend=%s, policy=%s, interpolation=%s, "
+    "incremental=%s (shift=%zu)",
     channels_, height_, width_, bins_, window_ms, stride_ms,
+    output_rate_hz_ > 0.0 ? output_rate_hz_ : 1.0e6 / stride_us_,
     representation_backend_.c_str(), inference_policy_.c_str(), temporal_interpolation_.c_str(),
     reported_incremental ? "enabled" : "disabled", reported_shift_bins);
 }
@@ -352,6 +362,27 @@ std::int64_t EventTensorEncoderNode::ros_timestamp_ns(
 {
   const auto sensor_ns = static_cast<std::int64_t>(sensor_timestamp_us) * 1000LL;
   return has_sensor_to_ros_offset_ ? sensor_ns + sensor_to_ros_offset_ns_ : sensor_ns;
+}
+
+void EventTensorEncoderNode::initialize_publish_schedule(const Timestamp first_event_us)
+{
+  publish_schedule_origin_us_ = first_event_us + window_us_;
+  next_publish_target_us_ = publish_schedule_origin_us_;
+  next_publish_us_ = publish_schedule_origin_us_;
+}
+
+void EventTensorEncoderNode::advance_publish_schedule()
+{
+  next_publish_target_us_ += publish_period_us_;
+  const auto target_offset = next_publish_target_us_ - publish_schedule_origin_us_;
+  const auto stride_steps = std::max<std::int64_t>(
+    1, static_cast<std::int64_t>(std::llround(
+      static_cast<double>(target_offset) / static_cast<double>(stride_us_))));
+  auto candidate = publish_schedule_origin_us_ + stride_steps * stride_us_;
+  if (candidate <= next_publish_us_) {
+    candidate = next_publish_us_ + stride_us_;
+  }
+  next_publish_us_ = candidate;
 }
 
 void EventTensorEncoderNode::eventCD(
@@ -454,7 +485,7 @@ void EventTensorEncoderNode::process_events(
       }
       last_event_us_ = event.t;
       if (next_publish_us_ == 0) {
-        next_publish_us_ = event.t + window_us_;
+        initialize_publish_schedule(event.t);
       }
       cuda_pending_events_.push_back(CudaEvent{
         static_cast<std::int64_t>(event.t), event.x, event.y,
@@ -477,13 +508,13 @@ void EventTensorEncoderNode::process_events(
     }
     last_event_us_ = event.t;
     if (next_publish_us_ == 0) {
-      next_publish_us_ = event.t + window_us_;
+      initialize_publish_schedule(event.t);
     }
 
     // Half-open windows [start, end) make histogram bins exactly reusable.
     while (event.t >= next_publish_us_) {
       publish_window(next_publish_us_, frame_id_);
-      next_publish_us_ += stride_us_;
+      advance_publish_schedule();
     }
 
     if (event.x >= width_ || event.y >= height_) {
@@ -658,15 +689,17 @@ void EventTensorEncoderNode::on_cuda_timer()
       std::chrono::duration_cast<std::chrono::microseconds>(
         now_steady - last_event_sensor_update_time_).count());
     if (estimated_sensor_us >= next_publish_us_) {
-      const auto due_windows = static_cast<std::uint64_t>(
-        (estimated_sensor_us - next_publish_us_) / stride_us_) + 1U;
-      const auto publish_end_us = next_publish_us_ +
-        static_cast<Timestamp>(due_windows - 1U) * stride_us_;
+      std::uint64_t due_windows = 0U;
+      Timestamp publish_end_us = next_publish_us_;
+      while (estimated_sensor_us >= next_publish_us_) {
+        publish_end_us = next_publish_us_;
+        advance_publish_schedule();
+        ++due_windows;
+      }
       if (due_windows > 1U) {
         fixed_rate_skipped_windows_.fetch_add(due_windows - 1U, std::memory_order_relaxed);
       }
       maybe_publish_cuda_snapshot(publish_end_us);
-      next_publish_us_ = publish_end_us + stride_us_;
     }
   }
   if (
@@ -908,6 +941,8 @@ void EventTensorEncoderNode::reset_state(const char * reason)
   }
   std::fill(tensor_buffer_.begin(), tensor_buffer_.end(), 0.0F);
   next_publish_us_ = 0;
+  publish_schedule_origin_us_ = 0;
+  next_publish_target_us_ = 0;
   previous_window_end_us_ = 0;
   last_event_us_ = 0;
   has_last_event_sensor_update_ = false;
@@ -1042,6 +1077,8 @@ void EventTensorEncoderNode::publish_diagnostics()
     diagnostic_number("channels", channels_),
     diagnostic_number("window_ms", window_us_ / 1000.0),
     diagnostic_number("stride_ms", stride_us_ / 1000.0),
+    diagnostic_number(
+      "target_output_hz", output_rate_hz_ > 0.0 ? output_rate_hz_ : 1.0e6 / stride_us_),
     diagnostic_value("temporal_interpolation", temporal_interpolation_),
     diagnostic_value("polarity_mode", polarity_mode_),
     diagnostic_value("polarity_layout", polarity_layout_),

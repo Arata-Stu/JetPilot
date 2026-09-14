@@ -1,5 +1,6 @@
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import ComposableNodeContainer, LoadComposableNodes
 from launch_ros.descriptions import ComposableNode
@@ -49,8 +50,10 @@ def generate_launch_description():
         plugin="nvidia::isaac_ros::dnn_inference::TensorRTNode",
         name="rgb_latent_tensor_rt",
         parameters=[{
-            "model_file_path": PathJoinSubstitution([rgb_model_root, "model.onnx"]),
-            "engine_file_path": PathJoinSubstitution([rgb_model_root, "model.plan"]),
+            "model_file_path": PathJoinSubstitution(
+                [rgb_model_root, LaunchConfiguration("rgb_model_filename")]),
+            "engine_file_path": PathJoinSubstitution(
+                [rgb_model_root, LaunchConfiguration("rgb_engine_filename")]),
             "force_engine_update": ParameterValue(
                 LaunchConfiguration("force_engine_update"), value_type=bool),
             "enable_fp16": ParameterValue(
@@ -83,6 +86,8 @@ def generate_launch_description():
                 LaunchConfiguration("event_window_ms"), value_type=float),
             "stride_ms": ParameterValue(
                 LaunchConfiguration("event_stride_ms"), value_type=float),
+            "output_rate_hz": ParameterValue(
+                LaunchConfiguration("event_output_rate_hz"), value_type=float),
             "polarity_mode": LaunchConfiguration("event_polarity_mode"),
             "polarity_layout": LaunchConfiguration("event_polarity_layout"),
             "temporal_interpolation": LaunchConfiguration("event_temporal_interpolation"),
@@ -156,8 +161,10 @@ def generate_launch_description():
         plugin="nvidia::isaac_ros::dnn_inference::TensorRTNode",
         name="evs_latent_updater_tensor_rt",
         parameters=[{
-            "model_file_path": PathJoinSubstitution([updater_model_root, "model.onnx"]),
-            "engine_file_path": PathJoinSubstitution([updater_model_root, "model.plan"]),
+            "model_file_path": PathJoinSubstitution(
+                [updater_model_root, LaunchConfiguration("updater_model_filename")]),
+            "engine_file_path": PathJoinSubstitution(
+                [updater_model_root, LaunchConfiguration("updater_engine_filename")]),
             "force_engine_update": ParameterValue(
                 LaunchConfiguration("force_engine_update"), value_type=bool),
             "enable_fp16": ParameterValue(
@@ -178,32 +185,37 @@ def generate_launch_description():
         extra_arguments=[{"use_intra_process_comms": True}],
     )
 
-    trajectory_decoder = ComposableNode(
+    control_decoder = ComposableNode(
         package="jetpilot_e2e_inference",
-        plugin="jetpilot_e2e_inference::E2ETrajectoryDecoderNode",
-        name="e2e_trajectory_decoder",
+        plugin="jetpilot_e2e_inference::E2EControlDecoderNode",
+        name="async_rgb_evs_control_decoder",
         parameters=[
-            PathJoinSubstitution([pkg_share, "config", "e2e_trajectory.param.yaml"]),
+            PathJoinSubstitution([pkg_share, "config", "e2e_inference.param.yaml"]),
             {
-                "output_tensor_name": LaunchConfiguration("trajectory_tensor_name"),
+                "output_tensor_name": LaunchConfiguration("control_tensor_name"),
                 "use_sim_time": ParameterValue(
                     LaunchConfiguration("use_sim_time"), value_type=bool),
             },
         ],
         remappings=[
             ("tensor_sub", LaunchConfiguration("output_topic")),
-            ("trajectory", LaunchConfiguration("trajectory_topic")),
-            ("target_speed", LaunchConfiguration("target_speed_topic")),
-            ("planning_ready", LaunchConfiguration("planning_ready_topic")),
+            ("control_cmd", LaunchConfiguration("control_cmd_topic")),
         ],
         extra_arguments=[{"use_intra_process_comms": True}],
     )
 
     arguments = [
         DeclareLaunchArgument("container_name", default_value="multi_sensor_container"),
+        DeclareLaunchArgument("run_standalone", default_value="true"),
         DeclareLaunchArgument("use_sim_time", default_value="false"),
-        DeclareLaunchArgument("rgb_model_root"),
-        DeclareLaunchArgument("updater_model_root"),
+        DeclareLaunchArgument("model_root"),
+        DeclareLaunchArgument("rgb_model_root", default_value=LaunchConfiguration("model_root")),
+        DeclareLaunchArgument(
+            "updater_model_root", default_value=LaunchConfiguration("model_root")),
+        DeclareLaunchArgument("rgb_model_filename", default_value="rgb_encoder.onnx"),
+        DeclareLaunchArgument("rgb_engine_filename", default_value="rgb_encoder.plan"),
+        DeclareLaunchArgument("updater_model_filename", default_value="event_updater.onnx"),
+        DeclareLaunchArgument("updater_engine_filename", default_value="event_updater.plan"),
         DeclareLaunchArgument("force_engine_update", default_value="false"),
         DeclareLaunchArgument("enable_fp16", default_value="true"),
         DeclareLaunchArgument("rgb_image_topic", default_value="/realsense/color/image_raw"),
@@ -221,6 +233,7 @@ def generate_launch_description():
         DeclareLaunchArgument("event_bins", default_value="10"),
         DeclareLaunchArgument("event_window_ms", default_value="40.0"),
         DeclareLaunchArgument("event_stride_ms", default_value="4.0"),
+        DeclareLaunchArgument("event_output_rate_hz", default_value="100.0"),
         DeclareLaunchArgument("event_polarity_mode", default_value="separate"),
         DeclareLaunchArgument("event_polarity_layout", default_value="polarity_major"),
         DeclareLaunchArgument("event_temporal_interpolation", default_value="none"),
@@ -243,7 +256,7 @@ def generate_launch_description():
         DeclareLaunchArgument("state_input_tensor_name", default_value="state_in"),
         DeclareLaunchArgument("state_output_tensor_name", default_value="state_out"),
         DeclareLaunchArgument("delta_t_tensor_name", default_value="delta_t"),
-        DeclareLaunchArgument("trajectory_tensor_name", default_value="trajectory"),
+        DeclareLaunchArgument("control_tensor_name", default_value="control"),
         DeclareLaunchArgument("rgb_input_tensor_names", default_value="['rgb_input']"),
         DeclareLaunchArgument("rgb_input_binding_names", default_value="['rgb']"),
         DeclareLaunchArgument(
@@ -260,9 +273,9 @@ def generate_launch_description():
             "updater_input_tensor_formats",
             default_value="['nitros_tensor_list_nchw_rgb_f32']"),
         DeclareLaunchArgument(
-            "updater_output_tensor_names", default_value="['state_out', 'trajectory']"),
+            "updater_output_tensor_names", default_value="['state_out', 'control']"),
         DeclareLaunchArgument(
-            "updater_output_binding_names", default_value="['state_out', 'trajectory']"),
+            "updater_output_binding_names", default_value="['state_out', 'control']"),
         DeclareLaunchArgument(
             "updater_output_tensor_formats",
             default_value="['nitros_tensor_list_nchw_rgb_f32']"),
@@ -278,9 +291,7 @@ def generate_launch_description():
             "event_diagnostics_topic", default_value="/e2e/event_tensor/diagnostics"),
         DeclareLaunchArgument(
             "state_diagnostics_topic", default_value="/e2e/latent_state/diagnostics"),
-        DeclareLaunchArgument("trajectory_topic", default_value="/planning/trajectory"),
-        DeclareLaunchArgument("target_speed_topic", default_value="/planning/target_speed"),
-        DeclareLaunchArgument("planning_ready_topic", default_value="/planning/ready"),
+        DeclareLaunchArgument("control_cmd_topic", default_value="/auto/control_cmd"),
     ]
 
     container = ComposableNodeContainer(
@@ -290,6 +301,7 @@ def generate_launch_description():
         executable="component_container_mt",
         composable_node_descriptions=[],
         output="screen",
+        condition=IfCondition(LaunchConfiguration("run_standalone")),
     )
     nodes = LoadComposableNodes(
         target_container=container_name,
@@ -299,7 +311,7 @@ def generate_launch_description():
             event_encoder,
             state_manager,
             updater_tensor_rt,
-            trajectory_decoder,
+            control_decoder,
         ],
     )
     return LaunchDescription(arguments + [container, nodes])

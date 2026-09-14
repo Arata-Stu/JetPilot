@@ -1,0 +1,36 @@
+name: async_rgb_evs_dinov3_control
+task: control
+backbone: dinov3_vits16
+temporal: event_gru
+input_width: 212
+input_height: 120
+input_channels: 3
+event_channels: 20
+state_dim: 128
+event_feature_dim: 64
+rollout_steps: 32
+steering_only: false
+
+# Public DINOv3 ViT-S/16-compatible frozen RGB teacher.
+image_size: 224
+patch_size: 16
+embed_dim: 384
+depth: 12
+num_heads: 6
+ffn_ratio: 4.0
+storage_tokens: 4
+layer_scale: 0.00001
+rope_base: 100.0
+rope_rescale_coords: 2.0
+weights_path: ""
+require_weights: true
+trusted_checkpoint: false
+
+# Raw seconds enter ONNX/TensorRT. Scaling happens inside the model so 4 ms
+# through occasional 40 ms gaps occupy a numerically useful range for the GRU.
+nominal_delta_t_s: 0.004
+max_delta_t_s: 0.04
+
+control_loss_weight: 1.0
+latent_loss_weight: 0.25
+smooth_loss_weight: 0.02

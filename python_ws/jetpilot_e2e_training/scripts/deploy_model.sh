@@ -265,6 +265,7 @@ main() {
   load_profiles
   load_presets
   local profile_index preset_index model_path metadata_path model_name remote_model_dir remote_target checksum confirm
+  local source_model_dir rgb_encoder_path event_updater_path rgb_checksum event_checksum
   profile_index="$(select_profile_index)"
   if [[ -z "$REMOTE_HOST" && "${PROFILE_IDS[$profile_index]}" == "manual" ]]; then
     [[ -t 0 ]] || die "manual profile requires --host when running non-interactively"
@@ -272,6 +273,7 @@ main() {
   fi
   preset_index="$(select_preset_index)"
   model_path="$(select_model)"
+  source_model_dir="$(dirname -- "$model_path")"
   metadata_path="$(dirname -- "$model_path")/${PRESET_METADATA_FILENAMES[$preset_index]}"
   model_name="${DEPLOY_NAME:-$(basename -- "$(dirname -- "$model_path")")}"
   [[ "$model_name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$ ]] \
@@ -283,6 +285,16 @@ main() {
   remote_model_dir="${REMOTE_ROOT%/}/${model_name}"
   remote_target="${REMOTE_USER}@${REMOTE_HOST}"
   checksum="$(shasum -a 256 "$model_path" | awk '{print $1}')"
+
+  if [[ "${PRESET_MODALITIES[$preset_index]}" == "rgb_event_async" ]]; then
+    rgb_encoder_path="${source_model_dir}/rgb_encoder.onnx"
+    event_updater_path="${source_model_dir}/event_updater.onnx"
+    [[ -f "$rgb_encoder_path" ]] || die "RGB encoder ONNX was not found: $rgb_encoder_path"
+    [[ -f "$event_updater_path" ]] || die "Event updater ONNX was not found: $event_updater_path"
+    [[ -f "$metadata_path" ]] || die "Async RGB-EVS metadata was not found: $metadata_path"
+    rgb_checksum="$(shasum -a 256 "$rgb_encoder_path" | awk '{print $1}')"
+    event_checksum="$(shasum -a 256 "$event_updater_path" | awk '{print $1}')"
+  fi
 
   echo "ONNX       : ${model_path}"
   echo "metadata   : ${metadata_path}$([[ -f "$metadata_path" ]] || printf ' (not found)')"
@@ -297,7 +309,12 @@ main() {
 
   ssh "$remote_target" "mkdir -p -- '$remote_model_dir'"
   scp "$model_path" "${remote_target}:${remote_model_dir}/model.onnx.uploading"
-  if [[ -f "$metadata_path" ]]; then
+  if [[ "${PRESET_MODALITIES[$preset_index]}" == "rgb_event_async" ]]; then
+    scp "$rgb_encoder_path" "${remote_target}:${remote_model_dir}/rgb_encoder.onnx.uploading"
+    scp "$event_updater_path" "${remote_target}:${remote_model_dir}/event_updater.onnx.uploading"
+    scp "$metadata_path" "${remote_target}:${remote_model_dir}/metadata.json.uploading"
+    ssh "$remote_target" "set -e; mv -- '$remote_model_dir/model.onnx.uploading' '$remote_model_dir/model.onnx'; mv -- '$remote_model_dir/rgb_encoder.onnx.uploading' '$remote_model_dir/rgb_encoder.onnx'; mv -- '$remote_model_dir/event_updater.onnx.uploading' '$remote_model_dir/event_updater.onnx'; mv -- '$remote_model_dir/metadata.json.uploading' '$remote_model_dir/metadata.json'; printf '%s  %s\n' '$checksum' '$remote_model_dir/model.onnx' '$rgb_checksum' '$remote_model_dir/rgb_encoder.onnx' '$event_checksum' '$remote_model_dir/event_updater.onnx' > '$remote_model_dir/onnx.sha256'; rm -f -- '$remote_model_dir/model.plan' '$remote_model_dir/rgb_encoder.plan' '$remote_model_dir/event_updater.plan'"
+  elif [[ -f "$metadata_path" ]]; then
     scp "$metadata_path" "${remote_target}:${remote_model_dir}/metadata.json.uploading"
     ssh "$remote_target" "mv -- '$remote_model_dir/model.onnx.uploading' '$remote_model_dir/model.onnx'; mv -- '$remote_model_dir/metadata.json.uploading' '$remote_model_dir/metadata.json'; echo '$checksum  $remote_model_dir/model.onnx' > '$remote_model_dir/model.onnx.sha256'; rm -f -- '$remote_model_dir/model.plan'"
   else
@@ -305,7 +322,11 @@ main() {
   fi
 
   if [[ "$BUILD_ENGINE" == true ]]; then
-    ssh "$remote_target" "set -e; /usr/src/tensorrt/bin/trtexec --onnx='$remote_model_dir/model.onnx' --saveEngine='$remote_model_dir/model.plan.building' --fp16 > '$remote_model_dir/build_engine.log' 2>&1; mv -- '$remote_model_dir/model.plan.building' '$remote_model_dir/model.plan'"
+    if [[ "${PRESET_MODALITIES[$preset_index]}" == "rgb_event_async" ]]; then
+      ssh "$remote_target" "set -e; /usr/src/tensorrt/bin/trtexec --onnx='$remote_model_dir/rgb_encoder.onnx' --saveEngine='$remote_model_dir/rgb_encoder.plan.building' --fp16 > '$remote_model_dir/build_rgb_engine.log' 2>&1; mv -- '$remote_model_dir/rgb_encoder.plan.building' '$remote_model_dir/rgb_encoder.plan'; /usr/src/tensorrt/bin/trtexec --onnx='$remote_model_dir/event_updater.onnx' --saveEngine='$remote_model_dir/event_updater.plan.building' --fp16 > '$remote_model_dir/build_event_updater_engine.log' 2>&1; mv -- '$remote_model_dir/event_updater.plan.building' '$remote_model_dir/event_updater.plan'"
+    else
+      ssh "$remote_target" "set -e; /usr/src/tensorrt/bin/trtexec --onnx='$remote_model_dir/model.onnx' --saveEngine='$remote_model_dir/model.plan.building' --fp16 > '$remote_model_dir/build_engine.log' 2>&1; mv -- '$remote_model_dir/model.plan.building' '$remote_model_dir/model.plan'"
+    fi
   fi
   echo "転送が完了しました: ${remote_target}:${remote_model_dir}"
 }

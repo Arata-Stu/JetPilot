@@ -18,6 +18,8 @@ from e2e_learning.data.dataset import AsyncRgbEvsDataset, E2EDataset
 from e2e_learning.models.factory import build_model
 from e2e_learning.utils.io import ensure_dir, write_json, write_yaml
 
+ASYNC_RGB_EVS_MODELS = {"async_rgb_evs_control", "async_rgb_evs_dinov3_control"}
+
 
 def set_seed(seed: int) -> None:
     random.seed(seed)
@@ -365,7 +367,7 @@ def train_stage(
         loss_fn = SteeringLoss()
     best_metrics: dict[str, float] = {}
     for epoch in range(1, int(stage.epochs) + 1):
-        if model_name == "async_rgb_evs_control":
+        if model_name in ASYNC_RGB_EVS_MODELS:
             train_metrics = run_async_rgb_evs_epoch(model, train_loader, device, cfg.model, optimizer)
             val_metrics = run_async_rgb_evs_epoch(model, val_loader, device, cfg.model)
         elif model_name == "wam_dinov3_vits16":
@@ -450,38 +452,77 @@ def main(cfg: DictConfig) -> None:
     use_imu = bool(getattr(cfg.model, "use_imu", False))
     trajectory_points = int(getattr(cfg.model, "trajectory_points", getattr(cfg.data, "trajectory_points", 10)))
     trajectory_scale_m = float(getattr(cfg.model, "trajectory_scale_m", getattr(cfg.data, "trajectory_scale_m", 5.0)))
-    dataset = AsyncRgbEvsDataset(
-        dataset_dir=cfg.data.dataset_dir,
-        input_width=int(cfg.data.input_width),
-        input_height=int(cfg.data.input_height),
-        mean=tuple(float(v) for v in cfg.data.mean),
-        std=tuple(float(v) for v in cfg.data.std),
-        rollout_steps=int(getattr(cfg.model, "rollout_steps", 8)),
-        event_mean=tuple(float(v) for v in getattr(cfg.data, "event_mean", [0.0])),
-        event_std=tuple(float(v) for v in getattr(cfg.data, "event_std", [1.0])),
-        data_fraction=float(cfg.data.fraction),
-    ) if model_name == "async_rgb_evs_control" else E2EDataset(
-        dataset_dir=cfg.data.dataset_dir,
-        input_width=int(cfg.data.input_width),
-        input_height=int(cfg.data.input_height),
-        mean=tuple(float(v) for v in cfg.data.mean),
-        std=tuple(float(v) for v in cfg.data.std),
-        task=task,
-        sequence_length=int(getattr(cfg.model, "sequence_length", 1)),
-        frame_stride=int(getattr(cfg.model, "frame_stride", 1)),
-        trajectory_points=trajectory_points,
-        trajectory_scale_m=trajectory_scale_m,
-        imu_samples=int(getattr(cfg.model, "imu_samples", getattr(cfg.data, "imu_samples", 10))),
-        imu_features=int(getattr(cfg.model, "imu_features", 7)),
-        data_fraction=float(cfg.data.fraction),
-        future_horizon=(
-            int(getattr(cfg.model, "future_horizon", 0))
-            if model_name == "wam_dinov3_vits16"
-            else 0
-        ),
-        future_stride=int(getattr(cfg.model, "future_stride", 1)),
-    )
-    train_set, val_set = split_dataset(dataset, float(cfg.train.val_fraction), int(cfg.train.seed))
+    if model_name in ASYNC_RGB_EVS_MODELS:
+        timing_augmentation = bool(getattr(cfg.data, "timing_augmentation", True))
+        timing_max_hz = float(getattr(cfg.data, "timing_max_hz", 250.0))
+        source_event_hz = float(getattr(cfg.data, "event_sample_hz", 0.0))
+        if timing_augmentation and source_event_hz + 1.0e-6 < timing_max_hz:
+            raise RuntimeError(
+                f"250 Hz timing augmentation requires a dataset extracted at >= "
+                f"{timing_max_hz:g} Hz; this dataset is {source_event_hz:g} Hz"
+            )
+        async_dataset_args = {
+            "dataset_dir": cfg.data.dataset_dir,
+            "input_width": int(cfg.data.input_width),
+            "input_height": int(cfg.data.input_height),
+            "mean": tuple(float(v) for v in cfg.data.mean),
+            "std": tuple(float(v) for v in cfg.data.std),
+            "rollout_steps": int(getattr(cfg.model, "rollout_steps", 32)),
+            "event_mean": tuple(float(v) for v in getattr(cfg.data, "event_mean", [0.0])),
+            "event_std": tuple(float(v) for v in getattr(cfg.data, "event_std", [1.0])),
+            "data_fraction": float(cfg.data.fraction),
+            "timing_min_hz": float(getattr(cfg.data, "timing_min_hz", 100.0)),
+            "timing_max_hz": timing_max_hz,
+            "timing_jitter_fraction": float(
+                getattr(cfg.data, "timing_jitter_fraction", 0.15)
+            ),
+            "event_update_drop_probability": float(
+                getattr(cfg.data, "event_update_drop_probability", 0.05)
+            ),
+            "rgb_update_drop_probability": float(
+                getattr(cfg.data, "rgb_update_drop_probability", 0.10)
+            ),
+            "max_rgb_interval_multiplier": int(
+                getattr(cfg.data, "max_rgb_interval_multiplier", 2)
+            ),
+        }
+        train_dataset = AsyncRgbEvsDataset(
+            **async_dataset_args, augment_timing=timing_augmentation
+        )
+        validation_dataset = AsyncRgbEvsDataset(
+            **async_dataset_args, augment_timing=False
+        )
+        train_set, _ = split_dataset(
+            train_dataset, float(cfg.train.val_fraction), int(cfg.train.seed)
+        )
+        _, val_set = split_dataset(
+            validation_dataset, float(cfg.train.val_fraction), int(cfg.train.seed)
+        )
+    else:
+        dataset = E2EDataset(
+            dataset_dir=cfg.data.dataset_dir,
+            input_width=int(cfg.data.input_width),
+            input_height=int(cfg.data.input_height),
+            mean=tuple(float(v) for v in cfg.data.mean),
+            std=tuple(float(v) for v in cfg.data.std),
+            task=task,
+            sequence_length=int(getattr(cfg.model, "sequence_length", 1)),
+            frame_stride=int(getattr(cfg.model, "frame_stride", 1)),
+            trajectory_points=trajectory_points,
+            trajectory_scale_m=trajectory_scale_m,
+            imu_samples=int(getattr(cfg.model, "imu_samples", getattr(cfg.data, "imu_samples", 10))),
+            imu_features=int(getattr(cfg.model, "imu_features", 7)),
+            data_fraction=float(cfg.data.fraction),
+            future_horizon=(
+                int(getattr(cfg.model, "future_horizon", 0))
+                if model_name == "wam_dinov3_vits16"
+                else 0
+            ),
+            future_stride=int(getattr(cfg.model, "future_stride", 1)),
+        )
+        train_set, val_set = split_dataset(
+            dataset, float(cfg.train.val_fraction), int(cfg.train.seed)
+        )
     train_loader = DataLoader(
         train_set,
         batch_size=int(cfg.train.batch_size),

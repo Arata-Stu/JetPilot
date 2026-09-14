@@ -20,13 +20,23 @@ from .security import (
 
 NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 EXPERIMENTS = {
+    "async_rgb_evs_dinov3_control": {
+        "label": "Async frozen DINOv3 RGB + Raw EVS 20ch · 100-250 Hz",
+        "stages": 1, "task": "control", "family": "rgb_evs",
+        "target": "control", "modality": "rgb_event_async",
+        "name_prefix": "async-dinov3-rgb-evs-control",
+        "name_prefix_base": "async-dinov3-rgb-evs",
+        "output_targets": ["control", "steer"], "input_width": 212,
+        "input_height": 120, "recommended_batch_size": 4,
+    },
     "async_rgb_evs_control": {
-        "label": "Async RGB + Raw EVS 20ch · Control",
+        "label": "Async PilotNet RGB + Raw EVS 20ch · baseline",
         "stages": 1, "task": "control", "family": "rgb_evs",
         "target": "control", "modality": "rgb_event_async",
         "name_prefix": "async-rgb-evs-control", "name_prefix_base": "async-rgb-evs",
         "output_targets": ["control", "steer"], "input_width": 212,
         "input_height": 120, "recommended_batch_size": 8,
+        "hidden": True,
     },
     "event_tensor_pilotnet": {
         "label": "Raw EVS 20ch · PilotNet",
@@ -478,9 +488,30 @@ def build_preprocess_task(config: Any, body: dict[str, Any]) -> PipelineTaskSpec
     event_temporal_interpolation = str(body.get("event_temporal_interpolation") or "none")
     if event_temporal_interpolation not in {"none", "linear"}:
         raise ValueError("event temporal interpolation must be none or linear")
-    sample_hz = _number(body.get("sample_hz", 10.0), label="sample rate", minimum=0.1, maximum=250.0)
-    event_sample_hz = _number(body.get("event_sample_hz", 100.0), label="event update rate", minimum=1.0, maximum=250.0)
-    rollout_steps = _integer(body.get("rollout_steps", 8), label="rollout steps", minimum=1, maximum=64)
+    sample_hz = _number(
+        body.get("sample_hz", 30.0 if modality == "rgb_event_async" else 10.0),
+        label="sample rate", minimum=0.1, maximum=250.0,
+    )
+    event_sample_hz = _number(
+        body.get("event_sample_hz", 250.0 if modality == "rgb_event_async" else 100.0),
+        label="event update rate", minimum=1.0, maximum=250.0,
+    )
+    rollout_steps = _integer(
+        body.get("rollout_steps", 32 if modality == "rgb_event_async" else 8),
+        label="rollout steps", minimum=1, maximum=64,
+    )
+    if modality == "rgb_event_async":
+        minimum_rollout = max(1, int(event_sample_hz / sample_hz + 0.999999))
+        if minimum_rollout > 64:
+            raise ValueError(
+                "RGB Hz is too low for the requested EVS rate; increase RGB Hz "
+                "so one interval contains at most 64 event updates"
+            )
+        if rollout_steps < minimum_rollout:
+            raise ValueError(
+                f"max rollout must be at least {minimum_rollout} for "
+                f"{event_sample_hz:g} Hz EVS and {sample_hz:g} Hz RGB"
+            )
     overrides = [
             f"data.bag_path={bag}",
             f"data.output_dir={output}",
@@ -741,7 +772,7 @@ def _resolve_run(config: Any, value: object) -> tuple[Path, dict[str, Any]]:
 
 
 def build_export_task(config: Any, body: dict[str, Any]) -> PipelineTaskSpec:
-    directory, _ = _resolve_run(config, body.get("run_dir"))
+    directory, run_config = _resolve_run(config, body.get("run_dir"))
     checkpoint = directory / "checkpoints" / "best.pt"
     if not checkpoint.is_file() or checkpoint.is_symlink():
         raise ValueError(f"best checkpoint was not found: {checkpoint}")
@@ -750,15 +781,24 @@ def build_export_task(config: Any, body: dict[str, Any]) -> PipelineTaskSpec:
         f"export.output_dir={directory}",
     ]
     command = _python_command(config, "e2e_learning.cli.export_onnx", overrides)
+    model_config = run_config.get("model") if isinstance(run_config.get("model"), dict) else {}
+    artifacts = [
+        {"name": "ONNX", "path": str(directory / "model.onnx")},
+        {"name": "metadata", "path": str(directory / "metadata.json")},
+    ]
+    if str(model_config.get("name") or "") in {
+        "async_rgb_evs_control", "async_rgb_evs_dinov3_control"
+    }:
+        artifacts[1:1] = [
+            {"name": "RGB encoder ONNX", "path": str(directory / "rgb_encoder.onnx")},
+            {"name": "Event updater ONNX", "path": str(directory / "event_updater.onnx")},
+        ]
     return PipelineTaskSpec(
         kind="e2e-export-onnx",
         title=f"Export E2E ONNX: {directory.name}",
         command=command,
         cwd=str(training_root(config)),
-        artifacts=[
-            {"name": "ONNX", "path": str(directory / "model.onnx")},
-            {"name": "metadata", "path": str(directory / "metadata.json")},
-        ],
+        artifacts=artifacts,
         resource_keys=[f"e2e-run:{directory}"],
     )
 
@@ -774,10 +814,13 @@ def build_deploy_task(config: Any, body: dict[str, Any]) -> PipelineTaskSpec:
         raise ValueError("model must be an exported model.onnx from an E2E training run")
 
     metadata = _read_json(allowed.parent / "metadata.json")
-    if str(metadata.get("modality") or "") == "rgb_event_async":
-        raise ValueError(
-            "async RGB-EVS export is for offline evaluation; split TensorRT deployment is not implemented yet"
-        )
+    modality = str(metadata.get("modality") or "")
+    if modality == "rgb_event_async":
+        for filename in ("rgb_encoder.onnx", "event_updater.onnx"):
+            if not (allowed.parent / filename).is_file():
+                raise ValueError(
+                    f"async RGB-EVS deployment requires {filename}; export ONNX again"
+                )
     architecture = metadata.get("architecture") if isinstance(metadata.get("architecture"), dict) else {}
     if architecture.get("stateful_step"):
         raise ValueError(
@@ -787,14 +830,16 @@ def build_deploy_task(config: Any, body: dict[str, Any]) -> PipelineTaskSpec:
     model_config = metadata.get("config", {})
     if not image_topic and isinstance(model_config, dict):
         image_topic = str(model_config.get("data", {}).get("image_topic") or "")
-    modality = str(metadata.get("modality") or "")
     is_event = modality in {"event_image", "event_tensor"} or image_topic.endswith("/event_image")
     steering_only = bool(metadata.get("steering_only") or model.get("steering_only"))
     task = str(metadata.get("task") or model.get("task") or "control")
-    preset_prefix = "event_tensor" if modality == "event_tensor" else "event" if is_event else "camera"
-    recommended_preset = preset_prefix + (
-        "_trajectory" if task == "trajectory" else "_steering" if steering_only else "_control"
-    )
+    if modality == "rgb_event_async":
+        recommended_preset = "rgb_event_async_control"
+    else:
+        preset_prefix = "event_tensor" if modality == "event_tensor" else "event" if is_event else "camera"
+        recommended_preset = preset_prefix + (
+            "_trajectory" if task == "trajectory" else "_steering" if steering_only else "_control"
+        )
 
     root = training_root(config)
     default_profile, profiles = _load_collection(root / "src/e2e_learning/conf/deploy_profiles.json", "profiles")

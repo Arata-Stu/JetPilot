@@ -39,8 +39,18 @@ event_polarity_mode: separate
 event_polarity_layout: polarity_major
 event_temporal_interpolation: none
 sample_hz: 10.0
-event_sample_hz: 100.0
-rollout_steps: 8
+event_sample_hz: 250.0
+rollout_steps: 32
+
+# Async RGB-EVS training can resample a dense 250 Hz source sequence without
+# fabricating tensors or timestamps. Validation always uses the recorded cadence.
+timing_augmentation: false
+timing_min_hz: 100.0
+timing_max_hz: 250.0
+timing_jitter_fraction: 0.15
+event_update_drop_probability: 0.05
+rgb_update_drop_probability: 0.10
+max_rgb_interval_multiplier: 2
 event_mean: [0.0]
 event_std: [1.0]
 

@@ -253,18 +253,28 @@ FP16 `.npy`として保存します。channel順、mean/std、window、stride、
 
 実行時の生成rateと前処理時間は`/e2e/event_tensor/diagnostics`で確認します。
 
-### Async RGB + Raw EVS 20ch（offline検証版）
+### Async frozen DINOv3 RGB + Raw EVS 20ch（100〜250 Hz）
 
 Consoleの`Input representation`で`Async RGB + Raw EVS 20ch`を選ぶと、RGB間隔を
 1 sampleとし、その間のrolling 20ch tensorと教師controlを時刻順にまとめます。
-既定はRGB 30 Hz、EVS update 100 Hz、最大8 stepです。EVS tensorは容量を抑えるため
-FP16圧縮NPZで保存します。250 Hzを試す場合は`EVS update Hz=250`とし、RGB 30 Hzなら
-`Max rollout=12`以上を指定してください。
+既定はRGB 30 Hz、EVS抽出250 Hz、最大32 stepです。EVS tensorは容量を抑えるため
+FP16圧縮NPZで保存します。4 ms境界の250 Hzデータを保持し、学習時に実データの
+timestampを選び直して100〜250 Hzの更新揺れを作ります。
 
-`async_rgb_evs_control`はRGB PilotNet encoderのlatentを初期stateとし、小型EVS CNNと
-GRUCellで更新します。全EVS stepのcontrol loss、次RGB latentとのcosine loss、弱い
-control smoothness lossを同時に学習します。現段階のONNXはrolloutを一体化した
-Offline Analysis専用モデルで、分割TensorRT配備は明示的に拒否します。
+`async_rgb_evs_dinov3_control`はpretrained DINOv3 ViT-S/16を完全freezeし、学習可能な
+RGB adapterで128次元の初期stateを作ります。その後は小型EVS CNNとGRUCellだけで
+高頻度更新します。DINO backbone、adapter、EVS encoderを同一物として扱わず、
+backboneだけを常にeval/freezeします。
+
+augmentationでは25%を完全な250 Hz列として保持し、残りを100〜250 Hzから選択します。
+さらにevent updateを5% dropして次回`delta_t`へ累積し、RGB intervalも10%の確率で
+隣接区間へ延長します。`delta_t`はモデル内部で4 ms基準に正規化されます。Validationには
+augmentationを適用しないため、元の250 Hz性能とlossを比較できます。
+
+全EVS stepのcontrol loss、次RGB latentとのcosine loss、弱いcontrol smoothness lossを
+同時に学習します。ONNXはrolloutを一体化した
+Offline Analysis用`model.onnx`に加えて、ROS 2/TensorRT用の`rgb_encoder.onnx`と
+`event_updater.onnx`を同時に出力します。後者はstateを明示的な入出力として扱います。
 
 学習後は通常どおり`Export ONNX`、`Use in offline eval`を選び、学習元と同じrosbagで
 `Offline teacher comparison`を実行します。タイムラインにはRGB frameより高頻度の
@@ -276,6 +286,13 @@ raw eventのdecodeだけは`event_camera_py`互換性のためROS system Python�
 これはJetsonのCUDA rolling histogramとbin幅4 msで一致し、250 Hz出力が可能です。
 `window=50 ms / B=10 / stride=4 ms`はstrideが5 ms bin境界に揃わないため、厳密な
 CUDA rolling histogramではなくCPU backendが選択されます。
+
+Jetsonへ配備後は、metadataから学習時のevent正規化と表現設定を読み込んで起動できます。
+
+```bash
+ros2 run jetpilot_e2e_inference run_async_rgb_evs.sh \
+  /workspaces/ros2_ws/models/e2e/<async-rgb-evs-run>
+```
 
 ## 出力物
 

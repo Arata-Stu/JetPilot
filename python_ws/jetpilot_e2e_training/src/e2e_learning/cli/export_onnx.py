@@ -7,6 +7,7 @@ import hydra
 import torch
 from omegaconf import DictConfig, OmegaConf
 
+from e2e_learning.models.async_rgb_evs import AsyncEventUpdaterExport, AsyncRgbEncoderExport
 from e2e_learning.models.factory import build_model
 from e2e_learning.models.wam import WAMTensorRTWrapper
 from e2e_learning.utils.io import ensure_dir, write_json
@@ -54,7 +55,9 @@ def main(cfg: DictConfig) -> None:
     modality = str(getattr(run_cfg.data, "modality", "image"))
     image_input_name = str(cfg.export.input_name)
     is_wam = model_name == "wam_dinov3_vits16"
-    is_async_rgb_evs = model_name == "async_rgb_evs_control"
+    is_async_rgb_evs = model_name in {
+        "async_rgb_evs_control", "async_rgb_evs_dinov3_control"
+    }
     if model_name == "fusion" and sequence_length > 1:
         dummy_images = torch.randn(1, sequence_length, input_channels, input_height, input_width)
     else:
@@ -157,13 +160,68 @@ def main(cfg: DictConfig) -> None:
         dynamic_axes=None,
         external_data=False,
     )
+
+    split_exports: list[dict[str, Any]] = []
     if is_async_rgb_evs:
-        # Fail the export task immediately if the recurrent graph cannot be
-        # consumed by the same runtime used by Console Offline Analysis.
-        import onnxruntime as ort
+        state_dim = int(getattr(run_cfg.model, "state_dim", 128))
+        rgb_encoder_path = output_dir / "rgb_encoder.onnx"
+        event_updater_path = output_dir / "event_updater.onnx"
+        torch.onnx.export(
+            AsyncRgbEncoderExport(model).eval(),
+            dummy_images,
+            rgb_encoder_path,
+            input_names=["rgb"],
+            output_names=["rgb_latent"],
+            opset_version=opset_version,
+            dynamic_axes=None,
+            external_data=False,
+        )
+        updater_inputs = (
+            torch.zeros(1, state_dim),
+            torch.zeros(1, event_channels, input_height, input_width),
+            torch.full((1, 1), float(getattr(run_cfg.data, "event_stride_ms", 4.0)) / 1000.0),
+        )
+        torch.onnx.export(
+            AsyncEventUpdaterExport(model).eval(),
+            updater_inputs,
+            event_updater_path,
+            input_names=["state_in", "event_tensor", "delta_t"],
+            output_names=["state_out", "control"],
+            opset_version=opset_version,
+            dynamic_axes=None,
+            external_data=False,
+        )
+        split_exports = [
+            {
+                "role": "rgb_state_initializer",
+                "onnx": rgb_encoder_path.name,
+                "engine": "rgb_encoder.plan",
+                "inputs": [{"name": "rgb", "shape": list(dummy_images.shape)}],
+                "outputs": [{"name": "rgb_latent", "shape": [1, state_dim]}],
+            },
+            {
+                "role": "event_state_updater",
+                "onnx": event_updater_path.name,
+                "engine": "event_updater.plan",
+                "inputs": [
+                    {"name": "state_in", "shape": [1, state_dim]},
+                    {"name": "event_tensor", "shape": [1, event_channels, input_height, input_width]},
+                    {"name": "delta_t", "shape": [1, 1]},
+                ],
+                "outputs": [
+                    {"name": "state_out", "shape": [1, state_dim]},
+                    {"name": "control", "shape": [1, 2]},
+                ],
+            },
+        ]
 
-        ort.InferenceSession(str(onnx_path), providers=["CPUExecutionProvider"])
-
+    # Export is considered successful only when ONNX Runtime can load every
+    # generated graph. This catches exporter/opset mismatches before deployment.
+    import onnxruntime as ort
+    exported_paths = [onnx_path]
+    exported_paths.extend(output_dir / item["onnx"] for item in split_exports)
+    for exported_path in exported_paths:
+        ort.InferenceSession(str(exported_path), providers=["CPUExecutionProvider"])
     if is_async_rgb_evs:
         output_metadata = {
             "name": output_name, "task": "control", "shape": [1, int(run_cfg.model.rollout_steps), 2],
@@ -247,6 +305,7 @@ def main(cfg: DictConfig) -> None:
         "input": input_metadata[0],
         "inputs": input_metadata,
         "output": output_metadata,
+        "split_exports": split_exports,
         "tensorrt": {
             "engine_filename": "model.plan",
             "enable_fp16": bool(cfg.export.tensorrt.enable_fp16),

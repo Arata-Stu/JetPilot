@@ -231,7 +231,8 @@ void LatentStateManagerNode::try_dispatch()
         std::clamp(raw_delta_t, initial_delta_t_s_, max_delta_t_s_));
       nvidia::isaac_ros::nitros::NitrosTensor delta_t_tensor;
       {
-        const nvidia::isaac_ros::nitros::NitrosTensorShape shape{1};
+        // The online updater is exported with an explicit NC scalar input.
+        const nvidia::isaac_ros::nitros::NitrosTensorShape shape{1, 1};
         auto write_handle = delta_t_tensor.from_pool(
           delta_t_tensor_name_, scalar_memory_pool_, shape,
           nvidia::isaac_ros::nitros::NitrosDataType::kFloat32, *cuda_stream_);

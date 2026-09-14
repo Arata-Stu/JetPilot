@@ -218,6 +218,9 @@ class E2EPipelineTests(unittest.TestCase):
         self.assertIn("model.steering_only=false", train.command)
 
     def test_async_rgb_evs_dataset_and_training_contract(self) -> None:
+        experiment_ids = {item["id"] for item in pipeline_catalog(self.config)["experiments"]}
+        self.assertIn("async_rgb_evs_dinov3_control", experiment_ids)
+        self.assertNotIn("async_rgb_evs_control", experiment_ids)
         preprocess = build_preprocess_task(
             self.config,
             {
@@ -242,18 +245,58 @@ class E2EPipelineTests(unittest.TestCase):
         (dataset / "metadata.yaml").write_text(json.dumps({
             "task": "control", "modality": "rgb_event_async", "input_width": 212,
             "input_height": 120, "input_channels": 3, "event_channels": 20,
-            "rollout_steps": 8, "event_mean": [0.0], "event_std": [1.0],
+            "event_sample_hz": 250, "rollout_steps": 32,
+            "event_mean": [0.0], "event_std": [1.0],
         }))
         train = build_train_task(self.config, {
             "dataset_dir": str(dataset), "run_name": "async-run",
-            "experiment": "async_rgb_evs_control",
+            "experiment": "async_rgb_evs_dinov3_control",
         })
-        self.assertIn("experiment=async_rgb_evs_control", train.command)
+        self.assertIn("experiment=async_rgb_evs_dinov3_control", train.command)
+        self.assertIn("data.event_sample_hz=250", train.command)
         with self.assertRaisesRegex(ValueError, "requires a image dataset"):
             build_train_task(self.config, {
                 "dataset_dir": str(dataset), "run_name": "wrong-async-run",
                 "experiment": "pilotnet_scratch",
             })
+
+    def test_async_250hz_dataset_requires_enough_rollout_capacity(self) -> None:
+        body = {
+            "rosbag": str(self.bag), "dataset_name": "async-250",
+            "image_topic": "/realsense/color/image_raw",
+            "control_topic": "/teleop/control_cmd", "modality": "rgb_event_async",
+            "event_topic": "/event_camera/events", "sample_hz": 30,
+            "event_sample_hz": 250,
+        }
+        with self.assertRaisesRegex(ValueError, "max rollout"):
+            build_preprocess_task(self.config, {**body, "rollout_steps": 8})
+        preprocess = build_preprocess_task(
+            self.config, {**body, "rollout_steps": 32}
+        )
+        self.assertIn("--event-sample-hz 250.0", preprocess.command[-1])
+        self.assertIn("--rollout-steps 32", preprocess.command[-1])
+
+    def test_async_rgb_evs_deploy_requires_both_split_exports(self) -> None:
+        (self.conf / "deploy_model_presets.json").write_text(json.dumps({
+            "default": "rgb_event_async_control",
+            "presets": [{
+                "id": "rgb_event_async_control",
+                "label": "Async RGB-EVS control",
+            }],
+        }))
+        run = self._run(onnx=True)
+        (run / "metadata.json").write_text(json.dumps({
+            "modality": "rgb_event_async", "task": "control",
+        }))
+        with self.assertRaisesRegex(ValueError, "rgb_encoder.onnx"):
+            build_deploy_task(self.config, {"model_path": str(run / "model.onnx")})
+        (run / "rgb_encoder.onnx").write_bytes(b"rgb")
+        (run / "event_updater.onnx").write_bytes(b"event")
+        deploy = build_deploy_task(self.config, {"model_path": str(run / "model.onnx")})
+        self.assertEqual(
+            deploy.command[deploy.command.index("--preset") + 1],
+            "rgb_event_async_control",
+        )
 
     def test_train_and_export_tasks_preserve_selected_configuration(self) -> None:
         dataset = self._dataset()

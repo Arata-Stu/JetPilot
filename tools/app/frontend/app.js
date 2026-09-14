@@ -58,8 +58,8 @@ const state = {
     eventPolarityLayout: "polarity_major",
     eventTemporalInterpolation: "none",
     sampleHz: 10,
-    eventSampleHz: 100,
-    rolloutSteps: 8,
+    eventSampleHz: 250,
+    rolloutSteps: 32,
     controlTopic: "/teleop/control_cmd",
     odometryTopic: "/visual_slam/tracking/odometry",
     imuTopic: "/realsense/imu",
@@ -3382,8 +3382,9 @@ function updateE2EPipelineOption(key, value) {
     state.e2ePipeline.datasetTask = "control";
     if (state.e2ePipeline.datasetModality === "rgb_event_async") {
       state.e2ePipeline.sampleHz = 30;
-      state.e2ePipeline.eventSampleHz = 100;
-      state.e2ePipeline.rolloutSteps = 8;
+      state.e2ePipeline.eventSampleHz = 250;
+      state.e2ePipeline.rolloutSteps = 32;
+      state.e2ePipeline.batchSize = 4;
     }
   }
   if (key === "experiment") {
@@ -3411,7 +3412,7 @@ function recommendedE2EDeployPreset(run) {
   const dataset = state.e2ePipeline.datasets.find((item) => item.path === run.dataset_dir);
   const topic = dataset?.image_topic || run.image_topic || "";
   const modality = dataset?.modality || run.modality || "image";
-  if (modality === "rgb_event_async") return "";
+  if (modality === "rgb_event_async") return "rgb_event_async_control";
   const sensor = modality === "event_tensor" ? "event_tensor" : topic.endsWith("/event_image") ? "event" : "camera";
   const target = run.task === "trajectory" ? "trajectory" : run.steering_only ? "steering" : "control";
   return `${sensor}_${target}`;
@@ -3636,7 +3637,7 @@ function renderE2EPipeline() {
             <div class="field"><label>Dataset name</label><input value="${esc(pipeline.datasetName)}" onchange="updateE2EPipelineOption('datasetName', this.value)" /><div class="field-hint">${esc(pipeline.datasetRoot)} · <button type="button" class="link-button" onclick="applyE2ENameSuggestion('dataset')">現在日時で再提案</button></div></div>
             <div class="field"><label>Learning task</label><select onchange="updateE2EPipelineOption('datasetTask', this.value)">${[["control","Control (steering + throttle)"],["trajectory","Trajectory (future odometry)"]].map(([value,label]) => `<option value="${value}" ${pipeline.datasetTask === value ? "selected" : ""}>${label}</option>`).join("")}</select></div>
             <div class="field"><label>Input representation</label><select onchange="updateE2EPipelineOption('datasetModality', this.value)">${[["image","RGB / 3ch image"],["event_tensor","Raw EVS 20ch tensor"],["rgb_event_async","Async RGB + Raw EVS 20ch"]].map(([value,label]) => `<option value="${value}" ${pipeline.datasetModality === value ? "selected" : ""}>${label}</option>`).join("")}</select></div>
-            <div class="field"><label>${pipeline.datasetModality !== "image" ? "RGB reference topic" : "Image topic"}</label><select onchange="updateE2EPipelineOption('imageTopic', this.value)">${analysisTopicOptions("image", imageTopic)}</select><div class="field-hint">${pipeline.datasetModality === "event_tensor" ? "このtopicの時刻に合わせてraw eventからTensorを生成します。" : pipeline.datasetModality === "rgb_event_async" ? "RGBでstateを初期化し、次のRGBまで複数のEVS更新を学習します。" : ""}</div></div>
+            <div class="field"><label>${pipeline.datasetModality !== "image" ? "RGB reference topic" : "Image topic"}</label><select onchange="updateE2EPipelineOption('imageTopic', this.value)">${analysisTopicOptions("image", imageTopic)}</select><div class="field-hint">${pipeline.datasetModality === "event_tensor" ? "このtopicの時刻に合わせてraw eventからTensorを生成します。" : pipeline.datasetModality === "rgb_event_async" ? "Frozen DINOv3でRGB stateを作り、100〜250 Hzに揺らしたEVS更新を学習します。250 Hz抽出を推奨します。" : ""}</div></div>
             ${pipeline.datasetModality !== "image" ? `<div class="field"><label>Raw EventPacket topic</label><input value="${esc(pipeline.eventTopic)}" onchange="updateE2EPipelineOption('eventTopic', this.value)" /></div><div class="e2e-compact-fields"><label>Bins<input type="number" min="1" max="64" value="${esc(pipeline.eventBins)}" onchange="updateE2EPipelineOption('eventBins', this.value)" /></label><label>Window (ms)<input type="number" min="0.1" step="0.1" value="${esc(pipeline.eventWindowMs)}" onchange="updateE2EPipelineOption('eventWindowMs', this.value)" /></label><label>Stride (ms)<input type="number" min="0.1" step="0.1" value="${esc(pipeline.eventStrideMs)}" onchange="updateE2EPipelineOption('eventStrideMs', this.value)" /></label><label>RGB Hz<input type="number" min="0.1" max="250" step="0.1" value="${esc(pipeline.sampleHz)}" onchange="updateE2EPipelineOption('sampleHz', this.value)" /></label>${pipeline.datasetModality === "rgb_event_async" ? `<label>EVS update Hz<input type="number" min="1" max="250" value="${esc(pipeline.eventSampleHz)}" onchange="updateE2EPipelineOption('eventSampleHz', this.value)" /></label><label>Max rollout<input type="number" min="1" max="64" value="${esc(pipeline.rolloutSteps)}" onchange="updateE2EPipelineOption('rolloutSteps', this.value)" /></label>` : ""}</div><div class="e2e-compact-fields"><label>Channel layout<select onchange="updateE2EPipelineOption('eventPolarityLayout', this.value)">${[["polarity_major","polarity major (+B, -B)"],["time_major","time major (+,- per bin)"]].map(([value,label]) => `<option value="${value}" ${pipeline.eventPolarityLayout === value ? "selected" : ""}>${label}</option>`).join("")}</select></label><label>Interpolation<select onchange="updateE2EPipelineOption('eventTemporalInterpolation', this.value)">${[["none","None (CUDA compatible)"],["linear","Linear (CPU runtime)"]].map(([value,label]) => `<option value="${value}" ${pipeline.eventTemporalInterpolation === value ? "selected" : ""}>${label}</option>`).join("")}</select></label></div>` : ""}
             <div class="field"><label>Teacher control</label><select onchange="updateE2EPipelineOption('controlTopic', this.value)">${analysisTopicOptions("control", pipeline.controlTopic)}</select></div>
             <div class="field"><label>Odometry for trajectory GT</label><input value="${esc(pipeline.odometryTopic)}" onchange="updateE2EPipelineOption('odometryTopic', this.value)" /></div>

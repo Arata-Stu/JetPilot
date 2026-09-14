@@ -191,6 +191,11 @@ def _async_rgb_evs_predictions(
     interval_inference_times: list[float] = []
     update_inference_times: list[float] = []
     excluded = 0
+    print(
+        f"[async-rgb-evs] evaluating {len(rows):,} RGB intervals "
+        f"with rollout={rollout_steps}",
+        flush=True,
+    )
     for row_index, row in enumerate(rows):
         image = cv2.imread(str(dataset / row["image_path"]), cv2.IMREAD_COLOR)
         if image is None:
@@ -243,9 +248,15 @@ def _async_rgb_evs_predictions(
                 "inference_ms": update_inference_ms, "total_ms": update_inference_ms,
                 "missed_deadline": update_inference_ms > deadline_ms,
             })
-        if row_index and row_index % 100 == 0:
-            progress.update("e2e_inference", 0.82 + 0.15 * row_index / max(1, len(rows)),
-                            f"RGB-EVS推論 {row_index:,}/{len(rows):,} intervals")
+        if (row_index + 1) % 100 == 0 or row_index + 1 == len(rows):
+            completed = row_index + 1
+            message = f"RGB-EVS推論 {completed:,}/{len(rows):,} intervals"
+            progress.update(
+                "e2e_inference",
+                0.82 + 0.15 * completed / max(1, len(rows)),
+                message,
+            )
+            print(f"[async-rgb-evs] {completed:,}/{len(rows):,} intervals", flush=True)
     metrics = {
         "sample_count": len(records), "interval_count": len(rows),
         "excluded_non_manual": excluded, "missing_teacher": 0,

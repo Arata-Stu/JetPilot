@@ -47,6 +47,8 @@ class EventTensorAccumulator:
             tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]
         ] = collections.deque()
         self.timestamp_resets = 0
+        self.previous_window_end_ns: int | None = None
+        self.previous_tensor: np.ndarray | None = None
 
     def add(
         self,
@@ -67,6 +69,8 @@ class EventTensorAccumulator:
         if self.latest_event_ns is not None and int(event_ns[0]) < self.latest_event_ns:
             self.chunks.clear()
             self.first_event_ns = None
+            self.previous_window_end_ns = None
+            self.previous_tensor = None
             self.timestamp_resets += 1
         self.source_width = int(source_width)
         self.source_height = int(source_height)
@@ -98,12 +102,45 @@ class EventTensorAccumulator:
         window_end_ns = self.first_event_ns + (
             (self.latest_event_ns - self.first_event_ns) // self.stride_ns
         ) * self.stride_ns
+        if window_end_ns - self.first_event_ns < self.window_ns:
+            return None
         start_ns = window_end_ns - self.window_ns
         cfg = self.config
-        tensor = np.zeros((cfg.channels, cfg.height, cfg.width), dtype=np.float32)
+        if self.previous_window_end_ns == window_end_ns and self.previous_tensor is not None:
+            return self.previous_tensor, {
+                "events": int(round(float(self.previous_tensor.sum(dtype=np.float64)))),
+                "window_start_sensor_ns": start_ns,
+                "window_end_sensor_ns": window_end_ns,
+                "timestamp_resets": self.timestamp_resets,
+            }
+        bin_width_ns = self.window_ns // cfg.bins if self.window_ns % cfg.bins == 0 else 0
+        incremental = (
+            cfg.temporal_interpolation == "none"
+            and bin_width_ns > 0
+            and self.stride_ns == bin_width_ns
+            and self.previous_tensor is not None
+            and self.previous_window_end_ns is not None
+            and window_end_ns - self.previous_window_end_ns == self.stride_ns
+        )
+        if incremental:
+            tensor = np.empty_like(self.previous_tensor)
+            if cfg.polarity_layout == "polarity_major":
+                tensor[: cfg.bins - 1] = self.previous_tensor[1 : cfg.bins]
+                tensor[cfg.bins - 1] = 0.0
+                tensor[cfg.bins : 2 * cfg.bins - 1] = self.previous_tensor[
+                    cfg.bins + 1 : 2 * cfg.bins
+                ]
+                tensor[2 * cfg.bins - 1] = 0.0
+            else:
+                tensor[:-2] = self.previous_tensor[2:]
+                tensor[-2:] = 0.0
+            accumulation_start_ns = self.previous_window_end_ns
+        else:
+            tensor = np.zeros((cfg.channels, cfg.height, cfg.width), dtype=np.float32)
+            accumulation_start_ns = start_ns
         event_count = 0
         for times, source_x, source_y, polarity in self.chunks:
-            selected = (times >= start_ns) & (times < window_end_ns)
+            selected = (times >= accumulation_start_ns) & (times < window_end_ns)
             if not bool(selected.any()):
                 continue
             times_selected = times[selected]
@@ -127,7 +164,11 @@ class EventTensorAccumulator:
                 cfg.height - 1, sy.astype(np.int64) * cfg.height // max(self.source_height, 1)
             )
             polarity_index = np.where(selected_polarity, 0, 1).astype(np.int64)
-            if cfg.temporal_interpolation == "linear" and cfg.bins > 1:
+            if incremental:
+                temporal_bin = np.full(len(times_selected), cfg.bins - 1, dtype=np.int64)
+                channel = self._channels(temporal_bin, polarity_index)
+                np.add.at(tensor, (channel, target_y, target_x), 1.0)
+            elif cfg.temporal_interpolation == "linear" and cfg.bins > 1:
                 position = (
                     (times_selected - start_ns).astype(np.float64)
                     * (cfg.bins - 1) / self.window_ns
@@ -147,6 +188,12 @@ class EventTensorAccumulator:
                 channel = self._channels(temporal_bin, polarity_index)
                 np.add.at(tensor, (channel, target_y, target_x), 1.0)
             event_count += int(valid.sum())
+        # Separate-polarity representations are non-negative, so their sum is
+        # the exact number of events in the complete rolling window even when
+        # only the newest bin was accumulated above.
+        event_count = int(round(float(tensor.sum(dtype=np.float64))))
+        self.previous_window_end_ns = window_end_ns
+        self.previous_tensor = tensor
         return tensor, {
             "events": event_count,
             "window_start_sensor_ns": start_ns,

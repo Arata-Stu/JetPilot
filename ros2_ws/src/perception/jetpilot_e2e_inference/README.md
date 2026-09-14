@@ -186,9 +186,9 @@ raw EVS -> CUDA rolling representation -> event_tensor --+-> latent_state_manage
                                                               |
                                                         updater TensorRT
                                                               |
-                                                [state_out,trajectory]
+                                                 [state_out,control]
                                                    |          |
-                                                   +----------+-> Path
+                                                   +----------+-> ControlCommand
                                                    |
                                                    +-> 次回state_in
 ```
@@ -206,33 +206,50 @@ GPU bufferを保持し、次回入力では`state_in`という名前で参照し
 - state時刻以前のEVS tensorは破棄
 - `delta_t`はstate時刻とEVS窓終端時刻から算出し、設定範囲へclamp
 - updater timeout時は同時推論を発行せず、安全lockを維持して診断をERRORにする
-- State Managerの専用ACKをevent encoderへ返し、次のCUDA snapshot生成を許可
-  （RGB補正より古いEVS窓を破棄した場合もACKする）
+- `consumer_driven`利用時はState Managerの専用ACKをevent encoderへ返し、次の
+  CUDA snapshot生成を許可（RGB補正より古いEVS窓を破棄した場合もACKする）
 
-既定のモデルbinding契約は以下です。updaterへwaypoint headを統合し、EVS更新ごとの
+既定のモデルbinding契約は以下です。updaterへcontrol headを統合し、EVS更新ごとの
 追加TensorRT往復を避けます。
 
 | Engine | Inputs | Outputs |
 | --- | --- | --- |
 | RGB encoder | `rgb` | `rgb_latent` |
-| EVS updater + waypoint head | `state_in`, `event_tensor`, `delta_t` | `state_out`, `trajectory` |
+| EVS updater + control head | `state_in`, `event_tensor`, `delta_t` | `state_out`, `control` |
 
 `rgb_latent`と`state_out`は同一shape・同一dtype（現在はNITROS float32）にします。
-`event_tensor`の既定shapeは`[1,20,120,212]`、`delta_t`は秒単位の`[1]`です。
+`event_tensor`の既定shapeは`[1,20,120,212]`、`delta_t`は秒単位の`[1,1]`です。
 モデルが`delta_t`を使用しない場合は`include_delta_t:=false`とし、updaterの
 `*_tensor_names`および`*_binding_names`も2入力へ上書きしてください。
 
 ```bash
-ros2 launch jetpilot_e2e_inference async_rgb_evs_latent.launch.py \
-  rgb_model_root:=/workspaces/ros2_ws/models/e2e/rgb_encoder \
-  updater_model_root:=/workspaces/ros2_ws/models/e2e/evs_updater
+ros2 run jetpilot_e2e_inference run_async_rgb_evs.sh \
+  /workspaces/ros2_ws/models/e2e/<async-rgb-evs-run>
 ```
+
+学習側の`Export ONNX`はoffline評価用`model.onnx`に加えて、オンライン用の
+`rgb_encoder.onnx`と`event_updater.onnx`を生成します。Consoleの`Deploy to Jetson`で
+`Async RGB + Raw EVS 20ch Control`を選ぶと3ファイルを一括転送し、build指定時は
+`rgb_encoder.plan`と`event_updater.plan`を生成します。手動でengineを作る場合:
+
+```bash
+ros2 run jetpilot_e2e_inference build_async_rgb_evs_engines.sh \
+  /workspaces/ros2_ws/models/e2e/<async-rgb-evs-run>
+```
+
+`run_async_rgb_evs.sh`は`metadata.json`からRGB/20chのmean/std、bin数、window、stride、
+polarity、補間方式、入力寸法、topicと`event_sample_hz`を読み取るため、学習時と
+オンライン時の前処理条件を手入力せず一致させます。たとえば`stride=4 ms`で100 Hz学習したモデルは、4 msの
+bin境界上で8/12 msを交互に選び、長期平均100 Hzでstateを更新します。250 Hz学習時は
+4 msごとに更新します。
 
 診断は次の2 topicで確認できます。
 
 ```bash
 ros2 topic echo /e2e/event_tensor/diagnostics
 ros2 topic echo /e2e/latent_state/diagnostics
+ros2 topic echo /e2e/diagnostics
+ros2 topic hz /auto/control_cmd
 ```
 
 State Manager診断にはRGBの受信・適用・置換数、EVSの最新版置換・時刻破棄数、

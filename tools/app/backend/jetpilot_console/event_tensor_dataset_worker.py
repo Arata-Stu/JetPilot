@@ -109,10 +109,17 @@ def _build_async_dataset(args: argparse.Namespace) -> dict[str, object]:
             end_ns = int(info["window_end_sensor_ns"])
             if end_ns == last_event_end_ns:
                 continue
+            packet_stamp = _timestamp(message, bag_ns, args.timestamp_source)
+            latest_sensor_ns = int(accumulator.latest_event_ns or end_ns)
+            # Match EventTensorEncoderNode::ros_timestamp_ns(): anchor the
+            # sensor-time window boundary to the packet's ROS/bag clock. This
+            # keeps delta_t on exact 4 ms representation boundaries at 250 Hz.
+            representation_stamp = packet_stamp - latest_sensor_ns + end_ns
             relative = Path("tensors") / f"{len(events):08d}.npz"
             np.savez_compressed(output / relative, tensor=tensor.astype(np.float16))
             events.append({
-                "stamp": _timestamp(message, bag_ns, args.timestamp_source),
+                "stamp": representation_stamp, "packet_stamp": packet_stamp,
+                "sensor_stamp": end_ns,
                 "path": relative.as_posix(), "events": int(info["events"]),
                 "sum": tensor.sum(axis=(1, 2), dtype=np.float64),
                 "square_sum": np.square(tensor, dtype=np.float64).sum(axis=(1, 2)),
@@ -148,14 +155,21 @@ def _build_async_dataset(args: argparse.Namespace) -> dict[str, object]:
         if not aligned:
             continue
         previous_stamp = start_stamp
+        previous_sensor_stamp: int | None = None
         paths, deltas, labels, stamps = [], [], [], []
         for event, control in aligned:
             stamp = int(event["stamp"])
+            sensor_stamp = int(event["sensor_stamp"])
             paths.append(event["path"])
-            deltas.append(max(0.0, (stamp - previous_stamp) / 1.0e9))
+            elapsed_ns = (
+                stamp - previous_stamp if previous_sensor_stamp is None
+                else sensor_stamp - previous_sensor_stamp
+            )
+            deltas.append(max(0.0, elapsed_ns / 1.0e9))
             labels.append([float(control[1].get("steering", 0.0)), float(control[1].get("throttle", 0.0))])
             stamps.append(stamp)
             previous_stamp = stamp
+            previous_sensor_stamp = sensor_stamp
             sums += event["sum"]
             square_sums += event["square_sum"]
             value_count += args.width * args.height

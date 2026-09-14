@@ -69,6 +69,8 @@ private:
   void prepare_staging_buffer(std::vector<float> & output) const;
   void reset_state(const char * reason);
   void publish_diagnostics();
+  void initialize_publish_schedule(Timestamp first_event_us);
+  void advance_publish_schedule();
   bool incremental_eligible() const;
   std::size_t incremental_shift_bins() const;
   std::int64_t ros_timestamp_ns(Timestamp sensor_timestamp_us) const;
@@ -78,6 +80,8 @@ private:
   std::int64_t height_{0};
   std::int64_t window_us_{40000};
   std::int64_t stride_us_{4000};
+  std::int64_t publish_period_us_{4000};
+  double output_rate_hz_{0.0};
   std::string polarity_mode_{"separate"};
   std::string polarity_layout_{"polarity_major"};
   std::string temporal_interpolation_{"none"};
@@ -116,6 +120,8 @@ private:
   std::vector<bool> staging_buffer_pinned_;
   std::size_t next_staging_buffer_{0};
   Timestamp next_publish_us_{0};
+  Timestamp publish_schedule_origin_us_{0};
+  Timestamp next_publish_target_us_{0};
   Timestamp previous_window_end_us_{0};
   Timestamp last_event_us_{0};
   std::string frame_id_;

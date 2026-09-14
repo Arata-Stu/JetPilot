@@ -2,6 +2,15 @@
   "default": "camera_control",
   "presets": [
     {
+      "id": "rgb_event_async_control",
+      "label": "Async frozen DINOv3 RGB + Raw EVS 20ch Control",
+      "description": "Low-rate DINOv3 state initializer plus 100-250 Hz EVS recurrent updater",
+      "model_name": "rgb_event_async_control",
+      "model_kind": "e2e_async_rgb_evs_control",
+      "modality": "rgb_event_async",
+      "metadata_filename": "metadata.json"
+    },
+    {
       "id": "event_tensor_steering",
       "label": "Raw EVS 20ch Steering Only",
       "description": "Raw EventPacket to CUDA 20ch tensor and fixed-throttle steering",
