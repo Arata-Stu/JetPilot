@@ -34,7 +34,7 @@ sticks:
   left:
     x_axis: 0
     y_axis: 1
-    invert_x: false
+    invert_x: true
     invert_y: true
     center_x: 0
     center_y: 0

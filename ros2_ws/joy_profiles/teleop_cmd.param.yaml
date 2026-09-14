@@ -5,7 +5,7 @@ teleop_cmd_node:
     reverse_axis: 3
     brake_button: 2
     deadman_button: 3
-    steering_scale: 1.0
+    steering_scale: -1.0
     steering_offset: 0.0
     steering_offset_step: 0.01
     throttle_scale: 1.0
