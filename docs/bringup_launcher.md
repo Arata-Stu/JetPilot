@@ -354,7 +354,8 @@ rosbag managerが有効でも起動直後に自動記録が始まるわけでは
 RealSenseのRGB・InfraはそれぞれOFF / 30 / 60 / 90 Hzを選べます。
 InfraのOFFはinfra1・infra2の両方に適用します。EVS単独の場合、この選択は表示しません。
 SilkyEvCamを使用する場合は、EVSイベント画像を25 / 50 / 100 Hzから選べます。
-記録用TUIではbag managerのON/OFFとRTP設定の質問を省略します。
+記録用TUIでもWebRTC用RTP送信のON/OFF、送信先、ポート、画像topicを選択できます。
+bag managerのON/OFF選択は省略し、標準で有効にします。
 
 ```bash
 # Joy操作で収集

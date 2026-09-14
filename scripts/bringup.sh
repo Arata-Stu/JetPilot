@@ -1848,13 +1848,13 @@ configure_rtp_interactively() {
 
   current="$(get_arg sensor_kit_enable_rtp_stream 2>/dev/null || true)"
   if is_true "$current"; then
-    options+=('on   RTP送信 ON')
-    options+=('off  RTP送信 OFF')
+    options+=('on   WebRTC用RTP送信 ON')
+    options+=('off  WebRTC用RTP送信 OFF')
   else
-    options+=('off  RTP送信 OFF')
-    options+=('on   RTP送信 ON')
+    options+=('off  WebRTC用RTP送信 OFF')
+    options+=('on   WebRTC用RTP送信 ON')
   fi
-  selected="$(choose_one 'RTP stream' "${options[@]}")" || exit $?
+  selected="$(choose_one 'WebRTC用RTP stream' "${options[@]}")" || exit $?
   case "${selected%%[[:space:]]*}" in
     on)
       set_arg sensor_kit_enable_rtp_stream true
@@ -1992,7 +1992,7 @@ configure_sensor_kit_interactively() {
 
   selection="$(choose_one 'Sensor kit launch' "${options[@]}")" || exit $?
   apply_sensor_kit "${selection%%[[:space:]]*}"
-  if [[ "$PRESET" != record && "$PRESET" != e2e-collect && "$PRESET" != e2e && "$PRESET" != e2e-steering ]]; then
+  if [[ "$PRESET" != e2e-collect && "$PRESET" != e2e && "$PRESET" != e2e-steering ]]; then
     configure_rtp_interactively
   fi
 }

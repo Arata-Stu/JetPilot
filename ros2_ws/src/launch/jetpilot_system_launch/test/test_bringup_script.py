@@ -687,14 +687,24 @@ def test_interactive_sensor_configuration_includes_rtp_prompts() -> None:
     source = LAUNCHER.read_text(encoding="utf-8")
 
     assert "configure_rtp_interactively" in source
-    assert "choose_one 'RTP stream'" in source
-    assert "on   RTP送信 ON" in source
-    assert "off  RTP送信 OFF" in source
+    assert "choose_one 'WebRTC用RTP stream'" in source
+    assert "on   WebRTC用RTP送信 ON" in source
+    assert "off  WebRTC用RTP送信 OFF" in source
     assert "RTP送信先IP / host" in source
     assert "RTP送信先UDP port" in source
     assert "UDP portは1〜65535の整数で入力してください。" in source
     assert "choose_one 'RTP image topic'" in source
     assert "トピックを手入力..." in source
+
+
+def test_record_preset_offers_interactive_rtp_configuration() -> None:
+    source = LAUNCHER.read_text(encoding="utf-8")
+    function = source.split("configure_sensor_kit_interactively() {", 1)[1].split(
+        "\nconfigure_silky_evcam_bias_interactively()", 1
+    )[0]
+
+    assert '"$PRESET" != record' not in function
+    assert "configure_rtp_interactively" in function
 
 
 def test_interactive_vehicle_configuration_has_one_profile_selector() -> None:
