@@ -321,6 +321,11 @@ class E2EPipelineTests(unittest.TestCase):
             self.config, {**body, "rollout_steps": 32}
         )
         self.assertIn("--event-sample-hz 250.0", preprocess.command[-1])
+        self.assertIn("--progress-file", preprocess.command[-1])
+        self.assertTrue(any(
+            artifact["name"] == "progress" and artifact["path"].endswith("progress.json")
+            for artifact in preprocess.artifacts
+        ))
         self.assertIn("--rollout-steps 32", preprocess.command[-1])
 
     def test_async_rgb_evs_deploy_requires_both_split_exports(self) -> None:

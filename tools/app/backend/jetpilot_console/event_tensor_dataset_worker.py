@@ -5,14 +5,98 @@ import bisect
 import csv
 import json
 from pathlib import Path
+import time
 from typing import Any
 
 import numpy as np
 
 from e2e_learning.data.event_tensor import EventTensorAccumulator, EventTensorConfig
 from .analysis_worker import (
-    _control_payload, _decode_image, _deserializers, _open_reader, _stamp_ns, _write_jpeg,
+    _atomic_json, _control_payload, _decode_image, _deserializers, _metadata_duration_ns,
+    _open_reader, _stamp_ns, _write_jpeg,
 )
+
+
+class DatasetProgress:
+    def __init__(self, path: Path, bag: Path, mode: str) -> None:
+        self.path = path
+        self.bag = bag
+        self.mode = mode
+        self.duration_ns = _metadata_duration_ns(bag)
+        self.started = time.monotonic()
+        self.first_bag_ns: int | None = None
+        self.last_write = 0.0
+        self.update(stage="starting", force=True)
+
+    def update(
+        self,
+        *,
+        stage: str = "reading",
+        bag_ns: int | None = None,
+        tensor_count: int = 0,
+        rgb_count: int = 0,
+        decoded_events: int = 0,
+        force: bool = False,
+        complete: bool = False,
+    ) -> None:
+        now = time.monotonic()
+        if not force and now - self.last_write < 0.5:
+            return
+        if bag_ns is not None and self.first_bag_ns is None:
+            self.first_bag_ns = int(bag_ns)
+        processed_ns = (
+            max(0, int(bag_ns) - self.first_bag_ns)
+            if bag_ns is not None and self.first_bag_ns is not None else 0
+        )
+        bag_progress = (
+            min(1.0, processed_ns / self.duration_ns)
+            if self.duration_ns else 0.0
+        )
+        elapsed_s = max(0.0, now - self.started)
+        speed = processed_ns / 1.0e9 / elapsed_s if elapsed_s > 0.0 else 0.0
+        eta_s = (
+            max(0.0, (self.duration_ns - processed_ns) / 1.0e9 / speed)
+            if self.duration_ns and speed > 0.0 else None
+        )
+        if complete:
+            progress = bag_progress = 1.0
+            eta_s = 0.0
+            status = "completed"
+            message = "Dataset creation completed."
+        elif stage == "aligning":
+            progress = 0.97
+            status = "running"
+            message = "Aligning tensors with RGB and teacher control."
+        else:
+            progress = min(0.96, bag_progress * 0.96)
+            status = "running"
+            message = "Decoding events and writing tensors."
+        _atomic_json(self.path, {
+            "schema_version": 1,
+            "status": status,
+            "stage": stage,
+            "progress": progress,
+            "bag_progress": bag_progress,
+            "message": message,
+            "bag_path": str(self.bag),
+            "dataset_mode": self.mode,
+            "elapsed_s": elapsed_s,
+            "eta_s": eta_s,
+            "processed_bag_s": processed_ns / 1.0e9,
+            "bag_duration_s": self.duration_ns / 1.0e9 if self.duration_ns else None,
+            "processing_speed": speed,
+            "event_tensor_count": tensor_count,
+            "rgb_frame_count": rgb_count,
+            "decoded_events": decoded_events,
+        })
+        self.last_write = now
+        if force:
+            eta_label = f"{eta_s:.1f}s" if eta_s is not None else "calculating"
+            print(
+                f"[dataset-progress] {progress * 100:.1f}% "
+                f"tensors={tensor_count} RGB={rgb_count} ETA={eta_label}",
+                flush=True,
+            )
 
 
 def _timestamp(message: Any, bag_ns: int, source: str) -> int:
@@ -56,6 +140,8 @@ def _build_async_dataset(args: argparse.Namespace) -> dict[str, object]:
     image_dir, tensor_dir = output / "images", output / "tensors"
     image_dir.mkdir(parents=True, exist_ok=True)
     tensor_dir.mkdir(parents=True, exist_ok=True)
+    progress_path = Path(args.progress_file) if args.progress_file else output / "progress.json"
+    progress = DatasetProgress(progress_path, bag, args.dataset_mode)
     config = EventTensorConfig(
         bins=args.bins, window_ms=args.window_ms, stride_ms=args.stride_ms,
         width=args.width, height=args.height, polarity_layout=args.polarity_layout,
@@ -88,8 +174,17 @@ def _build_async_dataset(args: argparse.Namespace) -> dict[str, object]:
     # time boundary. Keep bag-time throttling only for an explicitly slower
     # requested output rate.
     throttle_event_packets = event_interval_ns > accumulator.stride_ns
+    message_count = 0
+    latest_bag_ns: int | None = None
     while reader.has_next():
         topic, serialized, bag_ns = reader.read_next()
+        latest_bag_ns = int(bag_ns)
+        message_count += 1
+        if message_count == 1 or message_count % 128 == 0:
+            progress.update(
+                bag_ns=latest_bag_ns, tensor_count=len(events), rgb_count=len(rgb_frames),
+                decoded_events=decoded_events, force=message_count == 1,
+            )
         if topic not in classes:
             continue
         message = deserialize(serialized, classes[topic])
@@ -144,6 +239,10 @@ def _build_async_dataset(args: argparse.Namespace) -> dict[str, object]:
                         next_event_bag_ns += event_interval_ns
             last_event_end_ns = end_ns
 
+    progress.update(
+        stage="aligning", bag_ns=latest_bag_ns, tensor_count=len(events),
+        rgb_count=len(rgb_frames), decoded_events=decoded_events, force=True,
+    )
     controls.sort(key=lambda item: item[0])
     rgb_frames.sort(key=lambda item: int(item["stamp"]))
     events.sort(key=lambda item: int(item["stamp"]))
@@ -228,6 +327,10 @@ def _build_async_dataset(args: argparse.Namespace) -> dict[str, object]:
         "timestamp_resets": accumulator.timestamp_resets,
     }
     (output / "metadata.yaml").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+    progress.update(
+        stage="complete", bag_ns=latest_bag_ns, tensor_count=len(events),
+        rgb_count=len(rgb_frames), decoded_events=decoded_events, force=True, complete=True,
+    )
     print(json.dumps(metadata, indent=2))
     return metadata
 
@@ -247,6 +350,8 @@ def build_dataset(args: argparse.Namespace) -> dict[str, object]:
     output.mkdir(parents=True, exist_ok=True)
     tensor_dir = output / "tensors"
     tensor_dir.mkdir(parents=True, exist_ok=True)
+    progress_path = Path(args.progress_file) if args.progress_file else output / "progress.json"
+    progress = DatasetProgress(progress_path, bag, args.dataset_mode)
     config = EventTensorConfig(
         bins=args.bins,
         window_ms=args.window_ms,
@@ -273,8 +378,17 @@ def build_dataset(args: argparse.Namespace) -> dict[str, object]:
     reference_messages = 0
     last_sample_bag_ns: int | None = None
     sample_interval_ns = max(1, int(round(1.0e9 / args.sample_hz)))
+    message_count = 0
+    latest_bag_ns: int | None = None
     while reader.has_next():
         topic, serialized, bag_ns = reader.read_next()
+        latest_bag_ns = int(bag_ns)
+        message_count += 1
+        if message_count == 1 or message_count % 128 == 0:
+            progress.update(
+                bag_ns=latest_bag_ns, tensor_count=len(candidates),
+                decoded_events=decoded_events, force=message_count == 1,
+            )
         if topic not in classes:
             continue
         message = deserialize(serialized, classes[topic])
@@ -305,6 +419,10 @@ def build_dataset(args: argparse.Namespace) -> dict[str, object]:
         )
         last_sample_bag_ns = int(bag_ns)
 
+    progress.update(
+        stage="aligning", bag_ns=latest_bag_ns, tensor_count=len(candidates),
+        decoded_events=decoded_events, force=True,
+    )
     controls.sort(key=lambda item: item[0])
     control_times = [item[0] for item in controls]
     max_control_dt_ns = int(round(args.max_control_dt_sec * 1.0e9))
@@ -387,6 +505,10 @@ def build_dataset(args: argparse.Namespace) -> dict[str, object]:
     (output / "metadata.yaml").write_text(
         json.dumps(metadata, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
     )
+    progress.update(
+        stage="complete", bag_ns=latest_bag_ns, tensor_count=len(candidates),
+        decoded_events=decoded_events, force=True, complete=True,
+    )
     print(json.dumps(metadata, indent=2, ensure_ascii=False))
     return metadata
 
@@ -411,6 +533,7 @@ def main() -> None:
     parser.add_argument("--dataset-mode", choices=("event_tensor", "rgb_event_async"), default="event_tensor")
     parser.add_argument("--event-sample-hz", type=float, default=100.0)
     parser.add_argument("--rollout-steps", type=int, default=8)
+    parser.add_argument("--progress-file", default="")
     build_dataset(parser.parse_args())
 
 

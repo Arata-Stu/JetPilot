@@ -45,8 +45,43 @@ class Task:
     # older Console versions keeps loading unchanged.
     resource_keys: list[str] = field(default_factory=list)
 
-    def to_json(self) -> dict[str, Any]:
+    def to_json(self, *, include_progress: bool = True) -> dict[str, Any]:
         payload = asdict(self)
+        progress_records: list[dict[str, Any]] = []
+        for artifact in self.artifacts if include_progress else ():
+            if artifact.get("name") != "progress":
+                continue
+            try:
+                path = Path(str(artifact.get("path") or ""))
+                if not path.is_file() or path.stat().st_size > 1024 * 1024:
+                    continue
+                value = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(value, dict):
+                    progress_records.append(value)
+            except (OSError, ValueError, TypeError):
+                continue
+        if progress_records:
+            fractions: list[float] = []
+            for value in progress_records:
+                try:
+                    fraction = float(value.get("progress") or 0.0)
+                except (TypeError, ValueError):
+                    fraction = 0.0
+                fractions.append(max(0.0, min(1.0, fraction)))
+            progress_artifact_count = sum(
+                1 for artifact in self.artifacts if artifact.get("name") == "progress"
+            )
+            active = next(
+                (value for value in reversed(progress_records)
+                 if str(value.get("status")) != "completed"),
+                progress_records[-1],
+            )
+            payload["progress"] = {
+                **active,
+                "progress": sum(fractions) / max(progress_artifact_count, 1),
+                "current_item": len(progress_records),
+                "item_count": progress_artifact_count,
+            }
         # Keep the persisted/API shape of legacy single-resource tasks stable.
         # The extra field is only needed when a task actually owns more than
         # one resource.
@@ -104,7 +139,7 @@ class TaskManager:
 
     def _save(self) -> None:
         tmp = self.state_file.with_suffix(".tmp")
-        data = [task.to_json() for task in self.tasks.values()]
+        data = [task.to_json(include_progress=False) for task in self.tasks.values()]
         tmp.write_text(json.dumps(data, indent=2, ensure_ascii=True), encoding="utf-8")
         tmp.replace(self.state_file)
 

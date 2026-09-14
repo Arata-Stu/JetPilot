@@ -3161,6 +3161,37 @@ tr:last-child td {
   white-space: nowrap;
 }
 
+.task-runtime-progress {
+  display: grid;
+  gap: 5px;
+  min-width: 240px;
+  margin-top: 8px;
+}
+
+.task-runtime-progress > div:first-child {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.task-runtime-progress > div:first-child span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-runtime-progress > div:first-child strong {
+  flex: none;
+  color: var(--soft);
+}
+
+.task-runtime-progress small {
+  color: var(--muted);
+  font: 10px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
 .analysis-missing,
 .analysis-data-issues {
   display: grid;

@@ -607,6 +607,7 @@ def build_preprocess_task(config: Any, body: dict[str, Any]) -> PipelineTaskSpec
             "--dataset-mode", modality,
             "--event-sample-hz", str(event_sample_hz),
             "--rollout-steps", str(rollout_steps),
+            "--progress-file", str(output / "progress.json"),
         ]
         python_path = os.pathsep.join((str(backend_root), str(source_root)))
         script = "\n".join(
@@ -634,6 +635,7 @@ def build_preprocess_task(config: Any, body: dict[str, Any]) -> PipelineTaskSpec
             {"name": "dataset", "path": str(output)},
             {"name": "samples", "path": str(output / "samples.csv")},
             {"name": "metadata", "path": str(output / "metadata.yaml")},
+            {"name": "progress", "path": str(output / "progress.json")},
         ],
         resource_keys=[f"analysis-bag:{bag}", f"e2e-dataset:{output}"],
     )

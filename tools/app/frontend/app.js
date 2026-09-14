@@ -3743,6 +3743,9 @@ function renderE2EPipeline() {
   const selectedExperiment = pipeline.experiments.find((item) => item.id === pipeline.experiment);
   const hasTwoStages = selectedExperiment?.stages === 2;
   const pipelineTasks = state.tasks.filter(isE2EPipelineTask).slice(0, 8);
+  const activeDatasetTask = pipelineTasks.find(
+    (task) => task.kind === "e2e-preprocess" && isActiveTask(task),
+  );
   const imageTopic = pipeline.imageTopic || state.analysis.imageTopic;
   const experiments = dataset
     ? pipeline.experiments.filter(
@@ -3775,6 +3778,7 @@ function renderE2EPipeline() {
             ${pipeline.datasetTask === "trajectory" ? `<div class="e2e-compact-fields"><label>Points<input type="number" min="2" value="${esc(pipeline.trajectoryPoints)}" onchange="updateE2EPipelineOption('trajectoryPoints', this.value)" /></label><label>Horizon (s)<input type="number" min="0.1" step="0.1" value="${esc(pipeline.trajectoryHorizonSec)}" onchange="updateE2EPipelineOption('trajectoryHorizonSec', this.value)" /></label><label>Scale (m)<input type="number" min="0.1" step="0.1" value="${esc(pipeline.trajectoryScaleM)}" onchange="updateE2EPipelineOption('trajectoryScaleM', this.value)" /></label></div>` : ""}
             <details><summary>Alignment & IMU</summary><div class="field"><label>Alignment clock</label><select onchange="updateE2EPipelineOption('timestampSource', this.value)">${[["bag", "Bag recording time (same as Offline Analysis)"], ["header", "Header stamp (synchronized sensors only)"]].map(([value, label]) => `<option value="${value}" ${pipeline.timestampSource === value ? "selected" : ""}>${esc(label)}</option>`).join("")}</select></div><div class="e2e-compact-fields"><label>Odom Δt<input type="number" min="0.001" step="0.01" value="${esc(pipeline.maxOdometryDtSec)}" onchange="updateE2EPipelineOption('maxOdometryDtSec', this.value)" /></label><label>IMU window (s)<input type="number" min="0.01" step="0.1" value="${esc(pipeline.imuWindowSec)}" onchange="updateE2EPipelineOption('imuWindowSec', this.value)" /></label><label>IMU samples<input type="number" min="1" value="${esc(pipeline.imuSamples)}" onchange="updateE2EPipelineOption('imuSamples', this.value)" /></label></div></details>
             <button class="primary ${actionBusy("e2e-pipeline:dataset") ? "is-busy" : ""}" onclick="createE2EDataset()" ${e2eSelectedRosbagPaths().length && imageTopic && (pipeline.datasetTask === "trajectory" ? pipeline.odometryTopic : pipeline.controlTopic) ? "" : "disabled"} ${actionButtonAttrs("e2e-pipeline:dataset", "Dataset creation is starting...")}>${esc(actionButtonLabel("e2e-pipeline:dataset", "Create dataset", "Starting..."))}</button>
+            ${activeDatasetTask ? renderTaskProgress(activeDatasetTask) : ""}
           </article>
           <article class="e2e-pipeline-stage">
             <header><span>02</span><div><strong>Train model</strong><small>Adjust repeatable training parameters</small></div></header>
@@ -9774,7 +9778,7 @@ function renderTaskTable(tasks) {
             (task) => `
               <tr>
                 <td><span class="status ${esc(task.status)}">${esc(task.status)}</span></td>
-                <td>${esc(task.title)}<div class="path" title="${esc(commandText(task))}">${esc(commandText(task))}</div></td>
+                <td>${esc(task.title)}${renderTaskProgress(task)}<div class="path" title="${esc(commandText(task))}">${esc(commandText(task))}</div></td>
                 <td class="mono">${esc(task.pid || "-")} / ${esc(task.pgid || "-")}</td>
                 <td>${esc(task.started_at || "-")}</td>
                 <td class="actions">
@@ -9789,6 +9793,53 @@ function renderTaskTable(tasks) {
       </tbody>
     </table>
   `;
+}
+
+function formatTaskDuration(seconds) {
+  if (seconds === null || seconds === undefined || seconds === "") return "計算中";
+  const value = Number(seconds);
+  if (!Number.isFinite(value) || value < 0) return "計算中";
+  if (value < 1) return "1秒未満";
+  if (value < 60) return `${Math.round(value)}秒`;
+  const minutes = Math.floor(value / 60);
+  const remainder = Math.round(value % 60);
+  if (minutes < 60) return `${minutes}分${remainder ? `${remainder}秒` : ""}`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}時間${minutes % 60 ? `${minutes % 60}分` : ""}`;
+}
+
+function renderTaskProgress(task) {
+  const progress = task?.progress;
+  if (!progress || !Number.isFinite(Number(progress.progress))) return "";
+  const fraction = Math.max(0, Math.min(1, Number(progress.progress)));
+  const percent = Math.round(fraction * 100);
+  const active = ["queued", "running", "stopping"].includes(task.status);
+  const itemCount = Number(progress.item_count || 1);
+  const currentItem = Math.min(itemCount, Number(progress.current_item || 1));
+  const bagPosition = Number(progress.processed_bag_s);
+  const bagDuration = Number(progress.bag_duration_s);
+  const details = [];
+  if (itemCount > 1) details.push(`bag ${currentItem}/${itemCount}`);
+  if (Number.isFinite(bagPosition) && Number.isFinite(bagDuration) && bagDuration > 0) {
+    details.push(`${formatTaskDuration(bagPosition)} / ${formatTaskDuration(bagDuration)}`);
+  }
+  if (Number(progress.event_tensor_count) > 0) {
+    details.push(`${Number(progress.event_tensor_count).toLocaleString()} tensors`);
+  }
+  if (Number(progress.processing_speed) > 0) {
+    details.push(`${Number(progress.processing_speed).toFixed(2)}x bag速度`);
+  }
+  let eta = "完了";
+  if (task.status === "failed") eta = "失敗";
+  else if (["stopped", "lost"].includes(task.status)) eta = "中断";
+  else if (active) {
+    eta = `${itemCount > 1 ? "このbag " : ""}残り約 ${formatTaskDuration(progress.eta_s)}`;
+  }
+  return `<div class="task-runtime-progress">
+    <div><span>${esc(progress.message || "Datasetを処理しています")}</span><strong>${percent}% · ${esc(eta)}</strong></div>
+    <div class="analysis-progress"><span style="width:${fraction * 100}%"></span></div>
+    ${details.length ? `<small>${esc(details.join(" · "))}</small>` : ""}
+  </div>`;
 }
 
 function renderTerminal() {

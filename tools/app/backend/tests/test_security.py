@@ -321,6 +321,36 @@ class TaskResourceLockTests(unittest.TestCase):
             self.assertEqual(reloaded.claimed_resource_keys(), (resource_key,))
             self.assertNotIn("resource_keys", reloaded.to_json())
 
+    def test_progress_artifact_is_exposed_but_not_persisted_in_task_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            state_dir = root / "state"
+            progress_path = root / "dataset" / "progress.json"
+            progress_path.parent.mkdir()
+            progress_path.write_text(
+                json.dumps({
+                    "status": "running",
+                    "progress": 0.375,
+                    "eta_s": 42.0,
+                    "event_tensor_count": 1234,
+                }),
+                encoding="utf-8",
+            )
+            manager = TaskManager(state_dir, root)
+            with patch.object(manager, "_run_task", return_value=None):
+                task = manager.start(
+                    kind="e2e-preprocess",
+                    title="Create dataset",
+                    command=["true"],
+                    artifacts=[{"name": "progress", "path": str(progress_path)}],
+                )
+
+            exposed = task.to_json()
+            self.assertEqual(exposed["progress"]["progress"], 0.375)
+            self.assertEqual(exposed["progress"]["eta_s"], 42.0)
+            persisted = json.loads((state_dir / "tasks.json").read_text(encoding="utf-8"))
+            self.assertNotIn("progress", persisted[0])
+
     def test_resource_check_and_registration_are_atomic(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             root = Path(temporary_directory)

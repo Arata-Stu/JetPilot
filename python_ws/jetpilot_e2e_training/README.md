@@ -277,6 +277,8 @@ Offline Analysis用`model.onnx`に加えて、ROS 2/TensorRT用の`rgb_encoder.o
 `event_updater.onnx`を同時に出力します。後者はstateを明示的な入出力として扱います。
 
 Dataset作成では複数rosbagを選択でき、bagごとに独立したdatasetを一括生成します。
+Raw EVS datasetの作成中は、rosbag内の処理済み時刻と実測処理速度から進捗率・生成済み
+tensor数・推定残り時間を計算し、Create dataset欄とPipeline tasksへ表示します。
 学習の`Dataset split`は、各train datasetの末尾をvalidationにする簡易モードと、
 train/validationのdataset群を完全に分離する厳密モードを選択できます。複数train bagの
 event正規化統計はtrain側だけから統合し、validation側の統計は混ぜません。
