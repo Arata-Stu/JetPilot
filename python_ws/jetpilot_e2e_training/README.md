@@ -286,7 +286,9 @@ event正規化統計はtrain側だけから統合し、validation側の統計は
 `Evaluation dataset`で選択します。このdatasetが学習へ追加されることはありません。
 タイムラインにはRGB frameより高頻度の
 EVS更新ごとのModel output、教師control、誤差が表示されます。
-raw eventのdecodeだけは`event_camera_py`互換性のためROS system Pythonで実行します。
+raw eventのdecodeだけは`event_camera_py`互換性のため、Docker image内の
+NumPy 1.26専用`/opt/event_camera_env`で実行します。古いimageではROS system Pythonへ
+フォールバックします。
 別のNumPy 1.x環境を使う場合は`JETPILOT_EVENT_ANALYSIS_PYTHON`を指定してください。
 
 最初の検証には`B=10 / window=40 ms / stride=4 ms / polarity_major / None`を推奨します。

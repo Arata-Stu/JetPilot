@@ -585,7 +585,11 @@ def build_preprocess_task(config: Any, body: dict[str, Any]) -> PipelineTaskSpec
         repo_root = Path(getattr(config, "repo_root", training_root(config).parents[1]))
         backend_root = repo_root / "tools" / "app" / "backend"
         source_root = training_root(config) / "src"
-        event_python = os.environ.get("JETPILOT_EVENT_ANALYSIS_PYTHON", "/usr/bin/python3")
+        isolated_event_python = Path("/opt/event_camera_env/bin/python")
+        event_python = os.environ.get(
+            "JETPILOT_EVENT_ANALYSIS_PYTHON",
+            str(isolated_event_python) if isolated_event_python.is_file() else "/usr/bin/python3",
+        )
         setup = Path(getattr(config, "ros2_ws", repo_root / "ros2_ws")) / "install" / "setup.bash"
         worker_args = [
             event_python, "-X", "faulthandler", "-m",

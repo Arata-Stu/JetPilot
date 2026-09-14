@@ -572,13 +572,20 @@ def build_analysis_script(
     if event_tensor_preview:
         # event_camera_py is an apt/ROS pybind11 module and its released binary
         # is incompatible with NumPy 2.x. The general ML environment in
-        # /opt/env intentionally uses NumPy 2, so decode/extraction runs in the
-        # ROS system interpreter while later model evaluation stays in
-        # config.python_bin. The environment variable remains an escape hatch
-        # for images whose compatible ROS interpreter lives elsewhere.
+        # /opt/env intentionally uses NumPy 2, so decode/extraction uses the
+        # image's isolated NumPy 1.26 interpreter while later model evaluation
+        # stays in config.python_bin. Older images fall back to ROS system
+        # Python. The environment variable remains an escape hatch for images
+        # whose compatible interpreter lives elsewhere.
         lines.extend(
             [
-                'event_analysis_python="${JETPILOT_EVENT_ANALYSIS_PYTHON:-/usr/bin/python3}"',
+                'if [ -n "${JETPILOT_EVENT_ANALYSIS_PYTHON:-}" ]; then',
+                '  event_analysis_python="$JETPILOT_EVENT_ANALYSIS_PYTHON"',
+                'elif [ -x /opt/event_camera_env/bin/python ]; then',
+                '  event_analysis_python=/opt/event_camera_env/bin/python',
+                'else',
+                '  event_analysis_python=/usr/bin/python3',
+                'fi',
                 'test -x "$event_analysis_python" || { echo "Event analysis Python is missing: $event_analysis_python"; exit 1; }',
                 (
                     '"$event_analysis_python" -c '

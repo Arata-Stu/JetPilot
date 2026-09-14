@@ -283,8 +283,9 @@ tensor itself. Therefore `Max extraction FPS = 10` produces approximately
 their polarity aggregates are arranged in a compact grid. An initial snapshot
 before the RGB/event clocks overlap is skipped. Select
 `/analysis/event_tensor_20ch` in the synchronized image viewer after analysis.
-Decoding uses the upstream `event_camera_py` binding; install the ROS package
-for the active distribution when it is not already present. Like the runtime
+Decoding uses the upstream `event_camera_py` binding through the image's isolated
+NumPy 1.26 environment at `/opt/event_camera_env`. Install the ROS package for
+the active distribution when it is not already present. Like the runtime
 C++ encoder, decoded sensor timestamps remain in the event sensor clock during
 windowing and binning; packet arrival timestamps are never injected into the
 representation. Each RGB frame displays the latest causally available complete

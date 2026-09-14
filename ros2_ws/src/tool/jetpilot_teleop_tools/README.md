@@ -50,7 +50,7 @@ axis、deadman、scaleは[`config/teleop_cmd.param.yaml`](config/teleop_cmd.para
 
 ## Control algorithm
 
-`teleop_cmd_node` は deadman button が押されている間だけ joystick 値を指令へ変換します。deadman が無効または離されている場合は steering/throttle/brake/reverse をすべて0にします。
+`teleop_cmd_node` は deadman button が押されている間だけ joystick 値を指令へ変換し、既定では250 Hzで最新値を`/teleop/control_cmd`へ出力します。deadman が無効または離されている場合、および`input_timeout_s`を超えてjoy入力が途絶えた場合は steering/throttle/brake/reverse をすべて0にします。
 
 既定ではD-pad左右が`steering_offset`を`steering_offset_step`ずつ増減し、上下が`throttle_scale`を`throttle_scale_step`ずつ増減します。いずれも押下edgeで1回だけ変更されます。Joy Profile Editorの「Button Functions」で各方向の割り当てを、「Joy Adjustment」でoffsetとscaleの初期値・刻み・範囲を設定できます。
 

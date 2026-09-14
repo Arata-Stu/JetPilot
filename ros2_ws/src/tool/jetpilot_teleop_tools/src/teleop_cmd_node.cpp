@@ -1,6 +1,7 @@
 #include <algorithm>
-#include <cstddef>
+#include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <stdexcept>
 
 #include "jetpilot_teleop_tools/teleop_cmd_node.hpp"
@@ -44,6 +45,14 @@ TeleopCmdNode::TeleopCmdNode() : Node("teleop_cmd_node")
   reverse_trigger_min_ = declare_numeric_parameter("reverse_trigger_min", trigger_min_);
   reverse_trigger_max_ = declare_numeric_parameter("reverse_trigger_max", trigger_max_);
   reverse_trigger_inverted_ = declare_parameter<bool>("reverse_trigger_inverted", false);
+  publish_rate_hz_ = declare_numeric_parameter("publish_rate_hz", 250.0);
+  input_timeout_s_ = declare_numeric_parameter("input_timeout_s", 0.1);
+  if (!std::isfinite(publish_rate_hz_) || publish_rate_hz_ <= 0.0) {
+    throw std::invalid_argument("publish_rate_hz must be finite and greater than zero");
+  }
+  if (!std::isfinite(input_timeout_s_) || input_timeout_s_ < 0.0) {
+    throw std::invalid_argument("input_timeout_s must be finite and non-negative");
+  }
 
   if (!std::isfinite(steering_scale_.load()) || std::abs(steering_scale_.load()) > 3.0 ||
       !std::isfinite(steering_offset_.load()) || steering_offset_ < -1.0 || steering_offset_ > 1.0) {
@@ -91,6 +100,10 @@ TeleopCmdNode::TeleopCmdNode() : Node("teleop_cmd_node")
     });
   const auto qos_cmd = rclcpp::QoS(rclcpp::KeepLast(1)).best_effort();
   cmd_pub_ = create_publisher<jetpilot_msgs::msg::ControlCommand>("/teleop/control_cmd", qos_cmd);
+  const auto publish_period = std::chrono::duration<double>(1.0 / publish_rate_hz_);
+  publish_timer_ = create_wall_timer(
+    std::chrono::duration_cast<std::chrono::nanoseconds>(publish_period),
+    [this]() { publish_command(); });
 
   // Keep introspection (`ros2 param get`) consistent when an out-of-range startup value was
   // clamped above.
@@ -273,6 +286,27 @@ void TeleopCmdNode::handle_joy(const sensor_msgs::msg::Joy & joy)
     cmd.throttle = 0.0F;
     cmd.brake = 0.0F;
     cmd.reverse = 0.0F;
+  }
+
+  std::lock_guard<std::mutex> lock(command_mutex_);
+  latest_command_ = cmd;
+  latest_joy_time_ = now();
+}
+
+void TeleopCmdNode::publish_command()
+{
+  jetpilot_msgs::msg::ControlCommand cmd;
+  cmd.header.stamp = now();
+  cmd.header.frame_id = "base_link";
+
+  {
+    std::lock_guard<std::mutex> lock(command_mutex_);
+    if (latest_command_ && latest_joy_time_ &&
+        (input_timeout_s_ == 0.0 || (now() - *latest_joy_time_).seconds() <= input_timeout_s_))
+    {
+      cmd = *latest_command_;
+      cmd.header.stamp = now();
+    }
   }
 
   cmd_pub_->publish(cmd);

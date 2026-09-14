@@ -834,6 +834,8 @@ def teleop_cmd_yaml(profile: dict[str, Any]) -> dict[str, Any]:
     return {
         "teleop_cmd_node": {
             "ros__parameters": {
+                "publish_rate_hz": 250.0,
+                "input_timeout_s": 0.1,
                 "steering_axis": sticks["left"]["x_axis"],
                 "throttle_axis": triggers["r2"]["axis"],
                 "reverse_axis": triggers["l2"]["axis"],

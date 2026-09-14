@@ -2,6 +2,8 @@
 #define JETPILOT_TELEOP_TOOLS__TELEOP_CMD_NODE_HPP_
 
 #include <atomic>
+#include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -28,6 +30,7 @@ private:
                             double trigger_min, double trigger_max, bool inverted) const;
   void adjust_steering_offset(double direction);
   void adjust_throttle_scale(double direction);
+  void publish_command();
   rcl_interfaces::msg::SetParametersResult handle_parameters(
     const std::vector<rclcpp::Parameter> & parameters);
   void handle_joy(const sensor_msgs::msg::Joy & joy);
@@ -57,12 +60,18 @@ private:
   double reverse_trigger_min_;
   double reverse_trigger_max_;
   bool reverse_trigger_inverted_;
+  double publish_rate_hz_;
+  double input_timeout_s_;
+  std::mutex command_mutex_;
+  std::optional<jetpilot_msgs::msg::ControlCommand> latest_command_;
+  std::optional<rclcpp::Time> latest_joy_time_;
   rclcpp::Subscription<sensor_msgs::msg::Joy>::SharedPtr joy_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr steer_offset_inc_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr steer_offset_dec_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr speed_offset_inc_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr speed_offset_dec_sub_;
   rclcpp::Publisher<jetpilot_msgs::msg::ControlCommand>::SharedPtr cmd_pub_;
+  rclcpp::TimerBase::SharedPtr publish_timer_;
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr parameter_callback_handle_;
 };
 

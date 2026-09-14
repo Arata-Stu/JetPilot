@@ -1,5 +1,7 @@
 teleop_cmd_node:
   ros__parameters:
+    publish_rate_hz: 250.0
+    input_timeout_s: 0.1
     steering_axis: 0
     throttle_axis: 5
     reverse_axis: 2

@@ -411,7 +411,7 @@ def generate_launch_description() -> lut.LaunchDescription:
         cli=True)
     args.add_arg('rc_channels_topic', '/rc/channels', cli=True)
     args.add_arg('propo_control_topic', '/propo/control_cmd', cli=True)
-    args.add_arg('joy_autorepeat_rate', '50.0', cli=True)
+    args.add_arg('joy_autorepeat_rate', '250.0', cli=True)
     args.add_arg('joy_deadzone', '0.05', cli=True)
     args.add_arg('joy_device_path', '', cli=True)
     args.add_arg('joy_prefer_evdev', False, cli=True)

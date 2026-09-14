@@ -2345,6 +2345,7 @@ def test_bias_tui_reprompts_for_missing_file_and_json(tmp_path: Path) -> None:
 def test_record_preset_supports_joy_fixed_throttle_and_camera_off() -> None:
     output = run_launcher("record", "--dry-run").stdout
     assert "enable_bag_manager:=true" in output
+    assert "joy_autorepeat_rate:=250.0" in output
     assert "teleop_fixed_throttle_mode:=false" in output
     assert "enable_e2e_inference:=false" in output
     output = run_launcher(

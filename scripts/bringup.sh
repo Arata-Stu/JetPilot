@@ -289,6 +289,7 @@ set_base_args() {
   set_arg enable_bag_manager false
   set_arg enable_joy false
   set_arg enable_teleop false
+  set_arg joy_autorepeat_rate 250.0
   set_arg speed_offset_inc_uses_localization_button false
   set_arg enable_rc_serial false
   set_arg enable_jetson_stats "$enable_jetson_stats"

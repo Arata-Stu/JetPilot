@@ -189,7 +189,7 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('propo_control_topic', '/propo/control_cmd', cli=True)
     args.add_arg('localization_trigger_topic', '/localization/trigger', cli=True)
     args.add_arg('speed_offset_inc_uses_localization_button', False, cli=True)
-    args.add_arg('joy_autorepeat_rate', '50.0', cli=True)
+    args.add_arg('joy_autorepeat_rate', '250.0', cli=True)
     args.add_arg('joy_deadzone', '0.05', cli=True)
     args.add_arg('joy_device_path', '', cli=True)
     args.add_arg('joy_prefer_evdev', False, cli=True)
