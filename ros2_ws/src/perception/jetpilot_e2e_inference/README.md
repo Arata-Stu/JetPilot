@@ -212,6 +212,11 @@ threadが実際にCPU上で実行された時間です。両者の差は
 `decode_scheduling_delay_ms_*`として表示されます。CPU migration数と、診断周期で
 sampleしたdecode CPUのcurrent/min/max周波数も出力します。周波数は1 Hz程度の
 sampleであり、数msの瞬間的なDVFS変化を完全には捕捉しません。
+`decode_buffer_growth_*`はpacket decode中にevent vectorのcapacityが拡張された頻度と
+大きさを示します。`decode_packet_events_*`、`decode_events_at_decode_ms_max`、
+`decode_ms_for_largest_event_packet`、`decode_event_count_time_correlation`により、
+packet内event数とdecode時間の関係を診断周期ごとに確認できます。相関係数は
+-1から1で、1に近いほどevent数の増加とdecode時間の増加が強く連動しています。
 既定では20 msを超えてqueueに滞留した古いpacket/event batchを破棄し、遅れたstateを
 後から推論へ流しません。この上限は`event_async_max_queue_age_ms`で変更できます。
 診断の文字列生成とpublishは既定1 Hzのtimer側でのみ行い、packet callbackの

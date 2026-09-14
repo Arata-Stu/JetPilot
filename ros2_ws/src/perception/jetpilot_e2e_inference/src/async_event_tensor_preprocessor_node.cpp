@@ -27,7 +27,7 @@ namespace jetpilot_e2e_inference
 namespace
 {
 
-void update_max(std::atomic<std::uint64_t> & maximum, const std::uint64_t value)
+bool update_max(std::atomic<std::uint64_t> & maximum, const std::uint64_t value)
 {
   auto current = maximum.load(std::memory_order_relaxed);
   while (
@@ -35,6 +35,7 @@ void update_max(std::atomic<std::uint64_t> & maximum, const std::uint64_t value)
     !maximum.compare_exchange_weak(current, value, std::memory_order_relaxed))
   {
   }
+  return current < value;
 }
 
 diagnostic_msgs::msg::KeyValue value(std::string key, std::string data)
@@ -367,6 +368,10 @@ void AsyncEventTensorPreprocessorNode::decode_packet(PacketWork work)
     return;
   }
   decode_scratch_.clear();
+  const auto decode_capacity_before =
+    static_cast<std::uint64_t>(decode_scratch_.capacity());
+  decode_buffer_capacity_before_events_.store(
+    decode_capacity_before, std::memory_order_relaxed);
   decode_reset_pending_ = false;
   if (packet_width_ != packet->width || packet_height_ != packet->height) {
     if (packet_width_ != 0U || packet_height_ != 0U) {
@@ -392,10 +397,34 @@ void AsyncEventTensorPreprocessorNode::decode_packet(PacketWork work)
   const auto finished_at = std::chrono::steady_clock::now();
   const auto elapsed_ns = static_cast<std::uint64_t>(
     std::chrono::duration_cast<std::chrono::nanoseconds>(finished_at - started).count());
+  const auto packet_events = static_cast<std::uint64_t>(decode_scratch_.size());
+  const auto decode_capacity_after =
+    static_cast<std::uint64_t>(decode_scratch_.capacity());
   decoded_packets_.fetch_add(1, std::memory_order_relaxed);
-  decoded_events_.fetch_add(decode_scratch_.size(), std::memory_order_relaxed);
+  decoded_events_.fetch_add(packet_events, std::memory_order_relaxed);
   decode_time_ns_.fetch_add(elapsed_ns, std::memory_order_relaxed);
-  update_max(decode_time_max_ns_, elapsed_ns);
+  if (update_max(decode_time_max_ns_, elapsed_ns)) {
+    decode_events_at_time_max_.store(packet_events, std::memory_order_relaxed);
+  }
+  if (update_max(decode_packet_events_max_, packet_events)) {
+    decode_time_at_events_max_ns_.store(elapsed_ns, std::memory_order_relaxed);
+  }
+  decode_correlation_samples_.fetch_add(1, std::memory_order_relaxed);
+  decode_correlation_events_sum_.fetch_add(packet_events, std::memory_order_relaxed);
+  decode_correlation_time_ns_sum_.fetch_add(elapsed_ns, std::memory_order_relaxed);
+  decode_correlation_events_squared_sum_.fetch_add(
+    packet_events * packet_events, std::memory_order_relaxed);
+  decode_correlation_time_ns_squared_sum_.fetch_add(
+    elapsed_ns * elapsed_ns, std::memory_order_relaxed);
+  decode_correlation_cross_sum_.fetch_add(
+    packet_events * elapsed_ns, std::memory_order_relaxed);
+  update_max(decode_buffer_capacity_after_events_max_, decode_capacity_after);
+  if (decode_capacity_after > decode_capacity_before) {
+    const auto growth = decode_capacity_after - decode_capacity_before;
+    decode_buffer_growth_packets_.fetch_add(1, std::memory_order_relaxed);
+    decode_buffer_growth_events_.fetch_add(growth, std::memory_order_relaxed);
+    update_max(decode_buffer_growth_events_max_, growth);
+  }
 
   if (decode_scratch_.empty() && !decode_reset_pending_) {
     record_service();
@@ -753,6 +782,34 @@ void AsyncEventTensorPreprocessorNode::publish_diagnostics()
   const auto decode_errors = decode_errors_.exchange(0, std::memory_order_relaxed);
   const auto decode_ns = decode_time_ns_.exchange(0, std::memory_order_relaxed);
   const auto decode_max_ns = decode_time_max_ns_.exchange(0, std::memory_order_relaxed);
+  const auto decode_events_at_time_max =
+    decode_events_at_time_max_.exchange(0, std::memory_order_relaxed);
+  const auto decode_packet_events_max =
+    decode_packet_events_max_.exchange(0, std::memory_order_relaxed);
+  const auto decode_time_at_events_max_ns =
+    decode_time_at_events_max_ns_.exchange(0, std::memory_order_relaxed);
+  const auto decode_correlation_samples =
+    decode_correlation_samples_.exchange(0, std::memory_order_relaxed);
+  const auto decode_correlation_events_sum =
+    decode_correlation_events_sum_.exchange(0, std::memory_order_relaxed);
+  const auto decode_correlation_time_ns_sum =
+    decode_correlation_time_ns_sum_.exchange(0, std::memory_order_relaxed);
+  const auto decode_correlation_events_squared_sum =
+    decode_correlation_events_squared_sum_.exchange(0, std::memory_order_relaxed);
+  const auto decode_correlation_time_ns_squared_sum =
+    decode_correlation_time_ns_squared_sum_.exchange(0, std::memory_order_relaxed);
+  const auto decode_correlation_cross_sum =
+    decode_correlation_cross_sum_.exchange(0, std::memory_order_relaxed);
+  const auto decode_buffer_growth_packets =
+    decode_buffer_growth_packets_.exchange(0, std::memory_order_relaxed);
+  const auto decode_buffer_growth_events =
+    decode_buffer_growth_events_.exchange(0, std::memory_order_relaxed);
+  const auto decode_buffer_growth_events_max =
+    decode_buffer_growth_events_max_.exchange(0, std::memory_order_relaxed);
+  const auto decode_buffer_capacity_before_events =
+    decode_buffer_capacity_before_events_.load(std::memory_order_relaxed);
+  const auto decode_buffer_capacity_after_events_max =
+    decode_buffer_capacity_after_events_max_.exchange(0, std::memory_order_relaxed);
   const auto decode_service_calls = decode_service_calls_.exchange(0, std::memory_order_relaxed);
   const auto decode_service_ns = decode_service_time_ns_.exchange(0, std::memory_order_relaxed);
   const auto decode_service_max_ns =
@@ -812,6 +869,27 @@ void AsyncEventTensorPreprocessorNode::publish_diagnostics()
   const auto decode_cpu_cur_khz = read_cpu_frequency_khz(decode_cpu, "scaling_cur_freq");
   const auto decode_cpu_min_khz = read_cpu_frequency_khz(decode_cpu, "scaling_min_freq");
   const auto decode_cpu_max_khz = read_cpu_frequency_khz(decode_cpu, "scaling_max_freq");
+  double decode_event_count_time_correlation = 0.0;
+  if (decode_correlation_samples >= 2U) {
+    const auto count = static_cast<long double>(decode_correlation_samples);
+    const auto sum_events = static_cast<long double>(decode_correlation_events_sum);
+    const auto sum_time = static_cast<long double>(decode_correlation_time_ns_sum);
+    const auto event_variance =
+      count * static_cast<long double>(decode_correlation_events_squared_sum) -
+      sum_events * sum_events;
+    const auto time_variance =
+      count * static_cast<long double>(decode_correlation_time_ns_squared_sum) -
+      sum_time * sum_time;
+    if (event_variance > 0.0L && time_variance > 0.0L) {
+      const auto covariance =
+        count * static_cast<long double>(decode_correlation_cross_sum) -
+        sum_events * sum_time;
+      decode_event_count_time_correlation = static_cast<double>(
+        covariance / std::sqrt(event_variance * time_variance));
+      decode_event_count_time_correlation = std::clamp(
+        decode_event_count_time_correlation, -1.0, 1.0);
+    }
+  }
 
   const bool healthy =
     packet_drops == 0 && stale_packets == 0 && decoded_drops == 0 &&
@@ -848,6 +926,24 @@ void AsyncEventTensorPreprocessorNode::publish_diagnostics()
     number("decode_ms_avg", decoded_packets == 0 ? 0.0 : milliseconds(decode_ns) / decoded_packets),
     number("decode_ms_max", milliseconds(decode_max_ns)),
     number("decode_ns_per_event", events == 0 ? 0.0 : static_cast<double>(decode_ns) / events),
+    number(
+      "decode_packet_events_avg", decoded_packets == 0 ? 0.0 :
+      static_cast<double>(events) / decoded_packets),
+    number("decode_packet_events_max", decode_packet_events_max),
+    number("decode_events_at_decode_ms_max", decode_events_at_time_max),
+    number("decode_ms_for_largest_event_packet", milliseconds(decode_time_at_events_max_ns)),
+    number("decode_event_count_time_correlation", decode_event_count_time_correlation),
+    number("decode_correlation_samples", decode_correlation_samples),
+    number("decode_buffer_growth_packets", decode_buffer_growth_packets),
+    number(
+      "decode_buffer_growth_pct", decoded_packets == 0 ? 0.0 :
+      100.0 * static_cast<double>(decode_buffer_growth_packets) / decoded_packets),
+    number(
+      "decode_buffer_growth_events_avg", decode_buffer_growth_packets == 0 ? 0.0 :
+      static_cast<double>(decode_buffer_growth_events) / decode_buffer_growth_packets),
+    number("decode_buffer_growth_events_max", decode_buffer_growth_events_max),
+    number("decode_buffer_capacity_before_events", decode_buffer_capacity_before_events),
+    number("decode_buffer_capacity_after_events_max", decode_buffer_capacity_after_events_max),
     number(
       "decode_handoff_ms_avg", decoded_packets == 0 ? 0.0 :
       milliseconds(decode_handoff_ns) / decoded_packets),
