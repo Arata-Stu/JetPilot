@@ -1664,8 +1664,8 @@ choose_preset_interactively() {
 configure_e2e_model() {
   is_true "$(get_arg enable_e2e_inference)" || return 0
   local sensor=rgb base=camera target=control selected records line choice key value current override explicit
-  local event_bins event_channels='' event_polarity_mode
-  local input_explicit=false
+  local event_bins event_channels='' event_polarity_mode event_preprocessor_mode
+  local input_explicit=false event_preprocessor_explicit=false
   local model_root="${E2E_MODEL_BASE:-${ROS2_WS}/models/e2e}"
   local helper="${SCRIPT_DIR}/e2e_models.py"
   local options=() flags=() input_options=()
@@ -1678,6 +1678,9 @@ configure_e2e_model() {
       case "${override%%:=*}" in
         e2e_image_topic|e2e_event_image_mode|e2e_event_tensor_mode|e2e_async_rgb_evs_mode)
           input_explicit=true
+          ;;
+        e2e_event_preprocessor_mode)
+          event_preprocessor_explicit=true
           ;;
       esac
     done
@@ -1754,6 +1757,21 @@ configure_e2e_model() {
   elif is_true "$(get_arg e2e_event_image_mode 2>/dev/null || printf false)"; then
     sensor=event
     base=event
+  fi
+  if is_true "$(get_arg e2e_event_tensor_mode 2>/dev/null || printf false)" \
+    || is_true "$(get_arg e2e_async_rgb_evs_mode 2>/dev/null || printf false)"; then
+    event_preprocessor_mode="$(get_arg e2e_event_preprocessor_mode 2>/dev/null || printf legacy)"
+    if [[ "$INTERACTIVE" == true && "$event_preprocessor_explicit" == false ]]; then
+      choice="$(choose_one 'Raw EVS preprocess' \
+        'async   単一node非同期（decode/CUDA/snapshot分離、250 Hz推奨）' \
+        'legacy  従来のEvent Tensor Encoder')" || exit $?
+      event_preprocessor_mode="${choice%%[[:space:]]*}"
+      set_arg e2e_event_preprocessor_mode "$event_preprocessor_mode"
+    fi
+    case "$event_preprocessor_mode" in
+      async|legacy) ;;
+      *) die 'e2e_event_preprocessor_mode must be async or legacy' ;;
+    esac
   fi
   flags=(--sensor "$sensor")
   [[ -z "$event_channels" ]] || flags+=(--event-tensor-channels "$event_channels")
@@ -2497,6 +2515,11 @@ print_summary() {
         "$(get_arg e2e_event_representation_backend)"
     else
       printf '  E2E input    : %s\n' "$(get_arg e2e_image_topic 2>/dev/null || printf /realsense/color/image_raw)"
+    fi
+    if is_true "$(get_arg e2e_event_tensor_mode 2>/dev/null || true)" \
+      || is_true "$(get_arg e2e_async_rgb_evs_mode 2>/dev/null || true)"; then
+      printf '  EVS preprocess: %s\n' \
+        "$(get_arg e2e_event_preprocessor_mode 2>/dev/null || printf legacy)"
     fi
     printf '  E2E model    : %s\n' "$(get_arg e2e_model_root)"
     if is_true "$(get_arg e2e_fixed_throttle_mode 2>/dev/null || true)"; then

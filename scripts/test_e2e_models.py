@@ -191,6 +191,22 @@ class E2EModelSelectionTests(unittest.TestCase):
         source = (ROOT / "scripts/bringup.sh").read_text()
         self.assertIn("event_tensor  Raw EVS 20ch", source)
         self.assertIn("rgb_event_async  RGB + Raw EVS", source)
+        self.assertIn("Raw EVS preprocess", source)
+        self.assertIn("async   単一node非同期", source)
+
+    def test_event_tensor_bringup_accepts_async_preprocessor(self):
+        result = subprocess.run([
+            "bash", str(ROOT / "scripts/bringup.sh"), "e2e", "--dry-run",
+            "--e2e-model", str(self.root / "event_tensor_control"),
+            "--set", "e2e_event_tensor_mode:=true",
+            "--set", "e2e_event_preprocessor_mode:=async",
+            "--set", "e2e_event_async_gpu_chunk_events:=16384",
+            "--set", "e2e_event_cuda_events_per_transfer:=16384",
+        ], text=True, capture_output=True, check=True)
+        self.assertIn("e2e_event_preprocessor_mode:=async", result.stdout)
+        self.assertIn("e2e_event_async_gpu_chunk_events:=16384", result.stdout)
+        self.assertIn("e2e_event_cuda_events_per_transfer:=16384", result.stdout)
+        self.assertIn("EVS preprocess: async", result.stdout)
 
     def test_async_rgb_evs_bringup_selects_cuda_pipeline(self):
         path = self.root / "rgb_event_async_control"
