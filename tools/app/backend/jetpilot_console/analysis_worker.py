@@ -1272,15 +1272,42 @@ class _EventTensorPreview:
         self.latest_event_ns: int | None = None
         self.latest_packet_bag_timestamp_ns: int | None = None
         self.latest_packet_header_timestamp_ns: int | None = None
+        self.packet_count = 0
+        self.last_render_packet_count = 0
+        self.last_packet_bag_timestamp_ns: int | None = None
+        self.latest_packet_interarrival_ns: int | None = None
+        self.packet_interarrival_max_since_render_ns = 0
+        self.latest_packet_decoded_events = 0
         self.clock_source = "sensor_time_latest_available"
         self.timestamp_resets = 0
 
     def add_packet(self, message: Any, bag_timestamp_ns: int) -> None:
+        bag_timestamp_ns = int(bag_timestamp_ns)
+        self.packet_count += 1
+        if (
+            self.last_packet_bag_timestamp_ns is not None
+            and bag_timestamp_ns >= self.last_packet_bag_timestamp_ns
+        ):
+            interval_ns = bag_timestamp_ns - self.last_packet_bag_timestamp_ns
+            self.latest_packet_interarrival_ns = interval_ns
+            self.packet_interarrival_max_since_render_ns = max(
+                self.packet_interarrival_max_since_render_ns, interval_ns
+            )
+        self.last_packet_bag_timestamp_ns = bag_timestamp_ns
+        self.latest_packet_bag_timestamp_ns = bag_timestamp_ns
+        packet_header_ns = _stamp_ns(message)
+        self.latest_packet_header_timestamp_ns = (
+            int(packet_header_ns)
+            if packet_header_ns is not None and packet_header_ns > 0 else None
+        )
         self.decoder.decode_bytes(
             str(message.encoding), int(message.width), int(message.height),
             int(message.time_base), bytes(message.events),
         )
         decoded_events = self.decoder.get_cd_events()
+        self.latest_packet_decoded_events = (
+            0 if decoded_events is None else int(len(decoded_events))
+        )
         if decoded_events is None or len(decoded_events) == 0:
             return
         np = self.np
@@ -1314,12 +1341,6 @@ class _EventTensorPreview:
         if self.first_event_ns is None:
             self.first_event_ns = int(event_ns[0])
         self.latest_event_ns = int(event_ns[-1])
-        self.latest_packet_bag_timestamp_ns = int(bag_timestamp_ns)
-        packet_header_ns = _stamp_ns(message)
-        self.latest_packet_header_timestamp_ns = (
-            int(packet_header_ns)
-            if packet_header_ns is not None and packet_header_ns > 0 else None
-        )
         self.decoded_events += len(decoded_events)
         # The most recent complete stride boundary can lag the newest decoded
         # event by almost one stride, so retain window + stride history.
@@ -1441,9 +1462,47 @@ class _EventTensorPreview:
             self.generated += 1
         nonzero = int(np.count_nonzero(tensors))
         channel_event_counts = tensors.sum(axis=(1, 2)).astype(float).tolist()
+        temporal_bin_event_counts = [
+            channel_event_counts[index] + channel_event_counts[self.bins + index]
+            for index in range(self.bins)
+        ]
+        empty_temporal_bins = [
+            index for index, count in enumerate(temporal_bin_event_counts) if count <= 0.0
+        ]
+        latest_empty_bin_run = 0
+        for count in reversed(temporal_bin_event_counts):
+            if count > 0.0:
+                break
+            latest_empty_bin_run += 1
+        packets_since_previous_preview = self.packet_count - self.last_render_packet_count
+        self.last_render_packet_count = self.packet_count
+        packet_age_ms = (
+            (int(timeline_timestamp_ns) - self.latest_packet_bag_timestamp_ns) / 1e6
+            if timeline_timestamp_ns is not None
+            and self.latest_packet_bag_timestamp_ns is not None else None
+        )
+        packet_interarrival_max_ms = self.packet_interarrival_max_since_render_ns / 1e6
+        self.packet_interarrival_max_since_render_ns = 0
+        gap_threshold_ms = max(2.0 * self.stride_ns / 1e6, 10.0)
+        if packet_age_ms is not None and packet_age_ms > gap_threshold_ms:
+            dark_cause = "packet_gap"
+        elif packets_since_previous_preview == 0:
+            dark_cause = "no_packet_since_previous_preview"
+        elif event_count == 0:
+            dark_cause = "empty_event_window"
+        elif latest_empty_bin_run > 0:
+            dark_cause = "no_recent_events_in_latest_bins"
+        elif nonzero == 0:
+            dark_cause = "empty_tensor"
+        else:
+            dark_cause = "active"
         return image, {
             "events": event_count,
             "channel_event_counts": channel_event_counts,
+            "temporal_bin_event_counts": temporal_bin_event_counts,
+            "empty_temporal_bins": empty_temporal_bins,
+            "empty_temporal_bin_count": len(empty_temporal_bins),
+            "latest_empty_bin_run": latest_empty_bin_run,
             "positive_events": float(sum(channel_event_counts[: self.bins])),
             "negative_events": float(sum(channel_event_counts[self.bins :])),
             "nonzero_fraction": nonzero / max(int(tensors.size), 1),
@@ -1463,13 +1522,21 @@ class _EventTensorPreview:
             "latest_event_sensor_timestamp_us": (
                 self.latest_event_ns // 1000 if self.latest_event_ns is not None else None
             ),
-            "latest_event_age_ms": (
-                (
-                    int(timeline_timestamp_ns) - self.latest_packet_bag_timestamp_ns
-                ) / 1e6
-                if timeline_timestamp_ns is not None
-                and self.latest_packet_bag_timestamp_ns is not None else None
+            "latest_event_age_ms": packet_age_ms,
+            "latest_packet_age_ms": packet_age_ms,
+            "packets_since_previous_preview": packets_since_previous_preview,
+            "latest_packet_decoded_events": self.latest_packet_decoded_events,
+            "latest_packet_interarrival_ms": (
+                self.latest_packet_interarrival_ns / 1e6
+                if self.latest_packet_interarrival_ns is not None else None
             ),
+            "packet_interarrival_max_since_preview_ms": packet_interarrival_max_ms,
+            "packet_header_to_bag_ms": (
+                (self.latest_packet_bag_timestamp_ns - self.latest_packet_header_timestamp_ns) / 1e6
+                if self.latest_packet_bag_timestamp_ns is not None
+                and self.latest_packet_header_timestamp_ns is not None else None
+            ),
+            "dark_cause": dark_cause,
             "latest_packet_header_timestamp_ns": self.latest_packet_header_timestamp_ns,
             "timestamp_resets": self.timestamp_resets,
             "buffered_packets": len(self.chunks),

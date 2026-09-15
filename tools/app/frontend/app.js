@@ -6027,14 +6027,39 @@ function updateAnalysisEventTensorStatus(payload) {
   const negative = Number(stats.negative_events || 0);
   const packetAgeMs = Number(stats.latest_event_age_ms);
   const resets = Number(stats.timestamp_resets || 0);
+  const emptyBins = Number(stats.empty_temporal_bin_count || 0);
+  const latestEmptyRun = Number(stats.latest_empty_bin_run || 0);
+  const packetsSincePreview = Number(stats.packets_since_previous_preview || 0);
+  const packetGapMaxMs = Number(stats.packet_interarrival_max_since_preview_ms);
+  const packetHeaderLagMs = Number(stats.packet_header_to_bag_ms);
+  const causeLabels = {
+    active: "active",
+    packet_gap: "packet delivery gap",
+    no_packet_since_previous_preview: "no new packet",
+    empty_event_window: "no events in window",
+    no_recent_events_in_latest_bins: "latest bins have no events",
+    empty_tensor: "empty tensor",
+  };
+  const darkCause = String(stats.dark_cause || "");
   const parts = [
     `20ch window: ${events.toLocaleString()} events`,
     `P ${Math.round(positive).toLocaleString()} / N ${Math.round(negative).toLocaleString()}`,
     Number.isFinite(packetAgeMs) ? `packet age ${packetAgeMs.toFixed(1)} ms` : "packet age —",
+    `empty bins ${emptyBins}/${Number(stats.bins || 0)} (latest ${latestEmptyRun})`,
+    `packets +${packetsSincePreview}`,
+    Number.isFinite(packetGapMaxMs) ? `packet gap max ${packetGapMaxMs.toFixed(1)} ms` : "packet gap —",
+    Number.isFinite(packetHeaderLagMs) ? `header lag ${packetHeaderLagMs.toFixed(1)} ms` : "",
+    darkCause ? `cause: ${causeLabels[darkCause] || darkCause}` : "",
     `timestamp resets ${resets.toLocaleString()}`,
-  ];
+  ].filter(Boolean);
   target.textContent = parts.join(" · ");
-  target.classList.toggle("warning", events === 0 || resets > 0 || (Number.isFinite(packetAgeMs) && packetAgeMs > Number(stats.window_ms || 50)));
+  target.classList.toggle(
+    "warning",
+    events === 0 || resets > 0 || darkCause === "packet_gap"
+      || darkCause === "no_packet_since_previous_preview"
+      || latestEmptyRun >= Math.max(2, Math.ceil(Number(stats.bins || 0) / 2))
+      || (Number.isFinite(packetAgeMs) && packetAgeMs > Number(stats.window_ms || 50)),
+  );
 }
 
 function renderAnalysisMultiTiles(grid, channels, selectedChannel, primaryTopic, mode) {

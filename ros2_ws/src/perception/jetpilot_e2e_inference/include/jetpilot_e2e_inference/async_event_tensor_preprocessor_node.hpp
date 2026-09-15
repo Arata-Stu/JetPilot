@@ -162,6 +162,10 @@ private:
   std::atomic<std::int64_t> last_applied_event_ros_ns_{0};
 
   std::atomic<std::uint64_t> received_packets_{0};
+  std::atomic<std::uint64_t> packet_interarrival_samples_{0};
+  std::atomic<std::uint64_t> packet_interarrival_ns_{0};
+  std::atomic<std::uint64_t> packet_interarrival_max_ns_{0};
+  std::atomic<std::uint64_t> packet_interarrival_over_output_period_{0};
   std::atomic<std::uint64_t> enqueued_packets_{0};
   std::atomic<std::uint64_t> dropped_packet_queue_packets_{0};
   std::atomic<std::uint64_t> dropped_packet_queue_bytes_{0};

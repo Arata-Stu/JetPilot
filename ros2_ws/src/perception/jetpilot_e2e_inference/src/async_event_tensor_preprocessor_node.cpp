@@ -293,7 +293,18 @@ void AsyncEventTensorPreprocessorNode::on_packet(EventPacket::UniquePtr packet)
     return;
   }
   received_packets_.fetch_add(1, std::memory_order_relaxed);
-  last_packet_arrival_steady_ns_.store(steady_nanoseconds(started), std::memory_order_relaxed);
+  const auto arrival_ns = steady_nanoseconds(started);
+  const auto previous_arrival_ns =
+    last_packet_arrival_steady_ns_.exchange(arrival_ns, std::memory_order_relaxed);
+  if (previous_arrival_ns > 0 && arrival_ns > previous_arrival_ns) {
+    const auto interarrival_ns = static_cast<std::uint64_t>(arrival_ns - previous_arrival_ns);
+    packet_interarrival_samples_.fetch_add(1, std::memory_order_relaxed);
+    packet_interarrival_ns_.fetch_add(interarrival_ns, std::memory_order_relaxed);
+    update_max(packet_interarrival_max_ns_, interarrival_ns);
+    if (interarrival_ns > static_cast<std::uint64_t>(output_period_us_) * 1000U) {
+      packet_interarrival_over_output_period_.fetch_add(1, std::memory_order_relaxed);
+    }
+  }
   {
     std::lock_guard<std::mutex> lock(packet_mutex_);
     if (packet_queue_.size() >= packet_queue_capacity_) {
@@ -881,6 +892,14 @@ void AsyncEventTensorPreprocessorNode::publish_diagnostics()
   }
 
   const auto packets = received_packets_.exchange(0, std::memory_order_relaxed);
+  const auto packet_interarrival_samples =
+    packet_interarrival_samples_.exchange(0, std::memory_order_relaxed);
+  const auto packet_interarrival_ns =
+    packet_interarrival_ns_.exchange(0, std::memory_order_relaxed);
+  const auto packet_interarrival_max_ns =
+    packet_interarrival_max_ns_.exchange(0, std::memory_order_relaxed);
+  const auto packet_interarrival_over_output_period =
+    packet_interarrival_over_output_period_.exchange(0, std::memory_order_relaxed);
   const auto enqueued = enqueued_packets_.exchange(0, std::memory_order_relaxed);
   const auto packet_drops =
     dropped_packet_queue_packets_.exchange(0, std::memory_order_relaxed);
@@ -1036,6 +1055,13 @@ void AsyncEventTensorPreprocessorNode::publish_diagnostics()
     value("pipeline_mode", "single_node_async"),
     number("packets_received_per_s", packets / elapsed_s),
     number("packets_enqueued_per_s", enqueued / elapsed_s),
+    number(
+      "packet_interarrival_ms_avg", packet_interarrival_samples == 0 ? 0.0 :
+      milliseconds(packet_interarrival_ns) / packet_interarrival_samples),
+    number("packet_interarrival_ms_max", milliseconds(packet_interarrival_max_ns)),
+    number(
+      "packet_interarrival_over_output_period",
+      packet_interarrival_over_output_period),
     number("events_decoded_per_s", events / elapsed_s),
     number("tensors_per_s", tensors / elapsed_s),
     number("packet_callback_ms_avg", packets == 0 ? 0.0 : milliseconds(callback_ns) / packets),
@@ -1153,6 +1179,10 @@ void AsyncEventTensorPreprocessorNode::publish_diagnostics()
     number("deadline_misses", deadline_misses),
     number("fixed_rate_skipped_windows", skipped),
     number("reused_event_state_snapshots", reused),
+    number("fresh_event_state_snapshots", tensors >= reused ? tensors - reused : 0U),
+    number(
+      "event_update_absent_pct", tensors == 0 ? 0.0 :
+      100.0 * static_cast<double>(reused) / tensors),
     number("events_per_snapshot", events_snapshot),
     number("events_per_snapshot_max", events_snapshot_max),
     number("event_state_age_ms", milliseconds(state_age_ns_.load(std::memory_order_relaxed))),
