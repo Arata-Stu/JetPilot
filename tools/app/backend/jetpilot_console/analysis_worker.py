@@ -1282,10 +1282,17 @@ class _EventTensorPreview:
         self.header_interarrival_max_since_render_ns = 0
         self.latest_sensor_interpacket_gap_ns: int | None = None
         self.sensor_interpacket_gap_max_since_render_ns = 0
-        self.sensor_interpacket_gaps: collections.deque[tuple[int, int]] = collections.deque()
+        self.sensor_event_gaps: collections.deque[tuple[int, int]] = collections.deque()
         self.latest_packet_decoded_events = 0
         self.clock_source = "sensor_time_latest_available"
         self.timestamp_resets = 0
+        self.last_render_timestamp_resets = 0
+        self.out_of_order_events = 0
+        self.dropped_out_of_order_events = 0
+        self.last_render_out_of_order_events = 0
+        self.last_render_dropped_out_of_order_events = 0
+        self.backward_jump_max_since_render_ns = 0
+        self.timestamp_backward_tolerance_ns = 4_000_000
 
     def add_packet(self, message: Any, bag_timestamp_ns: int) -> None:
         bag_timestamp_ns = int(bag_timestamp_ns)
@@ -1343,21 +1350,81 @@ class _EventTensorPreview:
         # stay entirely in the continuous event-sensor clock. Per-packet ROS/bag
         # arrival jitter must never be injected into 5 ms temporal bins.
         event_ns = sensor_us * 1000
-        if self.latest_event_ns is not None:
-            sensor_gap_ns = int(event_ns[0]) - self.latest_event_ns
+        # Match the runtime's 4 ms backward tolerance. EventPacket boundaries can
+        # overlap slightly; the online node drops those older events and resets
+        # only for a larger clock discontinuity. Treating every overlap as a
+        # reset made the offline preview diverge from the tensor used online.
+        previous_latest_event_ns = self.latest_event_ns
+        while len(event_ns) > 0:
+            running_max = np.maximum.accumulate(event_ns)
+            prior_max = np.empty_like(event_ns)
+            prior_max[0] = (
+                previous_latest_event_ns
+                if previous_latest_event_ns is not None else int(event_ns[0])
+            )
+            if len(event_ns) > 1:
+                prior_max[1:] = running_max[:-1]
+                if previous_latest_event_ns is not None:
+                    np.maximum(prior_max[1:], previous_latest_event_ns, out=prior_max[1:])
+            backward_ns = prior_max - event_ns
+            out_of_order = backward_ns > 0
+            large_reset_indices = np.flatnonzero(
+                backward_ns > self.timestamp_backward_tolerance_ns
+            )
+            if len(large_reset_indices) > 0:
+                reset_index = int(large_reset_indices[0])
+                observed = out_of_order[: reset_index + 1]
+                self.out_of_order_events += int(observed.sum())
+                self.dropped_out_of_order_events += int(out_of_order[:reset_index].sum())
+                self.backward_jump_max_since_render_ns = max(
+                    self.backward_jump_max_since_render_ns,
+                    int(backward_ns[: reset_index + 1].max(initial=0)),
+                )
+                self.chunks.clear()
+                self.sensor_event_gaps.clear()
+                self.first_event_ns = None
+                self.latest_event_ns = None
+                previous_latest_event_ns = None
+                self.timestamp_resets += 1
+                event_ns = event_ns[reset_index:]
+                source_x = source_x[reset_index:]
+                source_y = source_y[reset_index:]
+                polarity = polarity[reset_index:]
+                continue
+
+            out_of_order_count = int(out_of_order.sum())
+            self.out_of_order_events += out_of_order_count
+            self.dropped_out_of_order_events += out_of_order_count
+            if out_of_order_count:
+                self.backward_jump_max_since_render_ns = max(
+                    self.backward_jump_max_since_render_ns,
+                    int(backward_ns.max(initial=0)),
+                )
+                keep = ~out_of_order
+                event_ns = event_ns[keep]
+                source_x = source_x[keep]
+                source_y = source_y[keep]
+                polarity = polarity[keep]
+            break
+        if len(event_ns) == 0:
+            return
+        if previous_latest_event_ns is not None:
+            sensor_gap_ns = int(event_ns[0]) - previous_latest_event_ns
             self.latest_sensor_interpacket_gap_ns = sensor_gap_ns
             if sensor_gap_ns > 0:
                 self.sensor_interpacket_gap_max_since_render_ns = max(
                     self.sensor_interpacket_gap_max_since_render_ns, sensor_gap_ns
                 )
-                self.sensor_interpacket_gaps.append((int(event_ns[0]), sensor_gap_ns))
-        if self.latest_event_ns is not None and int(event_ns[0]) < self.latest_event_ns:
-            # The C++ encoder resets its rolling state when sensor time moves
-            # backwards (for example after a decoder reset).
-            self.chunks.clear()
-            self.sensor_interpacket_gaps.clear()
-            self.first_event_ns = None
-            self.timestamp_resets += 1
+                self.sensor_event_gaps.append((int(event_ns[0]), sensor_gap_ns))
+        if len(event_ns) > 1:
+            consecutive_gaps_ns = event_ns[1:] - event_ns[:-1]
+            diagnostic_gap_indices = np.flatnonzero(
+                consecutive_gaps_ns >= self.window_ns // max(self.bins, 1)
+            )
+            for gap_index in diagnostic_gap_indices:
+                self.sensor_event_gaps.append(
+                    (int(event_ns[gap_index + 1]), int(consecutive_gaps_ns[gap_index]))
+                )
         self.source_width = int(message.width)
         self.source_height = int(message.height)
         self.chunks.append(
@@ -1377,8 +1444,8 @@ class _EventTensorPreview:
         oldest = self.latest_event_ns - self.window_ns - self.stride_ns
         while self.chunks and int(self.chunks[0][0][-1]) < oldest:
             self.chunks.popleft()
-        while self.sensor_interpacket_gaps and self.sensor_interpacket_gaps[0][0] < oldest:
-            self.sensor_interpacket_gaps.popleft()
+        while self.sensor_event_gaps and self.sensor_event_gaps[0][0] < oldest:
+            self.sensor_event_gaps.popleft()
 
     def should_render(self, timestamp_ns: int) -> bool:
         # The caller invokes this only after primary-image max_fps throttling.
@@ -1508,6 +1575,21 @@ class _EventTensorPreview:
             latest_empty_bin_run += 1
         packets_since_previous_preview = self.packet_count - self.last_render_packet_count
         self.last_render_packet_count = self.packet_count
+        timestamp_resets_since_previous_preview = (
+            self.timestamp_resets - self.last_render_timestamp_resets
+        )
+        self.last_render_timestamp_resets = self.timestamp_resets
+        out_of_order_since_previous_preview = (
+            self.out_of_order_events - self.last_render_out_of_order_events
+        )
+        self.last_render_out_of_order_events = self.out_of_order_events
+        dropped_out_of_order_since_previous_preview = (
+            self.dropped_out_of_order_events
+            - self.last_render_dropped_out_of_order_events
+        )
+        self.last_render_dropped_out_of_order_events = self.dropped_out_of_order_events
+        backward_jump_max_since_preview_us = self.backward_jump_max_since_render_ns / 1000.0
+        self.backward_jump_max_since_render_ns = 0
         packet_age_ms = (
             (int(timeline_timestamp_ns) - self.latest_packet_bag_timestamp_ns) / 1e6
             if timeline_timestamp_ns is not None
@@ -1519,24 +1601,26 @@ class _EventTensorPreview:
         self.header_interarrival_max_since_render_ns = 0
         sensor_interpacket_gap_max_ms = self.sensor_interpacket_gap_max_since_render_ns / 1e6
         self.sensor_interpacket_gap_max_since_render_ns = 0
-        sensor_interpacket_gap_max_in_window_ns = max(
+        sensor_event_gap_max_in_window_ns = max(
             (
                 gap_ns
-                for gap_end_ns, gap_ns in self.sensor_interpacket_gaps
+                for gap_end_ns, gap_ns in self.sensor_event_gaps
                 if gap_end_ns > start_ns and gap_end_ns - gap_ns < window_end_ns
             ),
             default=0,
         )
-        sensor_interpacket_gap_max_in_window_ms = (
-            sensor_interpacket_gap_max_in_window_ns / 1e6
+        sensor_event_gap_max_in_window_ms = (
+            sensor_event_gap_max_in_window_ns / 1e6
         )
         gap_threshold_ms = max(2.0 * self.stride_ns / 1e6, 10.0)
         bin_width_ms = self.window_ns / max(self.bins, 1) / 1e6
         if packets_since_previous_preview == 0:
             dark_cause = "no_packet_since_previous_preview"
+        elif timestamp_resets_since_previous_preview > 0:
+            dark_cause = "timestamp_reset"
         elif event_count == 0:
             dark_cause = "empty_event_window"
-        elif empty_temporal_bins and sensor_interpacket_gap_max_in_window_ms >= bin_width_ms:
+        elif empty_temporal_bins and sensor_event_gap_max_in_window_ms >= bin_width_ms:
             dark_cause = "sensor_time_event_gap"
         elif empty_temporal_bins:
             dark_cause = "quiet_or_sparse_interval"
@@ -1591,7 +1675,7 @@ class _EventTensorPreview:
                 if self.latest_sensor_interpacket_gap_ns is not None else None
             ),
             "sensor_interpacket_gap_max_since_preview_ms": sensor_interpacket_gap_max_ms,
-            "sensor_interpacket_gap_max_in_window_ms": sensor_interpacket_gap_max_in_window_ms,
+            "sensor_event_gap_max_in_window_ms": sensor_event_gap_max_in_window_ms,
             "bin_width_ms": bin_width_ms,
             "packet_header_to_bag_ms": (
                 (self.latest_packet_bag_timestamp_ns - self.latest_packet_header_timestamp_ns) / 1e6
@@ -1601,6 +1685,13 @@ class _EventTensorPreview:
             "dark_cause": dark_cause,
             "latest_packet_header_timestamp_ns": self.latest_packet_header_timestamp_ns,
             "timestamp_resets": self.timestamp_resets,
+            "timestamp_resets_since_previous_preview": timestamp_resets_since_previous_preview,
+            "out_of_order_events_since_previous_preview": out_of_order_since_previous_preview,
+            "dropped_out_of_order_events_since_previous_preview": (
+                dropped_out_of_order_since_previous_preview
+            ),
+            "backward_jump_max_since_preview_us": backward_jump_max_since_preview_us,
+            "timestamp_backward_tolerance_us": self.timestamp_backward_tolerance_ns / 1000,
             "buffered_packets": len(self.chunks),
             "snapshot_timestamp_ns": (
                 int(timeline_timestamp_ns)
@@ -2317,6 +2408,18 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
                 in {"stale_packet_delivery", "packet_gap"}
                 for sample in event_preview_samples
             ),
+            "timestamp_reset_frames": sum(
+                int(sample.get("stats", {}).get("timestamp_resets_since_previous_preview", 0)) > 0
+                for sample in event_preview_samples
+            ),
+            "out_of_order_drop_frames": sum(
+                int(
+                    sample.get("stats", {}).get(
+                        "dropped_out_of_order_events_since_previous_preview", 0
+                    )
+                ) > 0
+                for sample in event_preview_samples
+            ),
             "max_packet_interarrival_ms": max(
                 float(sample.get("stats", {}).get("packet_interarrival_max_since_preview_ms", 0.0))
                 for sample in event_preview_samples
@@ -2325,8 +2428,12 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
                 float(sample.get("stats", {}).get("header_interarrival_max_since_preview_ms", 0.0))
                 for sample in event_preview_samples
             ),
-            "max_sensor_interpacket_gap_ms": max(
-                float(sample.get("stats", {}).get("sensor_interpacket_gap_max_in_window_ms", 0.0))
+            "max_sensor_event_gap_ms": max(
+                float(sample.get("stats", {}).get("sensor_event_gap_max_in_window_ms", 0.0))
+                for sample in event_preview_samples
+            ),
+            "max_backward_jump_us": max(
+                float(sample.get("stats", {}).get("backward_jump_max_since_preview_us", 0.0))
                 for sample in event_preview_samples
             ),
         }

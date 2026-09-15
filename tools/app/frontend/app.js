@@ -4908,7 +4908,7 @@ function renderAnalysisViewer() {
       </div>
       ${consistency.message ? `<div class="analysis-consistency ${consistency.className}"><strong>Map consistency</strong><span>${esc(consistency.message)}</span></div>` : ""}
       ${renderAnalysisSources()}
-      ${eventPreview.enabled ? `<div class="analysis-consistency ${Number(eventPreview.generated) > 0 ? "ok" : "missing"}"><strong>20ch event tensor</strong><span>${esc(eventPreview.decoded_events || 0)} events decoded · ${esc(eventPreviewSummary.frames_with_empty_bins || 0)}/${esc(eventPreviewSummary.frames || eventPreview.generated || 0)} frames contain empty bins · sensor-time gaps ${esc(eventPreviewSummary.sensor_time_gap_frames || 0)} · stale delivery ${esc(eventPreviewSummary.stale_packet_delivery_frames || 0)} · select ${esc(eventPreview.virtual_image_topic || "/analysis/event_tensor_20ch")} from Channel</span></div>` : ""}
+      ${eventPreview.enabled ? `<div class="analysis-consistency ${Number(eventPreview.generated) > 0 ? "ok" : "missing"}"><strong>20ch event tensor</strong><span>${esc(eventPreview.decoded_events || 0)} events decoded · ${esc(eventPreviewSummary.frames_with_empty_bins || 0)}/${esc(eventPreviewSummary.frames || eventPreview.generated || 0)} frames contain empty bins · sensor-time gaps ${esc(eventPreviewSummary.sensor_time_gap_frames || 0)} · stale delivery ${esc(eventPreviewSummary.stale_packet_delivery_frames || 0)} · timestamp reset frames ${esc(eventPreviewSummary.timestamp_reset_frames || 0)} · select ${esc(eventPreview.virtual_image_topic || "/analysis/event_tensor_20ch")} from Channel</span></div>` : ""}
       ${renderE2ESummaryPanel()}
       <div class="analysis-media-grid">
         <div class="analysis-image-panel">
@@ -6028,12 +6028,15 @@ function updateAnalysisEventTensorStatus(payload) {
   const negative = Number(stats.negative_events || 0);
   const packetAgeMs = Number(stats.latest_event_age_ms);
   const resets = Number(stats.timestamp_resets || 0);
+  const recentResets = Number(stats.timestamp_resets_since_previous_preview || 0);
+  const droppedOutOfOrder = Number(stats.dropped_out_of_order_events_since_previous_preview || 0);
+  const backwardJumpUs = Number(stats.backward_jump_max_since_preview_us);
   const emptyBins = Number(stats.empty_temporal_bin_count || 0);
   const latestEmptyRun = Number(stats.latest_empty_bin_run || 0);
   const packetsSincePreview = Number(stats.packets_since_previous_preview || 0);
   const packetGapMaxMs = Number(stats.packet_interarrival_max_since_preview_ms);
   const headerGapMaxMs = Number(stats.header_interarrival_max_since_preview_ms);
-  const sensorGapMaxMs = Number(stats.sensor_interpacket_gap_max_in_window_ms);
+  const sensorGapMaxMs = Number(stats.sensor_event_gap_max_in_window_ms);
   const binWidthMs = Number(stats.bin_width_ms);
   const packetHeaderLagMs = Number(stats.packet_header_to_bag_ms);
   const causeLabels = {
@@ -6045,6 +6048,7 @@ function updateAnalysisEventTensorStatus(payload) {
     no_recent_events_in_latest_bins: "latest bins have no events",
     sensor_time_event_gap: "sensor-time event gap",
     quiet_or_sparse_interval: "quiet/sparse interval",
+    timestamp_reset: "sensor timestamp reset",
     empty_tensor: "empty tensor",
   };
   const darkCause = String(stats.dark_cause || "");
@@ -6060,7 +6064,11 @@ function updateAnalysisEventTensorStatus(payload) {
     Number.isFinite(binWidthMs) ? `bin ${binWidthMs.toFixed(1)} ms` : "",
     Number.isFinite(packetHeaderLagMs) ? `header lag ${packetHeaderLagMs.toFixed(1)} ms` : "",
     darkCause ? `cause: ${causeLabels[darkCause] || darkCause}` : "",
-    `timestamp resets ${resets.toLocaleString()}`,
+    `timestamp resets ${resets.toLocaleString()} (+${recentResets.toLocaleString()})`,
+    droppedOutOfOrder > 0 ? `out-of-order dropped ${droppedOutOfOrder.toLocaleString()}` : "",
+    Number.isFinite(backwardJumpUs) && backwardJumpUs > 0
+      ? `backward max ${backwardJumpUs.toFixed(0)} us`
+      : "",
   ].filter(Boolean);
   target.textContent = parts.join(" · ");
   target.classList.toggle(
@@ -6068,6 +6076,7 @@ function updateAnalysisEventTensorStatus(payload) {
     events === 0 || resets > 0 || darkCause === "packet_gap"
       || darkCause === "stale_packet_delivery"
       || darkCause === "sensor_time_event_gap"
+      || darkCause === "timestamp_reset"
       || darkCause === "no_packet_since_previous_preview"
       || latestEmptyRun >= Math.max(2, Math.ceil(Number(stats.bins || 0) / 2))
       || (Number.isFinite(packetAgeMs) && packetAgeMs > Number(stats.window_ms || 50)),
