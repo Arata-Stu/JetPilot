@@ -162,6 +162,13 @@ private:
   std::atomic<std::int64_t> last_applied_event_ros_ns_{0};
 
   std::atomic<std::uint64_t> received_packets_{0};
+  std::atomic<std::uint64_t> received_packets_total_{0};
+  std::atomic<bool> received_sequence_initialized_{false};
+  std::atomic<std::uint64_t> last_received_sequence_{0};
+  std::atomic<std::uint64_t> input_sequence_gap_occurrences_{0};
+  std::atomic<std::uint64_t> input_sequence_missing_packets_{0};
+  std::atomic<std::uint64_t> input_sequence_gap_max_{0};
+  std::atomic<std::uint64_t> input_sequence_reorders_{0};
   std::atomic<std::uint64_t> packet_interarrival_samples_{0};
   std::atomic<std::uint64_t> packet_interarrival_ns_{0};
   std::atomic<std::uint64_t> packet_interarrival_max_ns_{0};

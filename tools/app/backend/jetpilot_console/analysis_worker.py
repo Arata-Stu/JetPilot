@@ -1273,6 +1273,13 @@ class _EventTensorPreview:
         self.latest_packet_bag_timestamp_ns: int | None = None
         self.latest_packet_header_timestamp_ns: int | None = None
         self.packet_count = 0
+        self.last_packet_sequence: int | None = None
+        self.packet_sequence_gaps: collections.deque[tuple[int, int]] = collections.deque()
+        self.packet_sequence_missing_total = 0
+        self.packet_sequence_reorders_total = 0
+        self.last_render_packet_sequence_missing_total = 0
+        self.last_render_packet_sequence_reorders_total = 0
+        self.packet_sequence_gap_max_since_render = 0
         self.last_render_packet_count = 0
         self.last_packet_bag_timestamp_ns: int | None = None
         self.latest_packet_interarrival_ns: int | None = None
@@ -1296,6 +1303,22 @@ class _EventTensorPreview:
 
     def add_packet(self, message: Any, bag_timestamp_ns: int) -> None:
         bag_timestamp_ns = int(bag_timestamp_ns)
+        packet_sequence_value = getattr(message, "seq", None)
+        packet_sequence = (
+            int(packet_sequence_value) if packet_sequence_value is not None else None
+        )
+        packet_sequence_missing = 0
+        if packet_sequence is not None and self.last_packet_sequence is not None:
+            if packet_sequence > self.last_packet_sequence + 1:
+                packet_sequence_missing = packet_sequence - self.last_packet_sequence - 1
+                self.packet_sequence_missing_total += packet_sequence_missing
+                self.packet_sequence_gap_max_since_render = max(
+                    self.packet_sequence_gap_max_since_render, packet_sequence_missing
+                )
+            elif packet_sequence <= self.last_packet_sequence:
+                self.packet_sequence_reorders_total += 1
+        if packet_sequence is not None:
+            self.last_packet_sequence = packet_sequence
         self.packet_count += 1
         if (
             self.last_packet_bag_timestamp_ns is not None
@@ -1416,6 +1439,8 @@ class _EventTensorPreview:
                     self.sensor_interpacket_gap_max_since_render_ns, sensor_gap_ns
                 )
                 self.sensor_event_gaps.append((int(event_ns[0]), sensor_gap_ns, "interpacket"))
+        if packet_sequence_missing > 0:
+            self.packet_sequence_gaps.append((int(event_ns[0]), packet_sequence_missing))
         if len(event_ns) > 1:
             consecutive_gaps_ns = event_ns[1:] - event_ns[:-1]
             diagnostic_gap_indices = np.flatnonzero(
@@ -1450,6 +1475,8 @@ class _EventTensorPreview:
             self.chunks.popleft()
         while self.sensor_event_gaps and self.sensor_event_gaps[0][0] < oldest:
             self.sensor_event_gaps.popleft()
+        while self.packet_sequence_gaps and self.packet_sequence_gaps[0][0] < oldest:
+            self.packet_sequence_gaps.popleft()
 
     def should_render(self, timestamp_ns: int) -> bool:
         # The caller invokes this only after primary-image max_fps throttling.
@@ -1594,6 +1621,18 @@ class _EventTensorPreview:
         self.last_render_dropped_out_of_order_events = self.dropped_out_of_order_events
         backward_jump_max_since_preview_us = self.backward_jump_max_since_render_ns / 1000.0
         self.backward_jump_max_since_render_ns = 0
+        packet_sequence_missing_since_previous_preview = (
+            self.packet_sequence_missing_total
+            - self.last_render_packet_sequence_missing_total
+        )
+        self.last_render_packet_sequence_missing_total = self.packet_sequence_missing_total
+        packet_sequence_reorders_since_previous_preview = (
+            self.packet_sequence_reorders_total
+            - self.last_render_packet_sequence_reorders_total
+        )
+        self.last_render_packet_sequence_reorders_total = self.packet_sequence_reorders_total
+        packet_sequence_gap_max_since_preview = self.packet_sequence_gap_max_since_render
+        self.packet_sequence_gap_max_since_render = 0
         packet_age_ms = (
             (int(timeline_timestamp_ns) - self.latest_packet_bag_timestamp_ns) / 1e6
             if timeline_timestamp_ns is not None
@@ -1636,6 +1675,11 @@ class _EventTensorPreview:
         sensor_event_gap_max_in_window_ms = (
             sensor_event_gap_max_in_window_ns / 1e6
         )
+        packet_sequence_missing_in_window = sum(
+            missing
+            for gap_sensor_ns, missing in self.packet_sequence_gaps
+            if start_ns < gap_sensor_ns < window_end_ns
+        )
         gap_threshold_ms = max(2.0 * self.stride_ns / 1e6, 10.0)
         bin_width_ms = self.window_ns / max(self.bins, 1) / 1e6
         if packets_since_previous_preview == 0:
@@ -1644,6 +1688,8 @@ class _EventTensorPreview:
             dark_cause = "timestamp_reset"
         elif event_count == 0:
             dark_cause = "empty_event_window"
+        elif empty_temporal_bins and packet_sequence_missing_in_window > 0:
+            dark_cause = "missing_event_packets"
         elif (
             empty_temporal_bins
             and sensor_interpacket_gap_max_in_window_ns / 1e6 >= bin_width_ms
@@ -1691,6 +1737,15 @@ class _EventTensorPreview:
             "latest_event_age_ms": packet_age_ms,
             "latest_packet_age_ms": packet_age_ms,
             "packets_since_previous_preview": packets_since_previous_preview,
+            "latest_packet_sequence": self.last_packet_sequence,
+            "packet_sequence_missing_since_previous_preview": (
+                packet_sequence_missing_since_previous_preview
+            ),
+            "packet_sequence_missing_in_window": packet_sequence_missing_in_window,
+            "packet_sequence_gap_max_since_preview": packet_sequence_gap_max_since_preview,
+            "packet_sequence_reorders_since_previous_preview": (
+                packet_sequence_reorders_since_previous_preview
+            ),
             "latest_packet_decoded_events": self.latest_packet_decoded_events,
             "latest_packet_interarrival_ms": (
                 self.latest_packet_interarrival_ns / 1e6
@@ -2452,6 +2507,10 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
             ),
             "sensor_intrapacket_gap_frames": sum(
                 sample.get("stats", {}).get("dark_cause") == "sensor_intrapacket_gap"
+                for sample in event_preview_samples
+            ),
+            "missing_event_packet_frames": sum(
+                sample.get("stats", {}).get("dark_cause") == "missing_event_packets"
                 for sample in event_preview_samples
             ),
             "stale_packet_delivery_frames": sum(

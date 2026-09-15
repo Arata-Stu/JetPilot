@@ -4908,7 +4908,7 @@ function renderAnalysisViewer() {
       </div>
       ${consistency.message ? `<div class="analysis-consistency ${consistency.className}"><strong>Map consistency</strong><span>${esc(consistency.message)}</span></div>` : ""}
       ${renderAnalysisSources()}
-      ${eventPreview.enabled ? `<div class="analysis-consistency ${Number(eventPreview.generated) > 0 ? "ok" : "missing"}"><strong>20ch event tensor</strong><span>${esc(eventPreview.decoded_events || 0)} events decoded · ${esc(eventPreviewSummary.frames_with_empty_bins || 0)}/${esc(eventPreviewSummary.frames || eventPreview.generated || 0)} frames contain empty bins · sensor-time gaps ${esc(eventPreviewSummary.sensor_time_gap_frames || 0)} · stale delivery ${esc(eventPreviewSummary.stale_packet_delivery_frames || 0)} · timestamp reset frames ${esc(eventPreviewSummary.timestamp_reset_frames || 0)} · select ${esc(eventPreview.virtual_image_topic || "/analysis/event_tensor_20ch")} from Channel</span></div>` : ""}
+      ${eventPreview.enabled ? `<div class="analysis-consistency ${Number(eventPreview.generated) > 0 ? "ok" : "missing"}"><strong>20ch event tensor</strong><span>${esc(eventPreview.decoded_events || 0)} events decoded · ${esc(eventPreviewSummary.frames_with_empty_bins || 0)}/${esc(eventPreviewSummary.frames || eventPreview.generated || 0)} frames contain empty bins · missing packet frames ${esc(eventPreviewSummary.missing_event_packet_frames || 0)} · sensor-time gaps ${esc(eventPreviewSummary.sensor_time_gap_frames || 0)} · stale delivery ${esc(eventPreviewSummary.stale_packet_delivery_frames || 0)} · timestamp reset frames ${esc(eventPreviewSummary.timestamp_reset_frames || 0)} · select ${esc(eventPreview.virtual_image_topic || "/analysis/event_tensor_20ch")} from Channel</span></div>` : ""}
       ${renderE2ESummaryPanel()}
       <div class="analysis-media-grid">
         <div class="analysis-image-panel">
@@ -6031,6 +6031,8 @@ function updateAnalysisEventTensorStatus(payload) {
   const recentResets = Number(stats.timestamp_resets_since_previous_preview || 0);
   const droppedOutOfOrder = Number(stats.dropped_out_of_order_events_since_previous_preview || 0);
   const backwardJumpUs = Number(stats.backward_jump_max_since_preview_us);
+  const missingPackets = Number(stats.packet_sequence_missing_in_window || 0);
+  const reorderedPackets = Number(stats.packet_sequence_reorders_since_previous_preview || 0);
   const emptyBins = Number(stats.empty_temporal_bin_count || 0);
   const latestEmptyRun = Number(stats.latest_empty_bin_run || 0);
   const packetsSincePreview = Number(stats.packets_since_previous_preview || 0);
@@ -6053,6 +6055,7 @@ function updateAnalysisEventTensorStatus(payload) {
     sensor_intrapacket_gap: "sensor gap inside packet",
     quiet_or_sparse_interval: "quiet/sparse interval",
     timestamp_reset: "sensor timestamp reset",
+    missing_event_packets: "missing EventPacket sequence",
     empty_tensor: "empty tensor",
   };
   const darkCause = String(stats.dark_cause || "");
@@ -6062,6 +6065,8 @@ function updateAnalysisEventTensorStatus(payload) {
     Number.isFinite(packetAgeMs) ? `packet age ${packetAgeMs.toFixed(1)} ms` : "packet age —",
     `empty bins ${emptyBins}/${Number(stats.bins || 0)} (latest ${latestEmptyRun})`,
     `packets +${packetsSincePreview}`,
+    missingPackets > 0 ? `missing seq in window ${missingPackets}` : "seq continuous",
+    reorderedPackets > 0 ? `reordered packets ${reorderedPackets}` : "",
     Number.isFinite(packetGapMaxMs) ? `packet gap max ${packetGapMaxMs.toFixed(1)} ms` : "packet gap —",
     Number.isFinite(headerGapMaxMs) ? `header gap max ${headerGapMaxMs.toFixed(1)} ms` : "",
     Number.isFinite(sensorGapMaxMs) ? `sensor gap in window ${sensorGapMaxMs.toFixed(1)} ms` : "",
@@ -6089,6 +6094,7 @@ function updateAnalysisEventTensorStatus(payload) {
       || darkCause === "sensor_interpacket_gap"
       || darkCause === "sensor_intrapacket_gap"
       || darkCause === "timestamp_reset"
+      || darkCause === "missing_event_packets"
       || darkCause === "no_packet_since_previous_preview"
       || latestEmptyRun >= Math.max(2, Math.ceil(Number(stats.bins || 0) / 2))
       || (Number.isFinite(packetAgeMs) && packetAgeMs > Number(stats.window_ms || 50)),

@@ -292,7 +292,23 @@ void AsyncEventTensorPreprocessorNode::on_packet(EventPacket::UniquePtr packet)
   if (!packet || packet->events.empty()) {
     return;
   }
+  const auto packet_sequence = static_cast<std::uint64_t>(packet->seq);
   received_packets_.fetch_add(1, std::memory_order_relaxed);
+  received_packets_total_.fetch_add(1, std::memory_order_relaxed);
+  const bool had_previous_sequence =
+    received_sequence_initialized_.exchange(true, std::memory_order_relaxed);
+  const auto previous_sequence =
+    last_received_sequence_.exchange(packet_sequence, std::memory_order_relaxed);
+  if (had_previous_sequence) {
+    if (packet_sequence > previous_sequence + 1U) {
+      const auto missing = packet_sequence - previous_sequence - 1U;
+      input_sequence_gap_occurrences_.fetch_add(1, std::memory_order_relaxed);
+      input_sequence_missing_packets_.fetch_add(missing, std::memory_order_relaxed);
+      update_max(input_sequence_gap_max_, missing);
+    } else if (packet_sequence <= previous_sequence) {
+      input_sequence_reorders_.fetch_add(1, std::memory_order_relaxed);
+    }
+  }
   const auto arrival_ns = steady_nanoseconds(started);
   const auto previous_arrival_ns =
     last_packet_arrival_steady_ns_.exchange(arrival_ns, std::memory_order_relaxed);
@@ -1006,6 +1022,14 @@ void AsyncEventTensorPreprocessorNode::publish_diagnostics()
   const auto resets = timestamp_resets_.exchange(0, std::memory_order_relaxed);
   const auto backward_max = backward_jump_max_us_.exchange(0, std::memory_order_relaxed);
   const auto packet_depth_max = packet_queue_depth_max_.exchange(0, std::memory_order_relaxed);
+  const auto input_sequence_gap_occurrences =
+    input_sequence_gap_occurrences_.exchange(0, std::memory_order_relaxed);
+  const auto input_sequence_missing_packets =
+    input_sequence_missing_packets_.exchange(0, std::memory_order_relaxed);
+  const auto input_sequence_gap_max =
+    input_sequence_gap_max_.exchange(0, std::memory_order_relaxed);
+  const auto input_sequence_reorders =
+    input_sequence_reorders_.exchange(0, std::memory_order_relaxed);
   const auto decoded_depth_max = decoded_queue_depth_max_.exchange(0, std::memory_order_relaxed);
   const auto state_age_max = state_age_max_ns_.exchange(0, std::memory_order_relaxed);
   const auto packet_arrival_ns = last_packet_arrival_steady_ns_.load(std::memory_order_relaxed);
@@ -1041,7 +1065,8 @@ void AsyncEventTensorPreprocessorNode::publish_diagnostics()
   const bool healthy =
     packet_drops == 0 && stale_packets == 0 && decoded_drops == 0 &&
     stale_decoded == 0 && decode_errors == 0 &&
-    publish_errors == 0 && pool_exhaustions == 0 && deadline_misses == 0 && resets == 0;
+    publish_errors == 0 && pool_exhaustions == 0 && deadline_misses == 0 && resets == 0 &&
+    input_sequence_missing_packets == 0 && input_sequence_reorders == 0;
   diagnostic_msgs::msg::DiagnosticArray array;
   array.header.stamp = now();
   diagnostic_msgs::msg::DiagnosticStatus status;
@@ -1054,6 +1079,16 @@ void AsyncEventTensorPreprocessorNode::publish_diagnostics()
   status.values = {
     value("pipeline_mode", "single_node_async"),
     number("packets_received_per_s", packets / elapsed_s),
+    number(
+      "packets_received_total",
+      received_packets_total_.load(std::memory_order_relaxed)),
+    number(
+      "last_received_sequence",
+      last_received_sequence_.load(std::memory_order_relaxed)),
+    number("input_sequence_gap_occurrences", input_sequence_gap_occurrences),
+    number("input_sequence_missing_packets", input_sequence_missing_packets),
+    number("input_sequence_gap_max", input_sequence_gap_max),
+    number("input_sequence_reorders", input_sequence_reorders),
     number("packets_enqueued_per_s", enqueued / elapsed_s),
     number(
       "packet_interarrival_ms_avg", packet_interarrival_samples == 0 ? 0.0 :
@@ -1164,6 +1199,9 @@ void AsyncEventTensorPreprocessorNode::publish_diagnostics()
     number("max_queue_age_ms", max_queue_age_ms_),
     number("gpu_updates", gpu_updates),
     number("gpu_events", gpu_events),
+    value(
+      "gpu_timing_scope",
+      "host_submit_including_staging_slot_backpressure; not pure CUDA kernel elapsed time"),
     number("gpu_update_ms_avg", gpu_updates == 0 ? 0.0 : milliseconds(gpu_ns) / gpu_updates),
     number("gpu_update_ms_max", milliseconds(gpu_max_ns)),
     number("gpu_worker_busy_pct", 100.0 * (gpu_ns + snapshot_ns) / (elapsed_s * 1.0e9)),
@@ -1219,7 +1257,8 @@ void AsyncEventTensorPreprocessorNode::publish_diagnostics()
       "async event preprocess: %.1f packet/s %.1f Mevent/s %.1f tensor/s; "
       "queues packet=%lu decoded=%lu; callback %.3fms decode %.3f/%.3fms "
       "gpu %.3f/%.3fms snapshot %.3f/%.3fms interval %.3f/%.3fms; "
-      "skipped=%lu reused=%lu drops=%lu/%lu state_age=%.3fms",
+      "skipped=%lu reused=%lu drops=%lu/%lu seq_missing=%lu "
+      "seq_reorders=%lu state_age=%.3fms",
       packets / elapsed_s, events / elapsed_s / 1.0e6, tensors / elapsed_s,
       static_cast<unsigned long>(packet_queue_depth_.load(std::memory_order_relaxed)),
       static_cast<unsigned long>(decoded_queue_depth_.load(std::memory_order_relaxed)),
@@ -1233,6 +1272,8 @@ void AsyncEventTensorPreprocessorNode::publish_diagnostics()
       milliseconds(interval_max_ns), static_cast<unsigned long>(skipped),
       static_cast<unsigned long>(reused), static_cast<unsigned long>(packet_drops),
       static_cast<unsigned long>(event_drops),
+      static_cast<unsigned long>(input_sequence_missing_packets),
+      static_cast<unsigned long>(input_sequence_reorders),
       milliseconds(state_age_ns_.load(std::memory_order_relaxed)));
   }
 }
