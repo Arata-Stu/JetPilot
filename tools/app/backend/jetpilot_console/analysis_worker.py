@@ -1277,6 +1277,12 @@ class _EventTensorPreview:
         self.last_packet_bag_timestamp_ns: int | None = None
         self.latest_packet_interarrival_ns: int | None = None
         self.packet_interarrival_max_since_render_ns = 0
+        self.last_packet_header_timestamp_ns: int | None = None
+        self.latest_header_interarrival_ns: int | None = None
+        self.header_interarrival_max_since_render_ns = 0
+        self.latest_sensor_interpacket_gap_ns: int | None = None
+        self.sensor_interpacket_gap_max_since_render_ns = 0
+        self.sensor_interpacket_gaps: collections.deque[tuple[int, int]] = collections.deque()
         self.latest_packet_decoded_events = 0
         self.clock_source = "sensor_time_latest_available"
         self.timestamp_resets = 0
@@ -1300,6 +1306,21 @@ class _EventTensorPreview:
             int(packet_header_ns)
             if packet_header_ns is not None and packet_header_ns > 0 else None
         )
+        if self.latest_packet_header_timestamp_ns is not None:
+            if (
+                self.last_packet_header_timestamp_ns is not None
+                and self.latest_packet_header_timestamp_ns
+                >= self.last_packet_header_timestamp_ns
+            ):
+                header_interval_ns = (
+                    self.latest_packet_header_timestamp_ns
+                    - self.last_packet_header_timestamp_ns
+                )
+                self.latest_header_interarrival_ns = header_interval_ns
+                self.header_interarrival_max_since_render_ns = max(
+                    self.header_interarrival_max_since_render_ns, header_interval_ns
+                )
+            self.last_packet_header_timestamp_ns = self.latest_packet_header_timestamp_ns
         self.decoder.decode_bytes(
             str(message.encoding), int(message.width), int(message.height),
             int(message.time_base), bytes(message.events),
@@ -1322,10 +1343,19 @@ class _EventTensorPreview:
         # stay entirely in the continuous event-sensor clock. Per-packet ROS/bag
         # arrival jitter must never be injected into 5 ms temporal bins.
         event_ns = sensor_us * 1000
+        if self.latest_event_ns is not None:
+            sensor_gap_ns = int(event_ns[0]) - self.latest_event_ns
+            self.latest_sensor_interpacket_gap_ns = sensor_gap_ns
+            if sensor_gap_ns > 0:
+                self.sensor_interpacket_gap_max_since_render_ns = max(
+                    self.sensor_interpacket_gap_max_since_render_ns, sensor_gap_ns
+                )
+                self.sensor_interpacket_gaps.append((int(event_ns[0]), sensor_gap_ns))
         if self.latest_event_ns is not None and int(event_ns[0]) < self.latest_event_ns:
             # The C++ encoder resets its rolling state when sensor time moves
             # backwards (for example after a decoder reset).
             self.chunks.clear()
+            self.sensor_interpacket_gaps.clear()
             self.first_event_ns = None
             self.timestamp_resets += 1
         self.source_width = int(message.width)
@@ -1347,6 +1377,8 @@ class _EventTensorPreview:
         oldest = self.latest_event_ns - self.window_ns - self.stride_ns
         while self.chunks and int(self.chunks[0][0][-1]) < oldest:
             self.chunks.popleft()
+        while self.sensor_interpacket_gaps and self.sensor_interpacket_gaps[0][0] < oldest:
+            self.sensor_interpacket_gaps.popleft()
 
     def should_render(self, timestamp_ns: int) -> bool:
         # The caller invokes this only after primary-image max_fps throttling.
@@ -1483,15 +1515,33 @@ class _EventTensorPreview:
         )
         packet_interarrival_max_ms = self.packet_interarrival_max_since_render_ns / 1e6
         self.packet_interarrival_max_since_render_ns = 0
+        header_interarrival_max_ms = self.header_interarrival_max_since_render_ns / 1e6
+        self.header_interarrival_max_since_render_ns = 0
+        sensor_interpacket_gap_max_ms = self.sensor_interpacket_gap_max_since_render_ns / 1e6
+        self.sensor_interpacket_gap_max_since_render_ns = 0
+        sensor_interpacket_gap_max_in_window_ns = max(
+            (
+                gap_ns
+                for gap_end_ns, gap_ns in self.sensor_interpacket_gaps
+                if gap_end_ns > start_ns and gap_end_ns - gap_ns < window_end_ns
+            ),
+            default=0,
+        )
+        sensor_interpacket_gap_max_in_window_ms = (
+            sensor_interpacket_gap_max_in_window_ns / 1e6
+        )
         gap_threshold_ms = max(2.0 * self.stride_ns / 1e6, 10.0)
-        if packet_age_ms is not None and packet_age_ms > gap_threshold_ms:
-            dark_cause = "packet_gap"
-        elif packets_since_previous_preview == 0:
+        bin_width_ms = self.window_ns / max(self.bins, 1) / 1e6
+        if packets_since_previous_preview == 0:
             dark_cause = "no_packet_since_previous_preview"
         elif event_count == 0:
             dark_cause = "empty_event_window"
-        elif latest_empty_bin_run > 0:
-            dark_cause = "no_recent_events_in_latest_bins"
+        elif empty_temporal_bins and sensor_interpacket_gap_max_in_window_ms >= bin_width_ms:
+            dark_cause = "sensor_time_event_gap"
+        elif empty_temporal_bins:
+            dark_cause = "quiet_or_sparse_interval"
+        elif packet_age_ms is not None and packet_age_ms > gap_threshold_ms:
+            dark_cause = "stale_packet_delivery"
         elif nonzero == 0:
             dark_cause = "empty_tensor"
         else:
@@ -1531,6 +1581,18 @@ class _EventTensorPreview:
                 if self.latest_packet_interarrival_ns is not None else None
             ),
             "packet_interarrival_max_since_preview_ms": packet_interarrival_max_ms,
+            "latest_header_interarrival_ms": (
+                self.latest_header_interarrival_ns / 1e6
+                if self.latest_header_interarrival_ns is not None else None
+            ),
+            "header_interarrival_max_since_preview_ms": header_interarrival_max_ms,
+            "latest_sensor_interpacket_gap_ms": (
+                self.latest_sensor_interpacket_gap_ns / 1e6
+                if self.latest_sensor_interpacket_gap_ns is not None else None
+            ),
+            "sensor_interpacket_gap_max_since_preview_ms": sensor_interpacket_gap_max_ms,
+            "sensor_interpacket_gap_max_in_window_ms": sensor_interpacket_gap_max_in_window_ms,
+            "bin_width_ms": bin_width_ms,
             "packet_header_to_bag_ms": (
                 (self.latest_packet_bag_timestamp_ns - self.latest_packet_header_timestamp_ns) / 1e6
                 if self.latest_packet_bag_timestamp_ns is not None
@@ -2234,6 +2296,40 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
         task_progress(0.94),
         "同期timelineとMap整合性結果を保存しています。",
     )
+    event_preview_diagnostic_summary: dict[str, object] = {}
+    if event_preview_samples:
+        event_preview_diagnostic_summary = {
+            "frames": len(event_preview_samples),
+            "frames_with_empty_bins": sum(
+                int(sample.get("stats", {}).get("empty_temporal_bin_count", 0)) > 0
+                for sample in event_preview_samples
+            ),
+            "empty_window_frames": sum(
+                int(sample.get("stats", {}).get("events", 0)) == 0
+                for sample in event_preview_samples
+            ),
+            "sensor_time_gap_frames": sum(
+                sample.get("stats", {}).get("dark_cause") == "sensor_time_event_gap"
+                for sample in event_preview_samples
+            ),
+            "stale_packet_delivery_frames": sum(
+                sample.get("stats", {}).get("dark_cause")
+                in {"stale_packet_delivery", "packet_gap"}
+                for sample in event_preview_samples
+            ),
+            "max_packet_interarrival_ms": max(
+                float(sample.get("stats", {}).get("packet_interarrival_max_since_preview_ms", 0.0))
+                for sample in event_preview_samples
+            ),
+            "max_header_interarrival_ms": max(
+                float(sample.get("stats", {}).get("header_interarrival_max_since_preview_ms", 0.0))
+                for sample in event_preview_samples
+            ),
+            "max_sensor_interpacket_gap_ms": max(
+                float(sample.get("stats", {}).get("sensor_interpacket_gap_max_in_window_ms", 0.0))
+                for sample in event_preview_samples
+            ),
+        }
     timeline = {
         "schema_version": SCHEMA_VERSION,
         "start_time_ns": str(start_ns),
@@ -2250,6 +2346,7 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
             "virtual_image_topic": EVENT_TENSOR_PREVIEW_TOPIC if event_preview is not None else "",
             "generated": len(event_preview_samples),
             "decoded_events": event_preview.decoded_events if event_preview is not None else 0,
+            "diagnostic_summary": event_preview_diagnostic_summary,
             "samples": event_preview_samples,
         },
         "controls": controls,
