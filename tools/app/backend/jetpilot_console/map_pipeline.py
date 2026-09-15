@@ -183,6 +183,17 @@ def build_vgl_vslam_script(
     rviz_config_file = default_vslam_rviz_config(config)
     return f"""set -euo pipefail
 {_source_ros_setup(config)}
+echo "[stage] verify ROS Python NumPy/OpenCV ABI"
+ros_python_check='import cv2, numpy; assert int(numpy.__version__.split(".", 1)[0]) < 2, f"ROS OpenCV requires NumPy 1.x; found {{numpy.__version__}}"'
+if ! /usr/bin/python3 -c "$ros_python_check" >/dev/null 2>&1 && [ -x /opt/event_camera_env/bin/python ]; then
+  ros_numpy_path="$(/opt/event_camera_env/bin/python -c 'import sysconfig; print(sysconfig.get_path("purelib"))')"
+  export PYTHONPATH="$ros_numpy_path${{PYTHONPATH:+:${{PYTHONPATH}}}}"
+  echo "[stage] using isolated NumPy 1.26 environment for ROS Python"
+fi
+if ! /usr/bin/python3 -c "$ros_python_check"; then
+  echo "ROS Python is incompatible with the installed OpenCV binding. Expected NumPy 1.x in /usr/bin/python3; rebuild the JetPilot Isaac ROS image or reinstall numpy==1.26.4 in the system interpreter."
+  exit 20
+fi
 mkdir -p {_q(map_dir)}
 requested_map_dir={_q(map_dir)}
 offline_launch_pid=""

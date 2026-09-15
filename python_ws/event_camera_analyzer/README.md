@@ -16,10 +16,17 @@
 
 ```bash
 cd python_ws/event_camera_analyzer
-pip install -r requirements.txt
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
 # CLI コマンドとしてインストールする場合:
-pip install -e .
+python -m pip install -e .
 ```
+
+ROS/Isaac ROSが使用するsystem Pythonへ直接インストールしないでください。
+特にsystem側のNumPyを2.xへ更新すると、NumPy 1.x ABI向けのROS OpenCV bindingが
+読み込めなくなります。E2E学習は`/opt/env`、このstandalone解析toolは上記`.venv`、
+ROS commandはsystem Pythonという分離を維持します。
 
 ## 使い方
 

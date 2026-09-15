@@ -70,6 +70,19 @@ class BuildVglVslamScriptTest(unittest.TestCase):
         self.assertIn("--width=424 --height=240", script)
         self.assertNotIn("ros2 run isaac_mapping_ros create_map_offline.py", script)
 
+    def test_map_creation_fails_fast_on_ros_numpy_opencv_abi_mismatch(self):
+        script = build_vgl_vslam_script(
+            self.config, "/record/bag", "/maps/new", None,
+            "edex compute_poses cuvgl", "low_res", "/models/small",
+            enable_rviz=False)
+
+        self.assertIn("verify ROS Python NumPy/OpenCV ABI", script)
+        self.assertIn("ros_python_check='import cv2, numpy", script)
+        self.assertIn("/opt/event_camera_env/bin/python", script)
+        self.assertIn('export PYTHONPATH="$ros_numpy_path', script)
+        self.assertIn("Expected NumPy 1.x in /usr/bin/python3", script)
+        self.assertIn("exit 20", script)
+
     def test_offline_eval_uses_controlled_replay_shutdown(self) -> None:
         script = build_vgl_vslam_script(
             self.config,
