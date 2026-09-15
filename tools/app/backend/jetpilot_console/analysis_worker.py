@@ -1282,7 +1282,7 @@ class _EventTensorPreview:
         self.header_interarrival_max_since_render_ns = 0
         self.latest_sensor_interpacket_gap_ns: int | None = None
         self.sensor_interpacket_gap_max_since_render_ns = 0
-        self.sensor_event_gaps: collections.deque[tuple[int, int]] = collections.deque()
+        self.sensor_event_gaps: collections.deque[tuple[int, int, str]] = collections.deque()
         self.latest_packet_decoded_events = 0
         self.clock_source = "sensor_time_latest_available"
         self.timestamp_resets = 0
@@ -1415,7 +1415,7 @@ class _EventTensorPreview:
                 self.sensor_interpacket_gap_max_since_render_ns = max(
                     self.sensor_interpacket_gap_max_since_render_ns, sensor_gap_ns
                 )
-                self.sensor_event_gaps.append((int(event_ns[0]), sensor_gap_ns))
+                self.sensor_event_gaps.append((int(event_ns[0]), sensor_gap_ns, "interpacket"))
         if len(event_ns) > 1:
             consecutive_gaps_ns = event_ns[1:] - event_ns[:-1]
             diagnostic_gap_indices = np.flatnonzero(
@@ -1423,7 +1423,11 @@ class _EventTensorPreview:
             )
             for gap_index in diagnostic_gap_indices:
                 self.sensor_event_gaps.append(
-                    (int(event_ns[gap_index + 1]), int(consecutive_gaps_ns[gap_index]))
+                    (
+                        int(event_ns[gap_index + 1]),
+                        int(consecutive_gaps_ns[gap_index]),
+                        "intrapacket",
+                    )
                 )
         self.source_width = int(message.width)
         self.source_height = int(message.height)
@@ -1604,8 +1608,28 @@ class _EventTensorPreview:
         sensor_event_gap_max_in_window_ns = max(
             (
                 gap_ns
-                for gap_end_ns, gap_ns in self.sensor_event_gaps
+                for gap_end_ns, gap_ns, _source in self.sensor_event_gaps
                 if gap_end_ns > start_ns and gap_end_ns - gap_ns < window_end_ns
+            ),
+            default=0,
+        )
+        sensor_interpacket_gap_max_in_window_ns = max(
+            (
+                gap_ns
+                for gap_end_ns, gap_ns, source in self.sensor_event_gaps
+                if source == "interpacket"
+                and gap_end_ns > start_ns
+                and gap_end_ns - gap_ns < window_end_ns
+            ),
+            default=0,
+        )
+        sensor_intrapacket_gap_max_in_window_ns = max(
+            (
+                gap_ns
+                for gap_end_ns, gap_ns, source in self.sensor_event_gaps
+                if source == "intrapacket"
+                and gap_end_ns > start_ns
+                and gap_end_ns - gap_ns < window_end_ns
             ),
             default=0,
         )
@@ -1620,8 +1644,16 @@ class _EventTensorPreview:
             dark_cause = "timestamp_reset"
         elif event_count == 0:
             dark_cause = "empty_event_window"
-        elif empty_temporal_bins and sensor_event_gap_max_in_window_ms >= bin_width_ms:
-            dark_cause = "sensor_time_event_gap"
+        elif (
+            empty_temporal_bins
+            and sensor_interpacket_gap_max_in_window_ns / 1e6 >= bin_width_ms
+        ):
+            dark_cause = "sensor_interpacket_gap"
+        elif (
+            empty_temporal_bins
+            and sensor_intrapacket_gap_max_in_window_ns / 1e6 >= bin_width_ms
+        ):
+            dark_cause = "sensor_intrapacket_gap"
         elif empty_temporal_bins:
             dark_cause = "quiet_or_sparse_interval"
         elif packet_age_ms is not None and packet_age_ms > gap_threshold_ms:
@@ -1676,6 +1708,12 @@ class _EventTensorPreview:
             ),
             "sensor_interpacket_gap_max_since_preview_ms": sensor_interpacket_gap_max_ms,
             "sensor_event_gap_max_in_window_ms": sensor_event_gap_max_in_window_ms,
+            "sensor_interpacket_gap_max_in_window_ms": (
+                sensor_interpacket_gap_max_in_window_ns / 1e6
+            ),
+            "sensor_intrapacket_gap_max_in_window_ms": (
+                sensor_intrapacket_gap_max_in_window_ns / 1e6
+            ),
             "bin_width_ms": bin_width_ms,
             "packet_header_to_bag_ms": (
                 (self.latest_packet_bag_timestamp_ns - self.latest_packet_header_timestamp_ns) / 1e6
@@ -2400,7 +2438,20 @@ def extract_analysis(options: AnalysisOptions) -> dict[str, object]:
                 for sample in event_preview_samples
             ),
             "sensor_time_gap_frames": sum(
-                sample.get("stats", {}).get("dark_cause") == "sensor_time_event_gap"
+                sample.get("stats", {}).get("dark_cause")
+                in {
+                    "sensor_time_event_gap",
+                    "sensor_interpacket_gap",
+                    "sensor_intrapacket_gap",
+                }
+                for sample in event_preview_samples
+            ),
+            "sensor_interpacket_gap_frames": sum(
+                sample.get("stats", {}).get("dark_cause") == "sensor_interpacket_gap"
+                for sample in event_preview_samples
+            ),
+            "sensor_intrapacket_gap_frames": sum(
+                sample.get("stats", {}).get("dark_cause") == "sensor_intrapacket_gap"
                 for sample in event_preview_samples
             ),
             "stale_packet_delivery_frames": sum(

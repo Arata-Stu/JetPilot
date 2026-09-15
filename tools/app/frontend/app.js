@@ -6037,6 +6037,8 @@ function updateAnalysisEventTensorStatus(payload) {
   const packetGapMaxMs = Number(stats.packet_interarrival_max_since_preview_ms);
   const headerGapMaxMs = Number(stats.header_interarrival_max_since_preview_ms);
   const sensorGapMaxMs = Number(stats.sensor_event_gap_max_in_window_ms);
+  const sensorInterpacketGapMaxMs = Number(stats.sensor_interpacket_gap_max_in_window_ms);
+  const sensorIntrapacketGapMaxMs = Number(stats.sensor_intrapacket_gap_max_in_window_ms);
   const binWidthMs = Number(stats.bin_width_ms);
   const packetHeaderLagMs = Number(stats.packet_header_to_bag_ms);
   const causeLabels = {
@@ -6047,6 +6049,8 @@ function updateAnalysisEventTensorStatus(payload) {
     empty_event_window: "no events in window",
     no_recent_events_in_latest_bins: "latest bins have no events",
     sensor_time_event_gap: "sensor-time event gap",
+    sensor_interpacket_gap: "sensor gap between packets",
+    sensor_intrapacket_gap: "sensor gap inside packet",
     quiet_or_sparse_interval: "quiet/sparse interval",
     timestamp_reset: "sensor timestamp reset",
     empty_tensor: "empty tensor",
@@ -6061,6 +6065,12 @@ function updateAnalysisEventTensorStatus(payload) {
     Number.isFinite(packetGapMaxMs) ? `packet gap max ${packetGapMaxMs.toFixed(1)} ms` : "packet gap —",
     Number.isFinite(headerGapMaxMs) ? `header gap max ${headerGapMaxMs.toFixed(1)} ms` : "",
     Number.isFinite(sensorGapMaxMs) ? `sensor gap in window ${sensorGapMaxMs.toFixed(1)} ms` : "",
+    Number.isFinite(sensorInterpacketGapMaxMs) && sensorInterpacketGapMaxMs > 0
+      ? `between packets ${sensorInterpacketGapMaxMs.toFixed(1)} ms`
+      : "",
+    Number.isFinite(sensorIntrapacketGapMaxMs) && sensorIntrapacketGapMaxMs > 0
+      ? `inside packet ${sensorIntrapacketGapMaxMs.toFixed(1)} ms`
+      : "",
     Number.isFinite(binWidthMs) ? `bin ${binWidthMs.toFixed(1)} ms` : "",
     Number.isFinite(packetHeaderLagMs) ? `header lag ${packetHeaderLagMs.toFixed(1)} ms` : "",
     darkCause ? `cause: ${causeLabels[darkCause] || darkCause}` : "",
@@ -6076,6 +6086,8 @@ function updateAnalysisEventTensorStatus(payload) {
     events === 0 || resets > 0 || darkCause === "packet_gap"
       || darkCause === "stale_packet_delivery"
       || darkCause === "sensor_time_event_gap"
+      || darkCause === "sensor_interpacket_gap"
+      || darkCause === "sensor_intrapacket_gap"
       || darkCause === "timestamp_reset"
       || darkCause === "no_packet_since_previous_preview"
       || latestEmptyRun >= Math.max(2, Math.ceil(Number(stats.bins || 0) / 2))
