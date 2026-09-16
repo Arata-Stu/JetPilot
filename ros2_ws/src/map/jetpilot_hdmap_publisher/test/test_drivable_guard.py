@@ -70,6 +70,23 @@ class GuardTest(unittest.TestCase):
         self.assertEqual(motion_issue(env,(0,0,0),(0,0,0),self.cfg),'')
         self.assertIn('box',route_issue(env,(0,0),[(0,0),(2,0)],1,self.cfg))
 
+    def test_trace_reports_checked_and_colliding_shapes_without_changing_result(self):
+        env=corridor(obstacles=[('box',[(.4,-.1),(.5,-.1),(.5,.1),(.4,.1)],0)])
+        motion_shapes=[]
+        route_shapes=[]
+        motion_result=motion_issue(
+            env,(0,0,0),(1,0,0),self.cfg,
+            trace=lambda shape,issue:motion_shapes.append((shape,issue)))
+        route_result=route_issue(
+            env,(0,0),[(0,0),(2,0)],1,self.cfg,
+            trace=lambda shape,issue:route_shapes.append((shape,issue)))
+        self.assertIn('box',motion_result)
+        self.assertIn('box',route_result)
+        self.assertTrue(motion_shapes)
+        self.assertTrue(route_shapes)
+        self.assertIn('box',motion_shapes[-1][1])
+        self.assertIn('box',route_shapes[-1][1])
+
     def test_route_looks_across_closed_loop_seam(self):
         env=corridor(obstacles=[('box',[(.2,-.05),(.3,-.05),(.3,.05),(.2,.05)],0)])
         path=[(0,0),(2,0),(2,1),(0,1)]

@@ -988,6 +988,10 @@ controllerは安全判定が0.3秒届かなくなっても停止します。判�
 障害物は底面を走行不可とする平面判定で、高さによるくぐり抜けは扱いません。
 
 設定は`jetpilot_hdmap_publisher/config/drivable_guard.param.yaml`です。
+FoxgloveまたはRVizでは`/planning/drivable_guard/markers`（`visualization_msgs/MarkerArray`）を表示すると、
+旋回継続時の停止領域（黄）、操舵を中央へ戻した停止領域（水色）、選択経路の検査領域（緑）、
+干渉した領域（赤）と、判定に使用した速度・停止距離・理由を確認できます。
+`publish_debug_markers`で配信の有効／無効を切り替えられます。
 `front_m` / `rear_m`は座標原点から車体端まで、`width_m`は車幅、`margin_m`は追加余裕です。
 現在値はbase_linkが中央にある約0.32 × 0.18 mの車体を仮定し、前後各0.16 m、margin 0.01 mです。
 直進時の判定寸法は前後各0.17 m、左右各0.10 mです。旋回中は、向きが変わる間に長方形が通過する領域も含めます。

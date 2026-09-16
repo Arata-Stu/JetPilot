@@ -62,15 +62,18 @@ Metavision RAWを、x86_64とJetsonで共通に読める固定長の`EVSBIN v1`�
 `EVSBIN`は64-byte little-endian headerと16-byte/eventから成り、timestampはµs、極性は0/1です。RAW decodeの評価とtensor生成の評価を混ぜないためのcanonical形式です。
 
 変換器はfast playbackかつtimestamp shift無効で動作します。既定の
-`--timestamp-policy drop-nonmonotonic`では、これまでに出力した最大timestampより古いイベントを
-除外し、CPU/GPUへ渡すcanonical列を単調にします。drop数、割合、最大lateness、影響callback数は
-`input.evbin.conversion.json`へ自動保存されます。元の順序を調査用に保持する場合だけ
-`--timestamp-policy preserve`を明示します。ただしpreserve出力は非単調RAWではtensor benchmarkの
+`--timestamp-policy reorder`では10 msのbounded reorder bufferを使い、局所的に前後したイベントを
+保持したままCPU/GPUへ渡すcanonical列を単調にします。10 msより遅れて到着し、既に出力済みの
+timestampより古いイベントだけを除外します。late入力数、drop数、割合、最大lateness、reorder
+buffer最大要素数は`input.evbin.conversion.json`へ自動保存されます。
+
+比較用として単純除外する`--timestamp-policy drop-nonmonotonic`と、元順序を保持する
+`--timestamp-policy preserve`も残しています。ただしpreserve出力は非単調RAWではtensor benchmarkの
 入力検証に失敗します。
 
 ```bash
 ./build/evs_raw_to_evbin input.raw input.evbin callbacks.csv \
-  --timestamp-policy drop-nonmonotonic \
+  --timestamp-policy reorder --reorder-window-us 10000 \
   --stats conversion.json
 ```
 

@@ -91,6 +91,37 @@ class GuardWiringTest(unittest.TestCase):
         self.assertEqual((outputs[0].ready,outputs[0].emergency),(False,False))
         self.assertIn('no TF',outputs[0].reason)
 
+    def test_foxglove_markers_show_all_envelopes_collision_and_speed_label(self):
+        def point(): return NS(x=0.,y=0.,z=0.)
+        def marker():
+            return NS(header=NS(frame_id='',stamp=None),ns='',id=0,type=0,action=0,
+                      pose=NS(position=point(),orientation=NS(x=0.,y=0.,z=0.,w=0.)),
+                      scale=NS(x=0.,y=0.,z=0.),color=NS(r=0.,g=0.,b=0.,a=0.),
+                      points=[],text='')
+        marker.ADD,marker.DELETEALL=0,3
+        marker.LINE_LIST,marker.TRIANGLE_LIST,marker.TEXT_VIEW_FACING=5,11,9
+        ns=dict(Marker=marker,MarkerArray=lambda:NS(markers=[]),Point=point)
+        load_functions(PACKAGE/'drivable_guard_node.py',
+                       {'_point','_shape_marker','build_debug_markers'},ns)
+        guard=NS(map_frame='map',debug_shapes={
+            'turning_stop':[([(-1,-1),(1,-1),(1,1),(-1,1)],False)],
+            'straight_stop':[([(-1,-1),(1,-1),(1,1),(-1,1)],False)],
+            'route':[([(-1,-1),(1,-1),(1,1),(-1,1)],True)]},
+            debug_info=dict(position=(0.,0.),measured_speed=1.,target_speed=2.,
+                            profile_speed=3.,check_speed=3.,stopping_distance=5.4))
+        guard._point=ns['_point']
+        guard._shape_marker=MethodType(ns['_shape_marker'],guard)
+        guard.build_debug_markers=MethodType(ns['build_debug_markers'],guard)
+        output=guard.build_debug_markers(123,False,False,'selected trajectory unsafe: bounds')
+        namespaces={item.ns for item in output.markers if getattr(item,'ns','')}
+        self.assertTrue(any('turning_stop/safe' in name for name in namespaces))
+        self.assertTrue(any('straight_stop/safe' in name for name in namespaces))
+        self.assertTrue(any('route/collision' in name for name in namespaces))
+        label=next(item for item in output.markers if item.ns=='drivable_guard/status')
+        self.assertIn('1.00/2.00/3.00/3.00',label.text)
+        self.assertIn('5.40 m',label.text)
+        self.assertIn('bounds',label.text)
+
     def test_publisher_uses_physical_bounds_and_obstacle_margin(self):
         ns=dict(DrivableArea=lambda:msg(lanes=[],obstacles=[]),DrivableLane=lambda:NS(),
                 StaticObstacle=lambda:NS(),Point=lambda:NS())

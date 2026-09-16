@@ -277,7 +277,7 @@ def swept_footprint(previous, current, cfg):
     return convex_hull(footprint(previous, cfg, extra) + footprint(current, cfg, extra))
 
 
-def motion_issue(env, pose, velocity, cfg):
+def motion_issue(env, pose, velocity, cfg, trace=None):
     """Constant body twist, then deceleration at constant curvature, forward/reverse.
 
     Exact arc endpoints; inflate each swept footprint by its arc/chord error so
@@ -294,7 +294,11 @@ def motion_issue(env, pose, velocity, cfg):
         raise ValueError("prediction exceeds computation limit")
     previous = (x, y, yaw)
     if speed < EPS and abs(w) < EPS:
-        return env.shape_issue(footprint(previous, cfg))
+        shape = footprint(previous, cfg)
+        issue = env.shape_issue(shape)
+        if trace:
+            trace(shape, issue)
+        return issue
     # Equivalent constant-speed travel time gives braking arc with fixed curvature.
     duration = travel/speed if speed >= EPS else cfg.reaction_s
     count = max(count, math.ceil(abs(w) * duration / .1))
@@ -310,14 +314,17 @@ def motion_issue(env, pose, velocity, cfg):
         current = (x+math.cos(yaw)*bx-math.sin(yaw)*by,
                    y+math.sin(yaw)*bx+math.cos(yaw)*by,
                    yaw+w*t)
-        issue = env.shape_issue(swept_footprint(previous, current, cfg))
+        shape = swept_footprint(previous, current, cfg)
+        issue = env.shape_issue(shape)
+        if trace:
+            trace(shape, issue)
         if issue:
             return issue
         previous = current
     return ""
 
 
-def route_issue(env, position, raw_points, speed, cfg, closed=False):
+def route_issue(env, position, raw_points, speed, cfg, closed=False, trace=None):
     """Check the selected route from the closest segment over the stopping horizon."""
     points = [point(p) for p in raw_points]
     if len(points)<2 or not math.isfinite(speed):
@@ -359,7 +366,10 @@ def route_issue(env, position, raw_points, speed, cfg, closed=False):
         yaw = math.atan2(b[1]-a[1], b[0]-a[0])
         if previous_pose is None:
             previous_pose = (a[0], a[1], yaw)
-            issue = env.shape_issue(footprint(previous_pose, cfg))
+            shape = footprint(previous_pose, cfg)
+            issue = env.shape_issue(shape)
+            if trace:
+                trace(shape, issue)
             if issue: return issue
         used=min(remaining,length)
         count=max(1,math.ceil(used/cfg.step_m))
@@ -369,7 +379,10 @@ def route_issue(env, position, raw_points, speed, cfg, closed=False):
             t=used/length*j/count
             current=(a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t)
             current_pose=(current[0],current[1],yaw)
-            issue=env.shape_issue(swept_footprint(previous_pose,current_pose,cfg))
+            shape = swept_footprint(previous_pose,current_pose,cfg)
+            issue=env.shape_issue(shape)
+            if trace:
+                trace(shape, issue)
             if issue: return issue
             previous_pose=current_pose
         remaining-=used
