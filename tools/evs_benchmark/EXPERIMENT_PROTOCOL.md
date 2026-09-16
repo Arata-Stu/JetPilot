@@ -25,6 +25,7 @@ RAW decode時間をrepresentation時間へ含めた値と、canonical event列�
 - event representation: `B=10`、polarity-major、20ch、nearest/no interpolation
 - output: 212×120、window 40 ms、stride 4 ms（250 Hz）
 - 入力区間とevent数。両machineへ同一EVSBINとSHA-256をコピー
+- RAW→EVSBINでは`drop_nonmonotonic`を固定し、decoded/written/drop数、drop率、最大latenessを保存
 - Release/O3、compiler、CUDA、driver、JetPack、power mode、clock設定
 - warm-up回数、測定回数、各試行の順番
 
@@ -66,7 +67,7 @@ RAW decode時間をrepresentation時間へ含めた値と、canonical event列�
 ## 5. 実験手順
 
 1. 30秒以上のRAWを固定条件で複数取得する。
-2. RAW→EVSBIN変換を一度行い、callback CSVとSHA-256を保存する。
+2. RAW→EVSBIN変換を`drop_nonmonotonic`で一度行い、conversion JSON、callback CSV、SHA-256を保存する。
 3. EVSBINをx86_64とJetsonへ同一バイト列で配布する。
 4. 各machineを固定power/clock条件にし、idle温度まで待つ。
 5. 各方式をwarm-up 5回後、最低30回測る。方式の実行順はrunごとに入れ替える。
