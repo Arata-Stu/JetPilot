@@ -90,6 +90,22 @@ wrap境界数、`evt3_wrap_boundaries_with_backward`は逆行を伴った境界�
 `--time-shift`との比較も可能ですが、wrap位相の評価には元timestampを保持する
 `--no-time-shift`を使用してください。
 
+逆行量の分位点、4/8 ms超の件数、100 ms時系列、異常cluster、40 ms windowへの推定影響率は、
+標準Pythonだけの解析スクリプトで集計できます。
+
+```bash
+python3 scripts/analyze_timestamp_anomalies.py \
+  --anomalies anomalies.csv \
+  --summary wrap_check.csv \
+  --hal-log hal.log \
+  --output-dir timestamp_analysis \
+  --window-us 40000 --stride-us 4000
+```
+
+`timestamp_anomaly_report.json`が主要集計、`backward_magnitude_histogram.csv`が逆行量の
+厳密な頻度、`timestamp_anomaly_timeline.csv`が100 ms単位の時間変化、
+`timestamp_anomaly_clusters.csv`が1 ms以内に連続した異常群です。
+
 ## 単一条件の実行
 
 ```bash
