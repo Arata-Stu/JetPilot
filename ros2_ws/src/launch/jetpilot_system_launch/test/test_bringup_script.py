@@ -1216,6 +1216,15 @@ def test_foxglove_launch_contract_excludes_high_bandwidth_topics() -> None:
     assert "^/map$" not in patterns
     assert "^/(.*/)?diagnostics$" in patterns
     assert "^/visual_slam/tracking/odometry$" in patterns
+    assert "^/planning/drivable_guard/markers$" in patterns
+    assert (
+        "^/planning/(ready|safety_status|selected_lane|current_lane|network_status|target_speed)$"
+        in patterns
+    )
+    assert "^/planning/route/(ready|selected_lane|target_speed)$" in patterns
+    assert "^/planning/recovery/ready$" in patterns
+    assert "^/controller/ready$" in patterns
+    assert "^/(bag/status|safety/collision_detected)$" in patterns
     assert (
         "^/localization/(pose_hint_required|pose_hint_state|current_section|"
         "current_section_marker)$"
@@ -1230,6 +1239,25 @@ def test_foxglove_launch_contract_excludes_high_bandwidth_topics() -> None:
         for pattern in patterns
     )
     compiled_patterns = [re.compile(pattern) for pattern in patterns]
+    assert any(
+        pattern.fullmatch("/planning/drivable_guard/markers")
+        for pattern in compiled_patterns
+    )
+    for status_topic in (
+        "/operation_mode/state",
+        "/planning/ready",
+        "/planning/safety_status",
+        "/planning/selected_lane",
+        "/planning/target_speed",
+        "/planning/route/ready",
+        "/planning/recovery/ready",
+        "/controller/ready",
+        "/bag/status",
+        "/safety/collision_detected",
+    ):
+        assert any(
+            pattern.fullmatch(status_topic) for pattern in compiled_patterns
+        ), status_topic
     for excluded_topic in (
         "/realsense/color/image_raw",
         "/visual_slam/vis/landmarks_cloud",

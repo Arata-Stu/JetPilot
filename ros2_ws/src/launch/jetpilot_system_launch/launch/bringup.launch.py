@@ -16,7 +16,12 @@ from launch_ros.actions import ComposableNodeContainer
 _TRUE_VALUES = {'1', 'true', 'yes', 'on'}
 _DEFAULT_FOXGLOVE_TOPIC_WHITELIST = (
     "['^/tf$', '^/tf_static$', '^/clock$', '^/operation_mode/state$', "
-    "'^/planning/(manager|recovery)/status$', '^/(.*/)?diagnostics$', "
+    "'^/planning/(manager|recovery)/status$', '^/planning/recovery/ready$', "
+    "'^/planning/(ready|safety_status|selected_lane|current_lane|network_status|target_speed)$', "
+    "'^/planning/route/(ready|selected_lane|target_speed)$', "
+    "'^/planning/drivable_guard/markers$', '^/controller/ready$', "
+    "'^/(bag/status|safety/collision_detected)$', "
+    "'^/(.*/)?diagnostics$', "
     "'^/localization/(pose_hint_required|pose_hint_state|current_section|"
     "current_section_marker)$', "
     "'^/visual_slam/tracking/odometry$', '^/visual_localization/pose$', "
@@ -51,6 +56,7 @@ _REPLAY_ISOLATED_TOPICS = (
     '/planning/network_status',
     '/planning/ready',
     '/planning/safety_status',
+    '/planning/drivable_guard/markers',
     '/tuning/safety_status',
     '/tuning/drivable_area',
     '/hd_map/drivable_area',

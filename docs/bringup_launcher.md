@@ -240,8 +240,10 @@ when the `foxglove` component, `enable_foxglove:=true`, or the explicit
 `--localization-init foxglove` mode is selected. It listens on port `8767`;
 ports `8765` and `8766` are reserved
 for the JetPilot Console and Joy profile editor. The default outbound allowlist contains only
-`/tf`, `/tf_static`, `/clock`, topics ending in `/diagnostics`, selected localization state and
-HD-map marker/path topics, `/visual_slam/tracking/odometry`, and `/visual_localization/pose`.
+`/tf`, `/tf_static`, `/clock`, topics ending in `/diagnostics`, selected localization state,
+operation/planning/controller safety and readiness state, bag/safety status,
+HD-map marker/path topics, `/planning/drivable_guard/markers`,
+`/visual_slam/tracking/odometry`, and `/visual_localization/pose`.
 Images, point clouds, and OccupancyGrid topics are not exposed. Service and parameter access are
 disabled. The bridge's own system monitor is also disabled because
 `/jetson/diagnostics` already provides jtop data.
@@ -251,7 +253,9 @@ multiple `/tf_static` publishers.
 The fixed frame is the Isaac ROS VSLAM `map` frame. The HD map was generated in that same frame, so
 no OccupancyGrid is needed. In Foxglove's 3D panel, select `map` as the display frame and enable
 `/hd_map/lane_markers`, `/hd_map/section_markers`, and optionally
-`/hd_map/primary_centerline_path`. Configure the **2D pose estimate** click-to-publish tool to use
+`/hd_map/primary_centerline_path`. During planning, enable
+`/planning/drivable_guard/markers` to display the checked stopping envelopes and collision area.
+Configure the **2D pose estimate** click-to-publish tool to use
 `/initialpose`.
 The map directory must contain `<map_dir>/<map_dir_name>_hd_map.yaml`, unless
 `hd_map_yaml_path` is set explicitly.

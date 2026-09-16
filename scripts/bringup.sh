@@ -56,7 +56,7 @@ ARG_VALUES=()
 EXTRA_LAUNCH_ARGS=()
 CUSTOM_COMPONENTS=''
 SENSOR_KIT_RTP_TOPICS=()
-FOXGLOVE_DEFAULT_TOPIC_WHITELIST="['^/tf$', '^/tf_static$', '^/clock$', '^/operation_mode/state$', '^/planning/(manager|recovery)/status$', '^/(.*/)?diagnostics$', '^/localization/(pose_hint_required|pose_hint_state|current_section|current_section_marker)$', '^/visual_slam/tracking/odometry$', '^/visual_localization/pose$', '^/hd_map/(lane_markers|section_markers|primary_centerline_path)$', '^/controller/(tracking_markers|lookahead_point)$', '^/perception/opponents/.*$']"
+FOXGLOVE_DEFAULT_TOPIC_WHITELIST="['^/tf$', '^/tf_static$', '^/clock$', '^/operation_mode/state$', '^/planning/(manager|recovery)/status$', '^/planning/recovery/ready$', '^/planning/(ready|safety_status|selected_lane|current_lane|network_status|target_speed)$', '^/planning/route/(ready|selected_lane|target_speed)$', '^/planning/drivable_guard/markers$', '^/controller/ready$', '^/(bag/status|safety/collision_detected)$', '^/(.*/)?diagnostics$', '^/localization/(pose_hint_required|pose_hint_state|current_section|current_section_marker)$', '^/visual_slam/tracking/odometry$', '^/visual_localization/pose$', '^/hd_map/(lane_markers|section_markers|primary_centerline_path)$', '^/controller/(tracking_markers|lookahead_point)$', '^/perception/opponents/.*$']"
 FOXGLOVE_DEFAULT_CLIENT_TOPIC_WHITELIST="['^/initialpose$']"
 
 die() {
