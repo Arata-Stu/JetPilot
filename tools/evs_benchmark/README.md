@@ -72,6 +72,24 @@ Metavision RAWを、x86_64とJetsonで共通に読める固定長の`EVSBIN v1`�
   --warmup 1 --trials 5 --validate-timestamps
 ```
 
+EVT3の16.777216秒timestamp wrapと逆行の関係を調べる場合は、性能測定と分けて1 trialだけ
+実行します。`anomalies.csv`には全逆行と、既定では1秒以上のforward gapが記録されます。
+`distance_to_evt3_wrap_us`が小さい行へ異常が集中していればwrap境界との相関があります。
+
+```bash
+./build/evs_raw_decode_bench input.raw wrap_check.csv \
+  --warmup 0 --trials 1 --validate-timestamps --no-time-shift \
+  --anomalies anomalies.csv \
+  --evt3-wrap-proximity-us 10000 \
+  --trace-forward-gap-us 1000000
+```
+
+`wrap_check.csv`では、callback境界とcallback内の逆行数、wrap前後10 ms以内の逆行数、
+1秒以上のforward gap数を別々に集計します。`evt3_wrap_boundaries_crossed`は収録中に通過した
+wrap境界数、`evt3_wrap_boundaries_with_backward`は逆行を伴った境界数です。
+`--time-shift`との比較も可能ですが、wrap位相の評価には元timestampを保持する
+`--no-time-shift`を使用してください。
+
 ## 単一条件の実行
 
 ```bash
