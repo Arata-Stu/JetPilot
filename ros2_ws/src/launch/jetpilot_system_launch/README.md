@@ -115,6 +115,27 @@ camera_mount_link -> d455_link -> realsense_camera_link`で接続します。
 
 SilkyEvCam/OpenEBを含むsensor kitでは、RAW記録機能自体は待機状態になりますが、Bag Managerからの連携は現在一時的に無効です。この状態では`/bag/request`へSTARTを送ってもrosbagだけを記録します。再度連携する場合は`config/tool/bag_manager.param.yaml`の`raw_recording_request_topic`を`/event_camera/raw_recording/request`へ戻してください。連携時はrosbag directoryの生成後に同じ開始要求が転送され、MCAP、RAW、`*.raw.metadata.yaml`が同じsession directoryへ保存されます。カメラ起動直後の自動RAW記録は無効です。
 
+センサ単体のRGB＋EVS benchmarkでは、通常設定を変更せず専用presetを使用できます。
+
+```bash
+scripts/bringup.sh rgb-evs-benchmark
+```
+
+このpresetは`realsense-silky`を固定で選び、RGB 30 Hz、SilkyEvCam native RAW、両センサと
+Jetsonのdiagnosticsだけを記録します。Infra、RealSense IMU、EVS event image、車両・推論・
+自己位置推定は起動しません。`/event_camera/events`と`events_raw`をMCAPへ重複保存しないため、
+ROS serializationとMCAP I/Oがnative RAW取得へ与える影響を抑えられます。設定は
+`config/tool/bag_manager.rgb_evs_benchmark.param.yaml`です。RGB HzやBiasはTUIまたはlaunch
+overrideで変更できます。
+
+停止・手持ち計測では車両を起動しない上記コマンドを使います。RCカーを動かして同じセンサ条件を
+記録するときだけ車両profileを明示します。この場合はJoy、teleop、operation、指定vehicleも起動し、
+操舵・適用指令を軽量MCAPへ追加記録します。
+
+```bash
+scripts/bringup.sh rgb-evs-benchmark --vehicle jpbb
+```
+
 MCAPとRAWのduration分割は`config/tool/bag_manager.param.yaml`の`recording_split_duration_s`で一括指定します。統合launchにはRAW専用の分割引数を公開していないため、異なるdurationは指定できません。`0`は分割無効、例えば`600`は両方を約10分周期で分割します。
 
 Jetson 上の通常起動では `isaac_ros_jetson_stats` が既定で有効になり、診断情報を `/jetson/diagnostics` へ publish します。必要に応じて `enable_jetson_stats:=false` で無効化できます。x86 imageには同packageが配布されないため既定で無効になり、明示的な有効化も拒否します。`scripts/bringup.sh` のオフライン再生プリセットでは tool stack自体を停止するため、Jetson statsも起動しません。

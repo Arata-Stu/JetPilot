@@ -113,6 +113,7 @@ vehicle              Selected vehicle interface only
 teleop               Joy/teleop/operation + selected vehicle interface
 drive                Live sensor + joy/teleop/operation + selected vehicle interface
 record              データ収集（Joy / 固定スロットル・rosbag manager）
+rgb-evs-benchmark   RGB＋EVSセンサベンチマーク（native RAW＋軽量MCAP）
 calibration          Live sensor + mapless VSLAM odometry + teleop + vehicle + bag recording
 e2e                  E2E走行（モデルからスロットル方式を自動選択）
 runtime              Live sensor/localization/teleop + Foxglove pose fallback + vehicle (map required)
@@ -223,7 +224,7 @@ known_preset() {
   case "$1" in
     sensor|localization-only|localization|localize-live|replay-localization|\
       offline-vslam|offline-vslam-map|offline-localization|\
-      vehicle|teleop|drive|calibration|record|e2e-collect|e2e-steering|e2e|runtime|map-view|tuning|competition|\
+      vehicle|teleop|drive|calibration|record|rgb-evs-benchmark|e2e-collect|e2e-steering|e2e|runtime|map-view|tuning|competition|\
       vehicle-pca|vehicle-vesc|teleop-pca|teleop-vesc|\
       drive-pca|drive-vesc|runtime-pca|runtime-vesc|custom) return 0 ;;
     *) return 1 ;;
@@ -1048,6 +1049,24 @@ apply_preset() {
       set_arg fixed_throttle 0.2
       REQUIRES_VEHICLE=true
       ;;
+    rgb-evs-benchmark)
+      set_arg enable_sensor_kit true
+      set_arg enable_tool true
+      set_arg enable_bag_manager true
+      set_arg bag_manager_param \
+        "${PROJECT_ROOT}/ros2_ws/src/launch/jetpilot_system_launch/config/tool/bag_manager.rgb_evs_benchmark.param.yaml"
+      apply_sensor_kit realsense-silky
+      set_arg sensor_kit_rgb_fps 30
+      set_arg sensor_kit_infra_fps 0
+      set_arg sensor_kit_enable_accel false
+      set_arg sensor_kit_enable_gyro false
+      set_arg sensor_kit_enable_depth false
+      set_arg sensor_kit_silky_evcam_event_image_enabled false
+      set_arg sensor_kit_silky_evcam_raw_recording_enabled true
+      set_arg sensor_kit_silky_evcam_raw_recording_auto_start false
+      set_arg sensor_kit_silky_evcam_raw_recording_request_topic \
+        /event_camera/raw_recording/request
+      ;;
     e2e-collect)
       set_arg enable_sensor_kit true
       enable_drive_stack
@@ -1626,6 +1645,7 @@ choose_preset_interactively() {
   local options=()
   selection="$(choose_one '用途を選択' \
     'record   データ収集' \
+    'benchmark RGB＋EVSセンサベンチマーク' \
     'e2e      E2E走行' \
     'driving  通常走行' \
     'offline  オフライン再生' \
@@ -1633,6 +1653,10 @@ choose_preset_interactively() {
   case "${selection%%[[:space:]]*}" in
     record|e2e)
       PRESET="${selection%%[[:space:]]*}"
+      return 0
+      ;;
+    benchmark)
+      PRESET='rgb-evs-benchmark'
       return 0
       ;;
     driving)
@@ -1934,6 +1958,9 @@ configure_realsense_fps_interactively() {
   local stream key current selection fps override explicit
   local options=()
   for stream in rgb infra; do
+    if [[ "$PRESET" == 'rgb-evs-benchmark' && "$stream" == 'infra' ]]; then
+      continue
+    fi
     key="sensor_kit_${stream}_fps"
     explicit=false
     if ((${#EXTRA_LAUNCH_ARGS[@]} > 0)); then
@@ -1956,6 +1983,8 @@ configure_realsense_fps_interactively() {
 
 configure_silky_evcam_fps_interactively() {
   is_true "$(get_arg enable_sensor_kit)" || return 0
+  is_true "$(get_arg sensor_kit_silky_evcam_event_image_enabled 2>/dev/null || true)" \
+    || return 0
   [[ "$(get_arg sensor_kit_interface_pkg 2>/dev/null || true)" == 'jetpilot_system_launch' ]] \
     || return 0
   case "$(get_arg sensor_kit_interface_launch 2>/dev/null || true)" in
@@ -2120,6 +2149,17 @@ normalize_rosbag_path() {
 }
 
 validate_configuration() {
+  if [[ "$PRESET" == 'rgb-evs-benchmark' ]]; then
+    [[ "$SENSOR_KIT_PROFILE" == 'realsense-silky' ]] \
+      || die 'rgb-evs-benchmark requires the realsense-silky sensor kit'
+    is_true "$(get_arg enable_bag_manager)" \
+      || die 'rgb-evs-benchmark requires the bag manager'
+    is_true "$(get_arg sensor_kit_silky_evcam_raw_recording_enabled)" \
+      || die 'rgb-evs-benchmark requires OpenEB RAW recording'
+    [[ "$(get_arg sensor_kit_silky_evcam_raw_recording_request_topic)" \
+        == '/event_camera/raw_recording/request' ]] \
+      || die 'rgb-evs-benchmark requires the OpenEB RAW recording request topic'
+  fi
   if is_true "$(get_arg teleop_fixed_throttle_mode 2>/dev/null || true)" || is_true "$(get_arg e2e_fixed_throttle_mode 2>/dev/null || true)"; then
     "$PYTHON_BIN" - "$(get_arg fixed_throttle)" <<'PYVALIDATE' || die 'fixed_throttle must be a number within [0, 1]'
 import math
@@ -2428,11 +2468,14 @@ print_summary() {
     if [[ -n "$(get_arg sensor_kit_silky_evcam_bias_file 2>/dev/null || true)" ]]; then
       printf '  Silky bias   : %s\n' "$(get_arg sensor_kit_silky_evcam_bias_file)"
     fi
-    if [[ -n "$(get_arg sensor_kit_silky_evcam_event_image_fps 2>/dev/null || true)" ]]; then
+    if is_true "$(get_arg sensor_kit_silky_evcam_event_image_enabled 2>/dev/null || true)" \
+      && [[ -n "$(get_arg sensor_kit_silky_evcam_event_image_fps 2>/dev/null || true)" ]]; then
       printf '  EVS image Hz : %s (window %s ms / stride %s ms)\n' \
         "$(get_arg sensor_kit_silky_evcam_event_image_fps)" \
         "$(get_arg sensor_kit_silky_evcam_event_image_window_ms)" \
         "$(get_arg sensor_kit_silky_evcam_event_image_stride_ms)"
+    elif [[ -n "$(get_arg sensor_kit_silky_evcam_event_image_enabled 2>/dev/null || true)" ]]; then
+      printf '  EVS image    : disabled (native RAW capture)\n'
     fi
     if is_true "$(get_arg sensor_kit_enable_rtp_stream 2>/dev/null || true)"; then
       printf '  RTP topic    : %s\n' \
@@ -2728,6 +2771,10 @@ if [[ "$REQUIRES_MAP" == 'true' && -z "$MAP_DIR" && "$INTERACTIVE" == 'true' ]];
 fi
 if [[ -n "${CLI_VEHICLE:-}" ]]; then
   apply_vehicle "$CLI_VEHICLE"
+  if [[ "$PRESET" == 'rgb-evs-benchmark' ]]; then
+    enable_drive_stack
+    set_arg publish_vehicle_evs_description true
+  fi
 fi
 if [[ "$INTERACTIVE" == 'true' && -z "${CLI_VEHICLE:-}" ]] \
   && [[ "$REQUIRES_VEHICLE" == 'true' ]]; then
@@ -2736,7 +2783,8 @@ fi
 if [[ "$REQUIRES_VEHICLE" == 'true' && "$VEHICLE_BACKEND" == 'none' && -z "${CLI_VEHICLE:-}" ]]; then
   apply_vehicle "$DEFAULT_VEHICLE_PROFILE"
 fi
-if [[ "$INTERACTIVE" == 'true' && -z "$CLI_SENSOR_KIT" ]] \
+if [[ "$INTERACTIVE" == 'true' && -z "$CLI_SENSOR_KIT" \
+  && "$PRESET" != 'rgb-evs-benchmark' ]] \
   && is_true "$(get_arg enable_sensor_kit)"; then
   configure_sensor_kit_interactively
 fi

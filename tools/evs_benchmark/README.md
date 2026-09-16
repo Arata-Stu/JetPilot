@@ -25,6 +25,34 @@ CUDA compilerがなければCPU版のみ構成されます。Metavision SDKが�
 
 ## 入力の作成
 
+### RGB＋EVSを同一sessionへ収録
+
+JetPilot bringupからセンサbenchmark専用の軽量記録を起動できます。
+
+```bash
+bash /workspaces/scripts/bringup.sh rgb-evs-benchmark
+```
+
+RCカーを走行させる条件ではvehicleを明示します。指定しなければアクチュエータは起動しません。
+
+```bash
+bash /workspaces/scripts/bringup.sh rgb-evs-benchmark --vehicle jpbb
+```
+
+このpresetはRealSense RGBをMCAPへ、SilkyEvCamをOpenEB native RAWへ記録します。
+`/event_camera/events`、`events_raw`、`event_image`はMCAPへ保存しないため、native RAW取得に
+ROS event packetのserialization負荷を重ねません。START/STOPは別terminalから送ります。
+
+```bash
+ros2 topic pub --once /bag/request jetpilot_msgs/msg/BagRequest \
+  "{command: 1, label: factory_static_01}"
+
+ros2 topic pub --once /bag/request jetpilot_msgs/msg/BagRequest \
+  "{command: 2, label: factory_static_01}"
+```
+
+MCAP、RAW、RAW timestamp metadataは`/workspaces/record/<session>/`へまとまります。
+
 Metavision RAWを、x86_64とJetsonで共通に読める固定長の`EVSBIN v1`へ一度だけ変換します。
 
 ```bash

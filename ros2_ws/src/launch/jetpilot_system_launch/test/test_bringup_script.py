@@ -74,6 +74,7 @@ def test_presets_are_listed() -> None:
         "teleop",
         "drive",
         "calibration",
+        "rgb-evs-benchmark",
         "e2e",
         "runtime",
         "map-view",
@@ -591,6 +592,44 @@ def test_openeb_raw_recording_integration_is_available_but_disabled() -> None:
     assert "raw_recording_dir_ = requested_path.lexically_normal().string()" in (
         openeb_driver_source
     )
+
+
+def test_rgb_evs_benchmark_uses_native_raw_and_lightweight_mcap() -> None:
+    output = run_launcher("rgb-evs-benchmark", "--dry-run").stdout
+    benchmark_config_path = (
+        PROJECT_ROOT
+        / "ros2_ws/src/launch/jetpilot_system_launch/config/tool/"
+        "bag_manager.rgb_evs_benchmark.param.yaml"
+    )
+    benchmark_config = benchmark_config_path.read_text(encoding="utf-8")
+
+    assert "enable_sensor_kit:=true" in output
+    assert "enable_bag_manager:=true" in output
+    assert "enable_vehicle:=false" in output
+    assert "sensor_kit_rgb_fps:=30" in output
+    assert "sensor_kit_infra_fps:=0" in output
+    assert "sensor_kit_enable_accel:=false" in output
+    assert "sensor_kit_enable_gyro:=false" in output
+    assert "sensor_kit_silky_evcam_event_image_enabled:=false" in output
+    assert "sensor_kit_silky_evcam_raw_recording_enabled:=true" in output
+    assert str(benchmark_config_path) in output
+    assert 'raw_recording_request_topic: "/event_camera/raw_recording/request"' in (
+        benchmark_config
+    )
+    assert "- /realsense/color/image_raw" in benchmark_config
+    assert "- /event_camera/diagnostics" in benchmark_config
+    assert "- /event_camera/events\n" not in benchmark_config
+    assert "- /event_camera/events_raw\n" not in benchmark_config
+    assert "- /event_camera/event_image\n" not in benchmark_config
+
+    drive_output = run_launcher(
+        "rgb-evs-benchmark", "--vehicle", "jpbb", "--dry-run"
+    ).stdout
+    assert "enable_vehicle:=true" in drive_output
+    assert "enable_joy:=true" in drive_output
+    assert "enable_teleop:=true" in drive_output
+    assert "enable_operation:=true" in drive_output
+    assert "publish_vehicle_evs_description:=true" in drive_output
 
 
 def test_flir_sensor_kit_launches_can_be_selected_explicitly() -> None:
@@ -2430,7 +2469,8 @@ def test_live_bag_manager_defaults_on_and_can_be_disabled() -> None:
 def test_purpose_menu_routes_to_existing_presets() -> None:
     source = LAUNCHER.read_text()
     function = source.split("choose_preset_interactively() {", 1)[1].split("\nconfigure_e2e_model()", 1)[0]
-    for purpose, child in (("record", "record"), ("e2e", "e2e"),
+    for purpose, child in (("record", "record"),
+                           ("benchmark", "rgb-evs-benchmark"), ("e2e", "e2e"),
                            ("driving", "drive"), ("driving", "competition"),
                            ("offline", "offline-vslam"), ("advanced", "sensor")):
         # Substitute just the selector; execute the real menu-routing function.

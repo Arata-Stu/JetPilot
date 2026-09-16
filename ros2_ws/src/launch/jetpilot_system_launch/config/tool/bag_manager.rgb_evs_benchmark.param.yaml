@@ -1,0 +1,59 @@
+bag_manager_node:
+  ros__parameters:
+    output_dir: "/workspaces/record"
+    record_all: false
+
+    # Sensor-level RGB + EVS benchmark capture. EVS events are intentionally
+    # excluded from MCAP: OpenEB writes the native RAW stream into the same
+    # session directory through raw_recording_request_topic. This avoids adding
+    # ROS serialization and MCAP I/O load to the native EVS acquisition path.
+    topics:
+      - /bag/request
+      - /bag/status
+      - /tf_static
+
+      # Optional drive-state topics. They stay absent in the sensor-only run,
+      # and are recorded when the preset is launched with --vehicle.
+      - /joy
+      - /joy/diagnostics
+      - /teleop/control_cmd
+      - /vehicle/control_cmd
+      - /operation_mode/state
+      - /sensors/core
+
+      # SilkyEvCam metadata and acquisition diagnostics. The event payload is
+      # stored in the native *.raw file, not duplicated into the rosbag.
+      - /event_camera/camera_info
+      - /event_camera/raw_recording/request
+      - /event_camera/diagnostics
+
+      # RealSense RGB reference stream and its timing metadata.
+      - /realsense/color/camera_info
+      - /realsense/color/image_raw
+      - /realsense/color/metadata
+      - /realsense/diagnostics
+
+      # Platform telemetry used to interpret latency, utilization and DVFS.
+      - /jetson/diagnostics
+
+    exclude_topics: []
+    storage_id: "mcap"
+    serialization_format: ""
+    max_bag_size: 0
+    recording_split_duration_s: 0
+    max_cache_size: 0
+    compression_mode: ""
+    compression_format: ""
+    compression_queue_size: 0
+    compression_threads: 0
+    qos_profile_overrides_path: ""
+    include_hidden_topics: false
+    no_discovery: false
+    snapshot_mode: false
+    start_paused: false
+    extra_args: []
+    status_period_s: 1.0
+
+    # Coordinate the native OpenEB RAW recording with the rosbag session.
+    raw_recording_request_topic: "/event_camera/raw_recording/request"
+    recording_start_timeout_s: 5.0
