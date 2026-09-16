@@ -20,6 +20,9 @@ cmake --build tools/silkyevcam_bias_tuner/build -j2
 
 ROS ドライバーなど、同じカメラを使用しているアプリケーションを終了してから起動します。
 最初に見つかったカメラを開き、保存先は起動時のカレントディレクトリになります。
+起動時にカメラから取得した全バイアス値はメモリに保持され、同時に
+`silkyevcam_startup.bias` へ自動保存されます。SilkyEvCam VGA の値は絶対値なので、
+Reset はゼロではなく、この起動時スナップショットへ戻します。
 次の例では、生成ファイルを `record/silkyevcam_bias` にまとめます。
 
 ```bash
@@ -35,10 +38,15 @@ cd record/silkyevcam_bias
 | `a` | 背景ノイズの自動調整。成功すると `silkyevcam_autotuned.bias` を保存 |
 | `s` | 現在の値を `silkyevcam_custom.bias` に保存 |
 | `r` | カメラの現在値を GUI に再取得（ファイル読み込みではありません） |
+| `x` | 全バイアスをツール起動時の値へ戻す |
+| `RESET startup` | GUI の値を `1` にすると `x` と同じResetを実行し、自動的に`0`へ戻る |
 | `q` | 終了 |
 
 自動調整は背景ノイズを測るため、静止した対象・カメラで実行します。
 同名ファイルは次の保存時に上書きされます。
+Resetを実行すると進行中の自動調整は中止されます。保存先に書き込めず
+`silkyevcam_startup.bias` の作成に失敗した場合でも、同じプロセス内ではメモリ上の
+起動時スナップショットからResetできます。
 
 ## ROS 2 で使用
 

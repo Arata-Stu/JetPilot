@@ -1,0 +1,5 @@
+build/
+results/
+*.evbin
+__pycache__/
+*.pyc

@@ -8,7 +8,9 @@
 #include <chrono>
 #include <cstdio>
 #include <iostream>
+#include <map>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -57,16 +59,38 @@ int main() {
         auto &biases =
             camera.get_facility<Metavision::I_LL_Biases>();
 
-        auto all_biases = biases.get_all_biases();
+        const auto startup_biases = biases.get_all_biases();
 
         std::cout << "\nAvailable biases\n";
         std::cout << "----------------------------\n";
 
-        for (const auto &[name, value] : all_biases) {
+        for (const auto &[name, value] : startup_biases) {
             std::cout
                 << name
                 << " = "
                 << value
+                << std::endl;
+        }
+
+        // Keep a persistent copy as well as the in-memory snapshot. For VGA
+        // sensors these are absolute values, so restoring every bias to zero
+        // would not restore the camera's startup state.
+        try {
+            biases.save_to_file(
+                "silkyevcam_startup.bias"
+            );
+
+            std::cout
+                << "Saved startup biases: "
+                << "silkyevcam_startup.bias"
+                << std::endl;
+
+        } catch (const std::exception &e) {
+            // Reset still works from the in-memory snapshot when the current
+            // directory is not writable.
+            std::cerr
+                << "Could not save startup biases: "
+                << e.what()
                 << std::endl;
         }
 
@@ -86,7 +110,7 @@ int main() {
 
         for (const auto &name : target_biases) {
 
-            if (all_biases.find(name) == all_biases.end()) {
+            if (startup_biases.find(name) == startup_biases.end()) {
                 std::cout
                     << "Bias not available: "
                     << name
@@ -243,6 +267,19 @@ int main() {
             );
         }
 
+        // OpenCV's portable HighGUI API does not provide push buttons on all
+        // backends. A 0/1 trackbar works as a reset button without requiring
+        // the optional Qt backend. It is returned to 0 after each reset.
+        const std::string reset_control_name =
+            "RESET startup";
+
+        cv::createTrackbar(
+            reset_control_name,
+            window_name,
+            nullptr,
+            1
+        );
+
         // ============================================================
         // Start camera
         // ============================================================
@@ -253,6 +290,8 @@ int main() {
         std::cout << "a : Auto Tune background noise\n";
         std::cout << "s : Save biases\n";
         std::cout << "r : Reload biases\n";
+        std::cout << "x : Restore startup biases\n";
+        std::cout << "GUI: set RESET startup to 1\n";
         std::cout << "q : Quit\n";
         std::cout << std::endl;
 
@@ -326,9 +365,153 @@ int main() {
             "Auto Tune: idle";
 
         // ============================================================
+        // Restore the exact values captured before camera.start().
+        // ============================================================
+        const auto restore_startup_biases = [&]() {
+            bool success = true;
+            auto pending_biases = startup_biases;
+            std::map<std::string, std::string> restore_errors;
+
+            std::cout
+                << "\nRestoring startup biases..."
+                << std::endl;
+
+            // Some VGA biases have constraints relative to other biases. A
+            // value can therefore be rejected temporarily depending on the
+            // restore order. Retry pending values after every successful pass
+            // instead of treating the first rejection as a permanent error.
+            for (std::size_t pass = 0;
+                 pass <= startup_biases.size() && !pending_biases.empty();
+                 ++pass) {
+
+                bool made_progress = false;
+
+                for (auto it = pending_biases.begin();
+                     it != pending_biases.end();) {
+
+                    const std::string name = it->first;
+                    const int startup_value = it->second;
+
+                    try {
+                        if (!biases.set(name, startup_value)) {
+                            throw std::runtime_error(
+                                "set() returned false"
+                            );
+                        }
+
+                        const int restored_value =
+                            biases.get(name);
+
+                        if (restored_value != startup_value) {
+                            throw std::runtime_error(
+                                "hardware returned " +
+                                std::to_string(restored_value) +
+                                " instead of " +
+                                std::to_string(startup_value)
+                            );
+                        }
+
+                        std::cout
+                            << "  "
+                            << name
+                            << " = "
+                            << restored_value
+                            << std::endl;
+
+                        restore_errors.erase(name);
+                        it = pending_biases.erase(it);
+                        made_progress = true;
+
+                    } catch (const std::exception &e) {
+                        restore_errors[name] = e.what();
+                        ++it;
+                    }
+                }
+
+                if (!made_progress) {
+                    break;
+                }
+            }
+
+            if (!pending_biases.empty()) {
+                success = false;
+
+                for (const auto &[name, startup_value] : pending_biases) {
+                    const auto error = restore_errors.find(name);
+
+                    std::cerr
+                        << "Failed to restore "
+                        << name
+                        << " = "
+                        << startup_value
+                        << ": "
+                        << (error != restore_errors.end() ?
+                            error->second :
+                            "unknown error")
+                        << std::endl;
+                }
+            }
+
+            // Always re-read the hardware so that a partial failure is shown
+            // accurately in the GUI rather than leaving stale slider values.
+            for (auto &ctrl : controls) {
+                try {
+                    ctrl.value = biases.get(ctrl.name);
+
+                    cv::setTrackbarPos(
+                        ctrl.name,
+                        window_name,
+                        ctrl.value
+                    );
+
+                } catch (const std::exception &e) {
+                    success = false;
+
+                    std::cerr
+                        << "Failed to refresh "
+                        << ctrl.name
+                        << ": "
+                        << e.what()
+                        << std::endl;
+                }
+            }
+
+            tune_state = AutoTuneState::IDLE;
+            tune_iteration = 0;
+            tune_message = success ?
+                "Auto Tune: idle | startup biases restored" :
+                "Auto Tune: idle | startup restore FAILED";
+
+            std::cout
+                << (success ?
+                    "Startup biases restored." :
+                    "Startup bias restore completed with errors.")
+                << std::endl;
+
+            return success;
+        };
+
+        // ============================================================
         // Main loop
         // ============================================================
         while (camera.is_running()) {
+
+            // The GUI reset control behaves as a momentary button. Handle it
+            // before manual slider updates so restored values are not
+            // immediately overwritten by the previous GUI positions.
+            if (cv::getTrackbarPos(
+                    reset_control_name,
+                    window_name
+                ) != 0) {
+
+                restore_startup_biases();
+
+                cv::setTrackbarPos(
+                    reset_control_name,
+                    window_name,
+                    0
+                );
+            }
 
             // ========================================================
             // Manual bias updates
@@ -950,6 +1133,15 @@ int main() {
                         << "================================"
                         << std::endl;
                 }
+            }
+
+            // --------------------------------------------------------
+            // Restore startup biases
+            // --------------------------------------------------------
+            if (key == 'x' ||
+                key == 'X') {
+
+                restore_startup_biases();
             }
 
             // --------------------------------------------------------

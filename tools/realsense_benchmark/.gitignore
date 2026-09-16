@@ -1,0 +1,5 @@
+build/
+results/
+*.rgbbin
+__pycache__/
+*.pyc
