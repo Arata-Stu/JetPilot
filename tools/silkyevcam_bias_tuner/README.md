@@ -39,7 +39,7 @@ cd record/silkyevcam_bias
 | `s` | 現在の値を `silkyevcam_custom.bias` に保存 |
 | `r` | カメラの現在値を GUI に再取得（ファイル読み込みではありません） |
 | `x` | 全バイアスをツール起動時の値へ戻す |
-| `RESET startup` | GUI の値を `1` にすると `x` と同じResetを実行し、自動的に`0`へ戻る |
+| `Restore startup biases` | クリックすると `x` と同じResetを実行 |
 | `q` | 終了 |
 
 自動調整は背景ノイズを測るため、静止した対象・カメラで実行します。
@@ -47,6 +47,8 @@ cd record/silkyevcam_bias
 Resetを実行すると進行中の自動調整は中止されます。保存先に書き込めず
 `silkyevcam_startup.bias` の作成に失敗した場合でも、同じプロセス内ではメモリ上の
 起動時スナップショットからResetできます。
+OpenCVがQt対応の場合はネイティブボタンを表示します。Qt非対応の場合も、専用の小さな
+Controlウィンドウに同じクリック式ボタンを表示します。
 
 ## ROS 2 で使用
 

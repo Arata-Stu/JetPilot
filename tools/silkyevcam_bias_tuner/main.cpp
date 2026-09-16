@@ -267,18 +267,78 @@ int main() {
             );
         }
 
-        // OpenCV's portable HighGUI API does not provide push buttons on all
-        // backends. A 0/1 trackbar works as a reset button without requiring
-        // the optional Qt backend. It is returned to 0 after each reset.
-        const std::string reset_control_name =
-            "RESET startup";
+        // Prefer the native Qt push button when available. OpenCV builds that
+        // use GTK instead of Qt do not implement createButton(), so provide a
+        // small clickable fallback window rather than exposing a 0/1 slider.
+        std::atomic<bool> reset_requested{false};
 
-        cv::createTrackbar(
-            reset_control_name,
-            window_name,
-            nullptr,
-            1
-        );
+        const auto reset_button_callback =
+            [](int, void *userdata) {
+                auto *requested =
+                    static_cast<std::atomic<bool> *>(userdata);
+
+                requested->store(
+                    true,
+                    std::memory_order_relaxed
+                );
+            };
+
+        bool using_fallback_reset_button = false;
+        const std::string controls_window_name =
+            "SilkyEvCam Controls";
+
+        try {
+            cv::createButton(
+                "Restore startup biases",
+                reset_button_callback,
+                &reset_requested,
+                cv::QT_PUSH_BUTTON,
+                false
+            );
+
+        } catch (const cv::Exception &) {
+            using_fallback_reset_button = true;
+
+            cv::namedWindow(
+                controls_window_name,
+                cv::WINDOW_AUTOSIZE
+            );
+
+            cv::setMouseCallback(
+                controls_window_name,
+                [](int event,
+                   int x,
+                   int y,
+                   int,
+                   void *userdata) {
+                    if (event != cv::EVENT_LBUTTONUP) {
+                        return;
+                    }
+
+                    const cv::Rect button_bounds(
+                        10,
+                        10,
+                        300,
+                        48
+                    );
+
+                    if (!button_bounds.contains(
+                            cv::Point(x, y)
+                        )) {
+                        return;
+                    }
+
+                    auto *requested =
+                        static_cast<std::atomic<bool> *>(userdata);
+
+                    requested->store(
+                        true,
+                        std::memory_order_relaxed
+                    );
+                },
+                &reset_requested
+            );
+        }
 
         // ============================================================
         // Start camera
@@ -291,7 +351,7 @@ int main() {
         std::cout << "s : Save biases\n";
         std::cout << "r : Reload biases\n";
         std::cout << "x : Restore startup biases\n";
-        std::cout << "GUI: set RESET startup to 1\n";
+        std::cout << "GUI: click Restore startup biases\n";
         std::cout << "q : Quit\n";
         std::cout << std::endl;
 
@@ -496,21 +556,15 @@ int main() {
         // ============================================================
         while (camera.is_running()) {
 
-            // The GUI reset control behaves as a momentary button. Handle it
-            // before manual slider updates so restored values are not
-            // immediately overwritten by the previous GUI positions.
-            if (cv::getTrackbarPos(
-                    reset_control_name,
-                    window_name
-                ) != 0) {
+            // Handle GUI reset requests before manual slider updates so the
+            // restored values are not immediately overwritten by old GUI
+            // positions.
+            if (reset_requested.exchange(
+                    false,
+                    std::memory_order_relaxed
+                )) {
 
                 restore_startup_biases();
-
-                cv::setTrackbarPos(
-                    reset_control_name,
-                    window_name,
-                    0
-                );
             }
 
             // ========================================================
@@ -1064,6 +1118,52 @@ int main() {
                 window_name,
                 display
             );
+
+            if (using_fallback_reset_button) {
+                cv::Mat controls_display(
+                    68,
+                    320,
+                    CV_8UC3,
+                    cv::Scalar(32, 32, 32)
+                );
+
+                const cv::Rect button_bounds(
+                    10,
+                    10,
+                    300,
+                    48
+                );
+
+                cv::rectangle(
+                    controls_display,
+                    button_bounds,
+                    cv::Scalar(70, 120, 70),
+                    cv::FILLED
+                );
+
+                cv::rectangle(
+                    controls_display,
+                    button_bounds,
+                    cv::Scalar(150, 220, 150),
+                    1
+                );
+
+                cv::putText(
+                    controls_display,
+                    "Restore startup biases",
+                    cv::Point(31, 41),
+                    cv::FONT_HERSHEY_SIMPLEX,
+                    0.62,
+                    cv::Scalar(255, 255, 255),
+                    1,
+                    cv::LINE_AA
+                );
+
+                cv::imshow(
+                    controls_window_name,
+                    controls_display
+                );
+            }
 
             // ========================================================
             // Keyboard
