@@ -123,6 +123,22 @@ python3 scripts/analyze_timestamp_anomalies.py \
 厳密な頻度、`timestamp_anomaly_timeline.csv`が100 ms単位の時間変化、
 `timestamp_anomaly_clusters.csv`が1 ms以内に連続した異常群です。
 
+## Event密度区間の選択
+
+reorder済みEVSBINから固定長windowのevent数を数え、low（p10）、median（p50）、high（最大）を
+再現可能に選択します。event payload全体をPythonで展開せず、sorted timestampへbinary searchする
+ため、大容量EVSBINでも軽量です。
+
+```bash
+python3 scripts/select_evbin_segments.py \
+  --input events_reordered.evbin \
+  --output-dir density \
+  --window-us 2000000 --step-us 100000 --top 10
+```
+
+`density_selection.json`に選択区間、`density_windows.csv`に全候補を保存します。各選択結果の
+`start_offset_us`を`evs_bench --segment-start-us`へ渡し、同じ2秒長で比較します。
+
 ## 単一条件の実行
 
 ```bash
