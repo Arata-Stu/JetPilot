@@ -173,12 +173,56 @@ python3 scripts/select_evbin_segments.py \
 
 結果ディレクトリには条件ごとの生CSV、hardware metadata、git状態、入力SHA-256、実行コマンド、標準出力、resource usage、GPU telemetryと、全条件の`summary.csv`が残ります。
 
+matrixは通常の性能trialとは別に、全snapshotをCPUへ戻して比較するcorrectness passを1回実行します。
+このD2Hとhash計算は`wall_ms`へ混入しません。出力は次のとおりです。
+
+- `correctness.csv`: CPU fullを基準にした全snapshot sequence checksumと不一致数
+- `cpu_incremental/trace.csv`: CPU incrementalのsnapshot時系列
+- `cuda_rolling/trace.csv`: CUDA staging / H2D / update / snapshot時系列
+- `trace_summary.csv`: latencyとevent rateのmean / p50 / p95 / p99 / max、4 ms miss数
+- `trace_timeline.svg`: event rateとsnapshot latencyの折れ線グラフ
+- `*/tegrastats_timeline.csv`: Jetson telemetryの時系列
+- `*/tegrastats_summary.json`: power、clock、温度、GPU/CPU使用率、run energy集計
+- `*/nvidia_smi_summary.json`: x86 NVIDIA GPUの使用率、clock、温度、board power集計
+
+correctness passまたはtraceだけを手動実行することもできます。
+
+```bash
+./build/evs_bench --input input.evbin --backend all --algorithm all \
+  --width 212 --height 120 --bins 10 --window-us 40000 --stride-us 4000 \
+  --verify-sequence-only --correctness-output correctness.csv
+
+./build/evs_bench --input input.evbin --backend cuda --algorithm rolling \
+  --width 212 --height 120 --bins 10 --window-us 40000 --stride-us 4000 \
+  --warmup 2 --trace-only --trace-output cuda_trace.csv \
+  --metadata cuda_trace_metadata.json
+```
+
+traceは測定値をメモリへ保持し、処理終了後にCSVへ書く。通常trialとは分けて実行するため、
+詳細計測のoverheadを主要throughput値へ混ぜない。`tegrastats`のenergy値はprocess全体を100 ms
+sampleで積分したend-to-end推定で、setupとwarm-upを含む。
+x86の`nvidia-smi` energyはGPU board powerだけで、host全体の電力ではないため、Jetsonの
+`VDD_IN`と絶対値を直接比較しない。
+
+1分全体の時間変化だけを測る場合は、CPU fullや30 trialを実行せずtimeline専用scriptを使う。
+
+```bash
+./scripts/run_timeline.sh ./build/evs_bench input.evbin timeline_results \
+  --segment-start-us 0 --segment-duration-us 0 \
+  --width 212 --height 120 --bins 10 \
+  --window-us 40000 --stride-us 4000
+```
+
+これはCPU incrementalとCUDA rollingを各2回warm-upした後、全区間を1回ずつ順次処理する。
+`trace_timeline.svg`でevent密度とlatencyの時間変化を確認できる。主要な速度比較には、引き続き
+low / median / highの固定2秒区間を30 trial測定した`run_matrix.sh`を使用する。
+
 ## 重要な解釈
 
 - `cpu_util_pct`は単一プロセスのCPU時間÷wall時間です。100%は概ね1 core相当で、システム全体の利用率ではありません。
 - GPU kernelが速くても、`host staging + H2D + update + snapshot`がCPU incrementalより遅ければ、前処理単体の優位性は主張できません。
 - TensorRT直結時はD2H不要なので、主要比較からD2Hを除外しています。別用途でCPUへ戻す場合はD2H条件を別実験にします。
-- throughputだけでなく、同じevent列・tensor定義に対するchecksum一致を確認します。
+- throughputだけでなく、同じevent列・tensor定義に対する全snapshot sequence checksum一致を確認します。
 - 複数backendを同時選択した場合、trialごとにchecksumが一致しなければ実験を失敗として終了します。
 - 現在の実装は各snapshotで同期する`latency profiling`です。非同期pipelineのthroughputは、別のstreaming実験として混ぜずに測ります。
 

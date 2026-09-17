@@ -137,6 +137,7 @@ Result run_cuda_rolling(
   result.algorithm = "rolling";
   result.trial = trial;
   result.events = dataset.events.size();
+  result.sequence_checksum = 1469598103934665603ULL;
 
   const auto pixels = static_cast<std::size_t>(config.width) * config.height;
   const auto output_elements = 2U * config.bins * pixels;
@@ -206,6 +207,10 @@ Result run_cuda_rolling(
 
     const auto wall_start = Clock::now();
     const auto cpu_start = std::clock();
+    std::vector<float> correctness_output;
+    if (config.capture_sequence_checksums) {
+      correctness_output.resize(output_elements);
+    }
     std::size_t begin = 0;
     bool initialized = false;
     for (auto end_us = first_end; end_us <= last_end; end_us += config.stride_us) {
@@ -222,8 +227,9 @@ Result run_cuda_rolling(
       if (count > 0) {
         std::memcpy(host_events, dataset.events.data() + begin, count * sizeof(Event));
       }
-      result.host_staging_ms += std::chrono::duration<double, std::milli>(
+      const auto host_staging_ms = std::chrono::duration<double, std::milli>(
         Clock::now() - staging_start).count();
+      result.host_staging_ms += host_staging_ms;
 
       check_cuda(cudaEventRecord(h2d_start, stream), "record H2D start");
       if (count > 0) {
@@ -257,9 +263,44 @@ Result run_cuda_rolling(
       check_cuda(cudaEventRecord(snapshot_end, stream), "record snapshot end");
       check_cuda(cudaEventSynchronize(snapshot_end), "snapshot synchronize");
 
-      result.h2d_ms += elapsed(h2d_start, h2d_end);
-      result.update_ms += elapsed(update_start, update_end);
-      result.snapshot_ms += elapsed(snapshot_start, snapshot_end);
+      const auto h2d_ms = static_cast<double>(elapsed(h2d_start, h2d_end));
+      const auto update_ms = static_cast<double>(elapsed(update_start, update_end));
+      const auto snapshot_ms = static_cast<double>(elapsed(snapshot_start, snapshot_end));
+      result.h2d_ms += h2d_ms;
+      result.update_ms += update_ms;
+      result.snapshot_ms += snapshot_ms;
+
+      if (config.capture_trace) {
+        const auto window_begin_it = std::lower_bound(
+          dataset.events.begin(), dataset.events.begin() + static_cast<std::ptrdiff_t>(end),
+          end_us - config.window_us,
+          [](const Event & event, const std::int64_t timestamp) {
+            return event.timestamp_us < timestamp;
+          });
+        SnapshotTrace trace;
+        trace.snapshot_index = result.snapshots;
+        trace.end_timestamp_us = end_us;
+        trace.new_events = count;
+        trace.window_events = end - static_cast<std::size_t>(
+          window_begin_it - dataset.events.begin());
+        trace.wall_ms = std::chrono::duration<double, std::milli>(
+          Clock::now() - staging_start).count();
+        trace.host_staging_ms = host_staging_ms;
+        trace.h2d_ms = h2d_ms;
+        trace.update_ms = update_ms;
+        trace.snapshot_ms = snapshot_ms;
+        result.trace.push_back(trace);
+      }
+
+      if (config.capture_sequence_checksums) {
+        check_cuda(cudaMemcpy(
+            correctness_output.data(), device_output, output_elements * sizeof(float),
+            cudaMemcpyDeviceToHost), "sequence correctness D2H");
+        const auto snapshot_checksum = tensor_checksum64(correctness_output);
+        result.snapshot_checksums.push_back(snapshot_checksum);
+        result.sequence_checksum = append_sequence_checksum(
+          result.sequence_checksum, snapshot_checksum, result.snapshots);
+      }
       begin = end;
       initialized = true;
       ++result.snapshots;

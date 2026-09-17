@@ -11,6 +11,30 @@
 
 namespace evs_benchmark
 {
+
+std::uint64_t tensor_checksum64(const std::vector<float> & tensor)
+{
+  std::uint64_t hash = 1469598103934665603ULL;
+  for (const auto value : tensor) {
+    std::uint32_t bits = 0;
+    static_assert(sizeof(bits) == sizeof(value));
+    std::memcpy(&bits, &value, sizeof(bits));
+    hash ^= bits;
+    hash *= 1099511628211ULL;
+  }
+  return hash;
+}
+
+std::uint64_t append_sequence_checksum(
+  std::uint64_t sequence_checksum, const std::uint64_t snapshot_checksum,
+  const std::uint64_t snapshot_index)
+{
+  sequence_checksum ^= snapshot_checksum;
+  sequence_checksum *= 1099511628211ULL;
+  sequence_checksum ^= snapshot_index;
+  sequence_checksum *= 1099511628211ULL;
+  return sequence_checksum;
+}
 namespace
 {
 

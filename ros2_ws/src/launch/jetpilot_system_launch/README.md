@@ -115,6 +115,11 @@ camera_mount_link -> d455_link -> realsense_camera_link`で接続します。
 
 SilkyEvCam/OpenEBを含むsensor kitでは、RAW記録機能自体は待機状態になりますが、Bag Managerからの連携は現在一時的に無効です。この状態では`/bag/request`へSTARTを送ってもrosbagだけを記録します。再度連携する場合は`config/tool/bag_manager.param.yaml`の`raw_recording_request_topic`を`/event_camera/raw_recording/request`へ戻してください。連携時はrosbag directoryの生成後に同じ開始要求が転送され、MCAP、RAW、`*.raw.metadata.yaml`が同じsession directoryへ保存されます。カメラ起動直後の自動RAW記録は無効です。
 
+JetPilotのsensor kitが配信する`/event_camera/event_image`は、既定で`gep`表示を使用します。
+可視化色は白背景、ON（輝度増加）=青、OFF（輝度減少）=赤です。OpenEB単体launchの
+`event_image_style:=dark`は互換性のため残しており、こちらはOpenEB標準の濃紺／黒背景、
+ON=白、OFF=青です。
+
 センサ単体のRGB＋EVS benchmarkでは、通常設定を変更せず専用presetを使用できます。
 
 ```bash

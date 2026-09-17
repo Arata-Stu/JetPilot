@@ -84,10 +84,19 @@ RAW decode時間をrepresentation時間へ含めた値と、canonical event列�
 - JetsonのCPU/GPUは電力・メモリ帯域を共有するため、GPU使用率だけでなくVDD_INとclockを併記します。
 - rosbag replay速度やDDS queueは段階Dの要因であり、段階BのCPU/GPU優位性には混ぜません。
 
-## 7. 次の実装項目
+## 7. 実装済みの追加計測
 
-- snapshotごとのlatency trace（集約値だけでなく分布を保存）
-- CPU/GPU全要素一致を行うcorrectness subcommand
+- snapshotごとのlatency traceとp50/p95/p99/max、4 ms deadline miss
+- CPU full / incremental / CUDAの全snapshot sequence checksum
+- event rate / snapshot latencyの時系列SVG
+- tegrastatsの時系列CSVとpower / clock / temperature / energy集計
+
+これらは通常のthroughput trialと別passで実行し、correctness D2H、hash、詳細traceのoverheadを
+主要性能値へ混ぜない。
+
+## 8. 次の実装項目
+
+- mismatch発生時のsnapshot全要素差分とmax absolute error
 - zero-copy / unified memory / pageable memoryとの転送比較
 - CUDA Graph、double buffering、非同期2-stream throughput
 - native live sensor recorderと、RAW decodeのみのfast-playback benchmark

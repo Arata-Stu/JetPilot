@@ -280,7 +280,9 @@ selected bin count, window, stride, and optional temporal interpolation. It
 stores one JPEG contact sheet for every extracted primary RGB frame, never the
 tensor itself. Therefore `Max extraction FPS = 10` produces approximately
 600–1,200 previews for a one-to-two-minute bag. Positive and negative bins plus
-their polarity aggregates are arranged in a compact grid. An initial snapshot
+their polarity aggregates are arranged in a compact grid using the JetPilot EVS
+palette: white means no event, blue means positive/ON, and red means
+negative/OFF. An initial snapshot
 before the RGB/event clocks overlap is skipped. Select
 `/analysis/event_tensor_20ch` in the synchronized image viewer after analysis.
 Decoding uses the upstream `event_camera_py` binding through the image's isolated

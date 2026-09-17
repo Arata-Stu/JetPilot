@@ -163,7 +163,7 @@ int main() {
             height,
             width,
             CV_8UC3,
-            cv::Scalar(128, 128, 128)
+            cv::Scalar(255, 255, 255)
         );
 
         std::mutex image_mutex;
@@ -193,14 +193,15 @@ int main() {
 
                     if (ev.p) {
 
-                        // ON event = white
+                        // JetPilot EVS palette: ON = blue, OFF = red,
+                        // no event = white. OpenCV stores colors as BGR.
                         event_image.at<cv::Vec3b>(
                             ev.y,
                             ev.x
                         ) = cv::Vec3b(
                             255,
-                            255,
-                            255
+                            0,
+                            0
                         );
 
                         on_counter.fetch_add(
@@ -210,14 +211,14 @@ int main() {
 
                     } else {
 
-                        // OFF event = black
+                        // OFF event = red
                         event_image.at<cv::Vec3b>(
                             ev.y,
                             ev.x
                         ) = cv::Vec3b(
                             0,
                             0,
-                            0
+                            255
                         );
 
                         off_counter.fetch_add(
@@ -1047,9 +1048,9 @@ int main() {
 
                 event_image.setTo(
                     cv::Scalar(
-                        128,
-                        128,
-                        128
+                        255,
+                        255,
+                        255
                     )
                 );
             }

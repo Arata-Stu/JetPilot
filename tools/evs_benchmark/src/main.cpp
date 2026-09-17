@@ -23,6 +23,8 @@ struct Options
   std::string input;
   std::string output_csv{"results.csv"};
   std::string metadata_json{"metadata.json"};
+  std::string trace_csv{"trace.csv"};
+  std::string correctness_csv{"correctness.csv"};
   std::string backend{"all"};
   std::string algorithm{"all"};
   std::uint32_t source_width{1280};
@@ -35,6 +37,8 @@ struct Options
   std::size_t warmup{2};
   std::size_t trials{10};
   bool check_cuda_only{false};
+  bool trace_only{false};
+  bool verify_sequence_only{false};
   evs_benchmark::Config config;
 };
 
@@ -54,6 +58,10 @@ Options parse_options(const int argc, char ** argv)
     if (argument == "--input") {options.input = require_value(index, argc, argv);}
     else if (argument == "--output") {options.output_csv = require_value(index, argc, argv);}
     else if (argument == "--metadata") {options.metadata_json = require_value(index, argc, argv);}
+    else if (argument == "--trace-output") {options.trace_csv = require_value(index, argc, argv);}
+    else if (argument == "--correctness-output") {
+      options.correctness_csv = require_value(index, argc, argv);
+    }
     else if (argument == "--backend") {options.backend = require_value(index, argc, argv);}
     else if (argument == "--algorithm") {options.algorithm = require_value(index, argc, argv);}
     else if (argument == "--width") {options.config.width = std::stoul(require_value(index, argc, argv));}
@@ -71,6 +79,8 @@ Options parse_options(const int argc, char ** argv)
     else if (argument == "--segment-start-us") {options.segment_start_us = std::stoll(require_value(index, argc, argv));}
     else if (argument == "--segment-duration-us") {options.segment_duration_us = std::stoll(require_value(index, argc, argv));}
     else if (argument == "--check-cuda") {options.check_cuda_only = true;}
+    else if (argument == "--trace-only") {options.trace_only = true;}
+    else if (argument == "--verify-sequence-only") {options.verify_sequence_only = true;}
     else if (argument == "--help") {
       std::cout <<
         "evs_bench [--input INPUT.evbin] [--backend all|cpu|cuda] "
@@ -80,6 +90,8 @@ Options parse_options(const int argc, char ** argv)
         "          [--warmup 2 --trials 10 --output results.csv "
         "--metadata metadata.json]\n"
         "          [--segment-start-us 0 --segment-duration-us 2000000]\n"
+        "          [--trace-only --trace-output trace.csv]\n"
+        "          [--verify-sequence-only --correctness-output correctness.csv]\n"
         "Without --input, a deterministic synthetic stream is generated.\n";
       std::exit(0);
     } else {
@@ -87,6 +99,9 @@ Options parse_options(const int argc, char ** argv)
     }
   }
   if (options.trials == 0) {throw std::invalid_argument("trials must be positive");}
+  if (options.trace_only && options.verify_sequence_only) {
+    throw std::invalid_argument("trace-only and verify-sequence-only are mutually exclusive");
+  }
   return options;
 }
 
@@ -108,6 +123,67 @@ void write_csv(const std::string & path, const std::vector<evs_benchmark::Result
       ',' << result.cpu_util_pct << ',' << result.host_staging_ms << ',' << result.h2d_ms << ',' <<
       result.update_ms << ',' << result.snapshot_ms << ',' << result.gpu_total_ms << ',' <<
       result.checksum << '\n';
+  }
+}
+
+void write_trace_csv(
+  const std::string & path, const std::vector<evs_benchmark::Result> & results,
+  const std::int64_t first_timestamp_us, const std::int64_t window_us)
+{
+  std::ofstream output(path, std::ios::trunc);
+  if (!output) {throw std::runtime_error("cannot create trace CSV: " + path);}
+  output << "backend,algorithm,snapshot_index,end_timestamp_us,relative_time_ms,new_events,"
+    "window_events,event_rate_mev_s,wall_ms,host_staging_ms,h2d_ms,update_ms,snapshot_ms\n";
+  output << std::setprecision(12);
+  for (const auto & result : results) {
+    for (const auto & trace : result.trace) {
+      const auto relative_time_ms = static_cast<double>(
+        trace.end_timestamp_us - first_timestamp_us) / 1000.0;
+      const auto event_rate_mev_s = window_us > 0 ?
+        static_cast<double>(trace.window_events) / static_cast<double>(window_us) : 0.0;
+      output << result.backend << ',' << result.algorithm << ',' << trace.snapshot_index << ',' <<
+        trace.end_timestamp_us << ',' << relative_time_ms << ',' << trace.new_events << ',' <<
+        trace.window_events << ',' << event_rate_mev_s << ',' << trace.wall_ms << ',' <<
+        trace.host_staging_ms << ',' << trace.h2d_ms << ',' << trace.update_ms << ',' <<
+        trace.snapshot_ms << '\n';
+    }
+  }
+}
+
+void write_correctness_csv(
+  const std::string & path, const std::vector<evs_benchmark::Result> & results)
+{
+  if (results.empty()) {throw std::runtime_error("no correctness results");}
+  const auto & reference = results.front().snapshot_checksums;
+  std::ofstream output(path, std::ios::trunc);
+  if (!output) {throw std::runtime_error("cannot create correctness CSV: " + path);}
+  output << "backend,algorithm,snapshots,sequence_checksum,final_checksum,"
+    "mismatch_snapshots,first_mismatch_snapshot\n";
+  output << std::setprecision(17);
+  for (const auto & result : results) {
+    std::size_t mismatches = 0;
+    std::size_t first_mismatch = std::numeric_limits<std::size_t>::max();
+    const auto compared = std::min(reference.size(), result.snapshot_checksums.size());
+    for (std::size_t index = 0; index < compared; ++index) {
+      if (reference[index] != result.snapshot_checksums[index]) {
+        if (first_mismatch == std::numeric_limits<std::size_t>::max()) {
+          first_mismatch = index;
+        }
+        ++mismatches;
+      }
+    }
+    if (reference.size() != result.snapshot_checksums.size()) {
+      if (first_mismatch == std::numeric_limits<std::size_t>::max()) {
+        first_mismatch = compared;
+      }
+      mismatches += reference.size() > result.snapshot_checksums.size() ?
+        reference.size() - result.snapshot_checksums.size() :
+        result.snapshot_checksums.size() - reference.size();
+    }
+    output << result.backend << ',' << result.algorithm << ',' << result.snapshots << ',' <<
+      result.sequence_checksum << ',' << result.checksum << ',' << mismatches << ',';
+    if (first_mismatch != std::numeric_limits<std::size_t>::max()) {output << first_mismatch;}
+    output << '\n';
   }
 }
 
@@ -208,6 +284,54 @@ int main(int argc, char ** argv)
     }
     if (runners.empty()) {throw std::invalid_argument("no backend/algorithm combination selected");}
 
+    const auto create_parent = [](const std::string & path) {
+        const auto parent = std::filesystem::path(path).parent_path();
+        std::filesystem::create_directories(parent.empty() ? "." : parent);
+      };
+
+    if (options.verify_sequence_only) {
+      auto correctness_config = options.config;
+      correctness_config.capture_sequence_checksums = true;
+      std::vector<evs_benchmark::Result> correctness_results;
+      for (const auto runner : runners) {
+        correctness_results.push_back(runner(dataset, correctness_config, 0));
+      }
+      create_parent(options.correctness_csv);
+      write_correctness_csv(options.correctness_csv, correctness_results);
+      const auto & reference = correctness_results.front().snapshot_checksums;
+      for (const auto & result : correctness_results) {
+        if (result.snapshot_checksums != reference) {
+          throw std::runtime_error(
+                  "sequence correctness check failed; see " + options.correctness_csv);
+        }
+      }
+      std::cout << "sequence correctness passed: " << reference.size() <<
+        " snapshots, checksum=" << correctness_results.front().sequence_checksum << '\n';
+      return 0;
+    }
+
+    if (options.trace_only) {
+      for (std::size_t trial = 0; trial < options.warmup; ++trial) {
+        for (const auto runner : runners) {(void)runner(dataset, options.config, trial);}
+      }
+      auto trace_config = options.config;
+      trace_config.capture_trace = true;
+      std::vector<evs_benchmark::Result> trace_results;
+      for (const auto runner : runners) {
+        auto result = runner(dataset, trace_config, 0);
+        print_result(result);
+        trace_results.push_back(std::move(result));
+      }
+      create_parent(options.trace_csv);
+      create_parent(options.metadata_json);
+      write_trace_csv(
+        options.trace_csv, trace_results, dataset.events.front().timestamp_us,
+        options.config.window_us);
+      write_metadata(options.metadata_json, options, dataset, has_cuda);
+      std::cout << "trace written: " << options.trace_csv << '\n';
+      return 0;
+    }
+
     for (std::size_t trial = 0; trial < options.warmup; ++trial) {
       for (const auto runner : runners) {(void)runner(dataset, options.config, trial);}
     }
@@ -229,12 +353,8 @@ int main(int argc, char ** argv)
       }
     }
 
-    std::filesystem::create_directories(
-      std::filesystem::path(options.output_csv).parent_path().empty() ? "." :
-      std::filesystem::path(options.output_csv).parent_path());
-    std::filesystem::create_directories(
-      std::filesystem::path(options.metadata_json).parent_path().empty() ? "." :
-      std::filesystem::path(options.metadata_json).parent_path());
+    create_parent(options.output_csv);
+    create_parent(options.metadata_json);
     write_csv(options.output_csv, results);
     write_metadata(options.metadata_json, options, dataset, has_cuda);
     return 0;

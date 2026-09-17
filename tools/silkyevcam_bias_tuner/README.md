@@ -3,6 +3,10 @@
 SilkyEvCam のイベント画像とイベントレートを見ながらバイアスを調整する、
 ROS 非依存の C++ / OpenCV ツールです。旧 `c++/silkyevcam_bias_tuner` から移動しました。
 
+イベント画像はJetPilot共通の可視化パレットを使用します。イベントがない画素は白、
+ON（輝度増加）は青、OFF（輝度減少）は赤です。これはOpenEB標準の`Dark`
+パレット（濃紺／黒背景、ON=白、OFF=青）とは異なります。
+
 ## ビルド
 
 SilkyEvCam 対応 Metavision SDK / HAL、OpenCV（GUI 対応）、CMake、C++17 が必要です。

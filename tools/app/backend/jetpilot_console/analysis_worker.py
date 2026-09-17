@@ -1562,12 +1562,13 @@ class _EventTensorPreview:
         columns = max(1, int(math.ceil(math.sqrt(cell_count))))
         rows = int(math.ceil(cell_count / columns))
         gap = 2
-        image = np.zeros(
+        image = np.full(
             (
                 rows * self.height + max(rows - 1, 0) * gap,
                 columns * self.width + max(columns - 1, 0) * gap,
                 3,
             ),
+            255,
             dtype=np.uint8,
         )
 
@@ -1583,7 +1584,14 @@ class _EventTensorPreview:
             column = cell_index % columns
             y0 = row * (self.height + gap)
             x0 = column * (self.width + gap)
-            image[y0 : y0 + self.height, x0 : x0 + self.width, colour_channel] = cell
+            cell_view = image[y0 : y0 + self.height, x0 : x0 + self.width]
+            inverse = 255 - cell
+            if colour_channel == 0:  # Positive/ON: blue in BGR.
+                cell_view[:, :, 1] = inverse
+                cell_view[:, :, 2] = inverse
+            else:  # Negative/OFF: red in BGR.
+                cell_view[:, :, 0] = inverse
+                cell_view[:, :, 1] = inverse
 
         # Suppress only an initial frame whose event/RGB clocks do not overlap.
         # Once synchronization is established, an empty event window is useful
@@ -1725,7 +1733,7 @@ class _EventTensorPreview:
             "stride_ms": self.stride_ns / 1e6,
             "temporal_interpolation": "linear" if self.linear_interpolation else "none",
             "layout": (
-                f"grid={columns}x{rows}, positive bins 0..B-1 (blue), "
+                f"grid={columns}x{rows}, white background, positive bins 0..B-1 (blue), "
                 "negative bins 0..B-1 (red), final two cells=polarity aggregates"
             ),
             "clock_source": self.clock_source,

@@ -118,6 +118,11 @@ class SnapshotTrajectoryTests(unittest.TestCase):
         self.assertEqual(stats["timestamp_resets"], 0)
         self.assertGreater(int(image[:3, :, 0].max()), 0)
         self.assertGreater(int(image[3:, :, 2].max()), 0)
+        # JetPilot's display palette is white for no event, blue for positive,
+        # and red for negative. Images are held in OpenCV BGR order.
+        self.assertTrue(bool((image == 255).all(axis=2).any()))
+        self.assertTrue(bool(((image[:, :, 0] == 255) & (image[:, :, 2] < 255)).any()))
+        self.assertTrue(bool(((image[:, :, 2] == 255) & (image[:, :, 0] < 255)).any()))
 
     def test_extracts_jazzy_detection2d_payload(self) -> None:
         message = SimpleNamespace(

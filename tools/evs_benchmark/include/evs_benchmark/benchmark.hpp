@@ -53,6 +53,21 @@ struct Config
   std::size_t bins{10};
   std::int64_t window_us{40000};
   std::int64_t stride_us{4000};
+  bool capture_sequence_checksums{false};
+  bool capture_trace{false};
+};
+
+struct SnapshotTrace
+{
+  std::uint64_t snapshot_index{0};
+  std::int64_t end_timestamp_us{0};
+  std::uint64_t new_events{0};
+  std::uint64_t window_events{0};
+  double wall_ms{0.0};
+  double host_staging_ms{0.0};
+  double h2d_ms{0.0};
+  double update_ms{0.0};
+  double snapshot_ms{0.0};
 };
 
 struct Result
@@ -71,6 +86,9 @@ struct Result
   double snapshot_ms{0.0};
   double gpu_total_ms{0.0};
   double checksum{0.0};
+  std::uint64_t sequence_checksum{0};
+  std::vector<std::uint64_t> snapshot_checksums;
+  std::vector<SnapshotTrace> trace;
 };
 
 Dataset read_evbin(
@@ -82,6 +100,10 @@ Dataset make_synthetic(
   double event_rate_meps, std::uint64_t seed);
 
 void validate(const Dataset & dataset, const Config & config);
+std::uint64_t tensor_checksum64(const std::vector<float> & tensor);
+std::uint64_t append_sequence_checksum(
+  std::uint64_t sequence_checksum, std::uint64_t snapshot_checksum,
+  std::uint64_t snapshot_index);
 Result run_cpu_full(const Dataset & dataset, const Config & config, std::size_t trial);
 Result run_cpu_incremental(const Dataset & dataset, const Config & config, std::size_t trial);
 

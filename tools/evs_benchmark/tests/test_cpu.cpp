@@ -14,10 +14,13 @@ int main()
     config.bins = 10;
     config.window_us = 40000;
     config.stride_us = 4000;
+    config.capture_sequence_checksums = true;
     const auto full = evs_benchmark::run_cpu_full(dataset, config, 0);
     const auto incremental = evs_benchmark::run_cpu_incremental(dataset, config, 0);
     if (full.snapshots != incremental.snapshots ||
-      std::abs(full.checksum - incremental.checksum) > 1.0e-6)
+      std::abs(full.checksum - incremental.checksum) > 1.0e-6 ||
+      full.sequence_checksum != incremental.sequence_checksum ||
+      full.snapshot_checksums != incremental.snapshot_checksums)
     {
       std::cerr << "CPU backends differ: full=" << full.checksum <<
         " incremental=" << incremental.checksum << '\n';

@@ -16,6 +16,8 @@
 - [YOLOv8 Training / Retraining](python_ws/jetpilot_object_detection_training/README.md)
 - [YOLOv8 Isaac ROS Runtime / Decoder](ros2_ws/src/perception/jetpilot_object_detection/README.md)
 - [SilkyEvCam バイアス調整・ROS 2 への適用](tools/silkyevcam_bias_tuner/README.md)
+- [EVS driver / 20ch前処理パイプライン技術レポート](docs/evs_pipeline_engineering_report.md)
+- [EVS native benchmark実験プロトコル](tools/evs_benchmark/EXPERIMENT_PROTOCOL.md)
 
 ## Isaac ROS Docker の世代整理
 

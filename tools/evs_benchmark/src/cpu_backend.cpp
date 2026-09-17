@@ -87,14 +87,39 @@ Result run_cpu_full(const Dataset & dataset, const Config & config, const std::s
   std::vector<float> tensor(2U * config.bins * pixels, 0.0F);
   const auto first_end = dataset.events.front().timestamp_us + config.window_us;
   const auto last_end = dataset.events.back().timestamp_us;
+  auto previous_end = first_end - config.stride_us;
+  bool initialized = false;
+  result.sequence_checksum = 1469598103934665603ULL;
   const auto wall_start = Clock::now();
   const auto cpu_start = std::clock();
   for (auto end_us = first_end; end_us <= last_end; end_us += config.stride_us) {
+    Clock::time_point snapshot_wall_start;
+    if (config.capture_trace) {snapshot_wall_start = Clock::now();}
     const auto start_us = end_us - config.window_us;
     const auto begin = lower_bound_index(dataset, start_us);
     const auto end = lower_bound_index(dataset, end_us);
+    const auto new_begin = config.capture_trace && initialized ?
+      lower_bound_index(dataset, previous_end) : begin;
     std::fill(tensor.begin(), tensor.end(), 0.0F);
     accumulate(dataset, config, start_us, begin, end, tensor);
+    if (config.capture_sequence_checksums) {
+      const auto snapshot_checksum = tensor_checksum64(tensor);
+      result.snapshot_checksums.push_back(snapshot_checksum);
+      result.sequence_checksum = append_sequence_checksum(
+        result.sequence_checksum, snapshot_checksum, result.snapshots);
+    }
+    if (config.capture_trace) {
+      SnapshotTrace trace;
+      trace.snapshot_index = result.snapshots;
+      trace.end_timestamp_us = end_us;
+      trace.new_events = end - new_begin;
+      trace.window_events = end - begin;
+      trace.wall_ms = std::chrono::duration<double, std::milli>(
+        Clock::now() - snapshot_wall_start).count();
+      result.trace.push_back(trace);
+    }
+    previous_end = end_us;
+    initialized = true;
     ++result.snapshots;
   }
   result = finish_result(std::move(result), wall_start, cpu_start);
@@ -120,14 +145,20 @@ Result run_cpu_incremental(
   const auto last_end = dataset.events.back().timestamp_us;
   auto previous_end = first_end - config.stride_us;
   bool initialized = false;
+  result.sequence_checksum = 1469598103934665603ULL;
   const auto wall_start = Clock::now();
   const auto cpu_start = std::clock();
   for (auto end_us = first_end; end_us <= last_end; end_us += config.stride_us) {
+    Clock::time_point snapshot_wall_start;
+    if (config.capture_trace) {snapshot_wall_start = Clock::now();}
+    const bool first_snapshot = !initialized;
     const auto start_us = end_us - config.window_us;
+    const auto window_end = lower_bound_index(dataset, end_us);
+    const auto new_begin = first_snapshot ? 0U : lower_bound_index(dataset, previous_end);
+    const auto window_begin = first_snapshot || config.capture_trace ?
+      lower_bound_index(dataset, start_us) : 0U;
     if (!initialized) {
-      const auto begin = lower_bound_index(dataset, start_us);
-      const auto end = lower_bound_index(dataset, end_us);
-      accumulate(dataset, config, start_us, begin, end, tensor);
+      accumulate(dataset, config, start_us, window_begin, window_end, tensor);
       initialized = true;
     } else {
       for (std::size_t polarity = 0; polarity < 2U; ++polarity) {
@@ -138,9 +169,23 @@ Result run_cpu_incremental(
         std::fill(
           block + retained, block + config.bins * pixels, 0.0F);
       }
-      const auto begin = lower_bound_index(dataset, previous_end);
-      const auto end = lower_bound_index(dataset, end_us);
-      accumulate(dataset, config, start_us, begin, end, tensor);
+      accumulate(dataset, config, start_us, new_begin, window_end, tensor);
+    }
+    if (config.capture_sequence_checksums) {
+      const auto snapshot_checksum = tensor_checksum64(tensor);
+      result.snapshot_checksums.push_back(snapshot_checksum);
+      result.sequence_checksum = append_sequence_checksum(
+        result.sequence_checksum, snapshot_checksum, result.snapshots);
+    }
+    if (config.capture_trace) {
+      SnapshotTrace trace;
+      trace.snapshot_index = result.snapshots;
+      trace.end_timestamp_us = end_us;
+      trace.new_events = first_snapshot ? window_end - window_begin : window_end - new_begin;
+      trace.window_events = window_end - window_begin;
+      trace.wall_ms = std::chrono::duration<double, std::milli>(
+        Clock::now() - snapshot_wall_start).count();
+      result.trace.push_back(trace);
     }
     previous_end = end_us;
     ++result.snapshots;

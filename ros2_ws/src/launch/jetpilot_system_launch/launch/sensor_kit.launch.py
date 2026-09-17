@@ -127,7 +127,7 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('silky_evcam_event_image_window_ms', '0.0', cli=True)
     args.add_arg('silky_evcam_event_image_stride_ms', '0.0', cli=True)
     args.add_arg('silky_evcam_event_image_encoding', 'bgr8', cli=True)
-    args.add_arg('silky_evcam_event_image_style', 'dark', cli=True)
+    args.add_arg('silky_evcam_event_image_style', 'gep', cli=True)
     args.add_arg('silky_evcam_event_image_percentile', '90.0', cli=True)
     args.add_arg('silky_evcam_raw_recording_enabled', True, cli=True)
     args.add_arg(

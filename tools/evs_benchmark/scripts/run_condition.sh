@@ -57,3 +57,19 @@ else
     --metadata "$output_dir/metadata.json" "$@" \
     2>"$output_dir/stderr.log" | tee "$output_dir/stdout.log"
 fi
+
+stop_telemetry
+if [[ -s "$output_dir/tegrastats.log" ]]; then
+  python3 "$script_dir/parse_tegrastats.py" "$output_dir/tegrastats.log" \
+    --timeline "$output_dir/tegrastats_timeline.csv" \
+    --summary "$output_dir/tegrastats_summary.json" \
+    --interval-ms 100 \
+    --metadata "$output_dir/metadata.json" \
+    --results "$output_dir/results.csv"
+elif [[ -s "$output_dir/nvidia_smi.csv" ]]; then
+  python3 "$script_dir/summarize_nvidia_smi.py" "$output_dir/nvidia_smi.csv" \
+    --summary "$output_dir/nvidia_smi_summary.json" \
+    --interval-ms 100 \
+    --metadata "$output_dir/metadata.json" \
+    --results "$output_dir/results.csv"
+fi
