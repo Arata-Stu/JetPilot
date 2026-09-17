@@ -1,0 +1,158 @@
+# Jetson Live RGB-EVS 250 Hz評価手順
+
+この手順は、センサ保存性能とオンライン推論性能を別runで測ります。RAW保存I/Oを
+250 Hz latencyへ混ぜないことが目的です。
+
+## 0. 一度だけ準備
+
+Jetson上でworkspaceをbuildし、評価対象の`rgb_event_async`モデルを配置します。
+モデルの`metadata.json`は`event_sample_hz: 250.0`、CUDA互換のevent表現
+（通常は40 ms window、4 ms stride、10 bins、temporal interpolationなし）である必要があります。
+
+```bash
+cd /workspaces/ros2_ws
+colcon build --symlink-install
+source install/setup.bash
+```
+
+Jetsonの電力modeとclock条件を固定し、論文では使用した値を明記します。次は例です。
+
+```bash
+sudo nvpmodel -m 0
+sudo jetson_clocks
+nvpmodel -q
+jetson_clocks --show
+```
+
+## 1. センサ取得baselineを記録
+
+Terminal A:
+
+```bash
+source /workspaces/ros2_ws/install/setup.bash
+bash /workspaces/scripts/bringup.sh rgb-evs-benchmark
+```
+
+Terminal Bで60秒記録します。最初の10秒程度はwarm-upとして、記録開始前に待ちます。
+
+```bash
+source /workspaces/ros2_ws/install/setup.bash
+cd /workspaces/tools/evs_benchmark
+./scripts/record_live_window.sh 60 sensor_static_01
+```
+
+同じ照明・動きで最低5回繰り返します。静止だけでなく、低・中・高event密度になる条件を
+それぞれ記録します。保存先は`/workspaces/record/<timestamp>_<label>/`で、MCAP、OpenEB RAW、
+RAW metadataが同じsessionに入ります。
+
+## 2. RAW decodeとCPU/CUDA前処理を評価
+
+```bash
+cd /workspaces/tools/evs_benchmark
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j"$(nproc)"
+ctest --test-dir build --output-on-failure
+
+./build/evs_raw_to_evbin INPUT.raw events.evbin callbacks.csv \
+  --timestamp-policy reorder --reorder-window-us 10000 \
+  --stats conversion.json
+
+python3 scripts/select_evbin_segments.py \
+  --input events.evbin --output-dir density \
+  --window-us 2000000 --step-us 100000 --top 10
+```
+
+`density/density_selection.json`にあるlow、median、highの`start_offset_us`ごとに、
+同じ2秒区間・30 trialで実行します。
+
+```bash
+./scripts/run_matrix.sh ./build/evs_bench events.evbin results_low \
+  --segment-start-us LOW_START_US --segment-duration-us 2000000 \
+  --width 212 --height 120 --bins 10 \
+  --window-us 40000 --stride-us 4000 \
+  --warmup 5 --trials 30
+```
+
+`LOW_START_US`と出力directoryをmedian、highにも置き換えて実行します。
+判定には各directoryの`trace_summary.csv`と`correctness.csv`を使います。
+
+## 3. ライブ250 Hz CUDA＋TensorRTを評価
+
+このrunはアクチュエータを起動しません。event image、native RAW、RGB/event payloadも保存せず、
+診断topicと推論出力だけを軽量MCAPへ記録します。
+
+Terminal A:
+
+```bash
+source /workspaces/ros2_ws/install/setup.bash
+bash /workspaces/scripts/bringup.sh rgb-evs-e2e-benchmark \
+  --e2e-model /workspaces/ros2_ws/models/e2e/MODEL_NAME
+```
+
+起動表示で次を確認します。
+
+- `vehicle: none`
+- `E2E input: RGB + Raw EVS（非同期、250.0 Hz、cuda backend）`
+- `EVS preprocess: async`
+- `EVS image: disabled`
+
+別terminalでtopicが揃っていることを確認します。
+
+```bash
+ros2 topic hz /e2e/event_tensor/diagnostics
+ros2 topic hz /e2e/latent_state/diagnostics
+ros2 topic hz /e2e/diagnostics
+ros2 topic hz /auto/control_cmd
+```
+
+診断は約1 Hz、`/auto/control_cmd`は処理能力に応じた推論出力rateです。warm-up後、まず60秒を
+5回、その後10分を3回記録します。
+
+```bash
+cd /workspaces/tools/evs_benchmark
+./scripts/record_live_window.sh 60 live_250hz_01
+./scripts/record_live_window.sh 60 live_250hz_02
+./scripts/record_live_window.sh 60 live_250hz_03
+./scripts/record_live_window.sh 60 live_250hz_04
+./scripts/record_live_window.sh 60 live_250hz_05
+./scripts/record_live_window.sh 600 live_250hz_soak_01
+./scripts/record_live_window.sh 600 live_250hz_soak_02
+./scripts/record_live_window.sh 600 live_250hz_soak_03
+```
+
+収録中に値を目視する場合は次を使います。
+
+```bash
+ros2 topic echo /e2e/event_tensor/diagnostics
+ros2 topic echo /e2e/latent_state/diagnostics
+ros2 topic echo /e2e/diagnostics
+ros2 topic echo /jetson/diagnostics
+```
+
+## 4. 合格判定
+
+最低限、全runで次を確認します。
+
+1. `/e2e/event_tensor/diagnostics`
+   - `target_output_hz = 250`
+   - `deadline_misses = 0`を基本目標とする
+   - `snapshot_ms_max < 4 ms`
+   - `packet_queue_dropped_packets`、`decoded_queue_dropped_batches`、
+     `memory_pool_exhaustions`、`publish_errors`が0
+2. `/e2e/latent_state/diagnostics`
+   - `watchdog_count = 0`
+   - `inference_completed`が継続して増加
+   - `event_stale`と`event_replaced`が継続的に増えない
+   - `updater_round_trip_max_ms`を必ず報告する
+3. `/e2e/diagnostics`
+   - deadline miss数と出力間隔を報告する
+   - capture-to-command latencyはsensor clockとROS clockが一致しているrunだけ採用する
+4. `/event_camera/diagnostics`
+   - callback停止、長いpublish gap、event rateの異常低下がない
+5. `/jetson/diagnostics`
+   - thermal throttlingがない
+   - 電力、温度、CPU/GPU負荷をrun条件とともに保存する
+
+「250 Hzで動いた」という結論は、設定値だけではなく、60秒反復runと10分soakの両方で
+4 ms deadline、drop、watchdog、出力継続性を満たした場合に限定します。RAW保存ありの性能も
+必要なら、同じモデルで別条件として測り、RAWなしの主要結果と混ぜずに報告します。

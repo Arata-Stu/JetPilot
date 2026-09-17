@@ -114,6 +114,8 @@ teleop               Joy/teleop/operation + selected vehicle interface
 drive                Live sensor + joy/teleop/operation + selected vehicle interface
 record              データ収集（Joy / 固定スロットル・rosbag manager）
 rgb-evs-benchmark   RGB＋EVSセンサベンチマーク（native RAW＋軽量MCAP）
+rgb-evs-e2e-benchmark
+                     RGB＋EVS 250 Hz E2Eベンチマーク（診断のみ軽量MCAP）
 calibration          Live sensor + mapless VSLAM odometry + teleop + vehicle + bag recording
 e2e                  E2E走行（モデルからスロットル方式を自動選択）
 runtime              Live sensor/localization/teleop + Foxglove pose fallback + vehicle (map required)
@@ -224,7 +226,7 @@ known_preset() {
   case "$1" in
     sensor|localization-only|localization|localize-live|replay-localization|\
       offline-vslam|offline-vslam-map|offline-localization|\
-      vehicle|teleop|drive|calibration|record|rgb-evs-benchmark|e2e-collect|e2e-steering|e2e|runtime|map-view|tuning|competition|\
+      vehicle|teleop|drive|calibration|record|rgb-evs-benchmark|rgb-evs-e2e-benchmark|e2e-collect|e2e-steering|e2e|runtime|map-view|tuning|competition|\
       vehicle-pca|vehicle-vesc|teleop-pca|teleop-vesc|\
       drive-pca|drive-vesc|runtime-pca|runtime-vesc|custom) return 0 ;;
     *) return 1 ;;
@@ -1066,6 +1068,34 @@ apply_preset() {
       set_arg sensor_kit_silky_evcam_raw_recording_auto_start false
       set_arg sensor_kit_silky_evcam_raw_recording_request_topic \
         /event_camera/raw_recording/request
+      ;;
+    rgb-evs-e2e-benchmark)
+      # Measurement-only live pipeline: sensor + async CUDA/TensorRT +
+      # lightweight diagnostics. No actuator, event-image rendering, native RAW
+      # recording, or image/event payload is recorded during this run.
+      set_arg enable_sensor_kit true
+      set_arg enable_tool true
+      set_arg enable_bag_manager true
+      set_arg bag_manager_param \
+        "${PROJECT_ROOT}/ros2_ws/src/launch/jetpilot_system_launch/config/tool/bag_manager.rgb_evs_e2e_benchmark.param.yaml"
+      set_arg enable_e2e_inference true
+      apply_sensor_kit realsense-silky
+      set_arg sensor_kit_rgb_fps 30
+      set_arg sensor_kit_infra_fps 0
+      set_arg sensor_kit_enable_accel false
+      set_arg sensor_kit_enable_gyro false
+      set_arg sensor_kit_enable_depth false
+      set_arg sensor_kit_silky_evcam_event_image_enabled false
+      set_arg sensor_kit_silky_evcam_raw_recording_enabled false
+      set_arg sensor_kit_silky_evcam_raw_recording_auto_start false
+      set_arg sensor_kit_silky_evcam_raw_recording_request_topic ''
+      set_arg e2e_async_rgb_evs_mode true
+      set_arg e2e_event_image_mode false
+      set_arg e2e_event_tensor_mode false
+      set_arg e2e_event_preprocessor_mode async
+      set_arg e2e_event_representation_backend cuda
+      set_arg e2e_async_event_output_rate_hz 250.0
+      set_arg e2e_event_async_deadline_ms 4.0
       ;;
     e2e-collect)
       set_arg enable_sensor_kit true
@@ -1958,7 +1988,8 @@ configure_realsense_fps_interactively() {
   local stream key current selection fps override explicit
   local options=()
   for stream in rgb infra; do
-    if [[ "$PRESET" == 'rgb-evs-benchmark' && "$stream" == 'infra' ]]; then
+    if [[ "$PRESET" == 'rgb-evs-benchmark' || "$PRESET" == 'rgb-evs-e2e-benchmark' ]] \
+      && [[ "$stream" == 'infra' ]]; then
       continue
     fi
     key="sensor_kit_${stream}_fps"
@@ -2159,6 +2190,22 @@ validate_configuration() {
     [[ "$(get_arg sensor_kit_silky_evcam_raw_recording_request_topic)" \
         == '/event_camera/raw_recording/request' ]] \
       || die 'rgb-evs-benchmark requires the OpenEB RAW recording request topic'
+  fi
+  if [[ "$PRESET" == 'rgb-evs-e2e-benchmark' ]]; then
+    [[ "$SENSOR_KIT_PROFILE" == 'realsense-silky' ]] \
+      || die 'rgb-evs-e2e-benchmark requires the realsense-silky sensor kit'
+    is_true "$(get_arg enable_bag_manager)" \
+      || die 'rgb-evs-e2e-benchmark requires the bag manager'
+    is_true "$(get_arg enable_e2e_inference)" \
+      || die 'rgb-evs-e2e-benchmark requires E2E inference'
+    is_true "$(get_arg e2e_async_rgb_evs_mode)" \
+      || die 'rgb-evs-e2e-benchmark requires async RGB-EVS mode'
+    [[ "$(get_arg e2e_event_preprocessor_mode)" == 'async' ]] \
+      || die 'rgb-evs-e2e-benchmark requires the async event preprocessor'
+    [[ "$(get_arg e2e_event_representation_backend)" == 'cuda' ]] \
+      || die 'rgb-evs-e2e-benchmark requires the CUDA event backend'
+    [[ "$(get_arg e2e_async_event_output_rate_hz)" == '250.0' ]] \
+      || die 'rgb-evs-e2e-benchmark requires model metadata event_sample_hz=250.0'
   fi
   if is_true "$(get_arg teleop_fixed_throttle_mode 2>/dev/null || true)" || is_true "$(get_arg e2e_fixed_throttle_mode 2>/dev/null || true)"; then
     "$PYTHON_BIN" - "$(get_arg fixed_throttle)" <<'PYVALIDATE' || die 'fixed_throttle must be a number within [0, 1]'
@@ -2475,7 +2522,11 @@ print_summary() {
         "$(get_arg sensor_kit_silky_evcam_event_image_window_ms)" \
         "$(get_arg sensor_kit_silky_evcam_event_image_stride_ms)"
     elif [[ -n "$(get_arg sensor_kit_silky_evcam_event_image_enabled 2>/dev/null || true)" ]]; then
-      printf '  EVS image    : disabled (native RAW capture)\n'
+      if is_true "$(get_arg sensor_kit_silky_evcam_raw_recording_enabled 2>/dev/null || true)"; then
+        printf '  EVS image    : disabled (native RAW capture)\n'
+      else
+        printf '  EVS image    : disabled (live inference only)\n'
+      fi
     fi
     if is_true "$(get_arg sensor_kit_enable_rtp_stream 2>/dev/null || true)"; then
       printf '  RTP topic    : %s\n' \
@@ -2784,7 +2835,8 @@ if [[ "$REQUIRES_VEHICLE" == 'true' && "$VEHICLE_BACKEND" == 'none' && -z "${CLI
   apply_vehicle "$DEFAULT_VEHICLE_PROFILE"
 fi
 if [[ "$INTERACTIVE" == 'true' && -z "$CLI_SENSOR_KIT" \
-  && "$PRESET" != 'rgb-evs-benchmark' ]] \
+  && "$PRESET" != 'rgb-evs-benchmark' \
+  && "$PRESET" != 'rgb-evs-e2e-benchmark' ]] \
   && is_true "$(get_arg enable_sensor_kit)"; then
   configure_sensor_kit_interactively
 fi

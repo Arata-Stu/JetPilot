@@ -1,6 +1,7 @@
 # EVS Native Benchmark
 
 センサ間の共通比較方針は[../SENSOR_BENCHMARKS.md](../SENSOR_BENCHMARKS.md)を参照してください。
+Jetson上のライブ250 Hz CUDA＋TensorRT評価は[ LIVE_EVALUATION.md ](LIVE_EVALUATION.md)を参照してください。
 
 ROS 2、DDS、TensorRTを介さず、同一のイベント列から20ch event tensorを作るCPU/GPU実装を比較するための実験プロジェクトです。RCカー統合前に、センサ入力、正しさ、処理時間、転送時間、CPU/GPU使用率を切り分けます。
 

@@ -1,0 +1,47 @@
+bag_manager_node:
+  ros__parameters:
+    output_dir: "/workspaces/record"
+    record_all: false
+
+    # Live 250 Hz RGB-EVS evaluation records diagnostics and command timing
+    # only. Image/event payloads and native RAW are deliberately excluded so
+    # storage I/O does not distort the online latency measurement.
+    topics:
+      - /bag/request
+      - /bag/status
+      - /tf_static
+
+      - /event_camera/camera_info
+      - /event_camera/diagnostics
+      - /realsense/color/camera_info
+      - /realsense/diagnostics
+
+      - /e2e/event_tensor/diagnostics
+      - /e2e/latent_state/diagnostics
+      - /e2e/diagnostics
+      - /auto/control_cmd
+
+      - /jetson/diagnostics
+
+    exclude_topics: []
+    storage_id: "mcap"
+    serialization_format: ""
+    max_bag_size: 0
+    recording_split_duration_s: 0
+    max_cache_size: 0
+    compression_mode: ""
+    compression_format: ""
+    compression_queue_size: 0
+    compression_threads: 0
+    qos_profile_overrides_path: ""
+    include_hidden_topics: false
+    no_discovery: false
+    snapshot_mode: false
+    start_paused: false
+    extra_args: []
+    status_period_s: 1.0
+
+    # Keep native RAW off in latency runs. Use rgb-evs-benchmark separately
+    # when an auditable sensor stream must be retained.
+    raw_recording_request_topic: ""
+    recording_start_timeout_s: 5.0

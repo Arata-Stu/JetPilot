@@ -75,6 +75,7 @@ def test_presets_are_listed() -> None:
         "drive",
         "calibration",
         "rgb-evs-benchmark",
+        "rgb-evs-e2e-benchmark",
         "e2e",
         "runtime",
         "map-view",
@@ -630,6 +631,43 @@ def test_rgb_evs_benchmark_uses_native_raw_and_lightweight_mcap() -> None:
     assert "enable_teleop:=true" in drive_output
     assert "enable_operation:=true" in drive_output
     assert "publish_vehicle_evs_description:=true" in drive_output
+
+
+def test_rgb_evs_e2e_benchmark_uses_async_cuda_and_diagnostics_only() -> None:
+    output = run_launcher(
+        "rgb-evs-e2e-benchmark",
+        "--e2e-model",
+        "/workspaces/ros2_ws/models/e2e/test-rgb-event-async",
+        "--dry-run",
+    ).stdout
+    benchmark_config_path = (
+        PROJECT_ROOT
+        / "ros2_ws/src/launch/jetpilot_system_launch/config/tool/"
+        "bag_manager.rgb_evs_e2e_benchmark.param.yaml"
+    )
+    benchmark_config = benchmark_config_path.read_text(encoding="utf-8")
+
+    assert "enable_sensor_kit:=true" in output
+    assert "enable_bag_manager:=true" in output
+    assert "enable_e2e_inference:=true" in output
+    assert "enable_vehicle:=false" in output
+    assert "e2e_async_rgb_evs_mode:=true" in output
+    assert "e2e_event_preprocessor_mode:=async" in output
+    assert "e2e_event_representation_backend:=cuda" in output
+    assert "e2e_async_event_output_rate_hz:=250.0" in output
+    assert "e2e_event_async_deadline_ms:=4.0" in output
+    assert "sensor_kit_silky_evcam_event_image_enabled:=false" in output
+    assert "sensor_kit_silky_evcam_raw_recording_enabled:=false" in output
+    assert str(benchmark_config_path) in output
+    assert "- /e2e/event_tensor/diagnostics" in benchmark_config
+    assert "- /e2e/latent_state/diagnostics" in benchmark_config
+    assert "- /e2e/diagnostics" in benchmark_config
+    assert "- /jetson/diagnostics" in benchmark_config
+    assert "- /event_camera/events\n" not in benchmark_config
+    assert "- /event_camera/events_raw\n" not in benchmark_config
+    assert "- /event_camera/event_image\n" not in benchmark_config
+    assert "- /realsense/color/image_raw\n" not in benchmark_config
+    assert 'raw_recording_request_topic: ""' in benchmark_config
 
 
 def test_flir_sensor_kit_launches_can_be_selected_explicitly() -> None:
