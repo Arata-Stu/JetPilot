@@ -3,6 +3,15 @@
 センサ間の共通比較方針は[../SENSOR_BENCHMARKS.md](../SENSOR_BENCHMARKS.md)を参照してください。
 Jetson上のライブ250 Hz CUDA＋TensorRT評価は[ LIVE_EVALUATION.md ](LIVE_EVALUATION.md)を参照してください。
 
+学習前のTensorRT node込み評価には、benchmark専用20ch dummy ONNXを生成できます。
+
+```bash
+python3 scripts/generate_dummy_event_onnx.py \
+  --output-dir /workspaces/ros2_ws/models/e2e/dummy-event-tensor-20ch
+```
+
+このmodelは車両制御用presetから拒否され、`evs-tensorrt-benchmark`だけで使用できます。
+
 ROS 2、DDS、TensorRTを介さず、同一のイベント列から20ch event tensorを作るCPU/GPU実装を比較するための実験プロジェクトです。RCカー統合前に、センサ入力、正しさ、処理時間、転送時間、CPU/GPU使用率を切り分けます。
 
 ## 比較対象

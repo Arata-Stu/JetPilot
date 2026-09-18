@@ -157,6 +157,29 @@ class E2EModelSelectionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "RGB-format"):
             inspect_model(path, "event", False)
 
+    def test_benchmark_only_model_requires_explicit_permission(self):
+        path = self.root / "event_tensor_dummy"
+        path.mkdir()
+        (path / "model.onnx").write_bytes(b"test")
+        source = json.loads(
+            (self.root / "event_tensor_control" / "metadata.json").read_text()
+        )
+        source["model_name"] = "event_tensor_dummy"
+        source["benchmark_only"] = True
+        source["trained"] = False
+        (path / "metadata.json").write_text(json.dumps(source))
+
+        with self.assertRaisesRegex(ValueError, "benchmark-only"):
+            inspect_model(path, "event", False, event_tensor_channels=20)
+        record = inspect_model(
+            path,
+            "event",
+            False,
+            event_tensor_channels=20,
+            allow_benchmark_only=True,
+        )
+        self.assertEqual(record["name"], "event_tensor_dummy")
+
     def test_event_tensor_bringup_accepts_matching_twenty_channel_model(self):
         result = subprocess.run([
             "bash", str(ROOT / "scripts/bringup.sh"), "e2e", "--dry-run",

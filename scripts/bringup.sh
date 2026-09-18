@@ -1119,6 +1119,12 @@ apply_preset() {
       set_arg e2e_event_preprocessor_mode async
       set_arg e2e_event_representation_backend cuda
       set_arg e2e_event_inference_policy periodic
+      set_arg e2e_event_bins 10
+      set_arg e2e_event_window_ms 40.0
+      set_arg e2e_event_stride_ms 4.0
+      set_arg e2e_event_polarity_mode separate
+      set_arg e2e_event_polarity_layout polarity_major
+      set_arg e2e_event_temporal_interpolation none
       set_arg e2e_async_event_output_rate_hz 250.0
       set_arg e2e_event_async_deadline_ms 4.0
       ;;
@@ -1854,6 +1860,7 @@ configure_e2e_model() {
   fi
   flags=(--sensor "$sensor")
   [[ -z "$event_channels" ]] || flags+=(--event-tensor-channels "$event_channels")
+  [[ "$PRESET" != 'evs-tensorrt-benchmark' ]] || flags+=(--allow-benchmark-only)
   if [[ "$auto_throttle" == true ]]; then
     flags+=(--auto-throttle)
   fi

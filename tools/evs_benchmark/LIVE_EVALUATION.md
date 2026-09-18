@@ -83,6 +83,31 @@ python3 scripts/select_evbin_segments.py \
 このrunはevent cameraだけを起動し、アクチュエータ、event image、native RAW、event payload保存を
 無効にします。
 
+学習済みモデルがまだない場合は、学習環境の`onnx` packageを使ってbenchmark専用dummyを
+一度生成します。全20ch入力に依存するglobal mean reductionだけを持つため、完全な空graphより
+TensorRTで最適化消去されにくい下限モデルです。
+
+```bash
+cd /workspaces/tools/evs_benchmark
+python3 scripts/generate_dummy_event_onnx.py \
+  --output-dir /workspaces/ros2_ws/models/e2e/dummy-event-tensor-20ch
+```
+
+Jetson上でFP16 TensorRT engineをbuildします。
+
+```bash
+/workspaces/scripts/e2e_trt.sh \
+  /workspaces/ros2_ws/models/e2e/dummy-event-tensor-20ch
+```
+
+dummyは`benchmark_only: true`として保存され、通常の車両用`e2e` presetでは拒否されます。
+使用できるのは評価専用の`evs-tensorrt-benchmark`です。以下の
+`EVENT_TENSOR_MODEL`を、学習前は`dummy-event-tensor-20ch`、学習後は実モデル名に置き換えます。
+
+dummy結果は「TensorRT nodeを含むpipeline下限」として報告します。実モデルとの差には
+GPU schedulingやqueue状態の変化も含まれるため、単純な差を純粋なモデル演算時間とは断定せず、
+実モデル単体の`trtexec`結果も併記します。
+
 Terminal A:
 
 ```bash

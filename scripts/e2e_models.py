@@ -10,9 +10,12 @@ def inspect_model(
     sensor: str,
     steering_only: bool | None,
     event_tensor_channels: int | None = None,
+    allow_benchmark_only: bool = False,
 ) -> dict:
     path = path.expanduser().resolve()
     metadata = json.loads((path / "metadata.json").read_text())
+    if metadata.get("benchmark_only") is True and not allow_benchmark_only:
+        raise ValueError("benchmark-only model is not allowed for vehicle inference")
     config = metadata.get("config", {})
     data = config.get("data", {})
     output = metadata.get("output", {})
@@ -166,6 +169,7 @@ def list_models(
     sensor: str,
     steering_only: bool | None,
     event_tensor_channels: int | None = None,
+    allow_benchmark_only: bool = False,
 ) -> list[dict]:
     records = []
     seen = set()
@@ -176,7 +180,9 @@ def list_models(
             continue
         seen.add(path.resolve())
         try:
-            records.append(inspect_model(path, sensor, steering_only, event_tensor_channels))
+            records.append(inspect_model(
+                path, sensor, steering_only, event_tensor_channels, allow_benchmark_only
+            ))
         except (OSError, ValueError, TypeError, AttributeError):
             continue
     return records
@@ -191,12 +197,17 @@ def main():
     target.add_argument("--steering-only", action="store_true")
     target.add_argument("--auto-throttle", action="store_true")
     parser.add_argument("--event-tensor-channels", type=int)
+    parser.add_argument("--allow-benchmark-only", action="store_true")
     args = parser.parse_args()
     steering_only = None if args.auto_throttle else args.steering_only
     try:
         if args.action == "list":
             for record in list_models(
-                args.path, args.sensor, steering_only, args.event_tensor_channels
+                args.path,
+                args.sensor,
+                steering_only,
+                args.event_tensor_channels,
+                args.allow_benchmark_only,
             ):
                 mode = "固定スロットル" if record["steering_only"] else "モデルがスロットルを予測"
                 label = f"{record['name']} ({mode}, {record['width']}x{record['height']}, {'TRT ready' if record['engine'] else 'build needed'})"
@@ -204,7 +215,8 @@ def main():
                     print(f"{record['path']}\t{label}")
         else:
             record = inspect_model(
-                args.path, args.sensor, steering_only, args.event_tensor_channels
+                args.path, args.sensor, steering_only, args.event_tensor_channels,
+                args.allow_benchmark_only,
             )
             if args.auto_throttle:
                 print(f"e2e_fixed_throttle_mode\t{str(record['steering_only']).lower()}")
