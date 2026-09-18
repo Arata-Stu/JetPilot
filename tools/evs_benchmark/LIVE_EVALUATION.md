@@ -76,7 +76,54 @@ python3 scripts/select_evbin_segments.py \
 `LOW_START_US`と出力directoryをmedian、highにも置き換えて実行します。
 判定には各directoryの`trace_summary.csv`と`correctness.csv`を使います。
 
-## 3. ライブ250 Hz CUDA＋TensorRTを評価
+## 3. EVS-onlyライブ250 Hz CUDA＋TensorRTを評価
+
+評価対象のモデルは`metadata.json`で`modality: event_tensor`、20ch入力、40 ms window、
+4 ms stride、10 bins、temporal interpolationなしを宣言している必要があります。
+このrunはevent cameraだけを起動し、アクチュエータ、event image、native RAW、event payload保存を
+無効にします。
+
+Terminal A:
+
+```bash
+source /workspaces/ros2_ws/install/setup.bash
+bash /workspaces/scripts/bringup.sh evs-tensorrt-benchmark \
+  --e2e-model /workspaces/ros2_ws/models/e2e/EVENT_TENSOR_MODEL
+```
+
+起動表示で次を確認します。
+
+- `vehicle: none`
+- `sensor kit: event-camera`
+- `E2E input: Raw EVS 10 bins / separate polarity（cuda backend）`
+- `EVS preprocess: async`
+
+Terminal Bで診断と出力を確認します。
+
+```bash
+ros2 topic hz /e2e/event_tensor/diagnostics
+ros2 topic hz /e2e/diagnostics
+ros2 topic hz /auto/control_cmd
+```
+
+warm-up後、60秒を5回、10分を3回記録します。
+
+```bash
+cd /workspaces/tools/evs_benchmark
+./scripts/record_live_window.sh 60 evs_trt_250hz_01
+./scripts/record_live_window.sh 60 evs_trt_250hz_02
+./scripts/record_live_window.sh 60 evs_trt_250hz_03
+./scripts/record_live_window.sh 60 evs_trt_250hz_04
+./scripts/record_live_window.sh 60 evs_trt_250hz_05
+./scripts/record_live_window.sh 600 evs_trt_250hz_soak_01
+./scripts/record_live_window.sh 600 evs_trt_250hz_soak_02
+./scripts/record_live_window.sh 600 evs_trt_250hz_soak_03
+```
+
+保存先は`/workspaces/record/<timestamp>_<label>/`です。主要な論文結果にはこのEVS-only runを
+使用します。
+
+## 4. 任意: ライブasync RGB-EVSを評価
 
 このrunはアクチュエータを起動しません。event image、native RAW、RGB/event payloadも保存せず、
 診断topicと推論出力だけを軽量MCAPへ記録します。
@@ -129,7 +176,7 @@ ros2 topic echo /e2e/diagnostics
 ros2 topic echo /jetson/diagnostics
 ```
 
-## 4. 合格判定
+## 5. 合格判定
 
 最低限、全runで次を確認します。
 
@@ -139,7 +186,7 @@ ros2 topic echo /jetson/diagnostics
    - `snapshot_ms_max < 4 ms`
    - `packet_queue_dropped_packets`、`decoded_queue_dropped_batches`、
      `memory_pool_exhaustions`、`publish_errors`が0
-2. `/e2e/latent_state/diagnostics`
+2. async RGB-EVSを実施した場合の`/e2e/latent_state/diagnostics`
    - `watchdog_count = 0`
    - `inference_completed`が継続して増加
    - `event_stale`と`event_replaced`が継続的に増えない

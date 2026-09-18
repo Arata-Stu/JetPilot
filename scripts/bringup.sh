@@ -116,6 +116,8 @@ record              データ収集（Joy / 固定スロットル・rosbag manag
 rgb-evs-benchmark   RGB＋EVSセンサベンチマーク（native RAW＋軽量MCAP）
 rgb-evs-e2e-benchmark
                      RGB＋EVS 250 Hz E2Eベンチマーク（診断のみ軽量MCAP）
+evs-tensorrt-benchmark
+                     EVS-only 250 Hz CUDA＋TensorRTベンチマーク
 calibration          Live sensor + mapless VSLAM odometry + teleop + vehicle + bag recording
 e2e                  E2E走行（モデルからスロットル方式を自動選択）
 runtime              Live sensor/localization/teleop + Foxglove pose fallback + vehicle (map required)
@@ -226,7 +228,7 @@ known_preset() {
   case "$1" in
     sensor|localization-only|localization|localize-live|replay-localization|\
       offline-vslam|offline-vslam-map|offline-localization|\
-      vehicle|teleop|drive|calibration|record|rgb-evs-benchmark|rgb-evs-e2e-benchmark|e2e-collect|e2e-steering|e2e|runtime|map-view|tuning|competition|\
+      vehicle|teleop|drive|calibration|record|rgb-evs-benchmark|rgb-evs-e2e-benchmark|evs-tensorrt-benchmark|e2e-collect|e2e-steering|e2e|runtime|map-view|tuning|competition|\
       vehicle-pca|vehicle-vesc|teleop-pca|teleop-vesc|\
       drive-pca|drive-vesc|runtime-pca|runtime-vesc|custom) return 0 ;;
     *) return 1 ;;
@@ -1094,6 +1096,29 @@ apply_preset() {
       set_arg e2e_event_tensor_mode false
       set_arg e2e_event_preprocessor_mode async
       set_arg e2e_event_representation_backend cuda
+      set_arg e2e_async_event_output_rate_hz 250.0
+      set_arg e2e_event_async_deadline_ms 4.0
+      ;;
+    evs-tensorrt-benchmark)
+      # Event-only measurement pipeline: OpenEB -> async CUDA event tensor ->
+      # TensorRT -> decoder. Payload recording, rendering and actuators stay off.
+      set_arg enable_sensor_kit true
+      set_arg enable_tool true
+      set_arg enable_bag_manager true
+      set_arg bag_manager_param \
+        "${PROJECT_ROOT}/ros2_ws/src/launch/jetpilot_system_launch/config/tool/bag_manager.evs_tensorrt_benchmark.param.yaml"
+      set_arg enable_e2e_inference true
+      apply_sensor_kit event-camera
+      set_arg sensor_kit_silky_evcam_event_image_enabled false
+      set_arg sensor_kit_silky_evcam_raw_recording_enabled false
+      set_arg sensor_kit_silky_evcam_raw_recording_auto_start false
+      set_arg sensor_kit_silky_evcam_raw_recording_request_topic ''
+      set_arg e2e_async_rgb_evs_mode false
+      set_arg e2e_event_image_mode false
+      set_arg e2e_event_tensor_mode true
+      set_arg e2e_event_preprocessor_mode async
+      set_arg e2e_event_representation_backend cuda
+      set_arg e2e_event_inference_policy periodic
       set_arg e2e_async_event_output_rate_hz 250.0
       set_arg e2e_event_async_deadline_ms 4.0
       ;;
@@ -2207,6 +2232,24 @@ validate_configuration() {
     [[ "$(get_arg e2e_async_event_output_rate_hz)" == '250.0' ]] \
       || die 'rgb-evs-e2e-benchmark requires model metadata event_sample_hz=250.0'
   fi
+  if [[ "$PRESET" == 'evs-tensorrt-benchmark' ]]; then
+    [[ "$SENSOR_KIT_PROFILE" == 'event-camera' ]] \
+      || die 'evs-tensorrt-benchmark requires the event-camera sensor kit'
+    is_true "$(get_arg enable_bag_manager)" \
+      || die 'evs-tensorrt-benchmark requires the bag manager'
+    is_true "$(get_arg enable_e2e_inference)" \
+      || die 'evs-tensorrt-benchmark requires E2E inference'
+    is_true "$(get_arg e2e_event_tensor_mode)" \
+      || die 'evs-tensorrt-benchmark requires event tensor mode'
+    [[ "$(get_arg e2e_event_preprocessor_mode)" == 'async' ]] \
+      || die 'evs-tensorrt-benchmark requires the async event preprocessor'
+    [[ "$(get_arg e2e_event_representation_backend)" == 'cuda' ]] \
+      || die 'evs-tensorrt-benchmark requires the CUDA event backend'
+    [[ "$(get_arg e2e_event_stride_ms)" == '4.0' ]] \
+      || die 'evs-tensorrt-benchmark requires model metadata stride_ms=4.0'
+    [[ "$(get_arg e2e_async_event_output_rate_hz)" == '250.0' ]] \
+      || die 'evs-tensorrt-benchmark requires a 250 Hz output rate'
+  fi
   if is_true "$(get_arg teleop_fixed_throttle_mode 2>/dev/null || true)" || is_true "$(get_arg e2e_fixed_throttle_mode 2>/dev/null || true)"; then
     "$PYTHON_BIN" - "$(get_arg fixed_throttle)" <<'PYVALIDATE' || die 'fixed_throttle must be a number within [0, 1]'
 import math
@@ -2836,7 +2879,8 @@ if [[ "$REQUIRES_VEHICLE" == 'true' && "$VEHICLE_BACKEND" == 'none' && -z "${CLI
 fi
 if [[ "$INTERACTIVE" == 'true' && -z "$CLI_SENSOR_KIT" \
   && "$PRESET" != 'rgb-evs-benchmark' \
-  && "$PRESET" != 'rgb-evs-e2e-benchmark' ]] \
+  && "$PRESET" != 'rgb-evs-e2e-benchmark' \
+  && "$PRESET" != 'evs-tensorrt-benchmark' ]] \
   && is_true "$(get_arg enable_sensor_kit)"; then
   configure_sensor_kit_interactively
 fi
