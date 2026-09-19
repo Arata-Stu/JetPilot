@@ -1028,6 +1028,26 @@ button.preflight-unverified {
   padding: 8px;
 }
 
+.jetson-rosbag-picker .e2e-rosbag-groups {
+  max-height: 430px;
+}
+
+.jetson-rosbag-group-list {
+  display: grid;
+  gap: 6px;
+  padding: 6px;
+}
+
+.jetson-rosbag-group-list .mini-row {
+  border-color: #252d35;
+  background: #0f1419;
+  padding: 8px;
+}
+
+.jetson-rosbag-group-list .path {
+  margin-top: 3px;
+}
+
 .table-wrap {
   overflow: auto;
 }

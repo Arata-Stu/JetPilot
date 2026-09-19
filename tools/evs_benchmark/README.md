@@ -63,6 +63,48 @@ ros2 topic pub --once /bag/request jetpilot_msgs/msg/BagRequest \
 
 MCAP、RAW、RAW timestamp metadataは`/workspaces/record/<session>/`へまとまります。
 
+### 論文用RGB・Event画像の同期出力
+
+`rgb-evs-benchmark`で収録したsessionから、RGBの各フレーム周期に対応するevent画像を生成できます。
+EVS RAWにはwall-clockの絶対時刻がないため、rosbagに残る
+`/event_camera/raw_recording/request`のSTART受信時刻を共通アンカーにし、RAW先頭eventのsensor時刻へ
+対応付けます。各event画像の既定windowは固定値ではなく、直前RGBフレームから現在フレームまでの
+実測intervalです。
+
+```bash
+python3 /workspaces/tools/evs_benchmark/scripts/export_rgb_event_paper_frames.py \
+  /workspaces/record/<session> \
+  --output-dir /workspaces/record/<session>/paper_rgb_event
+```
+
+出力は`rgb/`、`event/`、左右連結済みの`pair/`、フレームごとの時刻とevent数を持つ
+`frames.csv`、同期仮定を記録する`sync.json`です。event画像は白背景、ON=青、OFF=赤です。
+RAW変換にはこのディレクトリでbuildした`evs_raw_to_evbin`を使用し、中間EVSBINと変換統計も
+出力directoryへ保存します。
+
+開始要求からRAW記録開始までの固定遅延を目視で補正する場合、正値はより後のEVS eventを選びます。
+
+```bash
+python3 scripts/export_rgb_event_paper_frames.py /workspaces/record/<session> \
+  --offset-ms 12.0 --start-sec 3 --duration-sec 5
+```
+
+動きのある収録では、RGBフレーム差分とevent数の相関から残差offsetを粗く推定できます。これは
+hardware同期ではなく、論文図・動画を自然に見せるための視覚的な補助です。推定値と相関は
+`sync.json`へ残ります。
+
+```bash
+python3 scripts/export_rgb_event_paper_frames.py /workspaces/record/<session> \
+  --auto-offset --auto-search-ms 200 --auto-step-ms 2
+```
+
+固定40 ms蓄積、間引き、出力数制限も指定できます。
+
+```bash
+python3 scripts/export_rgb_event_paper_frames.py /workspaces/record/<session> \
+  --window-ms 40 --every 3 --max-frames 100
+```
+
 Metavision RAWを、x86_64とJetsonで共通に読める固定長の`EVSBIN v1`へ一度だけ変換します。
 
 ```bash

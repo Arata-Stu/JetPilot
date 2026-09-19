@@ -377,6 +377,7 @@ const state = {
   jetsonInspectBusy: false,
   jetsonTransfer: {
     selectedPullPaths: [],
+    collapsedPullGroups: {},
     activePullPaths: [],
     currentPath: "",
     running: false,
@@ -9745,6 +9746,7 @@ function renderJetsonTransfers() {
     config.jetson_map_root || "",
   );
   const sequences = jetsonRosbagSequences();
+  const sequenceGroups = jetsonRosbagGroups(sequences);
   pruneSelectedJetsonPullPaths(sequences);
   const selectedPullPaths = selectedJetsonPullPaths();
   const activePullPaths = jetsonActivePullPaths();
@@ -9762,28 +9764,40 @@ function renderJetsonTransfers() {
   const primaryPullLabel = queueRunning
     ? `Pulling ${queue.currentIndex + 1}/${queue.total}`
     : actionButtonLabel("jetson:pull", selectedPullPaths.length > 1 ? "Pull Selected in Order" : "Pull Selected Sequence", "Starting Pull...");
-  const sequenceOptions = sequences
-    .map((sequence) => `<option value="${esc(sequence.path)}">${esc(sequence.name)} - ${esc(sequence.modified || sequence.path)}</option>`)
+  const sequenceOptions = sequenceGroups
+    .map((group) => `<optgroup label="${esc(jetsonRosbagGroupLabel(group.path))}">${group.sequences
+      .map((sequence) => `<option value="${esc(sequence.path)}">${esc(sequence.name)}${sequence.modified ? ` — ${esc(sequence.modified)}` : ""}</option>`)
+      .join("")}</optgroup>`)
     .join("");
-  const sequenceList = sequences
-    .slice(0, 12)
-    .map(
-      (sequence) => {
-        const rowState = jetsonPullRowState(sequence.path, selectedPullPaths);
-        return `
-        <div class="mini-row selectable-row">
-          <div>
-            <strong><label><input type="checkbox" ${selectedPullPaths.includes(sequence.path) ? "checked" : ""} ${pullBusy ? "disabled" : ""} onchange="toggleJetsonPullSelection(${js(sequence.path)}, this.checked)" /> ${esc(sequence.name)}</label></strong>
-            <div class="path" title="${esc(sequence.path)}">${esc(sequence.path)}</div>
-          </div>
-          <div class="actions">
-            <button onclick="useJetsonRosbag(${js(sequence.path)})" ${pullBusy ? "disabled" : ""}>Use</button>
-            <button class="primary ${rowState.className}" onclick="pullJetsonRosbag(${js(sequence.path)})" ${rowState.disabled ? `disabled title="${esc(rowState.title)}"` : ""}>${esc(rowState.label)}</button>
-          </div>
-        </div>`;
-      },
-    )
-    .join("");
+  const sequenceList = sequenceGroups.map((group) => {
+    const groupPaths = group.sequences.map((sequence) => sequence.path);
+    const selectedCount = groupPaths.filter((path) => selectedPullPaths.includes(path)).length;
+    const collapsed = Boolean(state.jetsonTransfer.collapsedPullGroups[group.path]);
+    const groupLabel = jetsonRosbagGroupLabel(group.path);
+    return `
+      <details class="e2e-rosbag-group jetson-rosbag-group" ${collapsed ? "" : "open"} ontoggle="toggleJetsonPullGroupOpen(${js(group.path)}, this.open)">
+        <summary><span class="e2e-rosbag-group-path" title="${esc(groupLabel)}">${esc(groupLabel)}</span><strong>${selectedCount}/${groupPaths.length}</strong></summary>
+        <div class="e2e-rosbag-group-actions">
+          <label><input type="checkbox" ${selectedCount === groupPaths.length ? "checked" : ""} ${pullBusy ? "disabled" : ""} onchange="toggleJetsonPullGroup(${js(group.path)}, this.checked)" />グループ内をすべて選択</label>
+        </div>
+        <div class="jetson-rosbag-group-list">
+          ${group.sequences.map((sequence) => {
+            const rowState = jetsonPullRowState(sequence.path, selectedPullPaths);
+            return `
+              <div class="mini-row selectable-row">
+                <div>
+                  <strong><label><input type="checkbox" ${selectedPullPaths.includes(sequence.path) ? "checked" : ""} ${pullBusy ? "disabled" : ""} onchange="toggleJetsonPullSelection(${js(sequence.path)}, this.checked)" /> ${esc(sequence.name)}</label></strong>
+                  <div class="path" title="${esc(sequence.path)}">${esc(sequence.modified || sequence.path)}</div>
+                </div>
+                <div class="actions">
+                  <button onclick="useJetsonRosbag(${js(sequence.path)})" ${pullBusy ? "disabled" : ""}>Use</button>
+                  <button class="primary ${rowState.className}" onclick="pullJetsonRosbag(${js(sequence.path)})" ${rowState.disabled ? `disabled title="${esc(rowState.title)}"` : ""}>${esc(rowState.label)}</button>
+                </div>
+              </div>`;
+          }).join("")}
+        </div>
+      </details>`;
+  }).join("");
   return `
     <div class="transfer-grid">
       <section class="transfer-card transfer-pull">
@@ -9810,7 +9824,7 @@ function renderJetsonTransfers() {
           </div>
           ${
             sequences.length
-              ? `<div class="mini-list full">${sequenceList}</div>`
+              ? `<div class="e2e-rosbag-picker jetson-rosbag-picker full"><div class="e2e-rosbag-groups">${sequenceList}</div></div>`
               : `<div class="notice full">Inspect Jetson first. Rosbag sequences are discovered by searching for metadata.yaml under the remote rosbag root.</div>`
           }
         </div>
@@ -15995,6 +16009,21 @@ function toggleJetsonPullSelection(path, checked) {
   setJetsonPullSelection([...selected]);
 }
 
+function toggleJetsonPullGroup(groupPath, checked) {
+  if (state.jetsonTransfer.running || actionBusy("jetson:pull")) return;
+  const selected = new Set(selectedJetsonPullPaths());
+  const group = jetsonRosbagGroups().find((item) => item.path === groupPath);
+  (group?.sequences || []).forEach((sequence) => {
+    if (checked) selected.add(sequence.path);
+    else selected.delete(sequence.path);
+  });
+  setJetsonPullSelection([...selected]);
+}
+
+function toggleJetsonPullGroupOpen(groupPath, open) {
+  state.jetsonTransfer.collapsedPullGroups[groupPath] = !open;
+}
+
 function selectAllJetsonPulls() {
   if (state.jetsonTransfer.running || actionBusy("jetson:pull")) return;
   setJetsonPullSelection(jetsonRosbagSequences().map((sequence) => sequence.path));
@@ -16165,6 +16194,38 @@ function jetsonRosbagSequences() {
       return true;
     })
     .reverse();
+}
+
+function jetsonRosbagRelativePath(path) {
+  const fullPath = String(path || "").replace(/\/+$/g, "");
+  const recordRoot = String(
+    state.jetsonTarget?.record_root || state.config?.jetson_record_root || "",
+  ).replace(/\/+$/g, "");
+  if (recordRoot && fullPath.startsWith(`${recordRoot}/`)) {
+    return fullPath.slice(recordRoot.length + 1);
+  }
+  return fullPath.split("/").filter(Boolean).slice(-2).join("/");
+}
+
+function jetsonRosbagGroups(sequences = jetsonRosbagSequences()) {
+  const groups = new Map();
+  sequences.forEach((sequence) => {
+    const parts = jetsonRosbagRelativePath(sequence.path).split("/").filter(Boolean);
+    parts.pop();
+    const groupPath = parts.join("/");
+    if (!groups.has(groupPath)) groups.set(groupPath, []);
+    groups.get(groupPath).push(sequence);
+  });
+  return [...groups.entries()].map(([path, groupedSequences]) => ({
+    path,
+    sequences: groupedSequences,
+  }));
+}
+
+function jetsonRosbagGroupLabel(groupPath) {
+  return groupPath
+    ? `record / ${groupPath.split("/").filter(Boolean).join(" / ")}`
+    : "record";
 }
 
 function contentLines(lines = []) {
@@ -16352,6 +16413,8 @@ window.startTransfer = startTransfer;
 window.useJetsonRosbag = useJetsonRosbag;
 window.pullJetsonRosbag = pullJetsonRosbag;
 window.toggleJetsonPullSelection = toggleJetsonPullSelection;
+window.toggleJetsonPullGroup = toggleJetsonPullGroup;
+window.toggleJetsonPullGroupOpen = toggleJetsonPullGroupOpen;
 window.selectAllJetsonPulls = selectAllJetsonPulls;
 window.clearJetsonPullSelection = clearJetsonPullSelection;
 window.startJetsonPull = startJetsonPull;
