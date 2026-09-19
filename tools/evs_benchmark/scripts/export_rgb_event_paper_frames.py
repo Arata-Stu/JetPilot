@@ -349,6 +349,13 @@ def _convert_raw_with_metavision(raw_path: Path, evbin_path: Path, np: Any) -> N
                 b"\0" * 24,
             )
         )
+    if event_count == 0:
+        evbin_path.unlink(missing_ok=True)
+        raise RuntimeError(
+            "Metavision decoded zero events from the RAW file. The incomplete EVSBIN was "
+            "removed. Check that the RAW file is non-empty, then build and pass the native "
+            "evs_raw_to_evbin converter."
+        )
     stats_path = evbin_path.with_suffix(evbin_path.suffix + ".conversion.json")
     stats_path.write_text(
         json.dumps(
@@ -817,7 +824,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         raw_path = _find_raw(session, args.raw.resolve() if args.raw else None)
         evbin_path = output_dir / f"{raw_path.stem}.evbin"
         if evbin_path.is_file():
-            print(f"[1/4] Reusing existing EVSBIN: {evbin_path.name}")
+            try:
+                cached_header = read_evbin_header(evbin_path)
+            except ValueError:
+                cached_header = None
+            if cached_header is not None and cached_header.event_count > 0:
+                print(f"[1/4] Reusing existing EVSBIN: {evbin_path.name}")
+            else:
+                print(f"[1/4] Removing invalid EVSBIN cache: {evbin_path.name}")
+                evbin_path.unlink()
+                _convert_raw(raw_path, evbin_path, _find_converter(args.converter), np)
         else:
             _convert_raw(raw_path, evbin_path, _find_converter(args.converter), np)
 
