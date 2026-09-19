@@ -69,7 +69,8 @@ MCAP、RAW、RAW timestamp metadataは`/workspaces/record/<session>/`へまと�
 EVS RAWにはwall-clockの絶対時刻がないため、rosbagに残る
 `/event_camera/raw_recording/request`のSTART受信時刻を共通アンカーにし、RAW先頭eventのsensor時刻へ
 対応付けます。各event画像の既定windowは固定値ではなく、直前RGBフレームから現在フレームまでの
-実測intervalです。
+実測intervalです。rosbagのdiscovery直後にSTARTだけが記録から漏れた場合は、記録されたSTOP時刻から
+RAW内の実測event継続時間を引いて開始時刻を復元します。使用した方法は`sync.json`へ保存されます。
 
 ```bash
 python3 /workspaces/tools/evs_benchmark/scripts/export_rgb_event_paper_frames.py \
@@ -102,7 +103,7 @@ python3 scripts/export_rgb_event_paper_frames.py /workspaces/record/<session> \
 
 動きのある収録では、RGBフレーム差分とevent数の相関から残差offsetを粗く推定できます。これは
 hardware同期ではなく、論文図・動画を自然に見せるための視覚的な補助です。推定値と相関は
-`sync.json`へ残ります。
+`sync.json`へ残ります。既定では相関が0.1未満なら推定offsetを棄却します。
 
 ```bash
 python3 scripts/export_rgb_event_paper_frames.py /workspaces/record/<session> \

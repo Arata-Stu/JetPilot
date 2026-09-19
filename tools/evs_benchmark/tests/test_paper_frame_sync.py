@@ -51,6 +51,23 @@ class PaperFrameSyncTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 MODULE.read_evbin_header(path)
 
+    def test_prefers_recorded_start_request(self):
+        requests = [
+            MODULE.RawRequestRecord(100, 101, 1, "start"),
+            MODULE.RawRequestRecord(5_000_000_100, 5_000_000_101, 2, "stop"),
+        ]
+        anchor, method = MODULE._choose_raw_start_anchor(requests, 2000, 5_002_000, None)
+        self.assertEqual(anchor, 100)
+        self.assertEqual(method, "recorded_start_request")
+
+    def test_infers_start_from_stop_when_start_was_not_recorded(self):
+        requests = [MODULE.RawRequestRecord(8_000_000_000, 8_000_000_001, 2, "stop")]
+        anchor, method = MODULE._choose_raw_start_anchor(
+            requests, 2_000_000, 7_000_000, None
+        )
+        self.assertEqual(anchor, 3_000_000_000)
+        self.assertEqual(method, "inferred_from_stop_minus_raw_duration")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -41,6 +41,14 @@ class RgbRecord:
     motion_score: float | None = None
 
 
+@dataclass(frozen=True)
+class RawRequestRecord:
+    bag_timestamp_ns: int
+    header_timestamp_ns: int
+    command: int
+    label: str
+
+
 def read_evbin_header(path: Path) -> EvbinHeader:
     with path.open("rb") as stream:
         payload = stream.read(EVSBIN_HEADER.size)
@@ -425,9 +433,9 @@ def _scan_bag(
     np: Any,
     cv2: Any,
     bag_backend: BagBackend,
-) -> tuple[int | None, list[RgbRecord]]:
+) -> tuple[list[RawRequestRecord], list[RgbRecord]]:
     records: list[RgbRecord] = []
-    anchor_ns: int | None = None
+    requests: list[RawRequestRecord] = []
     previous_gray = None
     available = bag_backend.available_topics(session)
     if rgb_topic not in available:
@@ -435,11 +443,18 @@ def _scan_bag(
     for topic, timestamp_ns, message in bag_backend.messages(
         session,
         {rgb_topic, request_topic},
-        {rgb_topic},
+        {rgb_topic, request_topic},
     ):
         if topic == request_topic:
-            if anchor_ns is None:
-                anchor_ns = int(timestamp_ns)
+            assert message is not None
+            requests.append(
+                RawRequestRecord(
+                    bag_timestamp_ns=int(timestamp_ns),
+                    header_timestamp_ns=_stamp_ns(message),
+                    command=int(message.command),
+                    label=str(message.label),
+                )
+            )
             continue
         assert message is not None
         motion_score = None
@@ -459,7 +474,28 @@ def _scan_bag(
                 motion_score=motion_score,
             )
         )
-    return anchor_ns, records
+    return requests, records
+
+
+def _choose_raw_start_anchor(
+    requests: Sequence[RawRequestRecord],
+    first_event_us: int,
+    last_event_us: int,
+    explicit_anchor_ns: int | None,
+) -> tuple[int, str]:
+    if explicit_anchor_ns is not None:
+        return explicit_anchor_ns, "explicit_raw_start_bag_ns"
+    starts = [request for request in requests if request.command == 1]
+    if starts:
+        return starts[0].bag_timestamp_ns, "recorded_start_request"
+    stops = [request for request in requests if request.command == 2]
+    if stops:
+        raw_duration_ns = max(0, last_event_us - first_event_us) * 1000
+        return stops[-1].bag_timestamp_ns - raw_duration_ns, "inferred_from_stop_minus_raw_duration"
+    raise RuntimeError(
+        "Neither RAW START nor STOP request was found in the bag. "
+        "Pass --raw-start-bag-ns explicitly."
+    )
 
 
 def _median_interval_ns(records: Sequence[RgbRecord]) -> int:
@@ -716,6 +752,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--auto-search-ms", type=float, default=200.0)
     parser.add_argument("--auto-step-ms", type=float, default=2.0)
     parser.add_argument(
+        "--auto-min-correlation",
+        type=float,
+        default=0.1,
+        help="Reject automatic offset estimates below this correlation",
+    )
+    parser.add_argument(
         "--window-ms",
         type=float,
         help="Fixed EVS accumulation window; default is each actual RGB interval",
@@ -743,9 +785,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise ValueError("--percentile must be in (0, 100]")
     if args.auto_search_ms <= 0 or args.auto_step_ms <= 0:
         raise ValueError("auto-alignment search and step must be positive")
+    if not -1.0 <= args.auto_min_correlation <= 1.0:
+        raise ValueError("--auto-min-correlation must be within [-1, 1]")
 
     output_dir = (args.output_dir or session / "paper_rgb_event").resolve()
-    if output_dir.exists() and any(output_dir.iterdir()):
+    resumable_names = {"rgb", "event", "pair"}
+    existing_entries = list(output_dir.iterdir()) if output_dir.exists() else []
+    unexpected_entries = [
+        entry
+        for entry in existing_entries
+        if not (
+            (entry.is_dir() and entry.name in resumable_names and not any(entry.iterdir()))
+            or entry.name.endswith(".evbin")
+            or entry.name.endswith(".evbin.conversion.json")
+            or entry.name.endswith(".evbin.callbacks.csv")
+        )
+    ]
+    if unexpected_entries:
         raise RuntimeError(
             f"Output directory is not empty: {output_dir}. Choose a new --output-dir."
         )
@@ -760,7 +816,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     else:
         raw_path = _find_raw(session, args.raw.resolve() if args.raw else None)
         evbin_path = output_dir / f"{raw_path.stem}.evbin"
-        _convert_raw(raw_path, evbin_path, _find_converter(args.converter), np)
+        if evbin_path.is_file():
+            print(f"[1/4] Reusing existing EVSBIN: {evbin_path.name}")
+        else:
+            _convert_raw(raw_path, evbin_path, _find_converter(args.converter), np)
 
     header = read_evbin_header(evbin_path)
     if header.event_count == 0:
@@ -772,7 +831,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     first_event_us = int(times[0])
 
     print(f"[2/4] Reading RGB clock and RAW START anchor from {session.name}")
-    detected_anchor_ns, records = _scan_bag(
+    requests, records = _scan_bag(
         session,
         args.rgb_topic,
         args.request_topic,
@@ -781,16 +840,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         cv2,
         bag_backend,
     )
-    anchor_ns = (
-        args.raw_start_bag_ns
-        if args.raw_start_bag_ns is not None
-        else detected_anchor_ns
+    anchor_ns, anchor_method = _choose_raw_start_anchor(
+        requests,
+        first_event_us,
+        int(times[-1]),
+        args.raw_start_bag_ns,
     )
-    if anchor_ns is None:
-        raise RuntimeError(
-            f"No message was found on {args.request_topic}. "
-            "Pass --raw-start-bag-ns explicitly."
-        )
+    print(f"      RAW start anchor: {anchor_method}")
     median_interval_ns = _median_interval_ns(records)
     offset_ms = float(args.offset_ms)
     auto_result = None
@@ -805,18 +861,28 @@ def main(argv: Sequence[str] | None = None) -> int:
             offset_ms,
             np,
         )
-        offset_ms += estimated_ms
+        accepted = score >= args.auto_min_correlation
+        if accepted:
+            offset_ms += estimated_ms
         auto_result = {
             "estimated_offset_ms": estimated_ms,
             "correlation": score,
             "sample_count": samples,
             "search_ms": args.auto_search_ms,
             "step_ms": args.auto_step_ms,
+            "minimum_correlation": args.auto_min_correlation,
+            "accepted": accepted,
         }
-        print(
-            f"[3/4] Auto offset: {estimated_ms:+.3f} ms "
-            f"(correlation={score:.3f}, final={offset_ms:+.3f} ms)"
-        )
+        if accepted:
+            print(
+                f"[3/4] Auto offset: {estimated_ms:+.3f} ms "
+                f"(correlation={score:.3f}, final={offset_ms:+.3f} ms)"
+            )
+        else:
+            print(
+                f"[3/4] Auto offset rejected: correlation={score:.3f} < "
+                f"{args.auto_min_correlation:.3f}; using {offset_ms:+.3f} ms"
+            )
     else:
         print(f"[3/4] Fixed residual offset: {offset_ms:+.3f} ms")
 
@@ -856,6 +922,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         "evbin_path": str(evbin_path),
         "output_frame_count": len(rows),
         "raw_start_bag_timestamp_ns": anchor_ns,
+        "raw_start_anchor_method": anchor_method,
+        "raw_request_messages": [
+            {
+                "bag_timestamp_ns": request.bag_timestamp_ns,
+                "header_timestamp_ns": request.header_timestamp_ns,
+                "command": request.command,
+                "label": request.label,
+            }
+            for request in requests
+        ],
         "raw_first_event_sensor_timestamp_us": first_event_us,
         "clock_mapping": (
             "event_sensor_us = raw_first_event_us + "
