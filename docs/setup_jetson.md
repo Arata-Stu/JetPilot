@@ -115,6 +115,17 @@ Jetson の電力・パフォーマンスモードを設定します（`-m 2` の
 sudo /usr/sbin/nvpmodel -m 2
 ```
 
+モード変更時に再起動を要求された場合は再起動し、その後に最大クロックと最大ファンを適用します。
+この設定は再起動後に再適用が必要です。
+
+```bash
+cd /workspaces
+./scripts/jetson_max_performance.sh
+
+# 設定を変更せず確認だけ行う場合
+./scripts/jetson_max_performance.sh --check
+```
+
 ### 4.3 Wi-Fi ドングル (RTL88x2BU) のセットアップ
 
 競合する古いドライバーを削除し、DKMS を使用して新しいドライバーをビルド・インストールします。

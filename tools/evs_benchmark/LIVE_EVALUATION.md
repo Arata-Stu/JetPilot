@@ -15,14 +15,17 @@ colcon build --symlink-install
 source install/setup.bash
 ```
 
-Jetsonの電力modeとclock条件を固定し、論文では使用した値を明記します。次は例です。
+Jetsonの電力modeとclock条件を固定し、論文では使用した値を明記します。mode変更で再起動した
+場合は、再起動後にこのスクリプトを再実行します。
 
 ```bash
-sudo nvpmodel -m 0
-sudo jetson_clocks
-nvpmodel -q
-jetson_clocks --show
+cd /workspaces
+./scripts/jetson_max_performance.sh
 ```
+
+スクリプトは`MAXN_SUPER / mode 2`を確認し、CPU・GPU・EMCの最大クロック固定とファンPWM 255を
+適用・検証します。mode 2でなければ自動変更せず終了するため、表示された手順に従って
+`nvpmodel`を変更し、必要なら再起動してから再実行します。
 
 ## 1. センサ取得baselineを記録
 
