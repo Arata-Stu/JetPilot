@@ -80,7 +80,8 @@ bash /workspaces/scripts/bringup.sh rgb-evs-benchmark \
 ```
 
 各sessionの直前にSTOP modeの確認を求めてから`/teleop_cmd_node`のparameterを更新し、実際に
-適用された値を表示します。走行中はsteeringをJoyで操作し、L2で固定throttleを解除してbrakeを
+適用された値を表示します。走行中は三角のdeadman buttonを押し続けてsteeringをJoyで操作し、
+三角を離すとzero commandへ戻ります。三角を押した状態ではL2でも固定throttleを解除してbrakeを
 かけられます。固定値はprotocol CSVにも保存され、実際の制御指令はbag内の
 `/teleop/control_cmd`と`/vehicle/control_cmd`で検証できます。
 

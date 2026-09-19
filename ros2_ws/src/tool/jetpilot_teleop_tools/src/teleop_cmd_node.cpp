@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <stdexcept>
 
+#include "jetpilot_teleop_tools/deadman_control.hpp"
 #include "jetpilot_teleop_tools/teleop_cmd_node.hpp"
 #include "rcl_interfaces/msg/parameter_descriptor.hpp"
 
@@ -18,6 +19,9 @@ TeleopCmdNode::TeleopCmdNode() : Node("teleop_cmd_node")
   brake_button_ = declare_parameter<int>("brake_button", -1);
   deadman_button_ = declare_parameter<int>("deadman_button", 3);
   fixed_throttle_mode_ = declare_parameter<bool>("fixed_throttle_mode", false);
+  if (fixed_throttle_mode_ && deadman_button_ < 0) {
+    throw std::invalid_argument("fixed_throttle_mode requires an enabled deadman_button");
+  }
   fixed_throttle_ = declare_numeric_parameter("fixed_throttle", 0.2);
   if (!std::isfinite(fixed_throttle_.load()) || fixed_throttle_ < 0.0 || fixed_throttle_ > 1.0) {
     throw std::invalid_argument("fixed_throttle must be finite and within [0, 1]");
@@ -250,9 +254,9 @@ void TeleopCmdNode::handle_joy(const sensor_msgs::msg::Joy & joy)
   cmd.header.stamp = now();
   cmd.header.frame_id = "base_link";
 
-  const bool deadman_pressed =
-    fixed_throttle_mode_ || deadman_button_ < 0 ||
-    (has_button(joy, deadman_button_) && joy.buttons[deadman_button_] != 0);
+  // Fixed throttle changes only the throttle value. It must never bypass the
+  // physical deadman: releasing the button immediately emits a zero command.
+  const bool deadman_pressed = deadman_is_pressed(joy.buttons, deadman_button_);
   if (deadman_pressed)
   {
     const double steering = has_axis(joy, steering_axis_)

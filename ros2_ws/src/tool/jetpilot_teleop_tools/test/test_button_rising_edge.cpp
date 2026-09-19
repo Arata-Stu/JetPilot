@@ -3,6 +3,7 @@
 
 #include "gtest/gtest.h"
 #include "jetpilot_teleop_tools/button_rising_edge.hpp"
+#include "jetpilot_teleop_tools/deadman_control.hpp"
 #include "jetpilot_teleop_tools/held_mode_selector.hpp"
 
 namespace
@@ -11,6 +12,7 @@ namespace
 using jetpilot_teleop_tools::ButtonRisingEdge;
 using jetpilot_teleop_tools::ButtonManagerAssignments;
 using jetpilot_teleop_tools::axis_direction_pressed;
+using jetpilot_teleop_tools::deadman_is_pressed;
 using jetpilot_teleop_tools::find_button_conflict;
 using jetpilot_teleop_tools::find_localization_button_conflict;
 using jetpilot_teleop_tools::HeldMode;
@@ -53,6 +55,18 @@ TEST(ButtonRisingEdgeTest, OutOfRangeIndexIsSafe)
 
   EXPECT_FALSE(edge.update({1, 1}));
   EXPECT_FALSE(edge.update({}));
+}
+
+TEST(DeadmanControlTest, IsActiveOnlyWhileConfiguredButtonIsHeld)
+{
+  EXPECT_FALSE(deadman_is_pressed({0, 0, 0, 0}, 3));
+  EXPECT_TRUE(deadman_is_pressed({0, 0, 0, 1}, 3));
+  EXPECT_FALSE(deadman_is_pressed({0, 0}, 3));
+}
+
+TEST(DeadmanControlTest, NegativeIndexPreservesLegacyDisabledBinding)
+{
+  EXPECT_TRUE(deadman_is_pressed({}, -1));
 }
 
 TEST(AxisDirectionTest, DetectsEitherDirectionPastThreshold)
