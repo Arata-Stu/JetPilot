@@ -80,7 +80,18 @@ python3 /workspaces/tools/evs_benchmark/scripts/export_rgb_event_paper_frames.py
 出力は`rgb/`、`event/`、左右連結済みの`pair/`、フレームごとの時刻とevent数を持つ
 `frames.csv`、同期仮定を記録する`sync.json`です。event画像は白背景、ON=青、OFF=赤です。
 RAW変換にはこのディレクトリでbuildした`evs_raw_to_evbin`を使用し、中間EVSBINと変換統計も
-出力directoryへ保存します。
+出力directoryへ保存します。変換器をまだbuildしていない場合は、SilkyEvCam対応Docker imageの
+Metavision Python bindingへ自動的にフォールバックします。rosbagの読出しも、`rosbags`がある環境では
+それを使用し、Jetson imageでは標準の`rosbag2_py`を使用するため、追加のpip installは不要です。
+
+JetsonのDocker内では、ROS環境をsourceしたsystem Pythonで実行してください。
+
+```bash
+source /opt/ros/jazzy/setup.bash
+source /workspaces/ros2_ws/install/setup.bash
+/usr/bin/python3 tools/evs_benchmark/scripts/export_rgb_event_paper_frames.py \
+  /workspaces/record/<session> --auto-offset
+```
 
 開始要求からRAW記録開始までの固定遅延を目視で補正する場合、正値はより後のEVS eventを選びます。
 

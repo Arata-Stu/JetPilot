@@ -17,7 +17,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, Iterator, Sequence
 
 
 EVSBIN_HEADER = struct.Struct("<8sIIIIQQ24s")
@@ -77,17 +77,139 @@ def _stamp_ns(message: Any) -> int:
     return int(stamp.sec) * 1_000_000_000 + int(stamp.nanosec)
 
 
-def _load_runtime_dependencies() -> tuple[Any, Any, Any]:
+class BagBackend:
+    """Small compatibility layer for standalone rosbags or sourced ROS 2."""
+
+    def __init__(self, mode: str, api: tuple[Any, ...]):
+        self.mode = mode
+        self.api = api
+
+    def available_topics(self, session: Path) -> set[str]:
+        if self.mode == "rosbags":
+            (any_reader,) = self.api
+            with any_reader([session]) as reader:
+                return {connection.topic for connection in reader.connections}
+        sequential_reader, storage_options, converter_options, _, _ = self.api
+        reader = sequential_reader()
+        reader.open(
+            storage_options(uri=str(session), storage_id=_storage_id(session)),
+            converter_options(
+                input_serialization_format="cdr", output_serialization_format="cdr"
+            ),
+        )
+        return {item.name for item in reader.get_all_topics_and_types()}
+
+    def messages(
+        self,
+        session: Path,
+        topics: set[str],
+        deserialize_topics: set[str],
+    ) -> Iterator[tuple[str, int, Any | None]]:
+        if self.mode == "rosbags":
+            (any_reader,) = self.api
+            with any_reader([session]) as reader:
+                connections = [
+                    connection
+                    for connection in reader.connections
+                    if connection.topic in topics
+                ]
+                for connection, timestamp_ns, rawdata in reader.messages(
+                    connections=connections
+                ):
+                    message = (
+                        reader.deserialize(rawdata, connection.msgtype)
+                        if connection.topic in deserialize_topics
+                        else None
+                    )
+                    yield connection.topic, int(timestamp_ns), message
+            return
+
+        (
+            sequential_reader,
+            storage_options,
+            converter_options,
+            deserialize_message,
+            get_message,
+        ) = self.api
+        reader = sequential_reader()
+        reader.open(
+            storage_options(uri=str(session), storage_id=_storage_id(session)),
+            converter_options(
+                input_serialization_format="cdr", output_serialization_format="cdr"
+            ),
+        )
+        topic_types = {item.name: item.type for item in reader.get_all_topics_and_types()}
+        message_types = {
+            topic: get_message(topic_types[topic])
+            for topic in deserialize_topics
+            if topic in topic_types
+        }
+        while reader.has_next():
+            topic, rawdata, timestamp_ns = reader.read_next()
+            if topic not in topics:
+                continue
+            message = (
+                deserialize_message(rawdata, message_types[topic])
+                if topic in deserialize_topics
+                else None
+            )
+            yield topic, int(timestamp_ns), message
+
+
+def _storage_id(session: Path) -> str:
+    if list(session.glob("*.mcap")):
+        return "mcap"
+    if list(session.glob("*.db3")):
+        return "sqlite3"
+    raise RuntimeError(f"No MCAP or SQLite rosbag storage file was found in {session}")
+
+
+def _load_runtime_dependencies() -> tuple[Any, Any, BagBackend]:
+    missing: list[str] = []
+    try:
+        import numpy as np
+    except ImportError:
+        np = None
+        missing.append("numpy")
     try:
         import cv2
-        import numpy as np
+    except ImportError:
+        cv2 = None
+        missing.append("cv2/python3-opencv")
+    if missing:
+        raise RuntimeError(
+            "Missing Python runtime module(s): "
+            + ", ".join(missing)
+            + ". Run this in the JetPilot container with system /usr/bin/python3."
+        )
+
+    try:
         from rosbags.highlevel import AnyReader
+
+        return np, cv2, BagBackend("rosbags", (AnyReader,))
+    except ImportError:
+        pass
+    try:
+        from rclpy.serialization import deserialize_message
+        from rosbag2_py import ConverterOptions, SequentialReader, StorageOptions
+        from rosidl_runtime_py.utilities import get_message
+
+        return np, cv2, BagBackend(
+            "ros2",
+            (
+                SequentialReader,
+                StorageOptions,
+                ConverterOptions,
+                deserialize_message,
+                get_message,
+            ),
+        )
     except ImportError as error:
         raise RuntimeError(
-            "This exporter requires numpy, opencv-python and rosbags. "
-            "Run it in the JetPilot analysis/container environment."
+            "No rosbag reader is available. Tried standalone 'rosbags' and the ROS 2 "
+            "modules rosbag2_py/rclpy. Source /opt/ros/jazzy/setup.bash and the "
+            "JetPilot workspace, then use /usr/bin/python3."
         ) from error
-    return np, cv2, AnyReader
 
 
 def _image_to_bgr(message: Any, np: Any, cv2: Any) -> Any:
@@ -131,7 +253,7 @@ def _find_raw(session: Path, explicit: Path | None) -> Path:
     return candidates[0]
 
 
-def _find_converter(explicit: Path | None) -> Path:
+def _find_converter(explicit: Path | None) -> Path | None:
     if explicit is not None:
         if not explicit.is_file():
             raise FileNotFoundError(f"RAW converter not found: {explicit}")
@@ -147,13 +269,106 @@ def _find_converter(explicit: Path | None) -> Path:
     for candidate in candidates:
         if candidate.is_file():
             return candidate
-    raise RuntimeError(
-        "evs_raw_to_evbin was not found. Build tools/evs_benchmark first, "
-        "or pass --converter /path/to/evs_raw_to_evbin."
+    return None
+
+
+def _convert_raw_with_metavision(raw_path: Path, evbin_path: Path, np: Any) -> None:
+    try:
+        from metavision_core.event_io import EventsIterator
+    except ImportError as error:
+        raise RuntimeError(
+            "evs_raw_to_evbin and the Metavision Python binding are both unavailable. "
+            "Build tools/evs_benchmark, or run with /usr/bin/python3 in the "
+            "SilkyEvCam-enabled JetPilot container."
+        ) from error
+
+    iterator = EventsIterator(
+        input_path=str(raw_path), delta_t=10_000, relative_timestamps=False
+    )
+    height, width = iterator.get_size()
+    if width <= 0 or height <= 0:
+        raise RuntimeError(f"Metavision reported invalid RAW geometry: {width}x{height}")
+    dtype = np.dtype(
+        [
+            ("t", "<i8"),
+            ("x", "<u2"),
+            ("y", "<u2"),
+            ("p", "u1"),
+            ("padding", "u1", (3,)),
+        ]
+    )
+    event_count = 0
+    dropped_nonmonotonic = 0
+    last_timestamp_us: int | None = None
+    with evbin_path.open("wb") as stream:
+        stream.write(
+            EVSBIN_HEADER.pack(
+                EVSBIN_MAGIC, 1, EVSBIN_HEADER.size, width, height, 0, 1000, b"\0" * 24
+            )
+        )
+        for decoded in iterator:
+            if len(decoded) == 0:
+                continue
+            timestamps = np.asarray(decoded["t"], dtype=np.int64)
+            order = np.argsort(timestamps, kind="stable")
+            decoded = decoded[order]
+            timestamps = timestamps[order]
+            if last_timestamp_us is not None:
+                keep = timestamps >= last_timestamp_us
+                dropped_nonmonotonic += int((~keep).sum())
+                decoded = decoded[keep]
+                timestamps = timestamps[keep]
+            if len(decoded) == 0:
+                continue
+            converted = np.zeros(len(decoded), dtype=dtype)
+            converted["t"] = timestamps
+            converted["x"] = decoded["x"]
+            converted["y"] = decoded["y"]
+            converted["p"] = decoded["p"]
+            stream.write(converted.tobytes())
+            event_count += len(converted)
+            last_timestamp_us = int(timestamps[-1])
+        stream.seek(0)
+        stream.write(
+            EVSBIN_HEADER.pack(
+                EVSBIN_MAGIC,
+                1,
+                EVSBIN_HEADER.size,
+                width,
+                height,
+                event_count,
+                1000,
+                b"\0" * 24,
+            )
+        )
+    stats_path = evbin_path.with_suffix(evbin_path.suffix + ".conversion.json")
+    stats_path.write_text(
+        json.dumps(
+            {
+                "input": str(raw_path),
+                "output": str(evbin_path),
+                "backend": "metavision_python",
+                "width": width,
+                "height": height,
+                "written_events": event_count,
+                "dropped_nonmonotonic_events": dropped_nonmonotonic,
+                "timestamp_policy": "stable_sort_each_10ms_slice_then_drop_backward",
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
     )
 
 
-def _convert_raw(raw_path: Path, evbin_path: Path, converter: Path) -> None:
+def _convert_raw(
+    raw_path: Path, evbin_path: Path, converter: Path | None, np: Any
+) -> None:
+    print(f"[1/4] Converting RAW to monotonic EVSBIN: {raw_path.name}")
+    if converter is None:
+        print("      evs_raw_to_evbin not found; using Metavision Python fallback")
+        _convert_raw_with_metavision(raw_path, evbin_path, np)
+        return
     stats_path = evbin_path.with_suffix(evbin_path.suffix + ".conversion.json")
     callbacks_path = evbin_path.with_suffix(evbin_path.suffix + ".callbacks.csv")
     command = [
@@ -168,7 +383,6 @@ def _convert_raw(raw_path: Path, evbin_path: Path, converter: Path) -> None:
         "--stats",
         str(stats_path),
     ]
-    print(f"[1/4] Converting RAW to monotonic EVSBIN: {raw_path.name}")
     subprocess.run(command, check=True)
 
 
@@ -210,44 +424,41 @@ def _scan_bag(
     need_motion: bool,
     np: Any,
     cv2: Any,
-    AnyReader: Any,
+    bag_backend: BagBackend,
 ) -> tuple[int | None, list[RgbRecord]]:
     records: list[RgbRecord] = []
     anchor_ns: int | None = None
     previous_gray = None
-    with AnyReader([session]) as reader:
-        connections = [
-            connection
-            for connection in reader.connections
-            if connection.topic in {rgb_topic, request_topic}
-        ]
-        rgb_connections = [c for c in connections if c.topic == rgb_topic]
-        if not rgb_connections:
-            available = sorted({c.topic for c in reader.connections})
-            raise RuntimeError(f"RGB topic {rgb_topic!r} not found; available: {available}")
-        for connection, timestamp_ns, rawdata in reader.messages(connections=connections):
-            if connection.topic == request_topic:
-                if anchor_ns is None:
-                    anchor_ns = int(timestamp_ns)
-                continue
-            message = reader.deserialize(rawdata, connection.msgtype)
-            motion_score = None
-            if need_motion:
-                bgr = _image_to_bgr(message, np, cv2)
-                gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-                gray = cv2.resize(gray, (96, 72), interpolation=cv2.INTER_AREA)
-                if previous_gray is not None:
-                    delta = cv2.absdiff(gray, previous_gray)
-                    motion_score = float(delta.mean())
-                previous_gray = gray
-            records.append(
-                RgbRecord(
-                    index=len(records),
-                    bag_timestamp_ns=int(timestamp_ns),
-                    header_timestamp_ns=_stamp_ns(message),
-                    motion_score=motion_score,
-                )
+    available = bag_backend.available_topics(session)
+    if rgb_topic not in available:
+        raise RuntimeError(f"RGB topic {rgb_topic!r} not found; available: {sorted(available)}")
+    for topic, timestamp_ns, message in bag_backend.messages(
+        session,
+        {rgb_topic, request_topic},
+        {rgb_topic},
+    ):
+        if topic == request_topic:
+            if anchor_ns is None:
+                anchor_ns = int(timestamp_ns)
+            continue
+        assert message is not None
+        motion_score = None
+        if need_motion:
+            bgr = _image_to_bgr(message, np, cv2)
+            gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+            gray = cv2.resize(gray, (96, 72), interpolation=cv2.INTER_AREA)
+            if previous_gray is not None:
+                delta = cv2.absdiff(gray, previous_gray)
+                motion_score = float(delta.mean())
+            previous_gray = gray
+        records.append(
+            RgbRecord(
+                index=len(records),
+                bag_timestamp_ns=int(timestamp_ns),
+                header_timestamp_ns=_stamp_ns(message),
+                motion_score=motion_score,
             )
+        )
     return anchor_ns, records
 
 
@@ -399,7 +610,7 @@ def _export_frames(
     percentile: float,
     np: Any,
     cv2: Any,
-    AnyReader: Any,
+    bag_backend: BagBackend,
 ) -> list[dict[str, Any]]:
     rgb_dir = output_dir / "rgb"
     event_dir = output_dir / "event"
@@ -407,59 +618,59 @@ def _export_frames(
     for directory in (rgb_dir, event_dir, pair_dir):
         directory.mkdir(parents=True, exist_ok=True)
     rows: list[dict[str, Any]] = []
-    with AnyReader([session]) as reader:
-        connections = [c for c in reader.connections if c.topic == rgb_topic]
-        frame_index = 0
-        for connection, timestamp_ns, rawdata in reader.messages(connections=connections):
-            if frame_index not in selected:
-                frame_index += 1
-                continue
-            message = reader.deserialize(rawdata, connection.msgtype)
-            rgb = _image_to_bgr(message, np, cv2)
-            end_us = map_bag_to_sensor_us(
-                int(timestamp_ns), anchor_ns, first_event_us, offset_ms
-            )
-            if window_ms is not None:
-                start_us = end_us - round(window_ms * 1000.0)
-            elif frame_index > 0:
-                start_us = map_bag_to_sensor_us(
-                    records[frame_index - 1].bag_timestamp_ns,
-                    anchor_ns,
-                    first_event_us,
-                    offset_ms,
-                )
-            else:
-                start_us = end_us - round(median_interval_ns / 1000.0)
-            begin = int(np.searchsorted(events["t"], start_us, side="left"))
-            end = int(np.searchsorted(events["t"], end_us, side="right"))
-            event_image = _render_event_image(
-                events[begin:end], header.width, header.height, percentile, np
-            )
-            relative_sec = (int(timestamp_ns) - anchor_ns) / 1.0e9
-            stem = f"{frame_index:06d}_t{relative_sec:010.6f}"
-            rgb_rel = Path("rgb") / f"{stem}.png"
-            event_rel = Path("event") / f"{stem}.png"
-            pair_rel = Path("pair") / f"{stem}.png"
-            _write_image(output_dir / rgb_rel, rgb, cv2)
-            _write_image(output_dir / event_rel, event_image, cv2)
-            _write_image(output_dir / pair_rel, _paired_image(rgb, event_image, cv2), cv2)
-            rows.append(
-                {
-                    "rgb_index": frame_index,
-                    "rgb_bag_timestamp_ns": int(timestamp_ns),
-                    "rgb_header_timestamp_ns": _stamp_ns(message),
-                    "relative_time_s": f"{relative_sec:.9f}",
-                    "event_window_start_sensor_us": start_us,
-                    "event_window_end_sensor_us": end_us,
-                    "event_window_ms": f"{(end_us - start_us) / 1000.0:.6f}",
-                    "event_count": max(0, end - begin),
-                    "sync_offset_ms": f"{offset_ms:.6f}",
-                    "rgb_path": rgb_rel.as_posix(),
-                    "event_path": event_rel.as_posix(),
-                    "pair_path": pair_rel.as_posix(),
-                }
-            )
+    frame_index = 0
+    for _, timestamp_ns, message in bag_backend.messages(
+        session, {rgb_topic}, {rgb_topic}
+    ):
+        if frame_index not in selected:
             frame_index += 1
+            continue
+        assert message is not None
+        rgb = _image_to_bgr(message, np, cv2)
+        end_us = map_bag_to_sensor_us(
+            int(timestamp_ns), anchor_ns, first_event_us, offset_ms
+        )
+        if window_ms is not None:
+            start_us = end_us - round(window_ms * 1000.0)
+        elif frame_index > 0:
+            start_us = map_bag_to_sensor_us(
+                records[frame_index - 1].bag_timestamp_ns,
+                anchor_ns,
+                first_event_us,
+                offset_ms,
+            )
+        else:
+            start_us = end_us - round(median_interval_ns / 1000.0)
+        begin = int(np.searchsorted(events["t"], start_us, side="left"))
+        end = int(np.searchsorted(events["t"], end_us, side="right"))
+        event_image = _render_event_image(
+            events[begin:end], header.width, header.height, percentile, np
+        )
+        relative_sec = (int(timestamp_ns) - anchor_ns) / 1.0e9
+        stem = f"{frame_index:06d}_t{relative_sec:010.6f}"
+        rgb_rel = Path("rgb") / f"{stem}.png"
+        event_rel = Path("event") / f"{stem}.png"
+        pair_rel = Path("pair") / f"{stem}.png"
+        _write_image(output_dir / rgb_rel, rgb, cv2)
+        _write_image(output_dir / event_rel, event_image, cv2)
+        _write_image(output_dir / pair_rel, _paired_image(rgb, event_image, cv2), cv2)
+        rows.append(
+            {
+                "rgb_index": frame_index,
+                "rgb_bag_timestamp_ns": int(timestamp_ns),
+                "rgb_header_timestamp_ns": _stamp_ns(message),
+                "relative_time_s": f"{relative_sec:.9f}",
+                "event_window_start_sensor_us": start_us,
+                "event_window_end_sensor_us": end_us,
+                "event_window_ms": f"{(end_us - start_us) / 1000.0:.6f}",
+                "event_count": max(0, end - begin),
+                "sync_offset_ms": f"{offset_ms:.6f}",
+                "rgb_path": rgb_rel.as_posix(),
+                "event_path": event_rel.as_posix(),
+                "pair_path": pair_rel.as_posix(),
+            }
+        )
+        frame_index += 1
     return rows
 
 
@@ -539,7 +750,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"Output directory is not empty: {output_dir}. Choose a new --output-dir."
         )
     output_dir.mkdir(parents=True, exist_ok=True)
-    np, cv2, AnyReader = _load_runtime_dependencies()
+    np, cv2, bag_backend = _load_runtime_dependencies()
 
     raw_path = None
     if args.evbin is not None:
@@ -549,7 +760,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     else:
         raw_path = _find_raw(session, args.raw.resolve() if args.raw else None)
         evbin_path = output_dir / f"{raw_path.stem}.evbin"
-        _convert_raw(raw_path, evbin_path, _find_converter(args.converter))
+        _convert_raw(raw_path, evbin_path, _find_converter(args.converter), np)
 
     header = read_evbin_header(evbin_path)
     if header.event_count == 0:
@@ -568,7 +779,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.auto_offset,
         np,
         cv2,
-        AnyReader,
+        bag_backend,
     )
     anchor_ns = (
         args.raw_start_bag_ns
@@ -634,7 +845,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         args.percentile,
         np,
         cv2,
-        AnyReader,
+        bag_backend,
     )
     _write_manifest(output_dir / "frames.csv", rows)
     summary = {
@@ -662,6 +873,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         ),
         "event_geometry": {"width": header.width, "height": header.height},
         "event_count_total": header.event_count,
+        "bag_reader_backend": bag_backend.mode,
         "event_rendering": {
             "background": "white",
             "positive": "blue",
