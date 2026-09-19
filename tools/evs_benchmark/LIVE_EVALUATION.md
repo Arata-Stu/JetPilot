@@ -45,6 +45,45 @@ cd /workspaces/tools/evs_benchmark
 それぞれ記録します。保存先は`/workspaces/record/<timestamp>_<label>/`で、MCAP、OpenEB RAW、
 RAW metadataが同じsessionに入ります。
 
+固定コースを周回して条件を揃える場合は、時間指定ではなく次の対話式protocolを使えます。
+既定では通常速度、低速、高速を各3周 x 3回、合計9個の独立sessionへ保存します。
+バッテリー、温度、時刻の影響が特定条件だけに偏らないよう、条件順はrepeatごとに循環します
+（normal-low-high、low-high-normal、high-normal-low）。
+開始地点でEnterを押すと記録が始まり、3周を終えて安全に停止してから再度Enterを押すと、
+そのsessionを終了して次へ進みます。
+
+```bash
+cd /workspaces/tools/evs_benchmark
+./scripts/record_lap_protocol.sh 3 3 course
+```
+
+labelは`course_normal_3lap_01`、`course_low_3lap_01`、`course_high_3lap_01`などです。
+各runの開始・終了UTCと所要時間は`/workspaces/record/*_course_lap_protocol.csv`にも保存されます。
+運転者自身が端末を操作する場合は、必ず車両を停止してから終了Enterを押します。
+
+Joyでsteeringだけを操作し、条件別のthrottleをソフトウェアで固定する場合は、先に別terminalで
+車両interfaceを含む収録構成を起動します。`VEHICLE_PROFILE`は実機のprofileへ置き換えます。
+
+```bash
+bash /workspaces/scripts/bringup.sh rgb-evs-benchmark \
+  --vehicle VEHICLE_PROFILE \
+  --set teleop_fixed_throttle_mode:=true \
+  --set fixed_throttle:=INITIAL_SAFE_VALUE
+```
+
+周回収録にはnormal、low、highの3条件の固定throttleをこの順で追加指定します。値は事前に
+安全な直線で校正した値を使い、ここに例示値は設けません。
+
+```bash
+./scripts/record_lap_protocol.sh 3 3 course \
+  NORMAL_THROTTLE LOW_THROTTLE HIGH_THROTTLE
+```
+
+各sessionの直前にSTOP modeの確認を求めてから`/teleop_cmd_node`のparameterを更新し、実際に
+適用された値を表示します。走行中はsteeringをJoyで操作し、L2で固定throttleを解除してbrakeを
+かけられます。固定値はprotocol CSVにも保存され、実際の制御指令はbag内の
+`/teleop/control_cmd`と`/vehicle/control_cmd`で検証できます。
+
 ## 2. RAW decodeとCPU/CUDA前処理を評価
 
 ```bash
