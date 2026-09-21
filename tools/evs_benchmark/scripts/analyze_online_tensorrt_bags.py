@@ -15,7 +15,7 @@ from typing import Any, Iterable
 E2E_TOPIC = "/e2e/diagnostics"
 EVENT_TOPIC = "/e2e/event_tensor/diagnostics"
 JETSON_TOPIC = "/jetson/diagnostics"
-CONTROL_TOPIC = "/benchmark/e2e/control_cmd"
+CONTROL_TOPICS = ("/benchmark/e2e/control_cmd", "/auto/control_cmd")
 
 COUNTER_KEYS = (
     "decode_errors",
@@ -138,7 +138,7 @@ def parse_bag(label: str, bag: Path, deadline_ms: float) -> dict[str, Any]:
         first_ns = timestamp_ns if first_ns is None else min(first_ns, timestamp_ns)
         last_ns = timestamp_ns if last_ns is None else max(last_ns, timestamp_ns)
         topic_counts[topic] += 1
-        if topic == CONTROL_TOPIC:
+        if topic in CONTROL_TOPICS:
             topic_timestamps[topic].append(timestamp_ns)
         if topic not in numeric:
             continue
@@ -175,14 +175,18 @@ def parse_bag(label: str, bag: Path, deadline_ms: float) -> dict[str, Any]:
         for topic, fields in text.items()
     }
 
+    control_topic = max(
+        CONTROL_TOPICS, key=lambda topic: topic_counts.get(topic, 0)
+    )
     return {
         "label": label,
         "bag": str(bag),
         "bag_duration_s": duration_s,
         "topic_counts": dict(topic_counts),
-        "control_output_hz": rate_hz(topic_timestamps[CONTROL_TOPIC]),
+        "control_topic": control_topic,
+        "control_output_hz": rate_hz(topic_timestamps[control_topic]),
         "control_output_hz_over_bag": (
-            topic_counts[CONTROL_TOPIC] / duration_s if duration_s > 0.0 else None
+            topic_counts[control_topic] / duration_s if duration_s > 0.0 else None
         ),
         "capture_to_command_ms": numeric_summary(capture),
         "decoder_callback_ms": numeric_summary(
@@ -220,7 +224,8 @@ def compact_row(result: dict[str, Any]) -> dict[str, Any]:
     return {
         "profile": result["label"],
         "duration_s": result["bag_duration_s"],
-        "outputs": result["topic_counts"].get(CONTROL_TOPIC, 0),
+        "control_topic": result["control_topic"],
+        "outputs": result["topic_counts"].get(result["control_topic"], 0),
         "output_hz": result["control_output_hz"],
         "latency_mean_ms": latency["mean"],
         "latency_p50_ms": latency["p50"],
