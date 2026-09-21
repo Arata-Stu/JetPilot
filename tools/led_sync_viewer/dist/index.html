@@ -119,8 +119,17 @@
     .panel-note { color: var(--muted); font-size: .78rem; }
     .timeline-wrap { padding: 8px 10px 2px; }
     #timeline { display: block; width: 100%; height: 430px; border-radius: 9px; background: #080e16; touch-action: none; }
-    .timeline-controls { display: grid; grid-template-columns: 1fr auto auto; gap: 12px; align-items: center; padding: 10px 14px 14px; }
-    .zoom { display: grid; grid-template-columns: auto minmax(100px, 1fr) auto; align-items: center; gap: 9px; color: var(--muted); font-size: .8rem; }
+    .timeline-controls { display: grid; gap: 10px; padding: 10px 14px 14px; }
+    .navigator-wrap { position: relative; height: 58px; border: 1px solid var(--line-strong); border-radius: 8px; overflow: hidden; background: #080e16; }
+    #navigator { display: block; width: 100%; height: 100%; cursor: crosshair; touch-action: none; }
+    .navigator-scale { display: grid; grid-template-columns: 90px 1fr 90px; align-items: center; gap: 10px; }
+    .navigator-hint { text-align: center; color: #708398; font-size: .76rem; }
+    .seek-time { color: var(--muted); font-size: .78rem; font-variant-numeric: tabular-nums; }
+    .seek-time:last-child { text-align: right; }
+    .nav-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+    .duration-control { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: .82rem; }
+    .duration-control select { min-height: 40px; }
+    .view-label { margin-left: auto; color: var(--cyan); font-size: .82rem; font-variant-numeric: tabular-nums; }
     .legend { display: flex; flex-wrap: wrap; gap: 12px; color: var(--muted); font-size: .78rem; }
     .legend span { display: inline-flex; align-items: center; gap: 6px; }
     .dot { width: 9px; height: 9px; border-radius: 50%; }
@@ -204,14 +213,41 @@
       <div>
         <article class="panel">
           <div class="panel-header">
-            <div><h2 class="panel-title">点滅タイムライン</h2><div class="panel-note">ドラッグで移動・ホイールで拡大</div></div>
+            <div><h2 class="panel-title">点滅タイムライン</h2><div class="panel-note">シークバーで移動・表示幅で拡大</div></div>
             <div class="legend" aria-label="凡例"><span><i class="dot rgb"></i>RGB輝度</span><span><i class="dot pos"></i>EVS＋</span><span><i class="dot neg"></i>EVS−</span></div>
           </div>
           <div class="timeline-wrap"><canvas id="timeline" aria-label="RGB輝度とEVSイベント数の時系列グラフ"></canvas></div>
           <div class="timeline-controls">
-            <div class="zoom"><span>全体</span><input id="zoomRange" type="range" min="0" max="100" value="0" aria-label="表示範囲"><span>拡大</span></div>
-            <button id="startView" type="button">開始側</button>
-            <button id="endView" type="button">終了側</button>
+            <div class="navigator-wrap">
+              <canvas id="navigator" aria-label="全記録中の現在の表示範囲。クリックまたはドラッグで移動"></canvas>
+            </div>
+            <div class="navigator-scale">
+              <span class="seek-time" id="seekStart">0.000 s</span>
+              <span class="navigator-hint">枠＝表示範囲　中央線＝表示中心　クリック／ドラッグで移動</span>
+              <span class="seek-time" id="seekEnd">0.000 s</span>
+            </div>
+            <div class="nav-row">
+              <button id="previousView" type="button">← 前へ</button>
+              <button id="nextView" type="button">次へ →</button>
+              <label class="duration-control" for="viewDuration">表示幅
+                <select id="viewDuration">
+                  <option value="full">全体</option>
+                  <option value="0.1">100 ms</option>
+                  <option value="0.25">250 ms</option>
+                  <option value="0.5">500 ms</option>
+                  <option value="1">1 s</option>
+                  <option value="2">2 s</option>
+                  <option value="5">5 s</option>
+                  <option value="10">10 s</option>
+                  <option value="30">30 s</option>
+                  <option value="custom" disabled>現在の倍率</option>
+                </select>
+              </label>
+              <button id="startView" type="button">最初の点滅</button>
+              <button id="endView" type="button">最後の点滅</button>
+              <button id="resetView" type="button">全体表示</button>
+              <output class="view-label" id="viewLabel">0.000–0.000 s</output>
+            </div>
           </div>
         </article>
 
@@ -227,7 +263,7 @@
         </article>
 
         <article class="panel playback">
-          <div class="panel-header"><h2 class="panel-title">同期スロー再生</h2><div class="panel-note">EVS動画は5 ms蓄積・1 ms更新を想定</div></div>
+          <div class="panel-header"><h2 class="panel-title">同期スロー再生（任意）</h2><div class="panel-note">同期計算には不要。目視確認・発表用</div></div>
           <div class="video-grid">
             <div class="video-cell"><span class="video-label">RGB · 60 Hz</span><video id="rgbVideo" muted playsinline></video><span class="video-empty" id="rgbEmpty">RGB動画を選択</span></div>
             <div class="video-cell"><span class="video-label">EVS · 1 ms step</span><video id="evsVideo" muted playsinline></video><span class="video-empty" id="evsEmpty">EVS可視化動画を選択</span></div>
@@ -257,7 +293,6 @@
             </div>
             <div class="stack">
               <button class="primary" id="analyzeButton" type="button">自動推定を実行</button>
-              <button id="resetView" type="button">表示範囲をリセット</button>
             </div>
             <p class="helper">閾値は時刻そのものを手入力するためではなく、点滅候補を選別するために使います。</p>
           </div>
@@ -288,6 +323,7 @@
       offsetS: 0, drift: 0, anchorS: 0, rmsS: 0,
       viewStart: 0, viewEnd: 2.2, fullStart: 0, fullEnd: 2.2,
       dragging: false, dragX: 0, dragStart: 0, dragEnd: 0,
+      navigatorDragging: false, navigatorBins: [],
       rgbUrl: null, evsUrl: null
     };
 
@@ -351,8 +387,9 @@
       state.fullEnd = Number.isFinite(fullEnd) ? fullEnd : 1;
       state.viewStart = state.fullStart;
       state.viewEnd = state.fullEnd;
+      buildNavigatorBins();
       $('sessionName').textContent = `${state.meta.session} — EVS ${state.evs.length.toLocaleString()} bin / RGB ${state.rgb.length.toLocaleString()} frame`;
-      $('zoomRange').value = 0;
+      $('viewDuration').value = 'full';
       analyze();
     }
 
@@ -543,6 +580,71 @@
         ctx.fillRect(x(edge.lo), pad.t, Math.max(2, x(edge.hi)-x(edge.lo)), topH);
       }
       ctx.restore();
+      updateTimelineNavigation();
+    }
+
+    function updateTimelineNavigation() {
+      const fullSpan = Math.max(.001, state.fullEnd - state.fullStart);
+      const viewSpan = Math.min(fullSpan, Math.max(.001, state.viewEnd - state.viewStart));
+      $('seekStart').textContent = `${state.fullStart.toFixed(3)} s`;
+      $('seekEnd').textContent = `${state.fullEnd.toFixed(3)} s`;
+      $('viewLabel').textContent = `${state.viewStart.toFixed(3)}–${state.viewEnd.toFixed(3)} s · 幅 ${viewSpan < 1 ? `${(viewSpan * 1000).toFixed(0)} ms` : `${viewSpan.toFixed(2)} s`}`;
+      drawNavigator();
+    }
+
+    function buildNavigatorBins() {
+      const binCount = 1200;
+      const bins = Array.from({ length: binCount }, () => ({ pos: 0, neg: 0 }));
+      const span = Math.max(.001, state.fullEnd - state.fullStart);
+      for (const point of state.evs) {
+        const index = clamp(Math.floor((point.t - state.fullStart) / span * binCount), 0, binCount - 1);
+        if (point.pos > bins[index].pos) bins[index].pos = point.pos;
+        if (point.neg > bins[index].neg) bins[index].neg = point.neg;
+      }
+      state.navigatorBins = bins;
+    }
+
+    function drawNavigator() {
+      const canvas = $('navigator');
+      const rect = canvas.getBoundingClientRect();
+      const ratio = window.devicePixelRatio || 1;
+      const width = Math.max(1, Math.round(rect.width * ratio));
+      const height = Math.max(1, Math.round(rect.height * ratio));
+      if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; }
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, width, height);
+      ctx.save(); ctx.scale(ratio, ratio);
+      const w = width / ratio, h = height / ratio;
+      ctx.fillStyle = '#080e16'; ctx.fillRect(0, 0, w, h);
+
+      let maximum = 1;
+      for (const bin of state.navigatorBins) maximum = Math.max(maximum, bin.pos, bin.neg);
+      const barWidth = w / Math.max(1, state.navigatorBins.length);
+      state.navigatorBins.forEach((bin, index) => {
+        const total = Math.max(bin.pos, bin.neg) / maximum;
+        const barHeight = Math.max(1, total * (h - 12));
+        ctx.fillStyle = bin.pos >= bin.neg ? 'rgba(55,230,196,.65)' : 'rgba(112,167,255,.65)';
+        ctx.fillRect(index * barWidth, h - barHeight, Math.max(1, barWidth), barHeight);
+      });
+
+      const fullSpan = Math.max(.001, state.fullEnd - state.fullStart);
+      const left = clamp((state.viewStart - state.fullStart) / fullSpan * w, 0, w);
+      const right = clamp((state.viewEnd - state.fullStart) / fullSpan * w, 0, w);
+      const center = (left + right) / 2;
+      ctx.fillStyle = 'rgba(2,6,10,.64)';
+      ctx.fillRect(0, 0, left, h);
+      ctx.fillRect(right, 0, w - right, h);
+      ctx.fillStyle = 'rgba(55,230,196,.10)';
+      ctx.fillRect(left, 0, Math.max(2, right - left), h);
+      ctx.strokeStyle = '#37e6c4'; ctx.lineWidth = 2;
+      ctx.strokeRect(left + 1, 1, Math.max(2, right - left - 2), h - 2);
+      ctx.fillStyle = '#37e6c4';
+      ctx.fillRect(left, h * .24, 3, h * .52);
+      ctx.fillRect(Math.max(left, right - 3), h * .24, 3, h * .52);
+      ctx.fillStyle = '#ffb45c';
+      ctx.fillRect(center - 1, 0, 2, h);
+      ctx.beginPath(); ctx.arc(center, h / 2, 4, 0, Math.PI * 2); ctx.fill();
+      ctx.restore();
     }
 
     function setView(center, span) {
@@ -660,13 +762,50 @@
       if (!path) { toast('Docker内のJSONパスを入力してください。'); return; }
       openDockerData(path).catch(error => toast(error.message));
     });
-    $('resetView').addEventListener('click', () => { state.viewStart=state.fullStart; state.viewEnd=state.fullEnd; $('zoomRange').value=0; draw(); });
-    $('startView').addEventListener('click', () => setView(state.evsEdges[0]?.t ?? state.fullStart, .35));
-    $('endView').addEventListener('click', () => setView(state.evsEdges.at(-1)?.t ?? state.fullEnd, .35));
-    $('zoomRange').addEventListener('input', event => {
-      const fullSpan=state.fullEnd-state.fullStart, factor=Math.pow(.04, Number(event.target.value)/100);
-      setView((state.viewStart+state.viewEnd)/2, fullSpan*factor);
+    $('resetView').addEventListener('click', () => {
+      $('viewDuration').value = 'full';
+      state.viewStart = state.fullStart;
+      state.viewEnd = state.fullEnd;
+      draw();
     });
+    $('startView').addEventListener('click', () => {
+      $('viewDuration').value = '0.5';
+      setView(state.evsEdges[0]?.t ?? state.fullStart, .5);
+    });
+    $('endView').addEventListener('click', () => {
+      $('viewDuration').value = '0.5';
+      setView(state.evsEdges.at(-1)?.t ?? state.fullEnd, .5);
+    });
+    $('viewDuration').addEventListener('change', event => {
+      if (event.target.value === 'custom') return;
+      const fullSpan = Math.max(.001, state.fullEnd - state.fullStart);
+      const span = event.target.value === 'full' ? fullSpan : Number(event.target.value);
+      setView((state.viewStart + state.viewEnd) / 2, span);
+    });
+    function moveView(direction) {
+      const span = state.viewEnd - state.viewStart;
+      setView((state.viewStart + state.viewEnd) / 2 + direction * span * .8, span);
+    }
+    $('previousView').addEventListener('click', () => moveView(-1));
+    $('nextView').addEventListener('click', () => moveView(1));
+
+    const navigator = $('navigator');
+    function seekFromNavigator(event) {
+      const rect = navigator.getBoundingClientRect();
+      const ratio = clamp((event.clientX - rect.left) / rect.width, 0, 1);
+      const center = state.fullStart + ratio * (state.fullEnd - state.fullStart);
+      setView(center, state.viewEnd - state.viewStart);
+    }
+    navigator.addEventListener('pointerdown', event => {
+      state.navigatorDragging = true;
+      navigator.setPointerCapture(event.pointerId);
+      seekFromNavigator(event);
+    });
+    navigator.addEventListener('pointermove', event => {
+      if (state.navigatorDragging) seekFromNavigator(event);
+    });
+    navigator.addEventListener('pointerup', () => state.navigatorDragging = false);
+    navigator.addEventListener('pointercancel', () => state.navigatorDragging = false);
 
     const canvas = $('timeline');
     canvas.addEventListener('wheel', event => {
@@ -676,6 +815,7 @@
       state.viewStart=pointerT-ratio*newSpan; state.viewEnd=state.viewStart+newSpan;
       if(state.viewStart<state.fullStart){state.viewEnd+=state.fullStart-state.viewStart;state.viewStart=state.fullStart;}
       if(state.viewEnd>state.fullEnd){state.viewStart-=state.viewEnd-state.fullEnd;state.viewEnd=state.fullEnd;}
+      $('viewDuration').value='custom';
       draw();
     }, { passive:false });
     canvas.addEventListener('pointerdown', event => { state.dragging=true; state.dragX=event.clientX; state.dragStart=state.viewStart; state.dragEnd=state.viewEnd; canvas.setPointerCapture(event.pointerId); });
