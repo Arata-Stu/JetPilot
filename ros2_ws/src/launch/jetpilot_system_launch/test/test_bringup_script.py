@@ -78,6 +78,8 @@ def test_presets_are_listed() -> None:
         "rc-popout",
         "rgb-evs-e2e-benchmark",
         "evs-tensorrt-benchmark",
+        "evs-cpu-tensorrt-benchmark",
+        "evs-legacy-cuda-tensorrt-benchmark",
         "e2e",
         "runtime",
         "map-view",
@@ -726,6 +728,51 @@ def test_evs_tensorrt_benchmark_is_event_only_and_diagnostics_only() -> None:
     assert "- /event_camera/events_raw\n" not in benchmark_config
     assert "- /event_camera/event_image\n" not in benchmark_config
     assert 'raw_recording_request_topic: ""' in benchmark_config
+
+
+def test_evs_tensorrt_comparison_presets_are_safe_and_select_expected_backend() -> None:
+    cases = (
+        (
+            "evs-cpu-tensorrt-benchmark",
+            "legacy",
+            "cpu",
+        ),
+        (
+            "evs-legacy-cuda-tensorrt-benchmark",
+            "legacy",
+            "cuda",
+        ),
+    )
+
+    for preset, preprocessor, backend in cases:
+        output = run_launcher(
+            preset,
+            "--e2e-model",
+            "/workspaces/ros2_ws/models/e2e/test-event-tensor",
+            "--dry-run",
+        ).stdout
+
+        assert "enable_sensor_kit:=true" in output
+        assert "enable_bag_manager:=true" in output
+        assert "enable_e2e_inference:=true" in output
+        assert "enable_vehicle:=false" in output
+        assert "launch/sensors/event_camera.launch.py" in output
+        assert "e2e_event_tensor_mode:=true" in output
+        assert "e2e_async_rgb_evs_mode:=false" in output
+        assert f"e2e_event_preprocessor_mode:={preprocessor}" in output
+        assert f"e2e_event_representation_backend:={backend}" in output
+        assert "sensor_kit_silky_evcam_event_image_enabled:=false" in output
+        assert "sensor_kit_silky_evcam_raw_recording_enabled:=false" in output
+        assert "bag_manager.evs_tensorrt_benchmark.param.yaml" in output
+
+    cpu_output = run_launcher(
+        "evs-cpu-tensorrt-benchmark",
+        "--e2e-model",
+        "/workspaces/ros2_ws/models/e2e/test-event-tensor",
+        "--dry-run",
+    ).stdout
+    assert "e2e_event_incremental_mode:=require" in cpu_output
+    assert "e2e_event_tensor_use_pinned_host_memory:=true" in cpu_output
 
 
 def test_flir_sensor_kit_launches_can_be_selected_explicitly() -> None:

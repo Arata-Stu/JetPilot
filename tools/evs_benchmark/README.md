@@ -10,7 +10,9 @@ python3 scripts/generate_dummy_event_onnx.py \
   --output-dir /workspaces/ros2_ws/models/e2e/dummy-event-tensor-20ch
 ```
 
-このmodelは車両制御用presetから拒否され、`evs-tensorrt-benchmark`だけで使用できます。
+このmodelは車両制御用presetから拒否され、EVS TensorRT評価専用の
+`evs-tensorrt-benchmark`、`evs-cpu-tensorrt-benchmark`、
+`evs-legacy-cuda-tensorrt-benchmark`だけで使用できます。
 
 ROS 2、DDS、TensorRTを介さず、同一のイベント列から20ch event tensorを作るCPU/GPU実装を比較するための実験プロジェクトです。RCカー統合前に、センサ入力、正しさ、処理時間、転送時間、CPU/GPU使用率を切り分けます。
 

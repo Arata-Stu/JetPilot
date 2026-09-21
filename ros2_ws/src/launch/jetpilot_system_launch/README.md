@@ -198,7 +198,7 @@ scripts/bringup.sh rgb-evs-e2e-benchmark \
 センサ、Jetsonのdiagnosticsだけを軽量MCAPへ保存します。完全な測定手順と判定項目は
 `/workspaces/tools/evs_benchmark/LIVE_EVALUATION.md`を参照してください。
 
-論文用の主要評価としてEVS-onlyのCUDA前処理とTensorRTを250 Hzで測る場合は、次を使用します。
+論文用の主要評価としてEVS-onlyのasync CUDA前処理とTensorRTを250 Hzで測る場合は、次を使用します。
 
 ```bash
 scripts/bringup.sh evs-tensorrt-benchmark \
@@ -207,6 +207,19 @@ scripts/bringup.sh evs-tensorrt-benchmark \
 
 このpresetはevent cameraだけを起動し、`EVS → async CUDA event tensor → TensorRT → decoder`
 のdiagnosticsだけを軽量MCAPへ保存します。アクチュエータ、event image、native RAW保存は無効です。
+
+CPU incrementalからpinned host buffer経由でfull tensorをGPUへ送りTensorRTへ入力する条件と、
+同じlegacy nodeでCUDA rollingを使う条件は次の安全なno-actuator presetで比較できます。
+
+```bash
+scripts/bringup.sh evs-cpu-tensorrt-benchmark \
+  --e2e-model /workspaces/ros2_ws/models/e2e/<event-tensor-run>
+
+scripts/bringup.sh evs-legacy-cuda-tensorrt-benchmark \
+  --e2e-model /workspaces/ros2_ws/models/e2e/<event-tensor-run>
+```
+
+3条件は同じ診断専用Bag Manager設定を使い、event payloadとnative RAWを保存しません。
 
 Jetson 上の通常起動では `isaac_ros_jetson_stats` が既定で有効になり、診断情報を `/jetson/diagnostics` へ publish します。必要に応じて `enable_jetson_stats:=false` で無効化できます。x86 imageには同packageが配布されないため既定で無効になり、明示的な有効化も拒否します。`scripts/bringup.sh` のオフライン再生プリセットでは tool stack自体を停止するため、Jetson statsも起動しません。
 

@@ -144,7 +144,7 @@ Jetson上でFP16 TensorRT engineをbuildします。
 ```
 
 dummyは`benchmark_only: true`として保存され、通常の車両用`e2e` presetでは拒否されます。
-使用できるのは評価専用の`evs-tensorrt-benchmark`です。以下の
+使用できるのは評価専用の3つのEVS TensorRT benchmark presetです。以下の
 `EVENT_TENSOR_MODEL`を、学習前は`dummy-event-tensor-20ch`、学習後は実モデル名に置き換えます。
 
 dummy結果は「TensorRT nodeを含むpipeline下限」として報告します。実モデルとの差には
@@ -159,12 +159,31 @@ bash /workspaces/scripts/bringup.sh evs-tensorrt-benchmark \
   --e2e-model /workspaces/ros2_ws/models/e2e/EVENT_TENSOR_MODEL
 ```
 
+同じモデルと記録条件でCPU incremental＋full tensor H2D、およびlegacy CUDAも比較できます。
+
+```bash
+# CPU incremental -> pinned host -> full tensor H2D -> TensorRT
+bash /workspaces/scripts/bringup.sh evs-cpu-tensorrt-benchmark \
+  --e2e-model /workspaces/ros2_ws/models/e2e/EVENT_TENSOR_MODEL
+
+# legacy CUDA rolling -> GPU resident tensor -> TensorRT
+bash /workspaces/scripts/bringup.sh evs-legacy-cuda-tensorrt-benchmark \
+  --e2e-model /workspaces/ros2_ws/models/e2e/EVENT_TENSOR_MODEL
+```
+
+3つともevent camera以外のセンサ、アクチュエータ、event image、native RAW、event payload保存を
+無効にします。同時起動せず、同じ視覚刺激で1条件ずつ測定します。主要production候補は
+`evs-tensorrt-benchmark`のasync CUDAです。
+
 起動表示で次を確認します。
 
 - `vehicle: none`
 - `sensor kit: event-camera`
 - `E2E input: Raw EVS 10 bins / separate polarity（cuda backend）`
 - `EVS preprocess: async`
+
+CPU presetでは`cpu backend`、`EVS preprocess: legacy`、legacy CUDA presetでは
+`cuda backend`、`EVS preprocess: legacy`が表示されることを確認します。
 
 Terminal Bで診断と出力を確認します。
 

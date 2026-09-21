@@ -118,7 +118,11 @@ rc-popout           RCカー飛び出し実験（RGB 848x480@60＋EVS native RAW
 rgb-evs-e2e-benchmark
                      RGB＋EVS 250 Hz E2Eベンチマーク（診断のみ軽量MCAP）
 evs-tensorrt-benchmark
-                     EVS-only 250 Hz CUDA＋TensorRTベンチマーク
+                     EVS-only 250 Hz async CUDA＋TensorRTベンチマーク
+evs-cpu-tensorrt-benchmark
+                     EVS-only CPU incremental＋H2D＋TensorRTベンチマーク
+evs-legacy-cuda-tensorrt-benchmark
+                     EVS-only legacy CUDA＋TensorRTベンチマーク
 calibration          Live sensor + mapless VSLAM odometry + teleop + vehicle + bag recording
 e2e                  E2E走行（モデルからスロットル方式を自動選択）
 runtime              Live sensor/localization/teleop + Foxglove pose fallback + vehicle (map required)
@@ -229,7 +233,7 @@ known_preset() {
   case "$1" in
     sensor|localization-only|localization|localize-live|replay-localization|\
       offline-vslam|offline-vslam-map|offline-localization|\
-      vehicle|teleop|drive|calibration|record|rgb-evs-benchmark|rc-popout|rgb-evs-e2e-benchmark|evs-tensorrt-benchmark|e2e-collect|e2e-steering|e2e|runtime|map-view|tuning|competition|\
+      vehicle|teleop|drive|calibration|record|rgb-evs-benchmark|rc-popout|rgb-evs-e2e-benchmark|evs-tensorrt-benchmark|evs-cpu-tensorrt-benchmark|evs-legacy-cuda-tensorrt-benchmark|e2e-collect|e2e-steering|e2e|runtime|map-view|tuning|competition|\
       vehicle-pca|vehicle-vesc|teleop-pca|teleop-vesc|\
       drive-pca|drive-vesc|runtime-pca|runtime-vesc|custom) return 0 ;;
     *) return 1 ;;
@@ -1125,9 +1129,9 @@ apply_preset() {
       set_arg e2e_async_event_output_rate_hz 250.0
       set_arg e2e_event_async_deadline_ms 4.0
       ;;
-    evs-tensorrt-benchmark)
-      # Event-only measurement pipeline: OpenEB -> async CUDA event tensor ->
-      # TensorRT -> decoder. Payload recording, rendering and actuators stay off.
+    evs-tensorrt-benchmark|evs-cpu-tensorrt-benchmark|evs-legacy-cuda-tensorrt-benchmark)
+      # Event-only measurement pipelines. Payload recording, rendering and
+      # actuators stay off for all CPU/CUDA comparison variants.
       set_arg enable_sensor_kit true
       set_arg enable_tool true
       set_arg enable_bag_manager true
@@ -1142,8 +1146,6 @@ apply_preset() {
       set_arg e2e_async_rgb_evs_mode false
       set_arg e2e_event_image_mode false
       set_arg e2e_event_tensor_mode true
-      set_arg e2e_event_preprocessor_mode async
-      set_arg e2e_event_representation_backend cuda
       set_arg e2e_event_inference_policy periodic
       set_arg e2e_event_bins 10
       set_arg e2e_event_window_ms 40.0
@@ -1153,6 +1155,22 @@ apply_preset() {
       set_arg e2e_event_temporal_interpolation none
       set_arg e2e_async_event_output_rate_hz 250.0
       set_arg e2e_event_async_deadline_ms 4.0
+      case "$PRESET" in
+        evs-tensorrt-benchmark)
+          set_arg e2e_event_preprocessor_mode async
+          set_arg e2e_event_representation_backend cuda
+          ;;
+        evs-cpu-tensorrt-benchmark)
+          set_arg e2e_event_preprocessor_mode legacy
+          set_arg e2e_event_representation_backend cpu
+          set_arg e2e_event_incremental_mode require
+          set_arg e2e_event_tensor_use_pinned_host_memory true
+          ;;
+        evs-legacy-cuda-tensorrt-benchmark)
+          set_arg e2e_event_preprocessor_mode legacy
+          set_arg e2e_event_representation_backend cuda
+          ;;
+      esac
       ;;
     e2e-collect)
       set_arg enable_sensor_kit true
@@ -1891,7 +1909,11 @@ configure_e2e_model() {
   fi
   flags=(--sensor "$sensor")
   [[ -z "$event_channels" ]] || flags+=(--event-tensor-channels "$event_channels")
-  [[ "$PRESET" != 'evs-tensorrt-benchmark' ]] || flags+=(--allow-benchmark-only)
+  case "$PRESET" in
+    evs-tensorrt-benchmark|evs-cpu-tensorrt-benchmark|evs-legacy-cuda-tensorrt-benchmark)
+      flags+=(--allow-benchmark-only)
+      ;;
+  esac
   if [[ "$auto_throttle" == true ]]; then
     flags+=(--auto-throttle)
   fi
@@ -1936,6 +1958,17 @@ configure_e2e_model() {
       || die "$key=$current does not match model metadata ($value)"
     set_arg "$key" "$value"
   done <<< "$records"
+  # Backend choice is an experimental condition for these presets, not a model
+  # property. Model metadata describes the representation; both exact CPU and
+  # CUDA implementations produce the same tensor checked by the native matrix.
+  case "$PRESET" in
+    evs-cpu-tensorrt-benchmark)
+      set_arg e2e_event_representation_backend cpu
+      ;;
+    evs-tensorrt-benchmark|evs-legacy-cuda-tensorrt-benchmark)
+      set_arg e2e_event_representation_backend cuda
+      ;;
+  esac
   if is_true "$(get_arg e2e_async_rgb_evs_mode 2>/dev/null || true)"; then
     set_arg sensor_kit_silky_evcam_event_image_enabled false
   fi
@@ -2312,23 +2345,45 @@ validate_configuration() {
     [[ "$(get_arg e2e_async_event_output_rate_hz)" == '250.0' ]] \
       || die 'rgb-evs-e2e-benchmark requires model metadata event_sample_hz=250.0'
   fi
-  if [[ "$PRESET" == 'evs-tensorrt-benchmark' ]]; then
+  if [[ "$PRESET" == 'evs-tensorrt-benchmark' \
+    || "$PRESET" == 'evs-cpu-tensorrt-benchmark' \
+    || "$PRESET" == 'evs-legacy-cuda-tensorrt-benchmark' ]]; then
     [[ "$SENSOR_KIT_PROFILE" == 'event-camera' ]] \
-      || die 'evs-tensorrt-benchmark requires the event-camera sensor kit'
+      || die "$PRESET requires the event-camera sensor kit"
     is_true "$(get_arg enable_bag_manager)" \
-      || die 'evs-tensorrt-benchmark requires the bag manager'
+      || die "$PRESET requires the bag manager"
     is_true "$(get_arg enable_e2e_inference)" \
-      || die 'evs-tensorrt-benchmark requires E2E inference'
+      || die "$PRESET requires E2E inference"
     is_true "$(get_arg e2e_event_tensor_mode)" \
-      || die 'evs-tensorrt-benchmark requires event tensor mode'
-    [[ "$(get_arg e2e_event_preprocessor_mode)" == 'async' ]] \
-      || die 'evs-tensorrt-benchmark requires the async event preprocessor'
-    [[ "$(get_arg e2e_event_representation_backend)" == 'cuda' ]] \
-      || die 'evs-tensorrt-benchmark requires the CUDA event backend'
+      || die "$PRESET requires event tensor mode"
     [[ "$(get_arg e2e_event_stride_ms)" == '4.0' ]] \
-      || die 'evs-tensorrt-benchmark requires model metadata stride_ms=4.0'
-    [[ "$(get_arg e2e_async_event_output_rate_hz)" == '250.0' ]] \
-      || die 'evs-tensorrt-benchmark requires a 250 Hz output rate'
+      || die "$PRESET requires model metadata stride_ms=4.0"
+    case "$PRESET" in
+      evs-tensorrt-benchmark)
+        [[ "$(get_arg e2e_event_preprocessor_mode)" == 'async' ]] \
+          || die 'evs-tensorrt-benchmark requires the async event preprocessor'
+        [[ "$(get_arg e2e_event_representation_backend)" == 'cuda' ]] \
+          || die 'evs-tensorrt-benchmark requires the CUDA event backend'
+        [[ "$(get_arg e2e_async_event_output_rate_hz)" == '250.0' ]] \
+          || die 'evs-tensorrt-benchmark requires a 250 Hz output rate'
+        ;;
+      evs-cpu-tensorrt-benchmark)
+        [[ "$(get_arg e2e_event_preprocessor_mode)" == 'legacy' ]] \
+          || die 'evs-cpu-tensorrt-benchmark requires the legacy event preprocessor'
+        [[ "$(get_arg e2e_event_representation_backend)" == 'cpu' ]] \
+          || die 'evs-cpu-tensorrt-benchmark requires the CPU event backend'
+        [[ "$(get_arg e2e_event_incremental_mode)" == 'require' ]] \
+          || die 'evs-cpu-tensorrt-benchmark requires exact incremental reuse'
+        is_true "$(get_arg e2e_event_tensor_use_pinned_host_memory)" \
+          || die 'evs-cpu-tensorrt-benchmark requires pinned host memory'
+        ;;
+      evs-legacy-cuda-tensorrt-benchmark)
+        [[ "$(get_arg e2e_event_preprocessor_mode)" == 'legacy' ]] \
+          || die 'evs-legacy-cuda-tensorrt-benchmark requires the legacy event preprocessor'
+        [[ "$(get_arg e2e_event_representation_backend)" == 'cuda' ]] \
+          || die 'evs-legacy-cuda-tensorrt-benchmark requires the CUDA event backend'
+        ;;
+    esac
   fi
   if is_true "$(get_arg teleop_fixed_throttle_mode 2>/dev/null || true)" || is_true "$(get_arg e2e_fixed_throttle_mode 2>/dev/null || true)"; then
     "$PYTHON_BIN" - "$(get_arg fixed_throttle)" <<'PYVALIDATE' || die 'fixed_throttle must be a number within [0, 1]'
@@ -2969,7 +3024,9 @@ if [[ "$INTERACTIVE" == 'true' && -z "$CLI_SENSOR_KIT" \
   && "$PRESET" != 'rgb-evs-benchmark' \
   && "$PRESET" != 'rc-popout' \
   && "$PRESET" != 'rgb-evs-e2e-benchmark' \
-  && "$PRESET" != 'evs-tensorrt-benchmark' ]] \
+  && "$PRESET" != 'evs-tensorrt-benchmark' \
+  && "$PRESET" != 'evs-cpu-tensorrt-benchmark' \
+  && "$PRESET" != 'evs-legacy-cuda-tensorrt-benchmark' ]] \
   && is_true "$(get_arg enable_sensor_kit)"; then
   configure_sensor_kit_interactively
 fi
