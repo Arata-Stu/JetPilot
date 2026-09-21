@@ -2162,7 +2162,6 @@ configure_sensor_kit_interactively() {
 
 configure_silky_evcam_bias_interactively() {
   is_true "$(get_arg enable_sensor_kit)" || return 0
-  [[ "$PRESET" != 'rc-popout' ]] || return 0
   [[ "$(get_arg sensor_kit_interface_pkg 2>/dev/null || true)" == 'jetpilot_system_launch' ]] \
     || return 0
   case "$(get_arg sensor_kit_interface_launch 2>/dev/null || true)" in
@@ -2280,8 +2279,6 @@ validate_configuration() {
       && ! is_true "$(get_arg sensor_kit_enable_accel)" \
       && ! is_true "$(get_arg sensor_kit_enable_gyro)" \
       || die 'rc-popout requires Infra, Depth, Accel, and Gyro to be disabled'
-    [[ -z "$(get_arg sensor_kit_silky_evcam_bias_file 2>/dev/null || true)" ]] \
-      || die 'rc-popout requires the default EVS bias (empty bias file)'
     is_true "$(get_arg sensor_kit_silky_evcam_raw_recording_enabled)" \
       || die 'rc-popout requires OpenEB RAW recording'
     [[ "$(get_arg sensor_kit_silky_evcam_raw_recording_request_topic)" \
@@ -3063,7 +3060,8 @@ PY
   set_arg enable_foxglove true
   set_arg vslam_enable_visualization true
 fi
-if [[ "$INTERACTIVE" == 'true' ]]; then
+if [[ "$INTERACTIVE" == 'true' \
+  || ( "$PRESET" == 'rc-popout' && -t 0 && -t 1 ) ]]; then
   configure_silky_evcam_bias_interactively
 fi
 validate_configuration

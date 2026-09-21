@@ -129,8 +129,9 @@ scripts/bringup.sh rc-popout
 ```
 
 このpresetはD455のRGBのみを848×480・60 Hzで起動し、Infra、Depth、Accel、Gyroを停止します。
-SilkyEvCamはbias fileを渡さず、カメラ／OpenEBのデフォルトbiasで起動します。端末から実行すると
-EVS event imageを使用するか確認され、`off`（計測時の推奨）または`on`（配置確認用）を選べます。
+SilkyEvCamは既定ではbias fileを渡さず、カメラ／OpenEBのデフォルトbiasで起動します。端末から実行すると
+EVS event imageを使用するか確認され、続けてbiasを読み込まないか、既存の`.bias`ファイルを使うかを
+選べます。event imageは`off`（計測時の推奨）または`on`（配置確認用）を選択します。
 native RAWを記録し、RGBとdiagnosticsは軽量MCAPへ保存します。実験条件を再現できるよう、
 各収録日の開始時にD455の機種名、serial、firmware、USB種別、対応streamを保存してください。
 
