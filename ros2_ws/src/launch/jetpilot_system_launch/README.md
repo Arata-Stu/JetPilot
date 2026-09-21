@@ -221,6 +221,11 @@ scripts/bringup.sh evs-legacy-cuda-tensorrt-benchmark \
 
 3条件は同じ診断専用Bag Manager設定を使い、event payloadとnative RAWを保存しません。
 
+同じpresetへ`--vehicle jpbb`を明示するとmanual shadow modeになり、Joy、固定スロットル、
+operation、vehicleを追加します。TensorRT出力は`/benchmark/e2e/control_cmd`へ隔離されるため、
+車両へ適用されるのはmanual teleop指令だけです。shadow専用Bagは推論出力に加えて
+`/teleop/control_cmd`、`/vehicle/control_cmd`、`/operation_mode/state`を保存します。
+
 Jetson 上の通常起動では `isaac_ros_jetson_stats` が既定で有効になり、診断情報を `/jetson/diagnostics` へ publish します。必要に応じて `enable_jetson_stats:=false` で無効化できます。x86 imageには同packageが配布されないため既定で無効になり、明示的な有効化も拒否します。`scripts/bringup.sh` のオフライン再生プリセットでは tool stack自体を停止するため、Jetson statsも起動しません。
 
 ## E2E direct control

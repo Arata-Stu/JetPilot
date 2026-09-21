@@ -775,6 +775,37 @@ def test_evs_tensorrt_comparison_presets_are_safe_and_select_expected_backend() 
     assert "e2e_event_tensor_use_pinned_host_memory:=true" in cpu_output
 
 
+def test_evs_tensorrt_vehicle_override_uses_manual_shadow_mode() -> None:
+    output = run_launcher(
+        "evs-cpu-tensorrt-benchmark",
+        "--vehicle",
+        "jpbb",
+        "--e2e-model",
+        "/workspaces/ros2_ws/models/e2e/test-event-tensor",
+        "--dry-run",
+    ).stdout
+    shadow_config_path = (
+        PROJECT_ROOT
+        / "ros2_ws/src/launch/jetpilot_system_launch/config/tool/"
+        "bag_manager.evs_tensorrt_shadow_benchmark.param.yaml"
+    )
+    shadow_config = shadow_config_path.read_text(encoding="utf-8")
+
+    assert "enable_vehicle:=true" in output
+    assert "enable_joy:=true" in output
+    assert "enable_teleop:=true" in output
+    assert "enable_operation:=true" in output
+    assert "enable_control:=false" in output
+    assert "teleop_fixed_throttle_mode:=true" in output
+    assert "e2e_control_cmd_topic:=/benchmark/e2e/control_cmd" in output
+    assert str(shadow_config_path) in output
+    assert "- /benchmark/e2e/control_cmd" in shadow_config
+    assert "- /auto/control_cmd" not in shadow_config
+    assert "- /teleop/control_cmd" in shadow_config
+    assert "- /vehicle/control_cmd" in shadow_config
+    assert "- /operation_mode/state" in shadow_config
+
+
 def test_flir_sensor_kit_launches_can_be_selected_explicitly() -> None:
     flir = run_launcher(
         "drive-vesc",

@@ -2384,6 +2384,20 @@ validate_configuration() {
           || die 'evs-legacy-cuda-tensorrt-benchmark requires the CUDA event backend'
         ;;
     esac
+    if is_true "$(get_arg enable_vehicle)"; then
+      is_true "$(get_arg enable_joy)" \
+        || die "$PRESET shadow mode requires Joy"
+      is_true "$(get_arg enable_teleop)" \
+        || die "$PRESET shadow mode requires teleop"
+      is_true "$(get_arg enable_operation)" \
+        || die "$PRESET shadow mode requires operation mode management"
+      ! is_true "$(get_arg enable_control)" \
+        || die "$PRESET shadow mode must not enable the autonomous controller"
+      [[ "$(get_arg e2e_control_cmd_topic)" == '/benchmark/e2e/control_cmd' ]] \
+        || die "$PRESET shadow mode must isolate TensorRT output on /benchmark/e2e/control_cmd"
+      [[ "$(get_arg bag_manager_param)" == *bag_manager.evs_tensorrt_shadow_benchmark.param.yaml ]] \
+        || die "$PRESET shadow mode requires the shadow benchmark bag configuration"
+    fi
   fi
   if is_true "$(get_arg teleop_fixed_throttle_mode 2>/dev/null || true)" || is_true "$(get_arg e2e_fixed_throttle_mode 2>/dev/null || true)"; then
     "$PYTHON_BIN" - "$(get_arg fixed_throttle)" <<'PYVALIDATE' || die 'fixed_throttle must be a number within [0, 1]'
@@ -3010,6 +3024,19 @@ if [[ -n "${CLI_VEHICLE:-}" ]]; then
   apply_vehicle "$CLI_VEHICLE"
   if [[ "$PRESET" == 'rgb-evs-benchmark' || "$PRESET" == 'rc-popout' ]]; then
     enable_drive_stack
+    set_arg publish_vehicle_evs_description true
+  elif [[ "$PRESET" == 'evs-tensorrt-benchmark' \
+    || "$PRESET" == 'evs-cpu-tensorrt-benchmark' \
+    || "$PRESET" == 'evs-legacy-cuda-tensorrt-benchmark' ]]; then
+    # Manual shadow mode: run the exact TensorRT benchmark while the operator
+    # drives, but isolate inference output from the operation/vehicle command
+    # path so a benchmark-only model can never actuate the vehicle.
+    enable_drive_stack
+    set_arg teleop_fixed_throttle_mode true
+    set_arg fixed_throttle 0.2
+    set_arg e2e_control_cmd_topic /benchmark/e2e/control_cmd
+    set_arg bag_manager_param \
+      "${PROJECT_ROOT}/ros2_ws/src/launch/jetpilot_system_launch/config/tool/bag_manager.evs_tensorrt_shadow_benchmark.param.yaml"
     set_arg publish_vehicle_evs_description true
   fi
 fi

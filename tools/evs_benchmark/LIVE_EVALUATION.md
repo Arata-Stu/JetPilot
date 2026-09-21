@@ -175,6 +175,19 @@ bash /workspaces/scripts/bringup.sh evs-legacy-cuda-tensorrt-benchmark \
 無効にします。同時起動せず、同じ視覚刺激で1条件ずつ測定します。主要production候補は
 `evs-tensorrt-benchmark`のasync CUDAです。
 
+同じコースをmanual固定スロットルで走りながらshadow推論する場合だけ、vehicleを明示します。
+
+```bash
+bash /workspaces/scripts/bringup.sh evs-cpu-tensorrt-benchmark \
+  --vehicle jpbb \
+  --e2e-model /workspaces/ros2_ws/models/e2e/EVENT_TENSOR_MODEL
+```
+
+この指定ではJoy、teleop、operation、vehicleを起動しますが、TensorRT出力は
+`/benchmark/e2e/control_cmd`へ隔離され、通常の`/auto/control_cmd`へ接続されません。
+推論出力、手動指令、適用指令、operation mode、各diagnosticsだけを専用MCAPへ保存します。
+他の2 backendもpreset名だけを置き換えて同じ条件で実行します。
+
 起動表示で次を確認します。
 
 - `vehicle: none`
