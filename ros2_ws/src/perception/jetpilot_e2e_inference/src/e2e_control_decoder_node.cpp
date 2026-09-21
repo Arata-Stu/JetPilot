@@ -99,6 +99,10 @@ E2EControlDecoderNode::E2EControlDecoderNode(const rclcpp::NodeOptions & options
     });
   stale_timeout_sec_ = declare_parameter<double>("stale_timeout_sec", 0.2);
   deadline_ms_ = declare_parameter<double>("deadline_ms", 33.3);
+  enable_pipeline_latency_breakdown_ =
+    declare_parameter<bool>("enable_pipeline_latency_breakdown", false);
+  const auto pipeline_latency_max_pending =
+    declare_parameter<std::int64_t>("pipeline_latency_max_pending", 4096);
   const auto diagnostics_topic =
     declare_parameter<std::string>("diagnostics_topic", "/e2e/diagnostics");
 
@@ -114,21 +118,105 @@ E2EControlDecoderNode::E2EControlDecoderNode(const rclcpp::NodeOptions & options
   if (stale_timeout_sec_ <= 0.0 || deadline_ms_ <= 0.0) {
     throw std::invalid_argument("stale_timeout_sec and deadline_ms must be positive");
   }
+  if (pipeline_latency_max_pending <= 0) {
+    throw std::invalid_argument("pipeline_latency_max_pending must be positive");
+  }
+  pipeline_latency_max_pending_ = static_cast<std::size_t>(pipeline_latency_max_pending);
 
   command_pub_ = create_publisher<jetpilot_msgs::msg::ControlCommand>("control_cmd", 10);
   diagnostics_pub_ =
     create_publisher<diagnostic_msgs::msg::DiagnosticArray>(diagnostics_topic, 10);
   rclcpp::SubscriptionOptions subscription_options;
   subscription_options.use_intra_process_comm = rclcpp::IntraProcessSetting::Enable;
+  if (enable_pipeline_latency_breakdown_) {
+    tensor_input_probe_sub_ = create_subscription<TensorList>(
+      "tensor_input_probe", rclcpp::QoS(10),
+      std::bind(&E2EControlDecoderNode::on_input_tensor, this, std::placeholders::_1),
+      subscription_options);
+  }
   tensor_sub_ = create_subscription<TensorList>(
     "tensor_sub", rclcpp::QoS(10),
     std::bind(&E2EControlDecoderNode::on_tensor, this, std::placeholders::_1),
     subscription_options);
 }
 
+void E2EControlDecoderNode::on_input_tensor(TensorList::ConstSharedPtr message)
+{
+  if (!message) {
+    return;
+  }
+  const auto received_at = std::chrono::steady_clock::now();
+  const auto current_ros_ns = now().nanoseconds();
+  const auto stamp_ns =
+    static_cast<std::int64_t>(message->get_timestamp_sec()) * 1000000000LL +
+    static_cast<std::int64_t>(message->get_timestamp_nsec());
+  if (stamp_ns <= 0) {
+    return;
+  }
+  const double sensor_to_input_ms = std::max(
+    0.0, static_cast<double>(current_ros_ns - stamp_ns) / 1.0e6);
+
+  std::lock_guard<std::mutex> lock(pipeline_timing_mutex_);
+  while (!pipeline_input_order_.empty() &&
+    pipeline_input_timings_.find(pipeline_input_order_.front()) == pipeline_input_timings_.end())
+  {
+    pipeline_input_order_.pop_front();
+  }
+  while (pipeline_input_timings_.size() >= pipeline_latency_max_pending_ &&
+    !pipeline_input_order_.empty())
+  {
+    pipeline_input_timings_.erase(pipeline_input_order_.front());
+    pipeline_input_order_.pop_front();
+    pipeline_evicted_inputs_.fetch_add(1U, std::memory_order_relaxed);
+  }
+  const auto [iterator, inserted] = pipeline_input_timings_.insert_or_assign(
+    stamp_ns, TensorInputTiming{received_at, sensor_to_input_ms});
+  (void)iterator;
+  if (inserted) {
+    pipeline_input_order_.push_back(stamp_ns);
+  }
+}
+
+E2EControlDecoderNode::PipelineTiming E2EControlDecoderNode::match_input_tensor(
+  const TensorList & message, const SteadyTime output_received_at)
+{
+  PipelineTiming result;
+  if (!enable_pipeline_latency_breakdown_) {
+    return result;
+  }
+  const auto stamp_ns =
+    static_cast<std::int64_t>(message.get_timestamp_sec()) * 1000000000LL +
+    static_cast<std::int64_t>(message.get_timestamp_nsec());
+  const auto current_ros_ns = now().nanoseconds();
+  if (stamp_ns > 0) {
+    result.sensor_to_output_ms = std::max(
+      0.0, static_cast<double>(current_ros_ns - stamp_ns) / 1.0e6);
+  }
+
+  std::lock_guard<std::mutex> lock(pipeline_timing_mutex_);
+  const auto iterator = pipeline_input_timings_.find(stamp_ns);
+  if (iterator != pipeline_input_timings_.end()) {
+    result.matched = true;
+    result.sensor_to_input_ms = iterator->second.sensor_to_input_ms;
+    result.input_to_output_ms = std::chrono::duration<double, std::milli>(
+      output_received_at - iterator->second.received_at).count();
+    pipeline_input_timings_.erase(iterator);
+  } else {
+    pipeline_unmatched_outputs_.fetch_add(1U, std::memory_order_relaxed);
+  }
+  while (!pipeline_input_order_.empty() &&
+    pipeline_input_timings_.find(pipeline_input_order_.front()) == pipeline_input_timings_.end())
+  {
+    pipeline_input_order_.pop_front();
+  }
+  result.pending_inputs = pipeline_input_timings_.size();
+  return result;
+}
+
 void E2EControlDecoderNode::on_tensor(TensorList::ConstSharedPtr message)
 {
   const auto callback_started = std::chrono::steady_clock::now();
+  const auto pipeline_timing = match_input_tensor(*message, callback_started);
   const auto publish_time = callback_started;
   const bool has_output_interval = has_last_publish_time_;
   const double output_interval_ms = has_output_interval ?
@@ -226,7 +314,8 @@ void E2EControlDecoderNode::on_tensor(TensorList::ConstSharedPtr message)
     const auto callback_finished = std::chrono::steady_clock::now();
     const double callback_ms =
       std::chrono::duration<double, std::milli>(callback_finished - callback_started).count();
-    publish_diagnostics(*message, callback_ms, output_interval_ms, has_output_interval);
+    publish_diagnostics(
+      *message, callback_ms, output_interval_ms, has_output_interval, pipeline_timing);
     last_publish_time_ = publish_time;
     has_last_publish_time_ = true;
   } catch (const std::exception & error) {
@@ -236,7 +325,7 @@ void E2EControlDecoderNode::on_tensor(TensorList::ConstSharedPtr message)
 
 void E2EControlDecoderNode::publish_diagnostics(
   const TensorList & message, const double callback_ms, const double output_interval_ms,
-  const bool has_output_interval)
+  const bool has_output_interval, const PipelineTiming & pipeline_timing)
 {
   const auto current_time = now();
   const std::int64_t stamp_ns =
@@ -273,6 +362,30 @@ void E2EControlDecoderNode::publish_diagnostics(
     diagnostic_value("missed_deadline", missed_deadline ? "1" : "0"),
     diagnostic_value("stale_output", stale_output ? "1" : "0"),
     diagnostic_value("sequence", std::to_string(sequence_)),
+    diagnostic_value("source_timestamp_sec", std::to_string(message.get_timestamp_sec())),
+    diagnostic_value("source_timestamp_nanosec", std::to_string(message.get_timestamp_nsec())),
+    diagnostic_value(
+      "pipeline_latency_breakdown_enabled",
+      enable_pipeline_latency_breakdown_ ? "true" : "false"),
+    diagnostic_value("tensor_input_matched", pipeline_timing.matched ? "1" : "0"),
+    diagnostic_value(
+      "sensor_to_tensor_input_ms",
+      pipeline_timing.matched ? std::to_string(pipeline_timing.sensor_to_input_ms) : ""),
+    diagnostic_value(
+      "tensor_input_to_output_ms",
+      pipeline_timing.matched ? std::to_string(pipeline_timing.input_to_output_ms) : ""),
+    diagnostic_value(
+      "sensor_to_tensor_output_ms",
+      pipeline_timing.matched ? std::to_string(pipeline_timing.sensor_to_output_ms) : ""),
+    diagnostic_value("tensor_output_to_command_ms", std::to_string(callback_ms)),
+    diagnostic_value(
+      "pipeline_latency_pending_inputs", std::to_string(pipeline_timing.pending_inputs)),
+    diagnostic_value(
+      "pipeline_latency_unmatched_outputs",
+      std::to_string(pipeline_unmatched_outputs_.load(std::memory_order_relaxed))),
+    diagnostic_value(
+      "pipeline_latency_evicted_inputs",
+      std::to_string(pipeline_evicted_inputs_.load(std::memory_order_relaxed))),
   };
 
   diagnostic_msgs::msg::DiagnosticArray diagnostics;

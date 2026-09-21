@@ -240,12 +240,17 @@ def generate_launch_description():
                 "fixed_throttle": ParameterValue(LaunchConfiguration("fixed_throttle"), value_type=float),
                 "deadline_ms": ParameterValue(
                     LaunchConfiguration("decoder_deadline_ms"), value_type=float),
+                "enable_pipeline_latency_breakdown": ParameterValue(
+                    LaunchConfiguration("enable_pipeline_latency_breakdown"),
+                    value_type=bool,
+                ),
                 "use_sim_time": ParameterValue(
                     LaunchConfiguration("use_sim_time"), value_type=bool
                 ),
             },
         ],
         remappings=[
+            ("tensor_input_probe", LaunchConfiguration("tensor_input_topic")),
             ("tensor_sub", LaunchConfiguration("tensor_output_topic")),
             ("control_cmd", LaunchConfiguration("control_cmd_topic")),
         ],
@@ -343,6 +348,9 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument("control_cmd_topic", default_value="/auto/control_cmd"),
             DeclareLaunchArgument("decoder_deadline_ms", default_value="33.3"),
+            DeclareLaunchArgument(
+                "enable_pipeline_latency_breakdown", default_value="false"
+            ),
             DeclareLaunchArgument("trajectory_topic", default_value="/planning/trajectory"),
             DeclareLaunchArgument("target_speed_topic", default_value="/planning/target_speed"),
             DeclareLaunchArgument("planning_ready_topic", default_value="/planning/ready"),

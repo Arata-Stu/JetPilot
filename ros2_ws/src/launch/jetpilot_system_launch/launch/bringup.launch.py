@@ -619,6 +619,7 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('e2e_camera_info_topic', '/realsense/color/camera_info', cli=True)
     args.add_arg('e2e_control_cmd_topic', '/auto/control_cmd', cli=True)
     args.add_arg('e2e_decoder_deadline_ms', '33.3', cli=True)
+    args.add_arg('e2e_pipeline_latency_breakdown_enabled', False, cli=True)
     args.add_arg('e2e_model_root', '', cli=True)
     args.add_arg('e2e_input_image_width', '424', cli=True)
     args.add_arg('e2e_input_image_height', '240', cli=True)
@@ -1091,6 +1092,8 @@ def generate_launch_description() -> lut.LaunchDescription:
                 'camera_info_topic': args.e2e_camera_info_topic,
                 'control_cmd_topic': args.e2e_control_cmd_topic,
                 'decoder_deadline_ms': args.e2e_decoder_deadline_ms,
+                'enable_pipeline_latency_breakdown':
+                    args.e2e_pipeline_latency_breakdown_enabled,
                 'fixed_throttle_mode': args.e2e_fixed_throttle_mode,
                 'fixed_throttle': args.fixed_throttle,
                 'event_image_mode': args.e2e_event_image_mode,

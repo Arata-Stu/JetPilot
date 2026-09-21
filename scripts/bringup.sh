@@ -1148,6 +1148,7 @@ apply_preset() {
       set_arg e2e_event_tensor_mode true
       set_arg e2e_event_inference_policy periodic
       set_arg e2e_decoder_deadline_ms 4.0
+      set_arg e2e_pipeline_latency_breakdown_enabled true
       set_arg e2e_event_bins 10
       set_arg e2e_event_window_ms 40.0
       set_arg e2e_event_stride_ms 4.0
@@ -2361,6 +2362,8 @@ validate_configuration() {
       || die "$PRESET requires model metadata stride_ms=4.0"
     [[ "$(get_arg e2e_decoder_deadline_ms)" == '4.0' ]] \
       || die "$PRESET requires a 4 ms decoder deadline"
+    is_true "$(get_arg e2e_pipeline_latency_breakdown_enabled)" \
+      || die "$PRESET requires per-frame pipeline latency breakdown"
     case "$PRESET" in
       evs-tensorrt-benchmark)
         [[ "$(get_arg e2e_event_preprocessor_mode)" == 'async' ]] \

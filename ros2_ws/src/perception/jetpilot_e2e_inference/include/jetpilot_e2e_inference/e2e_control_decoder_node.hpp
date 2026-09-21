@@ -3,16 +3,20 @@
 
 #include <atomic>
 #include <chrono>
-#include "rcl_interfaces/msg/set_parameters_result.hpp"
 #include <cstdint>
+#include <deque>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "diagnostic_msgs/msg/diagnostic_array.hpp"
 #include "isaac_ros_nitros_tensor_list_type/nitros_tensor_list.hpp"
 #include "jetpilot_msgs/msg/control_command.hpp"
 #include "rclcpp/rclcpp.hpp"
+#include "rcl_interfaces/msg/set_parameters_result.hpp"
 
 namespace jetpilot_e2e_inference
 {
@@ -25,11 +29,30 @@ public:
 
 private:
   using TensorList = nvidia::isaac_ros::nitros::NitrosTensorList;
+  using SteadyTime = std::chrono::steady_clock::time_point;
 
+  struct TensorInputTiming
+  {
+    SteadyTime received_at;
+    double sensor_to_input_ms{0.0};
+  };
+
+  struct PipelineTiming
+  {
+    bool matched{false};
+    double sensor_to_input_ms{0.0};
+    double input_to_output_ms{0.0};
+    double sensor_to_output_ms{0.0};
+    std::size_t pending_inputs{0U};
+  };
+
+  void on_input_tensor(TensorList::ConstSharedPtr message);
   void on_tensor(TensorList::ConstSharedPtr message);
+  PipelineTiming match_input_tensor(
+    const TensorList & message, SteadyTime output_received_at);
   void publish_diagnostics(
     const TensorList & message, double callback_ms, double output_interval_ms,
-    bool has_output_interval);
+    bool has_output_interval, const PipelineTiming & pipeline_timing);
 
   std::string output_tensor_name_;
   std::vector<std::string> output_fields_;
@@ -44,12 +67,20 @@ private:
   rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr parameter_callback_handle_;
   double stale_timeout_sec_{0.2};
   double deadline_ms_{33.3};
+  bool enable_pipeline_latency_breakdown_{false};
+  std::size_t pipeline_latency_max_pending_{4096U};
   std::uint64_t sequence_{0U};
+  std::atomic<std::uint64_t> pipeline_unmatched_outputs_{0U};
+  std::atomic<std::uint64_t> pipeline_evicted_inputs_{0U};
   bool has_last_publish_time_{false};
-  std::chrono::steady_clock::time_point last_publish_time_;
+  SteadyTime last_publish_time_;
+  std::mutex pipeline_timing_mutex_;
+  std::unordered_map<std::int64_t, TensorInputTiming> pipeline_input_timings_;
+  std::deque<std::int64_t> pipeline_input_order_;
 
   rclcpp::Publisher<jetpilot_msgs::msg::ControlCommand>::SharedPtr command_pub_;
   rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr diagnostics_pub_;
+  rclcpp::Subscription<TensorList>::SharedPtr tensor_input_probe_sub_;
   rclcpp::Subscription<TensorList>::SharedPtr tensor_sub_;
 };
 

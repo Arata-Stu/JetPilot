@@ -210,6 +210,11 @@ def compact_row(result: dict[str, Any]) -> dict[str, Any]:
     interval = result["output_interval_ms"]
     decoder = result["decoder_callback_ms"]
     counters = result["event_counters"]
+    pipeline = result.get("diagnostic_numeric", {}).get(E2E_TOPIC, {})
+    sensor_to_input = pipeline.get("sensor_to_tensor_input_ms", {})
+    input_to_output = pipeline.get("tensor_input_to_output_ms", {})
+    sensor_to_output = pipeline.get("sensor_to_tensor_output_ms", {})
+    matched = pipeline.get("tensor_input_matched", {})
     misses = result["deadline_miss_count_recomputed"]
     samples = latency["count"]
     return {
@@ -229,8 +234,22 @@ def compact_row(result: dict[str, Any]) -> dict[str, Any]:
         "output_interval_max_ms": interval["max"],
         "decoder_p99_ms": decoder["p99"],
         "decoder_max_ms": decoder["max"],
+        "sensor_to_tensor_input_mean_ms": sensor_to_input.get("mean"),
+        "sensor_to_tensor_input_p99_ms": sensor_to_input.get("p99"),
+        "tensor_input_to_output_mean_ms": input_to_output.get("mean"),
+        "tensor_input_to_output_p99_ms": input_to_output.get("p99"),
+        "sensor_to_tensor_output_mean_ms": sensor_to_output.get("mean"),
+        "sensor_to_tensor_output_p99_ms": sensor_to_output.get("p99"),
+        "pipeline_latency_matched": int(round(
+            (matched.get("mean") or 0.0) * (matched.get("count") or 0)
+        )),
         "event_diagnostics": result["topic_counts"].get(EVENT_TOPIC, 0),
-        "error_drop_skip_total": sum(counters.values()),
+        "event_deadline_misses": counters.get("deadline_misses", 0.0),
+        "event_skipped_windows": counters.get("fixed_rate_skipped_windows", 0.0),
+        "event_other_error_drop_total": sum(
+            value for key, value in counters.items()
+            if key not in {"deadline_misses", "fixed_rate_skipped_windows"}
+        ),
     }
 
 
