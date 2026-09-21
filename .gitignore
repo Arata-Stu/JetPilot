@@ -77,6 +77,10 @@ __pycache__/
 build/
 develop-eggs/
 dist/
+# Track the standalone LED synchronization UI even though generated dist
+# directories remain ignored elsewhere in the repository.
+!tools/led_sync_viewer/dist/
+!tools/led_sync_viewer/dist/**
 downloads/
 eggs/
 .eggs/

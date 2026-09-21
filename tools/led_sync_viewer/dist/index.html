@@ -1,0 +1,654 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="RGBとイベントカメラのLED点滅を照合する時間同期ビューア">
+  <title>LED Sync Inspector</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%23080d14'/%3E%3Cpath d='M8 34h12l5-15 8 29 7-22 5 8h11' fill='none' stroke='%2337e6c4' stroke-width='5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #070b11;
+      --panel: #0d141e;
+      --panel-2: #111b27;
+      --line: #243140;
+      --line-strong: #36485b;
+      --text: #e9f1f8;
+      --muted: #93a4b7;
+      --cyan: #37e6c4;
+      --cyan-soft: rgba(55, 230, 196, .14);
+      --amber: #ffb45c;
+      --amber-soft: rgba(255, 180, 92, .14);
+      --red: #ff6b7a;
+      --blue: #70a7ff;
+      --radius: 14px;
+    }
+
+    * { box-sizing: border-box; }
+    html { background: var(--bg); }
+    body {
+      margin: 0;
+      min-width: 320px;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at 85% -10%, rgba(55, 230, 196, .08), transparent 34rem),
+        var(--bg);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic UI", sans-serif;
+      font-size: 16px;
+      line-height: 1.5;
+    }
+
+    button, input, select { font: inherit; }
+    button, .file-button {
+      min-height: 40px;
+      border: 1px solid var(--line-strong);
+      border-radius: 9px;
+      background: #152130;
+      color: var(--text);
+      padding: 8px 13px;
+      cursor: pointer;
+      transition: border-color .15s ease, background .15s ease, transform .15s ease;
+    }
+    button:hover, .file-button:hover { border-color: #56708a; background: #19283a; }
+    button:active, .file-button:active { transform: translateY(1px); }
+    button.primary { border-color: #2bc5aa; background: #153d39; color: #dffff8; }
+    button.primary:hover { background: #194b45; }
+    button.ghost { background: transparent; }
+    button:focus-visible, input:focus-visible, select:focus-visible, .file-button:focus-within {
+      outline: 3px solid rgba(55, 230, 196, .32);
+      outline-offset: 2px;
+    }
+    input[type="file"] { position: absolute; inline-size: 1px; block-size: 1px; opacity: 0; }
+    input[type="number"], select {
+      min-height: 40px;
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      background: #09111a;
+      color: var(--text);
+      padding: 7px 9px;
+    }
+    input[type="range"] { accent-color: var(--cyan); }
+
+    .app { max-width: 1680px; margin: 0 auto; padding: 18px; }
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      margin-bottom: 14px;
+    }
+    .brand { display: flex; align-items: center; gap: 12px; min-width: 0; }
+    .mark {
+      display: grid;
+      place-items: center;
+      width: 42px;
+      height: 42px;
+      border-radius: 11px;
+      background: var(--cyan-soft);
+      border: 1px solid rgba(55, 230, 196, .28);
+      color: var(--cyan);
+      font-weight: 800;
+      letter-spacing: -.06em;
+    }
+    h1 { margin: 0; font-size: 1.18rem; line-height: 1.2; letter-spacing: .01em; }
+    .subtitle { margin: 3px 0 0; color: var(--muted); font-size: .86rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+
+    .status-strip {
+      display: grid;
+      grid-template-columns: minmax(180px, 1.4fr) repeat(4, minmax(118px, .7fr));
+      gap: 1px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--line);
+      margin-bottom: 14px;
+    }
+    .metric { background: var(--panel); padding: 12px 14px; min-width: 0; }
+    .metric-label { color: var(--muted); font-size: .76rem; letter-spacing: .04em; }
+    .metric-value { margin-top: 2px; font-size: 1.04rem; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .metric-value.cyan { color: var(--cyan); }
+    .metric-value.amber { color: var(--amber); }
+
+    .workspace { display: grid; grid-template-columns: minmax(0, 1fr) 310px; gap: 14px; align-items: start; }
+    .panel { border: 1px solid var(--line); border-radius: var(--radius); background: rgba(13, 20, 30, .96); overflow: hidden; }
+    .panel-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+    .panel-title { margin: 0; font-size: .93rem; font-weight: 700; }
+    .panel-note { color: var(--muted); font-size: .78rem; }
+    .timeline-wrap { padding: 8px 10px 2px; }
+    #timeline { display: block; width: 100%; height: 430px; border-radius: 9px; background: #080e16; touch-action: none; }
+    .timeline-controls { display: grid; grid-template-columns: 1fr auto auto; gap: 12px; align-items: center; padding: 10px 14px 14px; }
+    .zoom { display: grid; grid-template-columns: auto minmax(100px, 1fr) auto; align-items: center; gap: 9px; color: var(--muted); font-size: .8rem; }
+    .legend { display: flex; flex-wrap: wrap; gap: 12px; color: var(--muted); font-size: .78rem; }
+    .legend span { display: inline-flex; align-items: center; gap: 6px; }
+    .dot { width: 9px; height: 9px; border-radius: 50%; }
+    .dot.rgb { background: var(--amber); }
+    .dot.pos { background: var(--cyan); }
+    .dot.neg { background: var(--blue); }
+
+    .sidebar { display: grid; gap: 14px; }
+    .form { padding: 13px 14px 15px; }
+    .form-grid { display: grid; grid-template-columns: 1fr 108px; gap: 10px 8px; align-items: center; }
+    .form label { color: #becbd8; font-size: .82rem; }
+    .form input { width: 100%; }
+    .helper { margin: 10px 0 0; color: var(--muted); font-size: .77rem; }
+    .stack { display: grid; gap: 8px; margin-top: 13px; }
+
+    .pairs { margin-top: 14px; }
+    .table-wrap { overflow: auto; max-height: 270px; }
+    table { width: 100%; border-collapse: collapse; font-size: .82rem; font-variant-numeric: tabular-nums; }
+    th, td { padding: 9px 12px; text-align: right; border-bottom: 1px solid var(--line); white-space: nowrap; }
+    th { position: sticky; top: 0; background: #101925; color: var(--muted); font-weight: 600; }
+    th:first-child, td:first-child { text-align: left; }
+    .empty { padding: 22px 14px; color: var(--muted); text-align: center; font-size: .85rem; }
+
+    .playback { margin-top: 14px; }
+    .video-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--line); }
+    .video-cell { position: relative; min-height: 180px; background: #05080d; }
+    video { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: contain; background: #05080d; }
+    .video-label { position: absolute; top: 10px; left: 10px; z-index: 1; padding: 4px 8px; border-radius: 6px; background: rgba(5, 8, 13, .78); color: #dce7ef; font-size: .76rem; }
+    .video-empty { position: absolute; inset: 0; display: grid; place-items: center; color: #67798c; font-size: .84rem; pointer-events: none; }
+    .playback-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; padding: 12px 14px; }
+    .timecode { margin-left: auto; color: var(--cyan); font-variant-numeric: tabular-nums; font-size: .9rem; }
+
+    .toast { position: fixed; right: 20px; bottom: 20px; max-width: min(420px, calc(100vw - 40px)); padding: 11px 14px; border: 1px solid var(--line-strong); border-radius: 10px; background: #162230; color: var(--text); box-shadow: 0 15px 40px rgba(0,0,0,.38); opacity: 0; transform: translateY(8px); pointer-events: none; transition: .2s ease; }
+    .toast.show { opacity: 1; transform: translateY(0); }
+
+    @media (max-width: 980px) {
+      .workspace { grid-template-columns: 1fr; }
+      .sidebar { grid-template-columns: 1fr 1fr; }
+      .status-strip { grid-template-columns: repeat(2, 1fr); }
+      .metric:first-child { grid-column: 1 / -1; }
+    }
+    @media (max-width: 680px) {
+      .app { padding: 10px; }
+      .topbar { align-items: flex-start; flex-direction: column; }
+      .actions { justify-content: flex-start; }
+      .status-strip, .sidebar { grid-template-columns: 1fr; }
+      .metric:first-child { grid-column: auto; }
+      #timeline { height: 360px; }
+      .timeline-controls { grid-template-columns: 1fr; }
+      .video-grid { grid-template-columns: 1fr; }
+      .timecode { width: 100%; margin-left: 0; }
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <header class="topbar">
+      <div class="brand">
+        <div class="mark" aria-hidden="true">Δt</div>
+        <div>
+          <h1>LED Sync Inspector</h1>
+          <p class="subtitle" id="sessionName">デモセッション — 1 msイベント解析</p>
+        </div>
+      </div>
+      <div class="actions">
+        <label class="file-button">解析データを開く<input id="dataFiles" type="file" accept=".json,.csv,application/json,text/csv" multiple></label>
+        <button class="ghost" id="demoButton" type="button">デモを復元</button>
+        <button id="exportButton" type="button">結果を書き出す</button>
+      </div>
+    </header>
+
+    <section class="status-strip" aria-label="同期結果">
+      <div class="metric"><div class="metric-label">判定</div><div class="metric-value cyan" id="statusValue">点滅を検出</div></div>
+      <div class="metric"><div class="metric-label">RGB → EVS オフセット</div><div class="metric-value" id="offsetValue">+13.0 ms</div></div>
+      <div class="metric"><div class="metric-label">ドリフト</div><div class="metric-value" id="driftValue">0.0 ppm</div></div>
+      <div class="metric"><div class="metric-label">対応エッジ</div><div class="metric-value amber" id="pairCount">10</div></div>
+      <div class="metric"><div class="metric-label">残差 RMS</div><div class="metric-value" id="rmsValue">0.0 ms</div></div>
+    </section>
+
+    <section class="workspace">
+      <div>
+        <article class="panel">
+          <div class="panel-header">
+            <div><h2 class="panel-title">点滅タイムライン</h2><div class="panel-note">ドラッグで移動・ホイールで拡大</div></div>
+            <div class="legend" aria-label="凡例"><span><i class="dot rgb"></i>RGB輝度</span><span><i class="dot pos"></i>EVS＋</span><span><i class="dot neg"></i>EVS−</span></div>
+          </div>
+          <div class="timeline-wrap"><canvas id="timeline" aria-label="RGB輝度とEVSイベント数の時系列グラフ"></canvas></div>
+          <div class="timeline-controls">
+            <div class="zoom"><span>全体</span><input id="zoomRange" type="range" min="0" max="100" value="0" aria-label="表示範囲"><span>拡大</span></div>
+            <button id="startView" type="button">開始側</button>
+            <button id="endView" type="button">終了側</button>
+          </div>
+        </article>
+
+        <article class="panel pairs">
+          <div class="panel-header"><h2 class="panel-title">点滅エッジの対応</h2><div class="panel-note">RGBは60 Hzの観測区間として表示</div></div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>種別</th><th>EVS時刻</th><th>RGB観測区間</th><th>差</th><th>残差</th></tr></thead>
+              <tbody id="pairRows"></tbody>
+            </table>
+            <div class="empty" id="pairEmpty" hidden>対応する点滅エッジがありません。</div>
+          </div>
+        </article>
+
+        <article class="panel playback">
+          <div class="panel-header"><h2 class="panel-title">同期スロー再生</h2><div class="panel-note">EVS動画は5 ms蓄積・1 ms更新を想定</div></div>
+          <div class="video-grid">
+            <div class="video-cell"><span class="video-label">RGB · 60 Hz</span><video id="rgbVideo" muted playsinline></video><span class="video-empty" id="rgbEmpty">RGB動画を選択</span></div>
+            <div class="video-cell"><span class="video-label">EVS · 1 ms step</span><video id="evsVideo" muted playsinline></video><span class="video-empty" id="evsEmpty">EVS可視化動画を選択</span></div>
+          </div>
+          <div class="playback-controls">
+            <label class="file-button">RGB動画<input id="rgbFile" type="file" accept="video/*"></label>
+            <label class="file-button">EVS動画<input id="evsFile" type="file" accept="video/*"></label>
+            <button class="primary" id="playButton" type="button">再生</button>
+            <button id="stepBack" type="button">−1 ms</button>
+            <button id="stepForward" type="button">＋1 ms</button>
+            <span class="timecode" id="timecode">EVS 0.000 s / RGB 0.013 s</span>
+          </div>
+        </article>
+      </div>
+
+      <aside class="sidebar">
+        <section class="panel">
+          <div class="panel-header"><h2 class="panel-title">検出条件</h2></div>
+          <div class="form">
+            <div class="form-grid">
+              <label for="evsThreshold">EVS閾値 / ms</label><input id="evsThreshold" type="number" min="1" step="1" value="26">
+              <label for="rgbThreshold">RGB差分閾値</label><input id="rgbThreshold" type="number" min="0" step="0.01" value="0.16">
+              <label for="matchWindow">対応探索幅 / ms</label><input id="matchWindow" type="number" min="10" step="10" value="100">
+              <label for="provisionalOffset">初期オフセット / ms</label><input id="provisionalOffset" type="number" step="1" value="0">
+              <label for="evsFrameStep">EVS実時間 / frame</label><input id="evsFrameStep" type="number" min="0.1" step="0.1" value="1">
+              <label for="evsVideoFps">EVS動画 fps</label><input id="evsVideoFps" type="number" min="1" step="1" value="60">
+            </div>
+            <div class="stack">
+              <button class="primary" id="analyzeButton" type="button">自動推定を実行</button>
+              <button id="resetView" type="button">表示範囲をリセット</button>
+            </div>
+            <p class="helper">閾値は時刻そのものを手入力するためではなく、点滅候補を選別するために使います。</p>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header"><h2 class="panel-title">データ仕様</h2></div>
+          <div class="form">
+            <p class="helper" style="margin-top:0">JSONは <code>rgb[{t,v}]</code> と <code>evs[{t,pos,neg}]</code> を読み込みます。時刻は秒です。CSVは <code>t,rgb</code> または <code>t,pos,neg</code> に対応します。</p>
+            <div class="stack"><button id="sampleButton" type="button">サンプルJSONを保存</button></div>
+          </div>
+        </section>
+      </aside>
+    </section>
+  </main>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    'use strict';
+
+    const $ = (id) => document.getElementById(id);
+    const state = {
+      meta: { session: 'デモセッション', rgbFps: 60 },
+      rgb: [], evs: [], rgbEdges: [], evsEdges: [], pairs: [],
+      offsetS: 0, drift: 0, anchorS: 0, rmsS: 0,
+      viewStart: 0, viewEnd: 2.2, fullStart: 0, fullEnd: 2.2,
+      dragging: false, dragX: 0, dragStart: 0, dragEnd: 0,
+      rgbUrl: null, evsUrl: null
+    };
+
+    const median = (values) => {
+      if (!values.length) return 0;
+      const sorted = [...values].sort((a, b) => a - b);
+      const middle = Math.floor(sorted.length / 2);
+      return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+    };
+    const clamp = (value, low, high) => Math.max(low, Math.min(high, value));
+    const formatMs = (seconds, signed = false) => `${signed && seconds >= 0 ? '+' : ''}${(seconds * 1000).toFixed(1)} ms`;
+
+    function demoData() {
+      const transitions = [
+        [0.45, 'on'], [0.55, 'off'], [0.65, 'on'], [0.75, 'off'],
+        [0.85, 'on'], [1.15, 'off'], [1.25, 'on'], [1.35, 'off'],
+        [1.45, 'on'], [1.75, 'off']
+      ];
+      const evs = [];
+      for (let i = 0; i <= 2200; i += 1) {
+        const t = i / 1000;
+        let pos = 1 + ((i * 7) % 4), neg = (i * 11) % 3;
+        for (const [edgeT, kind] of transitions) {
+          const distance = Math.abs(t - edgeT);
+          if (distance < .004) {
+            const pulse = Math.round(92 * Math.exp(-Math.pow(distance / .0018, 2)));
+            if (kind === 'on') pos += pulse; else neg += pulse;
+          }
+        }
+        evs.push({ t, pos, neg });
+      }
+      const rgb = [];
+      const rgbOffset = .013;
+      let brightness = .18;
+      for (let i = 0; i <= 132; i += 1) {
+        const t = i / 60;
+        for (const [edgeT, kind] of transitions) {
+          if (edgeT + rgbOffset <= t) brightness = kind === 'on' ? .84 : .18;
+        }
+        const noise = (((i * 17) % 9) - 4) * .002;
+        rgb.push({ t, v: clamp(brightness + noise, 0, 1) });
+      }
+      return { meta: { session: 'デモセッション', rgbFps: 60 }, rgb, evs };
+    }
+
+    function loadDataset(data) {
+      state.meta = { session: data.meta?.session || '読み込みデータ', rgbFps: Number(data.meta?.rgbFps || data.meta?.rgb_fps || 60) };
+      state.rgb = (data.rgb || []).map(p => ({ t: Number(p.t ?? p.time_s), v: Number(p.v ?? p.value ?? p.rgb) })).filter(p => Number.isFinite(p.t) && Number.isFinite(p.v)).sort((a,b) => a.t-b.t);
+      state.evs = (data.evs || []).map(p => ({ t: Number(p.t ?? p.time_s), pos: Number(p.pos ?? p.positive_count ?? 0), neg: Number(p.neg ?? p.negative_count ?? 0) })).filter(p => Number.isFinite(p.t) && Number.isFinite(p.pos) && Number.isFinite(p.neg)).sort((a,b) => a.t-b.t);
+      const times = [...state.rgb.map(p => p.t), ...state.evs.map(p => p.t)];
+      state.fullStart = times.length ? Math.min(...times) : 0;
+      state.fullEnd = times.length ? Math.max(...times) : 1;
+      state.viewStart = state.fullStart;
+      state.viewEnd = state.fullEnd;
+      $('sessionName').textContent = `${state.meta.session} — EVS ${state.evs.length.toLocaleString()} bin / RGB ${state.rgb.length.toLocaleString()} frame`;
+      $('zoomRange').value = 0;
+      analyze();
+    }
+
+    function detectEvsEdges() {
+      const threshold = Number($('evsThreshold').value);
+      const candidates = state.evs.map(p => ({ ...p, total: p.pos + p.neg })).filter(p => p.total >= threshold);
+      const groups = [];
+      for (const point of candidates) {
+        const last = groups.at(-1);
+        if (!last || point.t - last.at(-1).t > .008) groups.push([point]);
+        else last.push(point);
+      }
+      return groups.map(group => {
+        const peak = group.reduce((best, item) => item.total > best.total ? item : best, group[0]);
+        return { t: peak.t, kind: peak.pos >= peak.neg ? 'on' : 'off', strength: peak.total };
+      });
+    }
+
+    function detectRgbEdges() {
+      const threshold = Number($('rgbThreshold').value);
+      const edges = [];
+      for (let i = 1; i < state.rgb.length; i += 1) {
+        const before = state.rgb[i - 1], after = state.rgb[i];
+        const delta = after.v - before.v;
+        if (Math.abs(delta) >= threshold) edges.push({
+          t: (before.t + after.t) / 2,
+          lo: before.t,
+          hi: after.t,
+          kind: delta > 0 ? 'on' : 'off',
+          strength: Math.abs(delta)
+        });
+      }
+      return edges;
+    }
+
+    function pairEdges(evsEdges, rgbEdges) {
+      const maxDelta = Number($('matchWindow').value) / 1000;
+      const provisional = Number($('provisionalOffset').value) / 1000;
+      const used = new Set();
+      const pairs = [];
+      for (const evs of evsEdges) {
+        let bestIndex = -1, bestDistance = Infinity;
+        rgbEdges.forEach((rgb, index) => {
+          if (used.has(index) || rgb.kind !== evs.kind) return;
+          const distance = Math.abs(rgb.t - (evs.t + provisional));
+          if (distance <= maxDelta && distance < bestDistance) { bestDistance = distance; bestIndex = index; }
+        });
+        if (bestIndex >= 0) {
+          used.add(bestIndex);
+          pairs.push({ evs, rgb: rgbEdges[bestIndex] });
+        }
+      }
+      return pairs.sort((a,b) => a.evs.t - b.evs.t);
+    }
+
+    function fitClock(pairs) {
+      if (!pairs.length) return { offset: 0, drift: 0, anchor: 0, rms: 0 };
+      const anchor = pairs.reduce((sum, p) => sum + p.evs.t, 0) / pairs.length;
+      const xs = pairs.map(p => p.evs.t - anchor);
+      const ys = pairs.map(p => p.rgb.t - p.evs.t);
+      const offset = ys.reduce((a,b) => a+b, 0) / ys.length;
+      const denominator = xs.reduce((sum, x) => sum + x*x, 0);
+      const drift = denominator > 0 ? xs.reduce((sum, x, i) => sum + x * (ys[i] - offset), 0) / denominator : 0;
+      const residuals = pairs.map((p, i) => ys[i] - (offset + drift * xs[i]));
+      const rms = Math.sqrt(residuals.reduce((sum, r) => sum + r*r, 0) / residuals.length);
+      pairs.forEach((p, i) => p.residual = residuals[i]);
+      return { offset, drift, anchor, rms };
+    }
+
+    function analyze() {
+      state.evsEdges = detectEvsEdges();
+      state.rgbEdges = detectRgbEdges();
+      state.pairs = pairEdges(state.evsEdges, state.rgbEdges);
+      const fit = fitClock(state.pairs);
+      state.offsetS = fit.offset;
+      state.drift = fit.drift;
+      state.anchorS = fit.anchor;
+      state.rmsS = fit.rms;
+      updateResults();
+      draw();
+    }
+
+    function updateResults() {
+      const count = state.pairs.length;
+      $('statusValue').textContent = count >= 4 ? '同期候補を推定' : count ? '要確認' : '未検出';
+      $('statusValue').className = `metric-value ${count >= 4 ? 'cyan' : count ? 'amber' : ''}`;
+      $('offsetValue').textContent = formatMs(state.offsetS, true);
+      $('driftValue').textContent = `${(state.drift * 1e6).toFixed(1)} ppm`;
+      $('pairCount').textContent = String(count);
+      $('rmsValue').textContent = formatMs(state.rmsS);
+      const rows = $('pairRows');
+      rows.innerHTML = '';
+      $('pairEmpty').hidden = count > 0;
+      for (const pair of state.pairs) {
+        const tr = document.createElement('tr');
+        const cells = [
+          pair.evs.kind === 'on' ? '点灯' : '消灯',
+          `${pair.evs.t.toFixed(3)} s`,
+          `${pair.rgb.lo.toFixed(3)}–${pair.rgb.hi.toFixed(3)} s`,
+          formatMs(pair.rgb.t - pair.evs.t, true),
+          formatMs(pair.residual || 0, true)
+        ];
+        cells.forEach(value => { const td = document.createElement('td'); td.textContent = value; tr.appendChild(td); });
+        rows.appendChild(tr);
+      }
+      updateTimecode();
+    }
+
+    function canvasMetrics() {
+      const canvas = $('timeline');
+      const rect = canvas.getBoundingClientRect();
+      const ratio = window.devicePixelRatio || 1;
+      const width = Math.max(1, Math.round(rect.width * ratio));
+      const height = Math.max(1, Math.round(rect.height * ratio));
+      if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; }
+      return { canvas, ctx: canvas.getContext('2d'), width, height, ratio };
+    }
+
+    function draw() {
+      const { ctx, width, height, ratio } = canvasMetrics();
+      ctx.clearRect(0, 0, width, height);
+      ctx.save(); ctx.scale(ratio, ratio);
+      const w = width / ratio, h = height / ratio;
+      const pad = { l: 58, r: 18, t: 20, b: 32 };
+      const plotW = w - pad.l - pad.r, plotH = h - pad.t - pad.b;
+      const topH = plotH * .42, gap = 42, bottomTop = pad.t + topH + gap, bottomH = plotH - topH - gap;
+      const span = Math.max(.001, state.viewEnd - state.viewStart);
+      const x = t => pad.l + (t - state.viewStart) / span * plotW;
+
+      ctx.strokeStyle = '#1d2a38'; ctx.lineWidth = 1;
+      ctx.fillStyle = '#77899c'; ctx.font = '12px ui-monospace, monospace';
+      for (let i = 0; i <= 6; i++) {
+        const xx = pad.l + plotW * i / 6;
+        ctx.beginPath(); ctx.moveTo(xx, pad.t); ctx.lineTo(xx, h - pad.b); ctx.stroke();
+        const t = state.viewStart + span * i / 6;
+        ctx.fillText(`${t.toFixed(span < .3 ? 3 : 2)} s`, xx - 17, h - 10);
+      }
+      ctx.fillStyle = '#93a4b7'; ctx.font = '600 12px ui-sans-serif, sans-serif';
+      ctx.fillText('RGB 輝度', 9, pad.t + 11);
+      ctx.fillText('EVS / ms', 9, bottomTop + 11);
+
+      const visibleRgb = state.rgb.filter(p => p.t >= state.viewStart && p.t <= state.viewEnd);
+      ctx.strokeStyle = '#ffb45c'; ctx.fillStyle = '#ffb45c'; ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      visibleRgb.forEach((p, i) => { const xx=x(p.t), yy=pad.t + topH * (1 - clamp(p.v, 0, 1)); i ? ctx.lineTo(xx,yy) : ctx.moveTo(xx,yy); });
+      ctx.stroke();
+      if (span < .8) visibleRgb.forEach(p => { ctx.beginPath(); ctx.arc(x(p.t), pad.t + topH*(1-clamp(p.v,0,1)), 2.6, 0, Math.PI*2); ctx.fill(); });
+
+      const visibleEvs = state.evs.filter(p => p.t >= state.viewStart && p.t <= state.viewEnd);
+      const maxEvents = Math.max(1, ...visibleEvs.map(p => Math.max(p.pos, p.neg)));
+      const drawSeries = (key, color) => {
+        ctx.strokeStyle = color; ctx.lineWidth = 1.3; ctx.beginPath();
+        visibleEvs.forEach((p,i) => { const xx=x(p.t), yy=bottomTop + bottomH * (1 - p[key]/maxEvents); i ? ctx.lineTo(xx,yy) : ctx.moveTo(xx,yy); }); ctx.stroke();
+      };
+      drawSeries('pos', '#37e6c4'); drawSeries('neg', '#70a7ff');
+
+      for (const edge of state.evsEdges) {
+        if (edge.t < state.viewStart || edge.t > state.viewEnd) continue;
+        ctx.strokeStyle = edge.kind === 'on' ? 'rgba(55,230,196,.65)' : 'rgba(112,167,255,.65)';
+        ctx.setLineDash([4,4]); ctx.beginPath(); ctx.moveTo(x(edge.t), bottomTop); ctx.lineTo(x(edge.t), bottomTop+bottomH); ctx.stroke(); ctx.setLineDash([]);
+      }
+      for (const edge of state.rgbEdges) {
+        if (edge.hi < state.viewStart || edge.lo > state.viewEnd) continue;
+        ctx.fillStyle = 'rgba(255,180,92,.14)';
+        ctx.fillRect(x(edge.lo), pad.t, Math.max(2, x(edge.hi)-x(edge.lo)), topH);
+      }
+      ctx.restore();
+    }
+
+    function setView(center, span) {
+      const fullSpan = Math.max(.001, state.fullEnd - state.fullStart);
+      span = clamp(span, .08, fullSpan);
+      let start = center - span / 2;
+      start = clamp(start, state.fullStart, state.fullEnd - span);
+      state.viewStart = start; state.viewEnd = start + span; draw();
+    }
+
+    function parseCsv(text) {
+      const lines = text.trim().split(/\r?\n/).filter(Boolean);
+      if (lines.length < 2) return {};
+      const headers = lines[0].split(',').map(s => s.trim().toLowerCase());
+      const rows = lines.slice(1).map(line => {
+        const values = line.split(','); const row = {};
+        headers.forEach((h,i) => row[h] = Number(values[i])); return row;
+      });
+      const timeKey = headers.find(h => ['t','time_s','time'].includes(h));
+      const rgbKey = headers.find(h => ['rgb','v','value','brightness'].includes(h));
+      const posKey = headers.find(h => ['pos','positive_count','positive'].includes(h));
+      const negKey = headers.find(h => ['neg','negative_count','negative'].includes(h));
+      const result = {};
+      if (timeKey && rgbKey) result.rgb = rows.map(r => ({ t:r[timeKey], v:r[rgbKey] }));
+      if (timeKey && (posKey || negKey)) result.evs = rows.map(r => ({ t:r[timeKey], pos:posKey?r[posKey]:0, neg:negKey?r[negKey]:0 }));
+      return result;
+    }
+
+    async function openData(files) {
+      const merged = { meta: { session: [...files].map(f => f.name).join(' + ') }, rgb: [], evs: [] };
+      for (const file of files) {
+        const text = await file.text();
+        const data = file.name.toLowerCase().endsWith('.json') ? JSON.parse(text) : parseCsv(text);
+        if (data.meta) merged.meta = { ...merged.meta, ...data.meta };
+        if (data.rgb) merged.rgb.push(...data.rgb);
+        if (data.evs) merged.evs.push(...data.evs);
+      }
+      if (!merged.rgb.length || !merged.evs.length) throw new Error('RGBとEVSの両方の信号が必要です。');
+      loadDataset(merged); toast('解析データを読み込みました。');
+    }
+
+    function download(name, value) {
+      const url = URL.createObjectURL(new Blob([value], { type: 'application/json' }));
+      const a = document.createElement('a'); a.href = url; a.download = name; a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 500);
+    }
+
+    function exportResult() {
+      download('led_sync_result.json', JSON.stringify({
+        schema_version: 1,
+        session: state.meta.session,
+        reference_sensor: 'rgb',
+        model: {
+          equation: 'rgb_time = evs_time + offset_s + drift * (evs_time - anchor_evs_time_s)',
+          anchor_evs_time_s: state.anchorS,
+          offset_s: state.offsetS,
+          drift: state.drift,
+          drift_ppm: state.drift * 1e6,
+          residual_rms_s: state.rmsS,
+          matched_edges: state.pairs.length
+        },
+        pairs: state.pairs.map(p => ({ kind:p.evs.kind, evs_time_s:p.evs.t, rgb_interval_s:[p.rgb.lo,p.rgb.hi], rgb_midpoint_s:p.rgb.t, residual_s:p.residual || 0 }))
+      }, null, 2));
+    }
+
+    function attachVideo(inputId, videoId, emptyId, key) {
+      $(inputId).addEventListener('change', event => {
+        const file = event.target.files[0]; if (!file) return;
+        if (state[key]) URL.revokeObjectURL(state[key]);
+        state[key] = URL.createObjectURL(file); $(videoId).src = state[key]; $(emptyId).hidden = true;
+      });
+    }
+
+    function updateTimecode() {
+      const evsT = evsSourceTime();
+      const rgbT = evsT + state.offsetS + state.drift * (evsT - state.anchorS);
+      $('timecode').textContent = `EVS ${evsT.toFixed(3)} s / RGB ${Math.max(0,rgbT).toFixed(3)} s`;
+    }
+
+    function evsSourceTime() {
+      const stepS = Math.max(.0001, Number($('evsFrameStep').value) / 1000);
+      const fps = Math.max(1, Number($('evsVideoFps').value));
+      return ($('evsVideo').currentTime || 0) * fps * stepS;
+    }
+
+    function syncVideos() {
+      const evs = $('evsVideo'), rgb = $('rgbVideo');
+      if (!evs.src || !rgb.src) return;
+      const evsT = evsSourceTime();
+      const target = evsT + state.offsetS + state.drift * (evsT - state.anchorS);
+      if (Math.abs(rgb.currentTime - target) > .008) rgb.currentTime = Math.max(0, target);
+      updateTimecode();
+      if (!evs.paused) requestAnimationFrame(syncVideos);
+    }
+
+    let toastTimer;
+    function toast(message) { clearTimeout(toastTimer); $('toast').textContent=message; $('toast').classList.add('show'); toastTimer=setTimeout(()=>$('toast').classList.remove('show'),2600); }
+
+    $('analyzeButton').addEventListener('click', () => { analyze(); toast(`${state.pairs.length}個の点滅エッジを対応付けました。`); });
+    $('demoButton').addEventListener('click', () => loadDataset(demoData()));
+    $('exportButton').addEventListener('click', exportResult);
+    $('sampleButton').addEventListener('click', () => download('led_sync_sample.json', JSON.stringify(demoData(), null, 2)));
+    $('dataFiles').addEventListener('change', event => openData(event.target.files).catch(error => toast(error.message)));
+    $('resetView').addEventListener('click', () => { state.viewStart=state.fullStart; state.viewEnd=state.fullEnd; $('zoomRange').value=0; draw(); });
+    $('startView').addEventListener('click', () => setView(state.evsEdges[0]?.t ?? state.fullStart, .35));
+    $('endView').addEventListener('click', () => setView(state.evsEdges.at(-1)?.t ?? state.fullEnd, .35));
+    $('zoomRange').addEventListener('input', event => {
+      const fullSpan=state.fullEnd-state.fullStart, factor=Math.pow(.04, Number(event.target.value)/100);
+      setView((state.viewStart+state.viewEnd)/2, fullSpan*factor);
+    });
+
+    const canvas = $('timeline');
+    canvas.addEventListener('wheel', event => {
+      event.preventDefault(); const rect=canvas.getBoundingClientRect(); const ratio=clamp((event.clientX-rect.left)/rect.width,0,1);
+      const pointerT=state.viewStart+ratio*(state.viewEnd-state.viewStart); const factor=event.deltaY>0?1.22:.82;
+      const newSpan=clamp((state.viewEnd-state.viewStart)*factor,.05,state.fullEnd-state.fullStart);
+      state.viewStart=pointerT-ratio*newSpan; state.viewEnd=state.viewStart+newSpan;
+      if(state.viewStart<state.fullStart){state.viewEnd+=state.fullStart-state.viewStart;state.viewStart=state.fullStart;}
+      if(state.viewEnd>state.fullEnd){state.viewStart-=state.viewEnd-state.fullEnd;state.viewEnd=state.fullEnd;}
+      draw();
+    }, { passive:false });
+    canvas.addEventListener('pointerdown', event => { state.dragging=true; state.dragX=event.clientX; state.dragStart=state.viewStart; state.dragEnd=state.viewEnd; canvas.setPointerCapture(event.pointerId); });
+    canvas.addEventListener('pointermove', event => {
+      if(!state.dragging)return; const rect=canvas.getBoundingClientRect(); const dt=-(event.clientX-state.dragX)/rect.width*(state.dragEnd-state.dragStart);
+      const span=state.dragEnd-state.dragStart; state.viewStart=clamp(state.dragStart+dt,state.fullStart,state.fullEnd-span); state.viewEnd=state.viewStart+span; draw();
+    });
+    canvas.addEventListener('pointerup', () => state.dragging=false);
+
+    attachVideo('rgbFile','rgbVideo','rgbEmpty','rgbUrl'); attachVideo('evsFile','evsVideo','evsEmpty','evsUrl');
+    $('playButton').addEventListener('click', async () => {
+      const evs=$('evsVideo'), rgb=$('rgbVideo');
+      if(!evs.src || !rgb.src){toast('RGB動画とEVS動画を選択してください。');return;}
+      if(evs.paused){const evsT=evsSourceTime();const target=evsT+state.offsetS+state.drift*(evsT-state.anchorS);rgb.pause();rgb.currentTime=Math.max(0,target);await evs.play();$('playButton').textContent='停止';syncVideos();}
+      else{evs.pause();$('playButton').textContent='再生';}
+    });
+    function step(direction){const evs=$('evsVideo'),rgb=$('rgbVideo');const fps=Math.max(1,Number($('evsVideoFps').value));evs.pause();rgb.pause();evs.currentTime=Math.max(0,evs.currentTime+direction/fps);const evsT=evsSourceTime();const target=evsT+state.offsetS+state.drift*(evsT-state.anchorS);rgb.currentTime=Math.max(0,target);$('playButton').textContent='再生';updateTimecode();}
+    $('stepBack').addEventListener('click',()=>step(-1)); $('stepForward').addEventListener('click',()=>step(1));
+    $('evsVideo').addEventListener('timeupdate',updateTimecode);
+    window.addEventListener('resize', draw);
+
+    loadDataset(demoData());
+  </script>
+</body>
+</html>
