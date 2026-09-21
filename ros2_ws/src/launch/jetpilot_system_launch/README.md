@@ -154,6 +154,11 @@ EnterでRGB MCAPとEVS native RAWの同時記録を開始・停止できます�
 中断して同じコマンドを再実行すると未完了条件から再開します。保存先の既定値は
 `/workspaces/record/rc_popout_experiment`です。
 
+runnerの起動直後には、配置確認用としてSilkyEvCamの`/event_camera/event_image`を一時的に
+publishするか確認されます。有効にした場合はカメラと障害物の配置決定後にEnterを押すと、このbringupを
+停止して本番用に再起動します。本番ではevent image publisherを無効化してから記録するため、可視化処理の
+負荷は測定へ入りません。配置確認中はまだBag/RAW記録を開始しません。
+
 ```bash
 # 次の条件と進捗だけを確認（センサは起動しない）
 scripts/rc_popout_experiment.sh --dry-run

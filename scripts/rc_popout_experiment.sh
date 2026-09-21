@@ -78,16 +78,32 @@ publish_bag_request() {
     "{command: ${command}, label: '${label}'}" >/dev/null
 }
 
+stop_bringup() {
+  if [[ -n "$BRINGUP_PID" ]] && kill -0 "$BRINGUP_PID" 2>/dev/null; then
+    kill -INT "$BRINGUP_PID" 2>/dev/null || true
+    wait "$BRINGUP_PID" 2>/dev/null || true
+  fi
+  BRINGUP_PID=''
+}
+
+start_bringup() {
+  local log_file="$1"
+  shift
+  local bringup_command=("${SCRIPT_DIR}/bringup.sh" rc-popout -y)
+  [[ -z "$VEHICLE" ]] || bringup_command+=(--vehicle "$VEHICLE")
+  bringup_command+=("$@")
+  "${bringup_command[@]}" >"$log_file" 2>&1 &
+  BRINGUP_PID=$!
+  wait_for_bag_manager
+}
+
 cleanup() {
   local exit_code=$?
   trap - EXIT INT TERM
   if [[ "$RECORDING" == true ]] && command -v ros2 >/dev/null 2>&1; then
     publish_bag_request 2 interrupted || true
   fi
-  if [[ -n "$BRINGUP_PID" ]] && kill -0 "$BRINGUP_PID" 2>/dev/null; then
-    kill -INT "$BRINGUP_PID" 2>/dev/null || true
-    wait "$BRINGUP_PID" 2>/dev/null || true
-  fi
+  stop_bringup
   exit "$exit_code"
 }
 
@@ -179,13 +195,27 @@ if command -v rs-enumerate-devices >/dev/null 2>&1; then
   rs-enumerate-devices -c >"$device_info" 2>&1 || true
 fi
 
-bringup_command=("${SCRIPT_DIR}/bringup.sh" rc-popout -y)
-[[ -z "$VEHICLE" ]] || bringup_command+=(--vehicle "$VEHICLE")
-"${bringup_command[@]}" >"${PLAN_DIR}/bringup.log" 2>&1 &
-BRINGUP_PID=$!
 trap cleanup EXIT INT TERM
-wait_for_bag_manager
+read -r -p '配置確認用のEVS event imageを表示しますか？ [Y/n]: ' alignment_choice
+case "$alignment_choice" in
+  n|N)
+    ;;
+  *)
+    printf '\n配置確認モードを起動します。記録はまだ開始しません。\n'
+    start_bringup "${PLAN_DIR}/bringup-alignment.log" \
+      --set sensor_kit_silky_evcam_event_image_enabled:=true
+    printf 'EVS画像topic: /event_camera/event_image\n'
+    printf '例: ros2 run rqt_image_view rqt_image_view /event_camera/event_image\n'
+    read -r -p 'カメラ・障害物の配置が決まったらEnter: ' _
+    printf '配置確認モードを停止し、本番記録モードへ切り替えます。\n'
+    stop_bringup
+    sleep 2
+    ;;
+esac
+
+start_bringup "${PLAN_DIR}/bringup.log"
 printf '\nセンサとBag Managerが起動しました。ログ: %s\n' "${PLAN_DIR}/bringup.log"
+printf '本番記録中は /event_camera/event_image publisherを無効化しています。\n'
 
 while next_record="$($PYTHON_BIN "$PLAN_HELPER" next --plan "$PLAN_FILE")"; do
   show_run "$next_record"
