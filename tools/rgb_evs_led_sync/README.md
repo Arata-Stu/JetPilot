@@ -227,3 +227,5 @@ annotation時には次を保存する。
 - LED fitが良くても、RGB exposureが長い場合はscene motionの時間ぼけが残る
 - event-derived`t_visible`だけでEVSのTTFDを評価すると有利な定義になり得る
 - 同じtrialのEVS--RGB検知差、RGB区間を用いた絶対TTFD、event細粒度TTFDを分けて報告する
+
+人間へ記録済みRGB映像を提示する実験は、[`human_video_reaction_protocol.md`](human_video_reaction_protocol.md)に分離して定義する。

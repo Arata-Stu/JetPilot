@@ -614,6 +614,7 @@ physical pop-out (`t_visible`)
 - live TensorRT 250 Hz protocol: `tools/evs_benchmark/LIVE_EVALUATION.md`
 - RGB+EVS simultaneous capture: `rgb-evs-benchmark` bringup preset
 - 着脱式LEDによるRGB--EVS同期と手動`t_visible`注釈設計: `tools/rgb_evs_led_sync/`
+- 記録済みRGB映像を用いた人間反応評価protocol: `tools/rgb_evs_led_sync/human_video_reaction_protocol.md`
 - brake command recording: `/commands/motor/brake`およびbag manager
 
 ただし、これらは現時点で「20ch危険検知から250 Hzで実制動する完成系」を意味しない。現行資産の境界は次の通りである。

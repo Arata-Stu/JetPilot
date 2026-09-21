@@ -12,6 +12,8 @@ def add_sensor_interface(args: lu.ArgumentContainer):
         'container_name': args.container_name,
         'run_standalone': str(lu.is_true(args.run_standalone)).lower(),
         'enable_depth': str(lu.is_true(args.enable_depth)).lower(),
+        'rgb_width': args.rgb_width,
+        'rgb_height': args.rgb_height,
         'rgb_fps': args.rgb_fps,
         'infra_fps': args.infra_fps,
         'enable_accel': str(lu.is_true(args.enable_accel)).lower(),
@@ -92,6 +94,8 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('run_standalone', True, cli=True)
     args.add_arg('enable_depth', False, cli=True)
     args.add_arg('enable_color', True, cli=True)
+    args.add_arg('rgb_width', '424', cli=True)
+    args.add_arg('rgb_height', '240', cli=True)
     args.add_arg('rgb_fps', '30', cli=True)
     args.add_arg('infra_fps', '60', cli=True)
     args.add_arg('enable_accel', True, cli=True)

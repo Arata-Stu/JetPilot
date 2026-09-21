@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import csv
 import hashlib
 import json
 import os
@@ -75,6 +76,7 @@ def test_presets_are_listed() -> None:
         "drive",
         "calibration",
         "rgb-evs-benchmark",
+        "rc-popout",
         "rgb-evs-e2e-benchmark",
         "evs-tensorrt-benchmark",
         "e2e",
@@ -632,6 +634,73 @@ def test_rgb_evs_benchmark_uses_native_raw_and_lightweight_mcap() -> None:
     assert "enable_teleop:=true" in drive_output
     assert "enable_operation:=true" in drive_output
     assert "publish_vehicle_evs_description:=true" in drive_output
+
+
+def test_rc_popout_uses_rgb_848x480_60_and_default_evs_bias() -> None:
+    output = run_launcher("rc-popout", "--dry-run").stdout
+
+    assert "enable_sensor_kit:=true" in output
+    assert "enable_bag_manager:=true" in output
+    assert "enable_vehicle:=false" in output
+    assert "sensor_kit_rgb_width:=848" in output
+    assert "sensor_kit_rgb_height:=480" in output
+    assert "sensor_kit_rgb_fps:=60" in output
+    assert "sensor_kit_infra_fps:=0" in output
+    assert "sensor_kit_enable_depth:=false" in output
+    assert "sensor_kit_enable_accel:=false" in output
+    assert "sensor_kit_enable_gyro:=false" in output
+    assert "sensor_kit_silky_evcam_event_image_enabled:=false" in output
+    assert "sensor_kit_silky_evcam_raw_recording_enabled:=true" in output
+    assert "sensor_kit_silky_evcam_bias_file:=" not in output
+
+
+def test_rc_popout_plan_is_balanced_resumable_and_dry_runnable(tmp_path: Path) -> None:
+    helper = PROJECT_ROOT / "scripts/rc_popout_plan.py"
+    runner = PROJECT_ROOT / "scripts/rc_popout_experiment.sh"
+    plan = tmp_path / "plan.tsv"
+    subprocess.run(
+        [
+            "python3", str(helper), "init", "--plan", str(plan),
+            "--speeds", "slow,fast", "--directions", "left,right",
+            "--obstacle-positions", "near,far", "--camera-positions", "center",
+            "--repetitions", "2", "--seed", "42",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    with plan.open(newline="", encoding="utf-8") as stream:
+        rows = list(csv.DictReader(stream, delimiter="\t"))
+    assert len(rows) == 16
+    assert {row["direction"] for row in rows} == {"left", "right"}
+    assert {row["obstacle_position"] for row in rows} == {"near", "far"}
+    assert all(row["status"] == "pending" for row in rows)
+
+    subprocess.run(
+        [
+            "python3", str(helper), "update", "--plan", str(plan),
+            "--run-id", "r001", "--status", "completed",
+        ],
+        check=True,
+    )
+    next_run = json.loads(subprocess.run(
+        ["python3", str(helper), "next", "--plan", str(plan)],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout)
+    assert next_run["run_id"] == "r002"
+
+    env = dict(os.environ, RC_POPOUT_PLAN_DIR=str(tmp_path))
+    output = subprocess.run(
+        ["bash", str(runner), "--dry-run"],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+    ).stdout
+    assert "次の試行: r002" in output
+    assert "センサ起動と記録は行いません" in output
 
 
 def test_rgb_evs_e2e_benchmark_uses_async_cuda_and_diagnostics_only() -> None:
@@ -2525,7 +2594,8 @@ def test_realsense_disabled_streams_keep_valid_driver_profiles() -> None:
     from types import SimpleNamespace
     for rgb, infra in ((0, 60), (30, 0), (0, 0), (30, 30)):
         values = {}
-        env = {"rgb_fps": rgb, "infra_fps": infra,
+        env = {"rgb_width": 848, "rgb_height": 480,
+               "rgb_fps": rgb, "infra_fps": infra,
                "args": SimpleNamespace(enable_color=True),
                "lu": SimpleNamespace(is_true=bool)}
         for key, value in zip(params.keys, params.values):
@@ -2574,7 +2644,7 @@ def test_live_bag_manager_defaults_on_and_can_be_disabled() -> None:
 def test_purpose_menu_routes_to_existing_presets() -> None:
     source = LAUNCHER.read_text()
     function = source.split("choose_preset_interactively() {", 1)[1].split("\nconfigure_e2e_model()", 1)[0]
-    for purpose, child in (("record", "record"),
+    for purpose, child in (("record", "record"), ("popout", "rc-popout"),
                            ("benchmark", "rgb-evs-benchmark"), ("e2e", "e2e"),
                            ("driving", "drive"), ("driving", "competition"),
                            ("offline", "offline-vslam"), ("advanced", "sensor")):

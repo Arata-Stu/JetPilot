@@ -27,8 +27,12 @@ from launch_ros.actions import ComposableNodeContainer
 def launch_realsense(args: lu.ArgumentContainer) -> list[lut.Action]:
 
     actions = []
+    rgb_width = int(args.rgb_width)
+    rgb_height = int(args.rgb_height)
     rgb_fps = int(args.rgb_fps)
     infra_fps = int(args.infra_fps)
+    if rgb_width <= 0 or rgb_height <= 0:
+        raise ValueError('RealSense RGB width and height must be positive integers')
     if rgb_fps not in (0, 30, 60, 90) or infra_fps not in (0, 30, 60, 90):
         raise ValueError('RealSense RGB/Infra FPS must be 0 (OFF), 30, 60, or 90')
 
@@ -57,7 +61,7 @@ def launch_realsense(args: lu.ArgumentContainer) -> list[lut.Action]:
         ),
         'enable_rgbd': False,
         # IMU stream selection is supplied by the bringup sensor configuration.
-        'rgb_camera.color_profile': f'424x240x{rgb_fps or 30}',
+        'rgb_camera.color_profile': f'{rgb_width}x{rgb_height}x{rgb_fps or 30}',
         'depth_module.infra_profile': f'424x240x{infra_fps or 60}',
         # Keep wrapper-level frame synchronization disabled while evaluating
         # high-FPS UVC stream stability.
@@ -147,6 +151,8 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('camera_name', 'realsense')
     args.add_arg('enable_depth', False)
     args.add_arg('enable_color', True)
+    args.add_arg('rgb_width', '424')
+    args.add_arg('rgb_height', '240')
     args.add_arg('rgb_fps', '30')
     args.add_arg('infra_fps', '60')
     args.add_arg('enable_accel', True)

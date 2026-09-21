@@ -114,6 +114,7 @@ teleop               Joy/teleop/operation + selected vehicle interface
 drive                Live sensor + joy/teleop/operation + selected vehicle interface
 record              データ収集（Joy / 固定スロットル・rosbag manager）
 rgb-evs-benchmark   RGB＋EVSセンサベンチマーク（native RAW＋軽量MCAP）
+rc-popout           RCカー飛び出し実験（RGB 848x480@60＋EVS native RAW）
 rgb-evs-e2e-benchmark
                      RGB＋EVS 250 Hz E2Eベンチマーク（診断のみ軽量MCAP）
 evs-tensorrt-benchmark
@@ -228,7 +229,7 @@ known_preset() {
   case "$1" in
     sensor|localization-only|localization|localize-live|replay-localization|\
       offline-vslam|offline-vslam-map|offline-localization|\
-      vehicle|teleop|drive|calibration|record|rgb-evs-benchmark|rgb-evs-e2e-benchmark|evs-tensorrt-benchmark|e2e-collect|e2e-steering|e2e|runtime|map-view|tuning|competition|\
+      vehicle|teleop|drive|calibration|record|rgb-evs-benchmark|rc-popout|rgb-evs-e2e-benchmark|evs-tensorrt-benchmark|e2e-collect|e2e-steering|e2e|runtime|map-view|tuning|competition|\
       vehicle-pca|vehicle-vesc|teleop-pca|teleop-vesc|\
       drive-pca|drive-vesc|runtime-pca|runtime-vesc|custom) return 0 ;;
     *) return 1 ;;
@@ -316,6 +317,8 @@ set_base_args() {
   set_arg enable_e2e_inference false
   set_arg enable_object_detection false
   set_arg enable_sensor_kit false
+  set_arg sensor_kit_rgb_width 424
+  set_arg sensor_kit_rgb_height 240
   set_arg sensor_kit_rgb_fps 30
   set_arg sensor_kit_infra_fps 60
   set_arg sensor_kit_enable_accel true
@@ -1071,6 +1074,29 @@ apply_preset() {
       set_arg sensor_kit_silky_evcam_raw_recording_request_topic \
         /event_camera/raw_recording/request
       ;;
+    rc-popout)
+      # RC-car pop-out experiment: D455 color only plus SilkyEvCam native RAW.
+      # An empty bias path means OpenEB uses the camera/default bias settings.
+      set_arg enable_sensor_kit true
+      set_arg enable_tool true
+      set_arg enable_bag_manager true
+      set_arg bag_manager_param \
+        "${PROJECT_ROOT}/ros2_ws/src/launch/jetpilot_system_launch/config/tool/bag_manager.rgb_evs_benchmark.param.yaml"
+      apply_sensor_kit realsense-silky
+      set_arg sensor_kit_rgb_width 848
+      set_arg sensor_kit_rgb_height 480
+      set_arg sensor_kit_rgb_fps 60
+      set_arg sensor_kit_infra_fps 0
+      set_arg sensor_kit_enable_accel false
+      set_arg sensor_kit_enable_gyro false
+      set_arg sensor_kit_enable_depth false
+      set_arg sensor_kit_silky_evcam_bias_file ''
+      set_arg sensor_kit_silky_evcam_event_image_enabled false
+      set_arg sensor_kit_silky_evcam_raw_recording_enabled true
+      set_arg sensor_kit_silky_evcam_raw_recording_auto_start false
+      set_arg sensor_kit_silky_evcam_raw_recording_request_topic \
+        /event_camera/raw_recording/request
+      ;;
     rgb-evs-e2e-benchmark)
       # Measurement-only live pipeline: sensor + async CUDA/TensorRT +
       # lightweight diagnostics. No actuator, event-image rendering, native RAW
@@ -1706,6 +1732,7 @@ choose_preset_interactively() {
   local options=()
   selection="$(choose_one '用途を選択' \
     'record   データ収集' \
+    'popout   RCカー飛び出し実験' \
     'benchmark RGB＋EVSセンサベンチマーク' \
     'e2e      E2E走行' \
     'driving  通常走行' \
@@ -1718,6 +1745,10 @@ choose_preset_interactively() {
       ;;
     benchmark)
       PRESET='rgb-evs-benchmark'
+      return 0
+      ;;
+    popout)
+      PRESET='rc-popout'
       return 0
       ;;
     driving)
@@ -2013,6 +2044,7 @@ configure_rtp_interactively() {
 
 configure_realsense_fps_interactively() {
   is_true "$(get_arg enable_sensor_kit)" || return 0
+  [[ "$PRESET" != 'rc-popout' ]] || return 0
   case "$(get_arg sensor_kit_interface_launch 2>/dev/null || printf 'launch/sensors/realsense.launch.py')" in
     */realsense.launch.py|*/realsense_silky_evcam.launch.py|*/realsense_silky_flir.launch.py) ;;
     *) return 0 ;;
@@ -2109,6 +2141,7 @@ configure_sensor_kit_interactively() {
 
 configure_silky_evcam_bias_interactively() {
   is_true "$(get_arg enable_sensor_kit)" || return 0
+  [[ "$PRESET" != 'rc-popout' ]] || return 0
   [[ "$(get_arg sensor_kit_interface_pkg 2>/dev/null || true)" == 'jetpilot_system_launch' ]] \
     || return 0
   case "$(get_arg sensor_kit_interface_launch 2>/dev/null || true)" in
@@ -2212,6 +2245,28 @@ normalize_rosbag_path() {
 }
 
 validate_configuration() {
+  if [[ "$PRESET" == 'rc-popout' ]]; then
+    [[ "$SENSOR_KIT_PROFILE" == 'realsense-silky' ]] \
+      || die 'rc-popout requires the realsense-silky sensor kit'
+    is_true "$(get_arg enable_bag_manager)" \
+      || die 'rc-popout requires the bag manager'
+    [[ "$(get_arg sensor_kit_rgb_width)" == 848 \
+      && "$(get_arg sensor_kit_rgb_height)" == 480 \
+      && "$(get_arg sensor_kit_rgb_fps)" == 60 ]] \
+      || die 'rc-popout requires RGB 848x480 at 60 Hz'
+    [[ "$(get_arg sensor_kit_infra_fps)" == 0 ]] \
+      && ! is_true "$(get_arg sensor_kit_enable_depth)" \
+      && ! is_true "$(get_arg sensor_kit_enable_accel)" \
+      && ! is_true "$(get_arg sensor_kit_enable_gyro)" \
+      || die 'rc-popout requires Infra, Depth, Accel, and Gyro to be disabled'
+    [[ -z "$(get_arg sensor_kit_silky_evcam_bias_file 2>/dev/null || true)" ]] \
+      || die 'rc-popout requires the default EVS bias (empty bias file)'
+    is_true "$(get_arg sensor_kit_silky_evcam_raw_recording_enabled)" \
+      || die 'rc-popout requires OpenEB RAW recording'
+    [[ "$(get_arg sensor_kit_silky_evcam_raw_recording_request_topic)" \
+        == '/event_camera/raw_recording/request' ]] \
+      || die 'rc-popout requires the OpenEB RAW recording request topic'
+  fi
   if [[ "$PRESET" == 'rgb-evs-benchmark' ]]; then
     [[ "$SENSOR_KIT_PROFILE" == 'realsense-silky' ]] \
       || die 'rgb-evs-benchmark requires the realsense-silky sensor kit'
@@ -2283,6 +2338,11 @@ PYVALIDATE
       0|30|60|90) ;;
       *) die "$fps_key must be 0 (OFF), 30, 60, or 90" ;;
     esac
+  done
+  local dimension_key
+  for dimension_key in sensor_kit_rgb_width sensor_kit_rgb_height; do
+    [[ "$(get_arg "$dimension_key")" =~ ^[1-9][0-9]*$ ]] \
+      || die "$dimension_key must be a positive integer"
   done
   if is_true "$(get_arg enable_e2e_inference)" \
     && ! is_true "$(get_arg e2e_event_image_mode 2>/dev/null || true)" \
@@ -2553,8 +2613,11 @@ print_summary() {
     printf '  sensor kit   : %s\n' "${SENSOR_KIT_PROFILE:-default}"
     case "$(get_arg sensor_kit_interface_launch 2>/dev/null || printf 'launch/sensors/realsense.launch.py')" in
       */realsense.launch.py|*/realsense_silky_evcam.launch.py|*/realsense_silky_flir.launch.py)
-        printf '  camera Hz    : RGB=%s / Infra=%s (424x240)\n' \
-          "$(get_arg sensor_kit_rgb_fps)" "$(get_arg sensor_kit_infra_fps)"
+        printf '  RGB stream   : %sx%s @ %s Hz\n' \
+          "$(get_arg sensor_kit_rgb_width)" \
+          "$(get_arg sensor_kit_rgb_height)" \
+          "$(get_arg sensor_kit_rgb_fps)"
+        printf '  Infra Hz     : %s\n' "$(get_arg sensor_kit_infra_fps)"
         printf '  RealSense IMU: Accel=%s / Gyro=%s\n' \
           "$(get_arg sensor_kit_enable_accel)" "$(get_arg sensor_kit_enable_gyro)"
         ;;
@@ -2872,7 +2935,7 @@ if [[ "$REQUIRES_MAP" == 'true' && -z "$MAP_DIR" && "$INTERACTIVE" == 'true' ]];
 fi
 if [[ -n "${CLI_VEHICLE:-}" ]]; then
   apply_vehicle "$CLI_VEHICLE"
-  if [[ "$PRESET" == 'rgb-evs-benchmark' ]]; then
+  if [[ "$PRESET" == 'rgb-evs-benchmark' || "$PRESET" == 'rc-popout' ]]; then
     enable_drive_stack
     set_arg publish_vehicle_evs_description true
   fi
@@ -2886,6 +2949,7 @@ if [[ "$REQUIRES_VEHICLE" == 'true' && "$VEHICLE_BACKEND" == 'none' && -z "${CLI
 fi
 if [[ "$INTERACTIVE" == 'true' && -z "$CLI_SENSOR_KIT" \
   && "$PRESET" != 'rgb-evs-benchmark' \
+  && "$PRESET" != 'rc-popout' \
   && "$PRESET" != 'rgb-evs-e2e-benchmark' \
   && "$PRESET" != 'evs-tensorrt-benchmark' ]] \
   && is_true "$(get_arg enable_sensor_kit)"; then

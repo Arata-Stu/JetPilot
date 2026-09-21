@@ -18,6 +18,8 @@ def launch_sensor_kit(args: lu.ArgumentContainer) -> list[lut.Action]:
                     'run_standalone': str(lu.is_true(args.run_standalone)).lower(),
                     'enable_depth': str(lu.is_true(args.enable_depth)).lower(),
                     'enable_color': str(lu.is_true(args.enable_color)).lower(),
+                    'rgb_width': args.rgb_width,
+                    'rgb_height': args.rgb_height,
                     'rgb_fps': args.rgb_fps,
                     'infra_fps': args.infra_fps,
                     'enable_accel': str(lu.is_true(args.enable_accel)).lower(),
@@ -127,6 +129,8 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('run_standalone', True)
     args.add_arg('enable_depth', False)
     args.add_arg('enable_color', True)
+    args.add_arg('rgb_width', '424')
+    args.add_arg('rgb_height', '240')
     args.add_arg('rgb_fps', '30')
     args.add_arg('infra_fps', '60')
     args.add_arg('enable_accel', True)

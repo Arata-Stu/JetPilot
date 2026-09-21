@@ -515,6 +515,8 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('sensor_kit_container_name', 'multi_sensor_container', cli=True)
     args.add_arg('sensor_kit_enable_depth', False, cli=True)
     args.add_arg('sensor_kit_enable_color', True, cli=True)
+    args.add_arg('sensor_kit_rgb_width', '424', cli=True)
+    args.add_arg('sensor_kit_rgb_height', '240', cli=True)
     args.add_arg('sensor_kit_rgb_fps', '30', cli=True)
     args.add_arg('sensor_kit_infra_fps', '60', cli=True)
     args.add_arg('sensor_kit_enable_accel', True, cli=True)
@@ -1017,6 +1019,8 @@ def generate_launch_description() -> lut.LaunchDescription:
                 'run_standalone': False,
                 'enable_depth': args.sensor_kit_enable_depth,
                 'enable_color': args.sensor_kit_enable_color,
+                'rgb_width': args.sensor_kit_rgb_width,
+                'rgb_height': args.sensor_kit_rgb_height,
                 'rgb_fps': args.sensor_kit_rgb_fps,
                 'infra_fps': args.sensor_kit_infra_fps,
                 'enable_accel': args.sensor_kit_enable_accel,
