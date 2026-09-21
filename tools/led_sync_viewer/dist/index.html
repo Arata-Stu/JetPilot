@@ -337,9 +337,18 @@
       state.meta = { session: data.meta?.session || '読み込みデータ', rgbFps: Number(data.meta?.rgbFps || data.meta?.rgb_fps || 60) };
       state.rgb = (data.rgb || []).map(p => ({ t: Number(p.t ?? p.time_s), v: Number(p.v ?? p.value ?? p.rgb) })).filter(p => Number.isFinite(p.t) && Number.isFinite(p.v)).sort((a,b) => a.t-b.t);
       state.evs = (data.evs || []).map(p => ({ t: Number(p.t ?? p.time_s), pos: Number(p.pos ?? p.positive_count ?? 0), neg: Number(p.neg ?? p.negative_count ?? 0) })).filter(p => Number.isFinite(p.t) && Number.isFinite(p.pos) && Number.isFinite(p.neg)).sort((a,b) => a.t-b.t);
-      const times = [...state.rgb.map(p => p.t), ...state.evs.map(p => p.t)];
-      state.fullStart = times.length ? Math.min(...times) : 0;
-      state.fullEnd = times.length ? Math.max(...times) : 1;
+      let fullStart = Infinity;
+      let fullEnd = -Infinity;
+      for (const point of state.rgb) {
+        if (point.t < fullStart) fullStart = point.t;
+        if (point.t > fullEnd) fullEnd = point.t;
+      }
+      for (const point of state.evs) {
+        if (point.t < fullStart) fullStart = point.t;
+        if (point.t > fullEnd) fullEnd = point.t;
+      }
+      state.fullStart = Number.isFinite(fullStart) ? fullStart : 0;
+      state.fullEnd = Number.isFinite(fullEnd) ? fullEnd : 1;
       state.viewStart = state.fullStart;
       state.viewEnd = state.fullEnd;
       $('sessionName').textContent = `${state.meta.session} — EVS ${state.evs.length.toLocaleString()} bin / RGB ${state.rgb.length.toLocaleString()} frame`;
@@ -492,8 +501,31 @@
       ctx.stroke();
       if (span < .8) visibleRgb.forEach(p => { ctx.beginPath(); ctx.arc(x(p.t), pad.t + topH*(1-clamp(p.v,0,1)), 2.6, 0, Math.PI*2); ctx.fill(); });
 
-      const visibleEvs = state.evs.filter(p => p.t >= state.viewStart && p.t <= state.viewEnd);
-      const maxEvents = Math.max(1, ...visibleEvs.map(p => Math.max(p.pos, p.neg)));
+      const rawVisibleEvs = state.evs.filter(p => p.t >= state.viewStart && p.t <= state.viewEnd);
+      const targetEvsPoints = Math.max(600, Math.floor(plotW * 2));
+      let visibleEvs = rawVisibleEvs;
+      if (rawVisibleEvs.length > targetEvsPoints) {
+        const groupSize = Math.ceil(rawVisibleEvs.length / targetEvsPoints);
+        visibleEvs = [];
+        for (let begin = 0; begin < rawVisibleEvs.length; begin += groupSize) {
+          const end = Math.min(begin + groupSize, rawVisibleEvs.length);
+          let pos = 0, neg = 0;
+          for (let index = begin; index < end; index += 1) {
+            if (rawVisibleEvs[index].pos > pos) pos = rawVisibleEvs[index].pos;
+            if (rawVisibleEvs[index].neg > neg) neg = rawVisibleEvs[index].neg;
+          }
+          visibleEvs.push({
+            t: (rawVisibleEvs[begin].t + rawVisibleEvs[end - 1].t) / 2,
+            pos,
+            neg
+          });
+        }
+      }
+      let maxEvents = 1;
+      for (const point of visibleEvs) {
+        if (point.pos > maxEvents) maxEvents = point.pos;
+        if (point.neg > maxEvents) maxEvents = point.neg;
+      }
       const drawSeries = (key, color) => {
         ctx.strokeStyle = color; ctx.lineWidth = 1.3; ctx.beginPath();
         visibleEvs.forEach((p,i) => { const xx=x(p.t), yy=bottomTop + bottomH * (1 - p[key]/maxEvents); i ? ctx.lineTo(xx,yy) : ctx.moveTo(xx,yy); }); ctx.stroke();
@@ -545,8 +577,8 @@
         const text = await file.text();
         const data = file.name.toLowerCase().endsWith('.json') ? JSON.parse(text) : parseCsv(text);
         if (data.meta) merged.meta = { ...merged.meta, ...data.meta };
-        if (data.rgb) merged.rgb.push(...data.rgb);
-        if (data.evs) merged.evs.push(...data.evs);
+        if (data.rgb) merged.rgb = merged.rgb.concat(data.rgb);
+        if (data.evs) merged.evs = merged.evs.concat(data.evs);
       }
       if (!merged.rgb.length || !merged.evs.length) throw new Error('RGBとEVSの両方の信号が必要です。');
       loadDataset(merged); toast('解析データを読み込みました。');
