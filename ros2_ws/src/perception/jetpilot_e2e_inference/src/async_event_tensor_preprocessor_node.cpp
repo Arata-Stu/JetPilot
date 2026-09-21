@@ -725,10 +725,12 @@ void AsyncEventTensorPreprocessorNode::apply_chunk(DecodedWork & work)
       // queues are drained; retaining that offset would bias every downstream
       // sensor-to-command latency in the run by a constant amount.
       const auto current_ros_ns = now().nanoseconds();
-      const auto estimated_sensor_now_us =
+      const std::int64_t estimated_sensor_now_us =
         current_ros_ns > sensor_to_ros_offset_ns_ ?
-        (current_ros_ns - sensor_to_ros_offset_ns_) / 1000LL : ready_end;
-      const auto target_us = std::max(ready_end, estimated_sensor_now_us);
+        (current_ros_ns - sensor_to_ros_offset_ns_) / std::int64_t{1000} :
+        static_cast<std::int64_t>(ready_end);
+      const auto target_us = std::max<std::int64_t>(
+        static_cast<std::int64_t>(ready_end), estimated_sensor_now_us);
       const auto target_offset_us = target_us - publish_schedule_origin_us_;
       const auto stride_steps = target_offset_us / stride_us_;
       next_window_target_us_ =
