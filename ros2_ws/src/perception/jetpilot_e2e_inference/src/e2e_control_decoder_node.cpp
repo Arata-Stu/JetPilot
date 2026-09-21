@@ -332,8 +332,10 @@ void E2EControlDecoderNode::publish_diagnostics(
     static_cast<std::int64_t>(message.get_timestamp_sec()) * 1000000000LL +
     static_cast<std::int64_t>(message.get_timestamp_nsec());
   const bool has_capture_stamp = stamp_ns > 0;
-  const double capture_to_command_ms = has_capture_stamp ?
-    std::max(0.0, static_cast<double>(current_time.nanoseconds() - stamp_ns) / 1.0e6) : 0.0;
+  const double capture_to_command_signed_ms = has_capture_stamp ?
+    static_cast<double>(current_time.nanoseconds() - stamp_ns) / 1.0e6 : 0.0;
+  const bool source_timestamp_future = has_capture_stamp && capture_to_command_signed_ms < 0.0;
+  const double capture_to_command_ms = std::max(0.0, capture_to_command_signed_ms);
   const double deadline_value_ms = has_capture_stamp ? capture_to_command_ms : callback_ms;
   const bool missed_deadline = deadline_value_ms > deadline_ms_;
   const bool stale_output =
@@ -342,18 +344,27 @@ void E2EControlDecoderNode::publish_diagnostics(
   diagnostic_msgs::msg::DiagnosticStatus status;
   status.name = "jetpilot_e2e_inference/pipeline";
   status.hardware_id = "jetpilot-e2e";
-  status.level = (missed_deadline || stale_output) ?
+  status.level = (missed_deadline || stale_output || source_timestamp_future) ?
     diagnostic_msgs::msg::DiagnosticStatus::WARN : diagnostic_msgs::msg::DiagnosticStatus::OK;
   if (missed_deadline) {
     status.message = "deadline missed";
   } else if (stale_output) {
     status.message = "stale output interval";
+  } else if (source_timestamp_future) {
+    status.message = "source timestamp is in the future";
   } else {
     status.message = "ok";
   }
   status.values = {
     diagnostic_value(
       "capture_to_command_ms", has_capture_stamp ? std::to_string(capture_to_command_ms) : ""),
+    diagnostic_value(
+      "capture_to_command_signed_ms",
+      has_capture_stamp ? std::to_string(capture_to_command_signed_ms) : ""),
+    diagnostic_value("source_timestamp_future", source_timestamp_future ? "1" : "0"),
+    diagnostic_value(
+      "source_timestamp_future_by_ms",
+      source_timestamp_future ? std::to_string(-capture_to_command_signed_ms) : "0.0"),
     diagnostic_value("decoder_callback_ms", std::to_string(callback_ms)),
     diagnostic_value(
       "output_interval_ms", has_output_interval ? std::to_string(output_interval_ms) : ""),

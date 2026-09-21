@@ -159,6 +159,7 @@ def parse_bag(label: str, bag: Path, deadline_ms: float) -> dict[str, Any]:
     capture = numeric[E2E_TOPIC].get("capture_to_command_ms", [])
     output_interval = numeric[E2E_TOPIC].get("output_interval_ms", [])
     recorded_misses = numeric[E2E_TOPIC].get("missed_deadline", [])
+    future_timestamps = numeric[E2E_TOPIC].get("source_timestamp_future", [])
     recomputed_misses = sum(value > deadline_ms for value in capture)
 
     event_counters = {
@@ -202,6 +203,7 @@ def parse_bag(label: str, bag: Path, deadline_ms: float) -> dict[str, Any]:
             recomputed_misses / len(capture) if capture else None
         ),
         "deadline_miss_count_recorded": int(round(sum(recorded_misses))),
+        "source_timestamp_future_count": int(round(sum(future_timestamps))),
         "stale_output_count": int(round(sum(numeric[E2E_TOPIC].get("stale_output", [])))),
         "event_counters": event_counters,
         "diagnostic_numeric": all_numeric,
@@ -235,6 +237,7 @@ def compact_row(result: dict[str, Any]) -> dict[str, Any]:
         "deadline_ms": result["evaluated_deadline_ms"],
         "deadline_misses": misses,
         "deadline_miss_pct": 100.0 * misses / samples if samples else None,
+        "source_timestamp_future_count": result.get("source_timestamp_future_count", 0),
         "output_interval_p99_ms": interval["p99"],
         "output_interval_max_ms": interval["max"],
         "decoder_p99_ms": decoder["p99"],

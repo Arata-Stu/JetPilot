@@ -753,6 +753,7 @@ void AsyncEventTensorPreprocessorNode::publish_snapshot(
     return;
   }
   const auto started = std::chrono::steady_clock::now();
+  const auto started_ros_ns = now().nanoseconds();
   const auto lateness_ns = started > scheduled_at ? static_cast<std::uint64_t>(
     std::chrono::duration_cast<std::chrono::nanoseconds>(started - scheduled_at).count()) : 0U;
   snapshot_lateness_ns_.fetch_add(lateness_ns, std::memory_order_relaxed);
@@ -769,15 +770,27 @@ void AsyncEventTensorPreprocessorNode::publish_snapshot(
       cuda_backend_->snapshot(
         reinterpret_cast<float *>(write_handle.get_ptr()), window_end_us, *cuda_stream_);
     }
-    auto timestamp_ns = ros_timestamp_ns(window_end_us);
+    // Timestamp the tensor with the freshest event actually represented in it.
+    // The logical fixed-rate window end can be ahead of the newest received
+    // event, and the packet-derived sensor/ROS offset can move slightly between
+    // packets.  Using that future window end as the header would create negative
+    // sensor-to-command latency that later gets clamped to zero.  Capping the
+    // source stamp at the scheduled publication time preserves causality while
+    // making the downstream metric an age-of-information measurement.
+    const auto scheduled_ros_ns = started_ros_ns >= static_cast<std::int64_t>(lateness_ns) ?
+      started_ros_ns - static_cast<std::int64_t>(lateness_ns) : started_ros_ns;
+    const auto latest_event_ros_ns =
+      last_applied_event_ros_ns_.load(std::memory_order_relaxed);
+    auto timestamp_ns = latest_event_ros_ns > 0 ?
+      std::min(scheduled_ros_ns, latest_event_ros_ns) : scheduled_ros_ns;
     timestamp_ns = std::max(timestamp_ns, last_header_timestamp_ns_ + std::int64_t{1});
     std_msgs::msg::Header header;
     header.stamp.sec = static_cast<std::int32_t>(timestamp_ns / 1000000000LL);
     header.stamp.nanosec = static_cast<std::uint32_t>(timestamp_ns % 1000000000LL);
     header.frame_id = frame_id_;
     const auto snapshot_ros_ns = now().nanoseconds();
-    const auto window_end_age_ns = snapshot_ros_ns >= timestamp_ns ?
-      static_cast<std::uint64_t>(snapshot_ros_ns - timestamp_ns) : 0U;
+    const auto window_end_age_ns = snapshot_ros_ns >= scheduled_ros_ns ?
+      static_cast<std::uint64_t>(snapshot_ros_ns - scheduled_ros_ns) : 0U;
     window_end_age_ns_.store(window_end_age_ns, std::memory_order_relaxed);
     update_max(window_end_age_max_ns_, window_end_age_ns);
     auto message = nvidia::isaac_ros::nitros::NitrosTensorListBuilder()
@@ -1274,6 +1287,7 @@ void AsyncEventTensorPreprocessorNode::publish_diagnostics()
     number("representation_stride_ms", stride_us_ / 1000.0),
     number("target_output_hz", 1.0e6 / output_period_us_),
     value("snapshot_schedule", "nearest_representation_stride"),
+    value("tensor_header_timestamp_source", "freshest_event_capped_at_schedule"),
     number("gpu_chunk_events", gpu_chunk_events_),
     number("tensor_bytes", tensor_bytes_),
     value("polarity_mode", polarity_mode_),

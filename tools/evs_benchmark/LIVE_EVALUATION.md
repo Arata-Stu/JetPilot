@@ -179,9 +179,9 @@ bash /workspaces/scripts/bringup.sh evs-legacy-cuda-tensorrt-benchmark \
 benchmark presetではper-frame latency breakdownも有効にし、同じtensor timestampを
 TensorRT入力と出力で照合します。`/e2e/diagnostics`には次の値が追加されます。
 
-- `sensor_to_tensor_input_ms`: event window終端からTensorRT入力受信まで
+- `sensor_to_tensor_input_ms`: tensor内の最新event取得時刻からTensorRT入力受信まで
 - `tensor_input_to_output_ms`: TensorRT入力受信から出力受信まで
-- `sensor_to_tensor_output_ms`: event window終端からTensorRT出力受信まで
+- `sensor_to_tensor_output_ms`: tensor内の最新event取得時刻からTensorRT出力受信まで
 - `tensor_output_to_command_ms`: TensorRT出力受信からcommand生成まで
 - `tensor_input_matched`: 入出力timestampを照合できたか
 
