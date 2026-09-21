@@ -720,8 +720,25 @@ void AsyncEventTensorPreprocessorNode::apply_chunk(DecodedWork & work)
     const auto ready_end = cuda_backend_->latest_window_end_us();
     if (ready_end > 0) {
       publish_schedule_origin_us_ = ready_end;
-      next_window_target_us_ = ready_end;
-      next_window_end_us_ = ready_end;
+      // Anchor the fixed-rate schedule to sensor "now", not to the first GPU
+      // chunk.  The first chunk may be several milliseconds old while startup
+      // queues are drained; retaining that offset would bias every downstream
+      // sensor-to-command latency in the run by a constant amount.
+      const auto current_ros_ns = now().nanoseconds();
+      const auto estimated_sensor_now_us =
+        current_ros_ns > sensor_to_ros_offset_ns_ ?
+        (current_ros_ns - sensor_to_ros_offset_ns_) / 1000LL : ready_end;
+      const auto target_us = std::max(ready_end, estimated_sensor_now_us);
+      const auto target_offset_us = target_us - publish_schedule_origin_us_;
+      const auto stride_steps = target_offset_us / stride_us_;
+      next_window_target_us_ =
+        publish_schedule_origin_us_ + stride_steps * stride_us_;
+      next_window_end_us_ = next_window_target_us_;
+      const auto initial_lag_us = std::max<std::int64_t>(
+        0, estimated_sensor_now_us - next_window_end_us_);
+      schedule_initial_lag_ns_.store(
+        static_cast<std::uint64_t>(initial_lag_us) * 1000U,
+        std::memory_order_relaxed);
       next_snapshot_at_ = finished_at;
     }
   }
@@ -756,6 +773,11 @@ void AsyncEventTensorPreprocessorNode::publish_snapshot(
     header.stamp.sec = static_cast<std::int32_t>(timestamp_ns / 1000000000LL);
     header.stamp.nanosec = static_cast<std::uint32_t>(timestamp_ns % 1000000000LL);
     header.frame_id = frame_id_;
+    const auto snapshot_ros_ns = now().nanoseconds();
+    const auto window_end_age_ns = snapshot_ros_ns >= timestamp_ns ?
+      static_cast<std::uint64_t>(snapshot_ros_ns - timestamp_ns) : 0U;
+    window_end_age_ns_.store(window_end_age_ns, std::memory_order_relaxed);
+    update_max(window_end_age_max_ns_, window_end_age_ns);
     auto message = nvidia::isaac_ros::nitros::NitrosTensorListBuilder()
       .WithHeader(header).AddTensor(tensor).Build();
     tensor_publisher_->publish(message);
@@ -1032,6 +1054,8 @@ void AsyncEventTensorPreprocessorNode::publish_diagnostics()
     input_sequence_reorders_.exchange(0, std::memory_order_relaxed);
   const auto decoded_depth_max = decoded_queue_depth_max_.exchange(0, std::memory_order_relaxed);
   const auto state_age_max = state_age_max_ns_.exchange(0, std::memory_order_relaxed);
+  const auto window_end_age_max =
+    window_end_age_max_ns_.exchange(0, std::memory_order_relaxed);
   const auto packet_arrival_ns = last_packet_arrival_steady_ns_.load(std::memory_order_relaxed);
   const auto packet_age_ms = packet_arrival_ns > 0 ?
     milliseconds(static_cast<std::uint64_t>(steady_nanoseconds(now_steady) - packet_arrival_ns)) :
@@ -1225,6 +1249,12 @@ void AsyncEventTensorPreprocessorNode::publish_diagnostics()
     number("events_per_snapshot_max", events_snapshot_max),
     number("event_state_age_ms", milliseconds(state_age_ns_.load(std::memory_order_relaxed))),
     number("event_state_age_ms_max", milliseconds(state_age_max)),
+    number(
+      "window_end_age_ms", milliseconds(window_end_age_ns_.load(std::memory_order_relaxed))),
+    number("window_end_age_ms_max", milliseconds(window_end_age_max)),
+    number(
+      "schedule_initial_lag_ms",
+      milliseconds(schedule_initial_lag_ns_.load(std::memory_order_relaxed))),
     number("memory_pool_exhaustions", pool_exhaustions),
     number("publish_errors", publish_errors),
     number("out_of_bounds_events", out_of_bounds),

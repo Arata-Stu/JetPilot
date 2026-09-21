@@ -257,6 +257,9 @@ private:
   std::atomic<std::uint64_t> coordinate_lut_rebuilds_{0};
   std::atomic<std::uint64_t> state_age_ns_{0};
   std::atomic<std::uint64_t> state_age_max_ns_{0};
+  std::atomic<std::uint64_t> window_end_age_ns_{0};
+  std::atomic<std::uint64_t> window_end_age_max_ns_{0};
+  std::atomic<std::uint64_t> schedule_initial_lag_ns_{0};
 };
 
 }  // namespace jetpilot_e2e_inference
