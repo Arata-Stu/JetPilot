@@ -618,6 +618,7 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('e2e_image_topic', '/realsense/color/image_raw', cli=True)
     args.add_arg('e2e_camera_info_topic', '/realsense/color/camera_info', cli=True)
     args.add_arg('e2e_control_cmd_topic', '/auto/control_cmd', cli=True)
+    args.add_arg('e2e_decoder_deadline_ms', '33.3', cli=True)
     args.add_arg('e2e_model_root', '', cli=True)
     args.add_arg('e2e_input_image_width', '424', cli=True)
     args.add_arg('e2e_input_image_height', '240', cli=True)
@@ -1089,6 +1090,7 @@ def generate_launch_description() -> lut.LaunchDescription:
                 'image_topic': args.e2e_image_topic,
                 'camera_info_topic': args.e2e_camera_info_topic,
                 'control_cmd_topic': args.e2e_control_cmd_topic,
+                'decoder_deadline_ms': args.e2e_decoder_deadline_ms,
                 'fixed_throttle_mode': args.e2e_fixed_throttle_mode,
                 'fixed_throttle': args.fixed_throttle,
                 'event_image_mode': args.e2e_event_image_mode,
@@ -1203,6 +1205,7 @@ def generate_launch_description() -> lut.LaunchDescription:
                 'event_diagnostics_topic': args.e2e_event_tensor_diagnostics_topic,
                 'state_diagnostics_topic': args.e2e_async_state_diagnostics_topic,
                 'control_cmd_topic': args.e2e_control_cmd_topic,
+                'decoder_deadline_ms': args.e2e_decoder_deadline_ms,
                 'use_sim_time': args.use_sim_time,
             },
             condition=IfCondition(lut.AndSubstitution(

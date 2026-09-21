@@ -251,6 +251,8 @@ def generate_launch_description():
             PathJoinSubstitution([pkg_share, "config", "e2e_inference.param.yaml"]),
             {
                 "output_tensor_name": LaunchConfiguration("control_tensor_name"),
+                "deadline_ms": ParameterValue(
+                    LaunchConfiguration("decoder_deadline_ms"), value_type=float),
                 "use_sim_time": ParameterValue(
                     LaunchConfiguration("use_sim_time"), value_type=bool),
             },
@@ -362,6 +364,7 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "state_diagnostics_topic", default_value="/e2e/latent_state/diagnostics"),
         DeclareLaunchArgument("control_cmd_topic", default_value="/auto/control_cmd"),
+        DeclareLaunchArgument("decoder_deadline_ms", default_value="33.3"),
     ]
 
     container = ComposableNodeContainer(

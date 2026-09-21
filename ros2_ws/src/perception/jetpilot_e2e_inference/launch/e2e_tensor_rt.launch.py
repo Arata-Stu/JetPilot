@@ -238,6 +238,8 @@ def generate_launch_description():
             {
                 "fixed_throttle_mode": ParameterValue(LaunchConfiguration("fixed_throttle_mode"), value_type=bool),
                 "fixed_throttle": ParameterValue(LaunchConfiguration("fixed_throttle"), value_type=float),
+                "deadline_ms": ParameterValue(
+                    LaunchConfiguration("decoder_deadline_ms"), value_type=float),
                 "use_sim_time": ParameterValue(
                     LaunchConfiguration("use_sim_time"), value_type=bool
                 ),
@@ -340,6 +342,7 @@ def generate_launch_description():
                 "camera_info_topic", default_value="/realsense/color/camera_info"
             ),
             DeclareLaunchArgument("control_cmd_topic", default_value="/auto/control_cmd"),
+            DeclareLaunchArgument("decoder_deadline_ms", default_value="33.3"),
             DeclareLaunchArgument("trajectory_topic", default_value="/planning/trajectory"),
             DeclareLaunchArgument("target_speed_topic", default_value="/planning/target_speed"),
             DeclareLaunchArgument("planning_ready_topic", default_value="/planning/ready"),

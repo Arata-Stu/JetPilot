@@ -173,7 +173,8 @@ bash /workspaces/scripts/bringup.sh evs-legacy-cuda-tensorrt-benchmark \
 
 3つともevent camera以外のセンサ、アクチュエータ、event image、native RAW、event payload保存を
 無効にします。同時起動せず、同じ視覚刺激で1条件ずつ測定します。主要production候補は
-`evs-tensorrt-benchmark`のasync CUDAです。
+`evs-tensorrt-benchmark`のasync CUDAです。3 presetはTensorRT decoderのdeadlineも4 msへ
+設定し、`/e2e/diagnostics`の`missed_deadline`が250 Hz条件を判定するようにします。
 
 同じコースをmanual固定スロットルで走りながらshadow推論する場合だけ、vehicleを明示します。
 

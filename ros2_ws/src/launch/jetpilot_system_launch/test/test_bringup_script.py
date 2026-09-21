@@ -678,6 +678,7 @@ def test_rgb_evs_e2e_benchmark_uses_async_cuda_and_diagnostics_only() -> None:
     assert "e2e_event_representation_backend:=cuda" in output
     assert "e2e_async_event_output_rate_hz:=250.0" in output
     assert "e2e_event_async_deadline_ms:=4.0" in output
+    assert "e2e_decoder_deadline_ms:=4.0" in output
     assert "sensor_kit_silky_evcam_event_image_enabled:=false" in output
     assert "sensor_kit_silky_evcam_raw_recording_enabled:=false" in output
     assert str(benchmark_config_path) in output
@@ -761,6 +762,7 @@ def test_evs_tensorrt_comparison_presets_are_safe_and_select_expected_backend() 
         assert "e2e_async_rgb_evs_mode:=false" in output
         assert f"e2e_event_preprocessor_mode:={preprocessor}" in output
         assert f"e2e_event_representation_backend:={backend}" in output
+        assert "e2e_decoder_deadline_ms:=4.0" in output
         assert "sensor_kit_silky_evcam_event_image_enabled:=false" in output
         assert "sensor_kit_silky_evcam_raw_recording_enabled:=false" in output
         assert "bag_manager.evs_tensorrt_benchmark.param.yaml" in output
