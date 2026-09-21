@@ -143,6 +143,28 @@ rs-enumerate-devices -c > /workspaces/record/realsense-device-info.txt
 実際に要求するRGB解像度とHzが表示されます。車両を動かす収録だけは
 `scripts/bringup.sh rc-popout --vehicle jpbb`を使用します。
 
+連続実験では、Terminal 1で上記bringupを起動したまま、Terminal 2で進行用スクリプトを実行します。
+
+```bash
+scripts/rc_popout_experiment.sh
+```
+
+このスクリプト自身はセンサを起動しません。最初にチェッカーボード校正を記録するか尋ねた後、事前登録した
+壁－カメラ距離、壁－段ボール距離、段ボール間の開口幅、照明、飛び出し方向、スロットル指令値、
+反復番号を順番に案内します。既定値はカメラ200 cm、段ボール100 cm、開口幅150/120/90 cm、
+照明固定、左右、スロットル20/40/60%、各3反復です。各試行は
+配置確認後のEnterでBag ManagerとEVS RAWの同時記録を開始し、LED同期パターン、RCカー飛び出し、
+終了側LEDの撮影後のEnterで停止します。session labelにはrun IDと各条件が自動的に入ります。
+採用済み試行は保存されるため、中断後も未完了条件から再開できます。
+
+```bash
+# 進捗だけ確認
+scripts/rc_popout_experiment.sh --status
+
+# 条件表を新しく作り直す
+scripts/rc_popout_experiment.sh --new
+```
+
 ```bash
 scripts/bringup.sh rgb-evs-benchmark
 ```
