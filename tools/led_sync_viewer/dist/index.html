@@ -61,7 +61,7 @@
       outline-offset: 2px;
     }
     input[type="file"] { position: absolute; inline-size: 1px; block-size: 1px; opacity: 0; }
-    input[type="number"], select {
+    input[type="number"], input[type="text"], select {
       min-height: 40px;
       border: 1px solid var(--line-strong);
       border-radius: 8px;
@@ -266,6 +266,9 @@
         <section class="panel">
           <div class="panel-header"><h2 class="panel-title">データ仕様</h2></div>
           <div class="form">
+            <label for="dockerDataPath">Docker内JSON</label>
+            <input id="dockerDataPath" type="text" style="width:100%;margin-top:6px" placeholder="/workspaces/record/.../led_sync_data.json">
+            <div class="stack"><button class="primary" id="loadDockerData" type="button">Dockerから読み込む</button></div>
             <p class="helper" style="margin-top:0">JSONは <code>rgb[{t,v}]</code> と <code>evs[{t,pos,neg}]</code> を読み込みます。時刻は秒です。CSVは <code>t,rgb</code> または <code>t,pos,neg</code> に対応します。</p>
             <div class="stack"><button id="sampleButton" type="button">サンプルJSONを保存</button></div>
           </div>
@@ -549,6 +552,15 @@
       loadDataset(merged); toast('解析データを読み込みました。');
     }
 
+    async function openDockerData(path) {
+      const response = await fetch(`/api/data?path=${encodeURIComponent(path)}`, { cache: 'no-store' });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || `読み込みに失敗しました (${response.status})`);
+      if (!Array.isArray(data.rgb) || !Array.isArray(data.evs)) throw new Error('RGBまたはEVS信号がありません。');
+      loadDataset(data);
+      toast('Docker内の解析データを読み込みました。');
+    }
+
     function download(name, value) {
       const url = URL.createObjectURL(new Blob([value], { type: 'application/json' }));
       const a = document.createElement('a'); a.href = url; a.download = name; a.click();
@@ -611,6 +623,11 @@
     $('exportButton').addEventListener('click', exportResult);
     $('sampleButton').addEventListener('click', () => download('led_sync_sample.json', JSON.stringify(demoData(), null, 2)));
     $('dataFiles').addEventListener('change', event => openData(event.target.files).catch(error => toast(error.message)));
+    $('loadDockerData').addEventListener('click', () => {
+      const path = $('dockerDataPath').value.trim();
+      if (!path) { toast('Docker内のJSONパスを入力してください。'); return; }
+      openDockerData(path).catch(error => toast(error.message));
+    });
     $('resetView').addEventListener('click', () => { state.viewStart=state.fullStart; state.viewEnd=state.fullEnd; $('zoomRange').value=0; draw(); });
     $('startView').addEventListener('click', () => setView(state.evsEdges[0]?.t ?? state.fullStart, .35));
     $('endView').addEventListener('click', () => setView(state.evsEdges.at(-1)?.t ?? state.fullEnd, .35));
@@ -649,6 +666,11 @@
     window.addEventListener('resize', draw);
 
     loadDataset(demoData());
+    const requestedData = new URLSearchParams(location.search).get('data');
+    if (requestedData) {
+      $('dockerDataPath').value = requestedData;
+      openDockerData(requestedData).catch(error => toast(error.message));
+    }
   </script>
 </body>
 </html>
