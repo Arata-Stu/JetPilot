@@ -1,8 +1,54 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+usage() {
+  cat <<EOF
+Usage:
+  $0 [LAPS=3] [REPEATS=3] [LABEL_PREFIX=course] [NORMAL_THROTTLE LOW_THROTTLE HIGH_THROTTLE]
+  $0 --condition normal|low|high --throttle VALUE [LAPS=3] [REPEATS=3] [LABEL_PREFIX=course]
+EOF
+}
+
+selected_condition=""
+selected_throttle=""
+positionals=()
+while (($# > 0)); do
+  case "$1" in
+    --condition)
+      (($# >= 2)) || { echo "--condition requires a value" >&2; exit 2; }
+      [[ -z "$selected_condition" ]] || { echo "--condition may be specified only once" >&2; exit 2; }
+      selected_condition="$2"
+      shift 2
+      ;;
+    --throttle)
+      (($# >= 2)) || { echo "--throttle requires a value" >&2; exit 2; }
+      [[ -z "$selected_throttle" ]] || { echo "--throttle may be specified only once" >&2; exit 2; }
+      selected_throttle="$2"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      while (($# > 0)); do positionals+=("$1"); shift; done
+      ;;
+    -*)
+      echo "Unknown option: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+    *)
+      positionals+=("$1")
+      shift
+      ;;
+  esac
+done
+set -- "${positionals[@]}"
+
 if (($# > 6)); then
-  echo "Usage: $0 [LAPS=3] [REPEATS=3] [LABEL_PREFIX=course] [NORMAL_THROTTLE LOW_THROTTLE HIGH_THROTTLE]" >&2
+  usage >&2
   exit 2
 fi
 
@@ -27,14 +73,32 @@ high_throttle="${6:-}"
 }
 
 throttle_count=0
-[[ -z "$normal_throttle" ]] || throttle_count=$((throttle_count + 1))
-[[ -z "$low_throttle" ]] || throttle_count=$((throttle_count + 1))
-[[ -z "$high_throttle" ]] || throttle_count=$((throttle_count + 1))
-if ((throttle_count != 0 && throttle_count != 3)); then
-  echo "Specify all three throttle values, or omit all three" >&2
-  exit 2
+if [[ -n "$selected_condition" || -n "$selected_throttle" ]]; then
+  case "$selected_condition" in
+    normal|low|high) ;;
+    *) echo "--condition must be normal, low, or high" >&2; exit 2 ;;
+  esac
+  [[ -n "$selected_throttle" ]] || {
+    echo "--throttle is required with --condition" >&2
+    exit 2
+  }
+  [[ -z "$normal_throttle" && -z "$low_throttle" && -z "$high_throttle" ]] || {
+    echo "Do not combine --condition/--throttle with positional throttle values" >&2
+    exit 2
+  }
+  throttle_count=1
+  conditions=("$selected_condition")
+else
+  [[ -z "$normal_throttle" ]] || throttle_count=$((throttle_count + 1))
+  [[ -z "$low_throttle" ]] || throttle_count=$((throttle_count + 1))
+  [[ -z "$high_throttle" ]] || throttle_count=$((throttle_count + 1))
+  if ((throttle_count != 0 && throttle_count != 3)); then
+    echo "Specify all three throttle values, or omit all three" >&2
+    exit 2
+  fi
+  conditions=(normal low high)
 fi
-for throttle in "$normal_throttle" "$low_throttle" "$high_throttle"; do
+for throttle in "$normal_throttle" "$low_throttle" "$high_throttle" "$selected_throttle"; do
   [[ -z "$throttle" || "$throttle" =~ ^(0([.][0-9]+)?|1([.]0+)?)$ ]] || {
     echo "Throttle values must be decimal numbers within [0, 1]" >&2
     exit 2
@@ -51,14 +115,13 @@ record_root="${EVS_RECORD_ROOT:-/workspaces/record}"
   exit 1
 }
 
-conditions=(normal low high)
 total_runs=$((${#conditions[@]} * repeats))
 protocol_timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 protocol_csv="${record_root}/${protocol_timestamp}_${label_prefix}_lap_protocol.csv"
 printf '%s\n' \
   'run_index,condition,repetition,laps,fixed_throttle,label,start_utc,end_utc,duration_s' > "$protocol_csv"
 
-if ((throttle_count == 3)); then
+if ((throttle_count > 0)); then
   fixed_mode="$(ros2 param get /teleop_cmd_node fixed_throttle_mode 2>/dev/null)" || {
     echo "Cannot read /teleop_cmd_node; launch the fixed-throttle drive stack first" >&2
     exit 1
@@ -98,6 +161,8 @@ echo "Each session: ${laps} laps"
 echo "Protocol log: ${protocol_csv}"
 if ((throttle_count == 3)); then
   echo "Fixed throttle: normal=${normal_throttle}, low=${low_throttle}, high=${high_throttle}"
+elif ((throttle_count == 1)); then
+  echo "Fixed throttle: ${selected_condition}=${selected_throttle}"
 fi
 
 run_index=0
@@ -108,11 +173,15 @@ for ((repetition = 1; repetition <= repeats; ++repetition)); do
     condition_index=$(((repetition - 1 + condition_offset) % ${#conditions[@]}))
     condition="${conditions[$condition_index]}"
     fixed_throttle=""
-    case "$condition" in
-      normal) fixed_throttle="$normal_throttle" ;;
-      low) fixed_throttle="$low_throttle" ;;
-      high) fixed_throttle="$high_throttle" ;;
-    esac
+    if [[ -n "$selected_condition" ]]; then
+      fixed_throttle="$selected_throttle"
+    else
+      case "$condition" in
+        normal) fixed_throttle="$normal_throttle" ;;
+        low) fixed_throttle="$low_throttle" ;;
+        high) fixed_throttle="$high_throttle" ;;
+      esac
+    fi
     run_index=$((run_index + 1))
     repetition_label="$(printf '%02d' "$repetition")"
     active_label="${label_prefix}_${condition}_${laps}lap_${repetition_label}"

@@ -188,6 +188,20 @@ bash /workspaces/scripts/bringup.sh evs-cpu-tensorrt-benchmark \
 推論出力、手動指令、適用指令、operation mode、各diagnosticsだけを専用MCAPへ保存します。
 他の2 backendもpreset名だけを置き換えて同じ条件で実行します。
 
+オンライン比較を通常速度だけで行う場合は、単一条件モードを使います。
+
+```bash
+# pilot: 通常速度、3周を1回
+./scripts/record_lap_protocol.sh \
+  --condition normal --throttle 0.3 \
+  3 1 online_cpu_trt
+
+# 本評価: 通常速度、3周を3回
+./scripts/record_lap_protocol.sh \
+  --condition normal --throttle 0.3 \
+  3 3 online_cpu_trt
+```
+
 起動表示で次を確認します。
 
 - `vehicle: none`
