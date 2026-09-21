@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import ast
-import csv
 import hashlib
 import json
 import os
@@ -652,55 +651,6 @@ def test_rc_popout_uses_rgb_848x480_60_and_default_evs_bias() -> None:
     assert "sensor_kit_silky_evcam_event_image_enabled:=false" in output
     assert "sensor_kit_silky_evcam_raw_recording_enabled:=true" in output
     assert "sensor_kit_silky_evcam_bias_file:=" not in output
-
-
-def test_rc_popout_plan_is_balanced_resumable_and_dry_runnable(tmp_path: Path) -> None:
-    helper = PROJECT_ROOT / "scripts/rc_popout_plan.py"
-    runner = PROJECT_ROOT / "scripts/rc_popout_experiment.sh"
-    plan = tmp_path / "plan.tsv"
-    subprocess.run(
-        [
-            "python3", str(helper), "init", "--plan", str(plan),
-            "--speeds", "slow,fast", "--directions", "left,right",
-            "--obstacle-positions", "near,far", "--camera-positions", "center",
-            "--repetitions", "2", "--seed", "42",
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    with plan.open(newline="", encoding="utf-8") as stream:
-        rows = list(csv.DictReader(stream, delimiter="\t"))
-    assert len(rows) == 16
-    assert {row["direction"] for row in rows} == {"left", "right"}
-    assert {row["obstacle_position"] for row in rows} == {"near", "far"}
-    assert all(row["status"] == "pending" for row in rows)
-
-    subprocess.run(
-        [
-            "python3", str(helper), "update", "--plan", str(plan),
-            "--run-id", "r001", "--status", "completed",
-        ],
-        check=True,
-    )
-    next_run = json.loads(subprocess.run(
-        ["python3", str(helper), "next", "--plan", str(plan)],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout)
-    assert next_run["run_id"] == "r002"
-
-    env = dict(os.environ, RC_POPOUT_PLAN_DIR=str(tmp_path))
-    output = subprocess.run(
-        ["bash", str(runner), "--dry-run"],
-        check=True,
-        capture_output=True,
-        text=True,
-        env=env,
-    ).stdout
-    assert "次の試行: r002" in output
-    assert "センサ起動と記録は行いません" in output
 
 
 def test_rgb_evs_e2e_benchmark_uses_async_cuda_and_diagnostics_only() -> None:

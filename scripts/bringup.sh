@@ -2119,6 +2119,27 @@ configure_silky_evcam_fps_interactively() {
   set_arg sensor_kit_silky_evcam_event_image_stride_ms "$stride"
 }
 
+configure_rc_popout_event_image_interactively() {
+  [[ "$PRESET" == 'rc-popout' ]] || return 0
+  [[ -t 0 && -t 1 ]] || return 0
+
+  local override selection
+  if ((${#EXTRA_LAUNCH_ARGS[@]} > 0)); then
+    for override in "${EXTRA_LAUNCH_ARGS[@]}"; do
+      [[ "$override" == sensor_kit_silky_evcam_event_image_enabled:=* ]] && return 0
+    done
+  fi
+
+  selection="$(choose_one '配置確認用のEVS event imageを使用しますか？' \
+    'off  使用しない（計測時の推奨）' \
+    'on   使用する（/event_camera/event_imageをpublish）')" || exit $?
+  case "${selection%%[[:space:]]*}" in
+    off) set_arg sensor_kit_silky_evcam_event_image_enabled false ;;
+    on) set_arg sensor_kit_silky_evcam_event_image_enabled true ;;
+    *) die "unknown EVS event image selection: $selection" ;;
+  esac
+}
+
 configure_sensor_kit_interactively() {
   local selection
   local profile_id
@@ -3009,6 +3030,7 @@ if ((${#EXTRA_LAUNCH_ARGS[@]} > 0)); then
     parse_override "$override"
   done
 fi
+configure_rc_popout_event_image_interactively
 configure_e2e_model
 if [[ "$INTERACTIVE" == 'true' ]]; then
   configure_recording_interactively

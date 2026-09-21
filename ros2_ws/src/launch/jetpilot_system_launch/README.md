@@ -129,8 +129,9 @@ scripts/bringup.sh rc-popout
 ```
 
 このpresetはD455のRGBのみを848×480・60 Hzで起動し、Infra、Depth、Accel、Gyroを停止します。
-SilkyEvCamはbias fileを渡さず、カメラ／OpenEBのデフォルトbiasで起動します。EVS event imageは
-生成せずnative RAWを記録し、RGBとdiagnosticsは軽量MCAPへ保存します。実験条件を再現できるよう、
+SilkyEvCamはbias fileを渡さず、カメラ／OpenEBのデフォルトbiasで起動します。端末から実行すると
+EVS event imageを使用するか確認され、`off`（計測時の推奨）または`on`（配置確認用）を選べます。
+native RAWを記録し、RGBとdiagnosticsは軽量MCAPへ保存します。実験条件を再現できるよう、
 各収録日の開始時にD455の機種名、serial、firmware、USB種別、対応streamを保存してください。
 
 ```bash
@@ -140,42 +141,6 @@ rs-enumerate-devices -c > /workspaces/record/realsense-device-info.txt
 同じ日の設定を上書きしたくない場合は、日付やsession名をファイル名に付けます。起動時のsummaryにも
 実際に要求するRGB解像度とHzが表示されます。車両を動かす収録だけは
 `scripts/bringup.sh rc-popout --vehicle jpbb`を使用します。
-
-複数条件を順番に収録する本実験では、対話型experiment runnerを使用します。
-
-```bash
-scripts/rc_popout_experiment.sh
-```
-
-初回に飛び出し速度、左右方向、障害物位置、カメラ位置、反復回数を入力すると、`plan.tsv`と
-`experiment_metadata.json`を作成します。カメラ位置・障害物位置を外側のblockにして配置変更を減らし、
-同じblock内の速度・方向・反復順をseed付きでランダム化します。各試行では次の条件が画面に表示され、
-EnterでRGB MCAPとEVS native RAWの同時記録を開始・停止できます。成功、やり直し、除外を選択でき、
-中断して同じコマンドを再実行すると未完了条件から再開します。保存先の既定値は
-`/workspaces/record/rc_popout_experiment`です。
-
-runnerの起動直後には、配置確認用としてSilkyEvCamの`/event_camera/event_image`を一時的に
-publishするか確認されます。有効にした場合はカメラと障害物の配置決定後にEnterを押すと、このbringupを
-停止して本番用に再起動します。本番ではevent image publisherを無効化してから記録するため、可視化処理の
-負荷は測定へ入りません。配置確認中はまだBag/RAW記録を開始しません。
-
-```bash
-# 次の条件と進捗だけを確認（センサは起動しない）
-scripts/rc_popout_experiment.sh --dry-run
-
-# 進捗集計
-scripts/rc_popout_experiment.sh --status
-
-# 新しい計画を作る（既存planはtimestamp付きで退避）
-scripts/rc_popout_experiment.sh --new-plan
-
-# 自車を動かす条件
-scripts/rc_popout_experiment.sh --vehicle jpbb
-```
-
-runner起動時には`rs-enumerate-devices`が利用可能なら、同じ実験directoryへtimestamp付きの
-`realsense-device-info-*.txt`も自動保存します。速度には`slow`のようなラベルも使えますが、最終評価では
-実測m/sまたは再現可能な固定スロットル値を使い、単位を含む対応表を実験ノートに残してください。
 
 ```bash
 scripts/bringup.sh rgb-evs-benchmark
