@@ -1,5 +1,8 @@
 # Jetson Live RGB-EVS 250 Hz評価手順
 
+取得済みデータの確定結果、指標の解釈および論文での使用範囲は
+[`EVALUATION_RESULTS.md`](EVALUATION_RESULTS.md)を参照してください。
+
 この手順は、センサ保存性能とオンライン推論性能を別runで測ります。RAW保存I/Oを
 250 Hz latencyへ混ぜないことが目的です。
 

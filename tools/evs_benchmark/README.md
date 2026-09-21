@@ -2,6 +2,7 @@
 
 センサ間の共通比較方針は[../SENSOR_BENCHMARKS.md](../SENSOR_BENCHMARKS.md)を参照してください。
 Jetson上のライブ250 Hz CUDA＋TensorRT評価は[ LIVE_EVALUATION.md ](LIVE_EVALUATION.md)を参照してください。
+取得済みデータの確定結果と解釈は[ EVALUATION_RESULTS.md ](EVALUATION_RESULTS.md)にまとめています。
 
 学習前のTensorRT node込み評価には、benchmark専用20ch dummy ONNXを生成できます。
 
