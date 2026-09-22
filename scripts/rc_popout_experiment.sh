@@ -2,6 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/lib/project_env.sh"
 ROS2_WS="${ROS2_WS:-/workspaces/ros2_ws}"
 ROS2_SETUP_FILE="${ROS2_SETUP_FILE:-${ROS2_WS}/install/setup.bash}"
 RECORD_ROOT="${RECORD_ROOT:-/workspaces/record}"

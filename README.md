@@ -1,5 +1,17 @@
 # JetPilot
 
+## 開発・保守
+
+使い方と管理方針は [開発・保守コマンド](docs/development_workflow.md) を参照してください。
+**uv.lock は Git 管理に含めます。** 仮想環境・キャッシュ・マシン固有設定は含めません。
+
+```bash
+./scripts/repos.sh                 # 外部リポジトリの状態をまとめて確認
+./scripts/repos.sh pull            # 作業中の変更を保護して一括更新
+./scripts/build.sh --packages jetpilot_controller --jobs 2
+./scripts/check.sh quick           # Mac で実行できる軽量チェック
+```
+
 ## Docs
 
 - [Project Design Policy](docs/project_design_policy.md)

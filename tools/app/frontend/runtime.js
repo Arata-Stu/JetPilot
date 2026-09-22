@@ -1,9 +1,10 @@
 /* SSH operations are explicit. Opening this page never starts a remote process. */
-const runtimeDefaults = {host: '192.168.11.190', user: 'tamiya', container: 'isaac_ros_dev_container', container_user: 'admin', host_workspace: '/home/tamiya/workspaces/JetPilot', screen: 'jetpilot-web', session: 'jetpilot-web', bringup: '/workspaces/scripts/bringup.sh', preset: 'record', sensor: 'realsense', vehicle: 'jpbb', rgb_fps: 30, infra_fps: 60, evs_window_ms: 50, evs_stride_ms: 10, fixed: false, throttle: 0.2, model: '', map: '', bag: ''};
-const runtimeHostChoices = ['192.168.11.190', '10.42.0.1', '192.168.55.1'];
-const runtimeWorkspaceChoices = ['/home/tamiya/workspaces/JetPilot', '/home/tamiya'];
+const runtimeDefaults = {host: '', user: '', container: 'isaac_ros_dev_container', container_user: 'admin', host_workspace: '', screen: 'jetpilot-web', session: 'jetpilot-web', bringup: '/workspaces/scripts/bringup.sh', preset: 'record', sensor: 'realsense', vehicle: 'jpbb', rgb_fps: 30, infra_fps: 60, evs_window_ms: 50, evs_stride_ms: 10, fixed: false, throttle: 0.2, model: '', map: '', bag: ''};
+const runtimeHostChoices = [];
+const runtimeWorkspaceChoices = [];
 let runtimeConfig = {...runtimeDefaults};
-try { Object.assign(runtimeConfig, JSON.parse(localStorage.getItem('jetpilot-runtime-v1') || '{}')); } catch (_) {}
+const runtimeSavedKeys = new Set();
+try { const saved = JSON.parse(localStorage.getItem('jetpilot-runtime-v1') || '{}'); Object.assign(runtimeConfig, saved); Object.keys(saved).forEach(key => runtimeSavedKeys.add(key)); } catch (_) {}
 for (const key of ['host', 'user', 'container', 'container_user', 'host_workspace']) {
   if (!String(runtimeConfig[key] || '').trim()) runtimeConfig[key] = runtimeDefaults[key];
 }
@@ -19,7 +20,18 @@ let runtimeLogViewOpen = false;
 let runtimeTune = {node:'/e2e_control_decoder', parameter:'fixed_throttle', value:0.2, sensor:'realsense', stream:'rgb', fps:30, evs_window_ms:50, evs_stride_ms:10};
 let runtimeTuneMessage = '';
 
+function runtimeApplyHostConfig(config) {
+  const defaults = {host: config.jetson_ips?.[0] || '', user: config.jetson_user || '', host_workspace: config.jetson_workspace_root || ''};
+  Object.assign(runtimeDefaults, defaults);
+  runtimeHostChoices.splice(0, runtimeHostChoices.length, ...(config.jetson_ips || []));
+  runtimeWorkspaceChoices.splice(0, runtimeWorkspaceChoices.length, defaults.host_workspace);
+  for (const [key, value] of Object.entries(defaults)) {
+    if (!runtimeSavedKeys.has(key) || !String(runtimeConfig[key] || '').trim()) runtimeConfig[key] = value;
+  }
+}
+
 function runtimeChange(key, value, redraw = false) {
+  runtimeSavedKeys.add(key);
   runtimeConfig[key] = value;
   localStorage.setItem('jetpilot-runtime-v1', JSON.stringify(runtimeConfig));
   runtimeResult = null; // Old target's state must never be shown as the new target's state.
@@ -169,7 +181,7 @@ async function runtimeRefreshBag() {
   try {
     const result = await api('/api/runtime/bag-status', {method:'POST',body:identity});
     if (identity !== JSON.stringify(runtimeConfig)) return;
-    runtimeBag = result.bag;
+    runtimeBag = result.bag || {state:'unknown'};
     runtimeBagTime = new Date().toLocaleTimeString();
   } catch(error) {
     if (identity !== JSON.stringify(runtimeConfig)) return;

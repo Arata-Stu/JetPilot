@@ -6,7 +6,7 @@ const path = require('node:path');
 
 function context() {
   const ctx = vm.createContext({ window: {}, localStorage: { getItem: () => null }, console, setInterval: () => {} });
-  const source = fs.readFileSync(path.join(__dirname, '../app.js'), 'utf8');
+  const source = require('./console_source.cjs').readAppSource();
   vm.runInContext(source.slice(0, source.indexOf('\nwindow.')), ctx);
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../live_tuning.js'), 'utf8'), ctx);
   vm.runInContext('render = () => {}; toast = () => {};', ctx);
@@ -16,7 +16,8 @@ function context() {
 test('every existing page belongs to a purpose and internal navigation selects its group', () => {
   const ctx = context();
   const pages = vm.runInContext('workspaces.flatMap(w => w.pages.map(p => p[0]))', ctx);
-  assert.equal(new Set(pages).size, 9);
+  assert.equal(new Set(pages).size, 10);
+  assert.ok(pages.includes('object-detection'));
   const drive = vm.runInContext("workspaces.find(w => w.id === 'drive')", ctx);
   assert.equal(drive.label, 'Jetsonに接続');
   assert.deepEqual(Array.from(drive.pages, item => Array.from(item)), [

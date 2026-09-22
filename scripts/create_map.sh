@@ -2,6 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/lib/project_env.sh"
 ROS2_WS="${ROS2_WS:-/workspaces/ros2_ws}"
 PYTHON_WS="${PYTHON_WS:-$(dirname -- "$ROS2_WS")/python_ws}"
 PYTHON_BIN="${PYTHON_BIN:-/opt/env/bin/python}"

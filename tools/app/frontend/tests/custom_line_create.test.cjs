@@ -12,7 +12,7 @@ function context() {
   };
   const ctx = vm.createContext({ window: {}, localStorage: { getItem: () => null }, console,
     document: { getElementById: id => inputs[id] || null } });
-  const source = fs.readFileSync(path.join(__dirname, '../app.js'), 'utf8');
+  const source = require('./console_source.cjs').readAppSource();
   vm.runInContext(source.slice(0, source.indexOf('\nwindow.')), ctx);
   vm.runInContext(`
     state.selectedMapPath = '/map/test';

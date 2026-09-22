@@ -67,7 +67,7 @@ const vm = require('node:vm');
 const path = require('node:path');
 function editorContext() {
   const context = vm.createContext({ window: {}, localStorage: {getItem: () => null}, console, LaneGeometry: G, setInterval: () => {} });
-  const source = fs.readFileSync(path.join(__dirname, '../app.js'), 'utf8');
+  const source = require('./console_source.cjs').readAppSource();
   vm.runInContext(source.slice(0, source.indexOf('\nwindow.')), context);
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../live_tuning.js'), 'utf8'), context);
   vm.runInContext(`
@@ -375,7 +375,7 @@ test('live save chrome reacts to sections, drawing completion and an in-flight s
     document.getElementById = id => elements[id] || null;
   `, c);
   // Restore the real incremental DOM updater (the shared fixture stubs it).
-  const source = fs.readFileSync(path.join(__dirname, '../app.js'), 'utf8');
+  const source = require('./console_source.cjs').readAppSource();
   vm.runInContext(source.slice(source.indexOf('function updateMapEditorChrome()'), source.indexOf('\nfunction mapCanvasFitScale')), c);
   vm.runInContext('updateMapEditorChrome()', c);
   assert.equal(c.elements['map-editor-save'].disabled, true);

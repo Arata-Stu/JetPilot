@@ -8,21 +8,23 @@ import re
 import shlex
 import subprocess
 
+from .host_config import host_environment
 from .security import validate_remote_absolute_path, validate_ssh_target
 
 
 CONTROLLER_PARAMETERS = ('algorithm', 'min_lookahead_m', 'max_lookahead_m', 'lookahead_speed_gain_s', 'max_steering_angle_rad', 'max_steering_command', 'map_lateral_error_gain', 'mpc_path_error_weight', 'mpc_heading_error_weight', 'mpc_steering_weight', 'throttle_kp', 'throttle_ki', 'throttle_kd', 'throttle_feedforward', 'brake_kp', 'max_throttle_command', 'max_brake_command', 'max_target_speed_mps', 'max_steering_rate_per_s')
 
 def settings(body):
+    environment = host_environment()
     result = {}
-    result['target'] = validate_ssh_target(str(body.get('user') or 'tamiya'), str(body.get('host', '')))
+    result['target'] = validate_ssh_target(str(body.get('user') or environment['JETSON_REMOTE_USER']), str(body.get('host', '')))
     for key, default in (('container', 'isaac_ros_dev_container'), ('container_user', 'admin'), ('screen', 'jetpilot-web'), ('session', 'jetpilot-web')):
         value = str(body.get(key) or default)
         pattern = r'[A-Za-z0-9_][A-Za-z0-9_-]{0,63}' if key in ('screen', 'session') else r'[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}'
         if not re.fullmatch(pattern, value):
             raise ValueError(f'{key}: 名前に使えない文字が含まれています（screen/tmuxは英数字・_・-）')
         result[key] = value
-    for key, default in (('bringup', '/workspaces/scripts/bringup.sh'), ('host_workspace', '/home/tamiya/workspaces/JetPilot'), ('model', ''), ('map', ''), ('bag', '')):
+    for key, default in (('bringup', '/workspaces/scripts/bringup.sh'), ('host_workspace', environment['JETSON_WORKSPACE_ROOT']), ('model', ''), ('map', ''), ('bag', '')):
         value = str(body.get(key) or default).strip()
         result[key] = validate_remote_absolute_path(value, label=key) if value else ''
     if not result['bringup']:

@@ -11,7 +11,7 @@ from typing import Any, Iterable, Mapping, Sequence
 
 from .analysis_worker import Progress, _atomic_json, _update_json_object, _utc_now
 from .e2e_analysis import control_error_summary, finite_summary, is_steering_only
-from .map_detail import load_yaml
+from .map_formats import load_yaml
 
 
 AGGRESSIVENESS_THRESHOLDS = {

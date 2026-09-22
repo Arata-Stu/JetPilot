@@ -1,13 +1,15 @@
 #!/bin/bash
 set -euo pipefail
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/lib/project_env.sh"
 
 echo "=== rosbag 受信スクリプト ==="
 
-DEFAULT_REMOTE_USER="tamiya"
-IP_CANDIDATES=("10.42.0.1" "192.168.55.1" "192.168.11.190")
+DEFAULT_REMOTE_USER="${JETSON_REMOTE_USER}"
+read -r -a IP_CANDIDATES <<< "${JETSON_REMOTE_IPS}"
 
-REMOTE_BASE_DIR_DEFAULT="/home/tamiya/workspaces/JetPilot/record/"
-LOCAL_DEST_DIR_DEFAULT="/home/arata-22/workspaces/JetPilot/record/"
+REMOTE_BASE_DIR_DEFAULT="${JETSON_RECORD_ROOT}/"
+LOCAL_DEST_DIR_DEFAULT="${RECORD_ROOT}/"
 REMOTE_LIST_MAX_DEPTH="${REMOTE_LIST_MAX_DEPTH:-4}"
 
 has_fzf() {
@@ -27,7 +29,6 @@ choose_one() {
     else
         echo "$prompt" >&2
         local i
-        for i in "${!@}"; do :; done
 
         local options=("$@")
         for i in "${!options[@]}"; do

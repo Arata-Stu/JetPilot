@@ -56,7 +56,7 @@ test('disconnect discards pending pose responses',async()=>{
   assert.equal(ctx.t.connected,false);assert.equal(ctx.t.status,null);assert.equal(ctx.t.trail.length,0);
 });
 test('live map redraw never loads raster images, video or point cloud and caps canvas size',()=>{
-  const app=fs.readFileSync(path.join(__dirname,'../app.js'),'utf8');
+  const app=require('./console_source.cjs').readAppSource();
   const begin=app.indexOf('function drawMapPreview()');
   const end=app.indexOf('\nfunction ',begin+1);
   const ctx=context();
@@ -83,7 +83,7 @@ test('returning from live adjustment restores raster drawing and the chosen laye
   assert.equal(ctx.state.mapLayers.landmark,false);
   ctx.toggleLiveTuning();
   assert.deepEqual({...ctx.state.mapLayers},layers);
-  const app=fs.readFileSync(path.join(__dirname,'../app.js'),'utf8');
+  const app=require('./console_source.cjs').readAppSource();
   const begin=app.indexOf('function drawMapPreview()');
   const end=app.indexOf('\nfunction ',begin+1);
   let images=0;
@@ -126,7 +126,7 @@ test('manual mode can connect for telemetry while applying still requires STOP',
 
 test('vehicle heading stays visible on a zoomed-out rotated map with the real arrow renderer',()=>{
   const ctx=context();
-  const app=fs.readFileSync(path.join(__dirname,'../app.js'),'utf8');
+  const app=require('./console_source.cjs').readAppSource();
   const begin=app.indexOf('function drawCanvasArrow(');
   vm.runInContext(app.slice(begin,app.indexOf('\nfunction ',begin+1)),ctx);
   let strokes=0,label='';const moves=[];

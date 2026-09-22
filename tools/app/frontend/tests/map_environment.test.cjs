@@ -6,7 +6,7 @@ const path = require('node:path');
 function context() {
   const ctx=vm.createContext({window:{},localStorage:{getItem:()=>null},console,document:{getElementById:id=>id==='map-preview-canvas'?{width:100,height:100}:null}});
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../lane_geometry.js'),'utf8'),ctx);
-  const source=fs.readFileSync(path.join(__dirname,'../app.js'),'utf8');
+  const source=require('./console_source.cjs').readAppSource();
   vm.runInContext(source.slice(0,source.indexOf('\nwindow.')),ctx);
   vm.runInContext(`
     render=()=>{}; drawMapPreview=()=>{}; updateMapEditorChrome=()=>{}; toast=()=>{};

@@ -3,7 +3,7 @@ const vm = require('node:vm');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const root = path.join(__dirname, '..');
-const app = fs.readFileSync(path.join(root, 'app.js'), 'utf8');
+const app = require('./console_source.cjs').readAppSource();
 const projector = app.slice(app.indexOf('function mapPointProjector('), app.indexOf('\nfunction ', app.indexOf('function mapPointProjector(') + 1));
 const detail = {map:{path:'/map/a'}, point_cloud_url:'/points', raster:{width:100,height:100,resolution_m_per_px:0.1,origin_xy_yaw:[2,3,Math.PI/2]}};
 const sandbox = {state:{selectedMapDetail:detail,mapLayers:{landmark:true}}, document:{getElementById:()=>null},requestAnimationFrame:()=>1,esc:String,drawMapPreview:()=>{},console};

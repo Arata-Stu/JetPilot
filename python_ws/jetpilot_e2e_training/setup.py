@@ -26,7 +26,8 @@ setup(
         "tensorboard",
         "onnx",
         "onnxscript",
-        "onnxruntime",
+        "onnxruntime-gpu; sys_platform == 'linux' and platform_machine == 'x86_64'",
+        "onnxruntime; sys_platform != 'linux' or platform_machine != 'x86_64'",
         "matplotlib",
     ],
     entry_points={

@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from .map_detail import load_yaml
+from .map_formats import load_yaml
 from .security import (
     resolve_under_root,
     validate_remote_absolute_path,

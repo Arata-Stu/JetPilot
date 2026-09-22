@@ -124,8 +124,7 @@ TASK_STREAM_CHUNK_BYTES = 256 * 1024
 
 def _frontend_asset_version(frontend_root: Path) -> str:
     mtimes = []
-    for name in ("index.html", "app.js", "lane_geometry.js", "camera_projection.js", "camera_overlay_ui.js", "point_cloud_ui.js", "live_tuning.js", "runtime.js", "simulation_compare.js", "network_simulation.js", "styles.css"):
-        path = frontend_root / name
+    for path in [frontend_root / "index.html", *frontend_root.glob("*.js"), *frontend_root.glob("*.css")]:
         if path.exists():
             mtimes.append(path.stat().st_mtime_ns)
     return str(max(mtimes) if mtimes else int(time.time() * 1000))
@@ -1050,13 +1049,7 @@ class Handler(BaseHTTPRequestHandler):
             version = _frontend_asset_version(config.frontend_root)
             text = payload.decode("utf-8", errors="replace")
             text = text.replace('href="/styles.css"', f'href="/styles.css?v={version}"')
-            text = text.replace('src="/lane_geometry.js"', f'src="/lane_geometry.js?v={version}"')
-            text = text.replace('src="/camera_projection.js"', f'src="/camera_projection.js?v={version}"')
-            text = text.replace('src="/camera_overlay_ui.js"', f'src="/camera_overlay_ui.js?v={version}"')
-            text = text.replace('src="/point_cloud_ui.js"', f'src="/point_cloud_ui.js?v={version}"')
-            text = text.replace('src="/runtime.js"', f'src="/runtime.js?v={version}"')
-            text = text.replace('src="/live_tuning.js"', f'src="/live_tuning.js?v={version}"')
-            text = text.replace('src="/app.js"', f'src="/app.js?v={version}"')
+            text = re.sub(r'src="/([^"?]+\.js)"', lambda match: f'src="/{match[1]}?v={version}"', text)
             payload = text.encode("utf-8")
         content_type = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
         self.send_response(HTTPStatus.OK)
@@ -2171,7 +2164,7 @@ find {shlex.quote(record_root)} -name metadata.yaml -printf '%TY-%Tm-%Td %TH:%TM
                 return
             title = "Prepare HD map raster"
         elif stage == "generate-raceline":
-            from .map_detail import load_yaml
+            from .map_formats import load_yaml
             network_path = Path(map_dir) / f"{Path(map_dir).name}_hd_map.yaml"
             if network_path.exists() and any(lane.get("successor_ids") for lane in load_yaml(network_path).get("lanes", [])):
                 self._json({"error": "分岐・合流のある地図は、Lane編集の『保存して各LaneのRaceline候補を生成』を使用してください。"}, HTTPStatus.BAD_REQUEST)

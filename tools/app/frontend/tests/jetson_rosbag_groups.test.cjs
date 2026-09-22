@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-const source = fs.readFileSync(path.join(__dirname, '../app.js'), 'utf8');
+const source = require('./console_source.cjs').readAppSource();
 
 function functionSource(name) {
   const start = source.indexOf(`function ${name}(`);

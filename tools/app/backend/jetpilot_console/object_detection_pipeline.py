@@ -8,7 +8,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .e2e_pipeline import PipelineTaskSpec, occupied_output_names
-from .map_detail import load_yaml
+from .map_formats import load_yaml
 from .object_detection_analysis import scan_object_detection_models
 from .security import (
     resolve_under_root,

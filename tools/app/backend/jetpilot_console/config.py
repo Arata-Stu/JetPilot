@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .security import env_flag
+from .host_config import host_environment
 
 
 def _app_root() -> Path:
@@ -30,13 +31,6 @@ def _workspace_root(app_root: Path) -> Path:
     if app_root.name == "app" and app_root.parent.name == "tools":
         return app_root.parent.parent
     return app_root.parent
-
-
-def _default_mount_path(workspace_root: Path, name: str, fallback: str) -> Path:
-    candidate = workspace_root / name
-    if candidate.exists():
-        return candidate
-    return Path(fallback)
 
 
 def _bounded_int_env(name: str, *, default: int, minimum: int, maximum: int) -> int:
@@ -72,50 +66,30 @@ class ConsoleConfig:
     jetson_map_root: str
     jetson_record_root: str
     enable_custom_commands: bool
+    jetson_workspace_root: str = ""
 
     @classmethod
     def from_env(cls) -> "ConsoleConfig":
         app_root = _app_root()
         repo_root = _workspace_root(app_root)
+        environment = host_environment(repo_root)
         state_dir = Path(
-            os.environ.get("JETPILOT_CONSOLE_STATE_DIR", str(app_root / ".state"))
+            environment.get("JETPILOT_CONSOLE_STATE_DIR", str(app_root / ".state"))
         ).expanduser().resolve(strict=False)
-        ros2_ws = Path(
-            os.environ.get(
-                "ROS2_WS",
-                str(_default_mount_path(repo_root, "ros2_ws", "/workspaces/ros2_ws")),
-            )
-        ).expanduser().resolve(strict=False)
-        python_ws = Path(
-            os.environ.get(
-                "PYTHON_WS",
-                str(_default_mount_path(repo_root, "python_ws", str(ros2_ws.parent / "python_ws"))),
-            )
-        ).expanduser().resolve(strict=False)
-        record_root = Path(
-            os.environ.get(
-                "RECORD_ROOT",
-                str(_default_mount_path(repo_root, "record", "/workspaces/record")),
-            )
-        ).expanduser().resolve(strict=False)
-        map_root = Path(
-            os.environ.get(
-                "MAP_ROOT",
-                str(_default_mount_path(repo_root, "map", "/workspaces/map")),
-            )
-        ).expanduser().resolve(strict=False)
+        ros2_ws = Path(environment["ROS2_WS"]).expanduser().resolve(strict=False)
+        python_ws = Path(environment["PYTHON_WS"]).expanduser().resolve(strict=False)
+        record_root = Path(environment["RECORD_ROOT"]).expanduser().resolve(strict=False)
+        map_root = Path(environment["MAP_ROOT"]).expanduser().resolve(strict=False)
         analysis_root = Path(
-            os.environ.get(
+            environment.get(
                 "ANALYSIS_ROOT",
-                os.environ.get(
+                environment.get(
                     "JETPILOT_ANALYSIS_ROOT",
                     str(record_root / ".jetpilot_analysis"),
                 ),
             )
         ).expanduser().resolve(strict=False)
-        jetson_ips = os.environ.get(
-            "JETSON_REMOTE_IPS", "192.168.11.190 10.42.0.1 192.168.55.1"
-        ).split()
+        jetson_ips = environment["JETSON_REMOTE_IPS"].split()
 
         return cls(
             repo_root=repo_root,
@@ -128,29 +102,26 @@ class ConsoleConfig:
             analysis_root=analysis_root,
             ros2_ws=ros2_ws,
             python_ws=python_ws,
-            python_bin=os.environ.get(
+            python_bin=environment.get(
                 "PYTHON_BIN",
                 "/opt/env/bin/python"
                 if Path("/opt/env/bin/python").is_file()
                 else sys.executable,
             ),
-            launch_package=os.environ.get("JETPILOT_LAUNCH_PACKAGE", "jetpilot_system_launch"),
+            launch_package=environment.get("JETPILOT_LAUNCH_PACKAGE", "jetpilot_system_launch"),
             analysis_ros_domain_id=_bounded_int_env(
                 "JETPILOT_ANALYSIS_ROS_DOMAIN_ID",
                 default=92,
                 minimum=0,
                 maximum=232,
             ),
-            jetson_user=os.environ.get("JETSON_REMOTE_USER", "tamiya"),
+            jetson_workspace_root=environment["JETSON_WORKSPACE_ROOT"],
+            jetson_user=environment["JETSON_REMOTE_USER"],
             jetson_ips=jetson_ips,
-            jetson_map_root=os.environ.get(
-                "JETSON_MAP_ROOT", "/home/tamiya/workspaces/JetPilot/map"
-            ),
-            jetson_record_root=os.environ.get(
-                "JETSON_RECORD_ROOT", "/home/tamiya/workspaces/JetPilot/record"
-            ),
+            jetson_map_root=environment["JETSON_MAP_ROOT"],
+            jetson_record_root=environment["JETSON_RECORD_ROOT"],
             enable_custom_commands=env_flag(
-                os.environ.get("JETPILOT_CONSOLE_ENABLE_CUSTOM_COMMANDS"),
+                environment.get("JETPILOT_CONSOLE_ENABLE_CUSTOM_COMMANDS"),
                 default=False,
             ),
         )
@@ -169,6 +140,7 @@ class ConsoleConfig:
             "launch_package": self.launch_package,
             "analysis_ros_domain_id": self.analysis_ros_domain_id,
             "jetson_user": self.jetson_user,
+            "jetson_workspace_root": self.jetson_workspace_root,
             "jetson_ips": self.jetson_ips,
             "jetson_map_root": self.jetson_map_root,
             "jetson_record_root": self.jetson_record_root,

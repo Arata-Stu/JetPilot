@@ -87,7 +87,7 @@ test('live UI signal changes preserve worker, time and geometry signature; topol
   const data=input(),posts=[];
   const ctx=vm.createContext({window:{},localStorage:{getItem:()=>null},console,setInterval:()=>{},NetworkSimulation:N,
     document:{getElementById:()=>null},data,posts});
-  const source=fs.readFileSync(path.join(__dirname,'../app.js'),'utf8');
+  const source=require('./console_source.cjs').readAppSource();
   vm.runInContext(source.slice(0,source.indexOf('\nwindow.')),ctx);
   vm.runInContext(`
     state.selectedMapDetail={map:{path:'/course'},hd_map:{lanes:data.network.lanes.map((l,i)=>({...l,primary:i===0})),sections:[],junctions:[]}};

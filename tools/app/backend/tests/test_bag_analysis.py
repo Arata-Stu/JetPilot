@@ -625,11 +625,12 @@ class AnalysisScriptTests(unittest.TestCase):
             self.assertIn("replay_additional_args:='--clock --start-paused'", offline)
             self.assertIn("/rosbag2_player/resume", offline)
             self.assertIn("localization readiness timed out", offline)
-            self.assertIn("rosbag_shutdown_on_exit:=false", offline)
-            self.assertIn("--stage offline_drain", offline)
-            self.assertIn("vslam_snapshot_require_localized_map:=true", offline)
+            self.assertIn("rosbag_shutdown_on_exit:=true", offline)
+            self.assertIn("waiting for bag-end auto-shutdown", offline)
+            self.assertIn("wait_for_offline_graph_quiescence()", offline)
+            self.assertIn('vslam_snapshot_require_localized_map:="$offline_require_localized"', offline)
             self.assertIn("vslam_snapshot_tf_topic:=/tf", offline)
-            self.assertIn("vslam_snapshot_write_interval_s:=0.0", offline)
+            self.assertIn("vslam_snapshot_write_interval_s:=2.0", offline)
             self.assertIn("--set-status running --stage offline_localization", offline)
             self.assertIn("--trajectory-snapshot", offline)
             self.assertIn("run_offline_localization_attempt vgl 0.15 0.40", offline)
@@ -738,7 +739,11 @@ if [ "$command_name" = "service" ] && [ "$subcommand" = "type" ]; then
   fi
   exit 0
 fi
-if [ "$command_name" = "service" ] && [ "$subcommand" = "call" ]; then exit 0; fi
+if [ "$command_name" = "service" ] && [ "$subcommand" = "call" ]; then
+  # Emulate bag-end shutdown after replay resumes.
+  printf '%s\n' 4 > "$FAKE_ROS_SERVICE_COUNTER"
+  exit 0
+fi
 if [ "$command_name" = "topic" ] && [ "$subcommand" = "pub" ]; then exit 0; fi
 exit 1
 """,

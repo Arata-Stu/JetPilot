@@ -8,12 +8,18 @@ import os
 import shutil
 import struct
 import tempfile
-from ast import literal_eval
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
+from .map_formats import load_yaml
+from .custom_trajectory import (
+    CUSTOM_LINE_POINT_EPSILON_M,
+    _apply_custom_speed_envelope,
+    _derive_custom_trajectory,
+    _custom_line_feasibility_validation,
+)
 from .network_geometry import network, geometry
 from .map_environment import normalize_obstacles, obstacle_path_issue
 from .map_pipeline import (
@@ -33,7 +39,6 @@ CUSTOM_LINE_TRAJECTORY_FILE = "trajectory.csv"
 CUSTOM_LINE_FORMAT = "jetpilot_custom_line_v1"
 CUSTOM_LINE_DEFAULT_SPEED_MPS = 1.0
 CUSTOM_LINE_MIN_SECTION_SPEED_MPS = 0.1
-CUSTOM_LINE_POINT_EPSILON_M = 1.0e-9
 CUSTOM_LINE_MAX_POINTS = 20_000
 CUSTOM_LINE_SPEED_SAMPLE_STEP_M = 0.10
 CUSTOM_LINE_MAX_COMPILED_POINTS = 100_000
@@ -69,210 +74,6 @@ def resolve_allowed_path(config: ConsoleConfig, value: str) -> Path:
 
 def _file_url(path: Path) -> str:
     return f"/api/files?path={quote(str(path))}"
-
-
-def _strip_comment(line: str) -> str:
-    in_quote = ""
-    for index, char in enumerate(line):
-        if char in ("'", '"'):
-            if in_quote == char:
-                in_quote = ""
-            elif not in_quote:
-                in_quote = char
-        if char == "#" and not in_quote:
-            return line[:index]
-    return line
-
-
-def _split_inline_yaml_values(value: str) -> list[str]:
-    values: list[str] = []
-    current: list[str] = []
-    quote = ""
-    escaped = False
-    depth = 0
-    for char in value:
-        if escaped:
-            current.append(char)
-            escaped = False
-            continue
-        if char == "\\" and quote:
-            current.append(char)
-            escaped = True
-            continue
-        if char in {"'", '"'}:
-            if quote == char:
-                quote = ""
-            elif not quote:
-                quote = char
-            current.append(char)
-            continue
-        if not quote:
-            if char in "[({":
-                depth += 1
-            elif char in "])}" and depth > 0:
-                depth -= 1
-            elif char == "," and depth == 0:
-                values.append("".join(current).strip())
-                current = []
-                continue
-        current.append(char)
-    values.append("".join(current).strip())
-    return values
-
-
-def _clean_scalar(value: str) -> Any:
-    text = value.strip()
-    if text == "":
-        return ""
-    lowered = text.lower()
-    if lowered in {"null", "none", "~"}:
-        return None
-    if lowered == "true":
-        return True
-    if lowered == "false":
-        return False
-    if len(text) >= 2 and text[0] == text[-1] and text[0] in {"'", '"'}:
-        if text[0] == '"':
-            try:
-                return json.loads(text)
-            except (json.JSONDecodeError, TypeError):
-                pass
-        return text[1:-1]
-    if text.startswith("[") and text.endswith("]"):
-        try:
-            return literal_eval(text)
-        except (SyntaxError, ValueError):
-            inner = text[1:-1].strip()
-            if not inner:
-                return []
-            return [_clean_scalar(item) for item in _split_inline_yaml_values(inner)]
-    try:
-        if any(char in text for char in ".eE"):
-            return float(text)
-        return int(text)
-    except ValueError:
-        return text
-
-
-def _yaml_lines(path: Path) -> list[tuple[int, str]]:
-    lines = []
-    for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        cleaned = _strip_comment(raw).rstrip()
-        if not cleaned.strip():
-            continue
-        indent = len(cleaned) - len(cleaned.lstrip(" "))
-        lines.append((indent, cleaned.strip()))
-    return lines
-
-
-def _next_indent(lines: list[tuple[int, str]], index: int, fallback: int) -> int:
-    if index < len(lines):
-        return lines[index][0]
-    return fallback
-
-
-def _parse_yaml_block(lines: list[tuple[int, str]], index: int, indent: int) -> tuple[Any, int]:
-    if index >= len(lines):
-        return {}, index
-    if lines[index][0] < indent:
-        return {}, index
-    if lines[index][1].startswith("- "):
-        return _parse_yaml_list(lines, index, lines[index][0])
-    return _parse_yaml_map(lines, index, indent)
-
-
-def _parse_yaml_map(lines: list[tuple[int, str]], index: int, indent: int) -> tuple[dict[str, Any], int]:
-    data: dict[str, Any] = {}
-    while index < len(lines):
-        line_indent, text = lines[index]
-        if line_indent < indent:
-            break
-        if line_indent > indent:
-            index += 1
-            continue
-        if text.startswith("- ") or ":" not in text:
-            break
-        key, value = text.split(":", 1)
-        key = key.strip()
-        value = value.strip()
-        index += 1
-        if value:
-            data[key] = _clean_scalar(value)
-        else:
-            child_indent = _next_indent(lines, index, line_indent + 2)
-            data[key], index = _parse_yaml_block(lines, index, child_indent)
-    return data, index
-
-
-def _parse_yaml_list(lines: list[tuple[int, str]], index: int, indent: int) -> tuple[list[Any], int]:
-    items: list[Any] = []
-    while index < len(lines):
-        line_indent, text = lines[index]
-        if line_indent < indent:
-            break
-        if line_indent != indent or not text.startswith("- "):
-            break
-
-        item_text = text[2:].strip()
-        index += 1
-
-        if item_text.startswith("- "):
-            nested = [_clean_scalar(item_text[2:].strip())]
-            while index < len(lines) and lines[index][0] > indent and lines[index][1].startswith("- "):
-                nested.append(_clean_scalar(lines[index][1][2:].strip()))
-                index += 1
-            items.append(nested)
-            continue
-
-        if not item_text:
-            child_indent = _next_indent(lines, index, indent + 2)
-            child, index = _parse_yaml_block(lines, index, child_indent)
-            items.append(child)
-            continue
-
-        if ":" in item_text and not item_text.startswith("["):
-            item: dict[str, Any] = {}
-            key, value = item_text.split(":", 1)
-            item[key.strip()] = _clean_scalar(value.strip()) if value.strip() else {}
-            while index < len(lines):
-                next_indent, next_text = lines[index]
-                if next_indent <= indent:
-                    break
-                if next_text.startswith("- ") and next_indent == indent:
-                    break
-                if ":" not in next_text:
-                    index += 1
-                    continue
-                child_key, child_value = next_text.split(":", 1)
-                child_key = child_key.strip()
-                child_value = child_value.strip()
-                index += 1
-                if child_value:
-                    item[child_key] = _clean_scalar(child_value)
-                else:
-                    child_indent = _next_indent(lines, index, next_indent + 2)
-                    item[child_key], index = _parse_yaml_block(lines, index, child_indent)
-            items.append(item)
-            continue
-
-        items.append(_clean_scalar(item_text))
-    return items, index
-
-
-def load_yaml(path: Path) -> dict[str, Any]:
-    # JSON is a valid subset of YAML. Some dependency-light workers emit their
-    # metadata.yaml in this form, so handle it before the built-in YAML parser.
-    raw = path.read_text(encoding="utf-8")
-    if raw.lstrip().startswith(("{", "[")):
-        try:
-            json_data = json.loads(raw)
-        except json.JSONDecodeError:
-            pass
-        else:
-            return json_data if isinstance(json_data, dict) else {}
-    lines = _yaml_lines(path)
-    data, _ = _parse_yaml_block(lines, 0, lines[0][0] if lines else 0)
-    return data if isinstance(data, dict) else {}
 
 
 def _as_float(value: Any, default: float = 0.0) -> float:
@@ -2393,47 +2194,6 @@ def _requested_section_speed(
     return section_speeds_mps.get(section_id, default_speed_mps) if section_id is not None else default_speed_mps
 
 
-def _apply_custom_speed_envelope(
-    trajectory: list[dict[str, float]],
-    closed_loop: bool,
-    constraints: dict[str, float],
-) -> list[float]:
-    speeds: list[float] = []
-    for row in trajectory:
-        curvature = abs(row["kappa_radpm"])
-        curvature_cap = math.inf
-        if curvature > 1.0e-12:
-            curvature_cap = math.sqrt(constraints["lateral_accel_limit_mps2"] / curvature)
-        speeds.append(min(row["vx_mps"], constraints["max_speed_mps"], curvature_cap))
-
-    edges = [(index, index + 1) for index in range(len(speeds) - 1)]
-    distances = [trajectory[index + 1]["s_m"] - trajectory[index]["s_m"] for index in range(len(speeds) - 1)]
-    if closed_loop:
-        closing_distance = math.hypot(
-            trajectory[0]["x_m"] - trajectory[-1]["x_m"],
-            trajectory[0]["y_m"] - trajectory[-1]["y_m"],
-        )
-        edges.append((len(speeds) - 1, 0))
-        distances.append(closing_distance)
-
-    tolerance = 1.0e-12
-    for _ in range(max(2, len(speeds) * 2 + 2)):
-        changed = False
-        for (start, end), distance in zip(edges, distances):
-            cap = math.sqrt(max(0.0, speeds[start] * speeds[start] + 2.0 * constraints["accel_limit_mps2"] * distance))
-            if speeds[end] > cap + tolerance:
-                speeds[end] = cap
-                changed = True
-        for (start, end), distance in reversed(list(zip(edges, distances))):
-            cap = math.sqrt(max(0.0, speeds[end] * speeds[end] + 2.0 * constraints["decel_limit_mps2"] * distance))
-            if speeds[start] > cap + tolerance:
-                speeds[start] = cap
-                changed = True
-        if not changed:
-            break
-    return speeds
-
-
 def _compile_custom_line(
     map_dir: Path,
     points: list[dict[str, float]],
@@ -2511,142 +2271,6 @@ def _compile_custom_line(
     if any(point is None for point in author_points):
         raise ValueError("failed to map compiled speeds back to editable points")
     return trajectory, [point for point in author_points if point is not None], validation, {**layout, "context": context}
-
-
-def _derive_custom_trajectory(
-    points: list[dict[str, float]],
-    closed_loop: bool,
-) -> list[dict[str, float]]:
-    count = len(points)
-    s_values = [0.0]
-    for index in range(1, count):
-        distance = math.hypot(
-            points[index]["x_m"] - points[index - 1]["x_m"],
-            points[index]["y_m"] - points[index - 1]["y_m"],
-        )
-        if not math.isfinite(distance) or distance <= CUSTOM_LINE_POINT_EPSILON_M:
-            raise ValueError(f"points[{index - 1}] to points[{index}] has a zero or non-finite length")
-        next_s = s_values[-1] + distance
-        if not math.isfinite(next_s) or next_s <= s_values[-1]:
-            raise ValueError("derived s values are not finite and strictly increasing")
-        s_values.append(next_s)
-
-    if closed_loop:
-        closing_distance = math.hypot(
-            points[0]["x_m"] - points[-1]["x_m"],
-            points[0]["y_m"] - points[-1]["y_m"],
-        )
-        if not math.isfinite(closing_distance) or closing_distance <= CUSTOM_LINE_POINT_EPSILON_M:
-            raise ValueError("closed custom line has a zero or non-finite closing segment")
-
-    psi_values: list[float] = []
-    kappa_values: list[float] = []
-    for index in range(count):
-        if closed_loop:
-            previous = points[(index - 1) % count]
-            following = points[(index + 1) % count]
-        elif index == 0:
-            previous = points[0]
-            following = points[1]
-        elif index == count - 1:
-            previous = points[count - 2]
-            following = points[count - 1]
-        else:
-            previous = points[index - 1]
-            following = points[index + 1]
-
-        tangent_x = following["x_m"] - previous["x_m"]
-        tangent_y = following["y_m"] - previous["y_m"]
-        tangent_length = math.hypot(tangent_x, tangent_y)
-        if not math.isfinite(tangent_length) or tangent_length <= CUSTOM_LINE_POINT_EPSILON_M:
-            raise ValueError(f"points[{index}] does not have a valid tangent")
-        psi_values.append(math.atan2(tangent_y, tangent_x))
-
-        if not closed_loop and index in (0, count - 1):
-            kappa_values.append(0.0)
-            continue
-        current = points[index]
-        a = math.hypot(current["x_m"] - previous["x_m"], current["y_m"] - previous["y_m"])
-        b = math.hypot(following["x_m"] - current["x_m"], following["y_m"] - current["y_m"])
-        c = math.hypot(following["x_m"] - previous["x_m"], following["y_m"] - previous["y_m"])
-        # Check lengths in meters, not their cubic product. A short but
-        # distinct edge (e.g. next to a Section Gate) is still valid geometry.
-        if any(not math.isfinite(length) or length <= CUSTOM_LINE_POINT_EPSILON_M for length in (a, b, c)):
-            raise ValueError(f"points[{index}] does not have a valid curvature neighborhood")
-        turn_sine = (
-            ((current["x_m"] - previous["x_m"]) / a) * ((following["y_m"] - current["y_m"]) / b)
-            - ((current["y_m"] - previous["y_m"]) / a) * ((following["x_m"] - current["x_m"]) / b)
-        )
-        kappa_values.append(2.0 * turn_sine / c)
-
-    acceleration_values: list[float] = []
-    for index in range(count):
-        if index + 1 < count:
-            following_index = index + 1
-            distance = s_values[following_index] - s_values[index]
-        elif closed_loop:
-            following_index = 0
-            distance = math.hypot(
-                points[0]["x_m"] - points[-1]["x_m"],
-                points[0]["y_m"] - points[-1]["y_m"],
-            )
-        else:
-            acceleration_values.append(0.0)
-            continue
-        acceleration = (
-            points[following_index]["speed_mps"] ** 2 - points[index]["speed_mps"] ** 2
-        ) / (2.0 * distance)
-        if not math.isfinite(acceleration):
-            raise ValueError("custom speeds produce a non-finite longitudinal acceleration")
-        acceleration_values.append(acceleration)
-
-    trajectory: list[dict[str, float]] = []
-    for index, point in enumerate(points):
-        row = {
-            "s_m": s_values[index],
-            "x_m": point["x_m"],
-            "y_m": point["y_m"],
-            "psi_rad": psi_values[index],
-            "kappa_radpm": kappa_values[index],
-            "vx_mps": point["speed_mps"],
-            "ax_mps2": acceleration_values[index],
-        }
-        if not all(math.isfinite(value) for value in row.values()):
-            raise ValueError("derived trajectory contains a non-finite value")
-        trajectory.append(row)
-    return trajectory
-
-
-def _custom_line_feasibility_validation(
-    trajectory: list[dict[str, float]],
-    constraints: dict[str, float],
-) -> dict[str, Any]:
-    max_speed = max(row["vx_mps"] for row in trajectory)
-    max_lateral_accel = max(abs(row["vx_mps"] ** 2 * row["kappa_radpm"]) for row in trajectory)
-    max_accel = max(max(0.0, row["ax_mps2"]) for row in trajectory)
-    max_decel = max(max(0.0, -row["ax_mps2"]) for row in trajectory)
-    metrics = {
-        "max_speed_mps": max_speed,
-        "max_lateral_accel_mps2": max_lateral_accel,
-        "max_accel_mps2": max_accel,
-        "max_decel_mps2": max_decel,
-    }
-    checks = (
-        (max_speed, constraints["max_speed_mps"], "custom speed exceeds max_speed_mps"),
-        (
-            max_lateral_accel,
-            constraints["lateral_accel_limit_mps2"],
-            "custom speed and curvature exceed lateral_accel_limit_mps2",
-        ),
-        (max_accel, constraints["accel_limit_mps2"], "custom speed profile exceeds accel_limit_mps2"),
-        (max_decel, constraints["decel_limit_mps2"], "custom speed profile exceeds decel_limit_mps2"),
-    )
-    for actual, limit, issue in checks:
-        if not math.isfinite(actual):
-            return {"valid": False, "issue": "custom speed feasibility is non-finite", **metrics}
-        if actual > limit + 1.0e-9:
-            return {"valid": False, "issue": f"{issue}: {actual:.6g} > {limit:.6g}", **metrics}
-    return {"valid": True, "issue": "", **metrics}
 
 
 def _validate_custom_line(

@@ -12,7 +12,7 @@ from typing import Any, Mapping
 
 from .config import ConsoleConfig
 from .vgl_models import input_size, resolve_model
-from .map_detail import load_yaml
+from .map_formats import load_yaml
 from .map_pipeline import (
     DEFAULT_RACELINE_DIRECTION,
     DEFAULT_RACELINE_ACCEL_LIMIT_MPS2,

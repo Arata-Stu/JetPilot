@@ -6,7 +6,7 @@ const vm=require('node:vm');
 function setup(){
  const canvas={width:100,height:100,setPointerCapture(){}};
  const c=vm.createContext({window:{},localStorage:{getItem:()=>null},console,document:{getElementById:()=>canvas}});
- const src=fs.readFileSync(path.join(__dirname,'../app.js'),'utf8');
+ const src=require('./console_source.cjs').readAppSource();
  vm.runInContext(src.slice(0,src.indexOf('\nwindow.')),c);
  vm.runInContext(`
  render=()=>{};drawMapPreview=()=>{};updateSectionEditorChrome=()=>{};mapEditorInteractionLocked=()=>false;

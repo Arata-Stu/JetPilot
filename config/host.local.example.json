@@ -1,0 +1,5 @@
+{
+  "JETSON_REMOTE_USER": "robot",
+  "JETSON_REMOTE_IPS": "192.168.55.1",
+  "JETSON_WORKSPACE_ROOT": "/home/robot/JetPilot"
+}

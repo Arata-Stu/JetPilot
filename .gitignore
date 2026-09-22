@@ -231,3 +231,8 @@ ros2_ws/src/launch/localization_launch/path
 !scripts/lib/
 
 /tools/isaac-ros-cli/
+
+# Shared dependency locks are source-controlled; machine-specific settings are not.
+!**/uv.lock
+/config/host.local.json
+.venvs/

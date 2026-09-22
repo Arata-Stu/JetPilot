@@ -57,7 +57,7 @@ function ui(){
  class Worker {constructor(){this.terminated=false;this.messages=[];Worker.instances.push(this);}postMessage(x){this.input=x;this.messages.push(x);}terminate(){this.terminated=true;}}
  Worker.instances=[];
  const ctx=vm.createContext({setTimeout,clearTimeout,Worker,window:{},localStorage:{getItem:()=>null},document:{querySelectorAll:()=>[],getElementById:()=>null},console,cancelAnimationFrame:()=>{}});
- const source=fs.readFileSync(path.join(__dirname,'../app.js'),'utf8');vm.runInContext(source.slice(0,source.indexOf('\nwindow.')),ctx);
+ const source=require('./console_source.cjs').readAppSource();vm.runInContext(source.slice(0,source.indexOf('\nwindow.')),ctx);
  vm.runInContext(`drawSimulationPreview=()=>{};updateSimulationChrome=()=>{};updateSimulationComparisonChrome=()=>{};simulationPathPoints=()=>[{x:0,y:0},{x:10,y:0}];`,ctx);
  return {ctx,Worker};
 }

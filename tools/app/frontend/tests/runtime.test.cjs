@@ -3,6 +3,17 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
 const source = fs.readFileSync(path.join(__dirname, '../runtime.js'), 'utf8');
+// Shared host defaults apply to fresh browsers; explicit choices survive refresh.
+const hostContext = vm.createContext({localStorage:{getItem:()=>null,setItem:()=>{}}, render:()=>{}, setInterval:()=>{}});
+vm.runInContext(source, hostContext);
+vm.runInContext("runtimeApplyHostConfig({jetson_ips:['robot-a'],jetson_user:'pilot',jetson_workspace_root:'/srv/robot'})", hostContext);
+assert.equal(vm.runInContext('runtimeConfig.host', hostContext), 'robot-a');
+assert.equal(vm.runInContext('runtimeConfig.host_workspace', hostContext), '/srv/robot');
+vm.runInContext("runtimeChange('host','operator-choice'); runtimeApplyHostConfig({jetson_ips:['robot-b'],jetson_user:'pilot',jetson_workspace_root:'/srv/robot'})", hostContext);
+assert.equal(vm.runInContext('runtimeConfig.host', hostContext), 'operator-choice');
+vm.runInContext('runtimeResetConnectionDefaults()', hostContext);
+assert.equal(vm.runInContext('runtimeConfig.host', hostContext), 'robot-b');
+
 const store = new Map();
 let calls = [];
 const context = vm.createContext({
@@ -12,12 +23,15 @@ const context = vm.createContext({
   api: async (...args)=>{calls.push(args);return {state:'running',message:'sent'};},
 });
 vm.runInContext(source, context);
+vm.runInContext("runtimeApplyHostConfig({jetson_ips:['192.168.11.190','10.42.0.1','192.168.55.1'],jetson_user:'tamiya',jetson_workspace_root:'/home/tamiya/workspaces/JetPilot'})", context);
 assert.match(vm.runInContext('renderRuntime()',context), /環境を準備/);
 assert.match(vm.runInContext('renderRuntime()',context), /runtime-connect-card/);
 assert.match(vm.runInContext('renderRuntime()',context), /runtime-launch-card/);
 assert.match(vm.runInContext('renderRuntime()',context), /runtime-record-card/);
 assert.match(vm.runInContext('renderRuntime()',context), /runtime-tune-card/);
+vm.runInContext("runtimeResult={environment_log:'log'}",context);
 assert.match(vm.runInContext('renderRuntime()',context), /開いている間は自動更新を停止/);
+vm.runInContext('runtimeResult=null',context);
 assert.equal(vm.runInContext('runtimeConnectionState()[1]',context),'未確認');
 assert.equal(vm.runInContext('runtimeConfig.host',context),'192.168.11.190');
 assert.equal(vm.runInContext('runtimeConfig.user',context),'tamiya');
