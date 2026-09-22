@@ -16,7 +16,7 @@ ROOTS=(
 
 usage() {
   cat <<'EOF'
-Usage: scripts/export_led_sync_batch.sh [options]
+Usage: scripts/experiments/export_led_sync_batch.sh [options]
 
 Options:
   --rgb-roi X,Y,W,H   RGB LED ROI (default: full 848x480 frame)

@@ -11,7 +11,7 @@ import sys
 
 from configure_vgl_extractor import configure
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'ros2_ws/src/launch/jetpilot_system_launch/launch'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'ros2_ws/src/launch/jetpilot_system_launch/launch'))
 from vgl_model_profile import model_onnx_identity
 
 

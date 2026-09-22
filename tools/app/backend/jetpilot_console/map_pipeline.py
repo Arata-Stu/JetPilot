@@ -176,7 +176,7 @@ def build_vgl_vslam_script(
 ) -> str:
     from .vgl_models import input_size
     input_size(dict(vgl_image_width=vgl_image_width, vgl_image_height=vgl_image_height))
-    mapping_helper = Path(getattr(config, "repo_root", config.ros2_ws.parent)) / "scripts/create_map_with_vgl.py"
+    mapping_helper = Path(getattr(config, "repo_root", config.ros2_ws.parent)) / "scripts/lib/create_map_with_vgl.py"
     topic_config_path = topic_config or str(default_topic_config(config))
     create_steps = " ".join(shlex.quote(step) for step in steps.split())
     rviz_value = "true" if enable_rviz else "false"

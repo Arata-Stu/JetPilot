@@ -93,15 +93,15 @@ calibration は system site-packages を参照し、学習用の NumPy 2 環境�
 
 ```bash
 # Linux 上で、既存環境を消さずに lock の依存バージョンを反映
-./scripts/python_env.sh sync training
-./scripts/python_env.sh sync calibration
-./scripts/python_env.sh sync analysis
-./scripts/python_env.sh sync calibration --venv /workspaces/.venvs/calibration
+./scripts/maintenance/python_env.sh sync training
+./scripts/maintenance/python_env.sh sync calibration
+./scripts/maintenance/python_env.sh sync analysis
+./scripts/maintenance/python_env.sh sync calibration --venv /workspaces/.venvs/calibration
 
 # 依存定義を変更した後（Mac でも Python 3.12 があれば実行可能）
-./scripts/python_env.sh lock training --python /path/to/python3.12
-./scripts/python_env.sh export training --python /path/to/python3.12
-./scripts/check.sh locks
+./scripts/maintenance/python_env.sh lock training --python /path/to/python3.12
+./scripts/maintenance/python_env.sh export training --python /path/to/python3.12
+./scripts/diagnostics/check.sh locks
 ```
 
 uv 0.12.0 を基準にしている。`UV_BIN` で uv のパス、`JETPILOT_ENV_PYTHON` または `--python` で既存 Python 3.12 を指定できる。Python を自動ダウンロードしない。
@@ -140,12 +140,12 @@ GUI の必要性は CPU と別に選べる。追加 Docker レイヤーの `INST
 ## テストの入口
 
 ```bash
-./scripts/check.sh quick
-./scripts/check.sh frontend
-./scripts/check.sh locks
-./scripts/check.sh ros --packages jetpilot_controller
-./scripts/check.sh gpu
-./scripts/check.sh jetson
+./scripts/diagnostics/check.sh quick
+./scripts/diagnostics/check.sh frontend
+./scripts/diagnostics/check.sh locks
+./scripts/diagnostics/check.sh ros --packages jetpilot_controller
+./scripts/diagnostics/check.sh gpu
+./scripts/diagnostics/check.sh jetson
 ```
 
 - **quick**：Python 構文、シェル構文、保守スクリプト、既存 scripts、Console backend。`python -S` で標準ライブラリのテストを実行する。NumPy/OpenCV が必要な既存2ケースは環境未導入なら skip。ROS/GPU は不要。

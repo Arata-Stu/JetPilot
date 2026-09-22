@@ -19,7 +19,7 @@ Docker内で、更新したリポジトリを使用します。
 source /workspaces/ros2_ws/install/setup.bash
 OUTPUT_MODEL_DIR=/workspaces/tools/aliked_workspace/artifacts/424x240/runtime_models \
 VGL_IMAGE_WIDTH=424 VGL_IMAGE_HEIGHT=240 \
-bash /workspaces/scripts/create_map.sh
+bash /workspaces/scripts/mapping/create_map.sh
 ```
 
 bagは既存の`20260907_011815_joy_start`を選択し、出力は旧mapとは別の名前を指定します。
@@ -62,7 +62,7 @@ Macでは標準ライブラリの制御テストとJavaScriptテストのみを�
 画像と姿勢が生成済みで、VGL生成前に停止した場合は、次のようにVGL工程だけを実行できます。
 
 ```bash
-python3 /workspaces/scripts/create_map_with_vgl.py \
+python3 /workspaces/scripts/lib/create_map_with_vgl.py \
   --resume-map /workspaces/map/出力名/生成された日時付きディレクトリ \
   --model-dir /workspaces/tools/aliked_workspace/artifacts/424x240/runtime_models \
   --width 424 --height 240
@@ -96,5 +96,5 @@ python3 /workspaces/scripts/create_map_with_vgl.py \
 ROSを起動しない標準ライブラリの検証:
 
 ```bash
-python3 -m unittest discover -s scripts -p test_localize_offline_origin.py
+python3 -m unittest discover -s tests/scripts -p test_localize_offline_origin.py
 ```

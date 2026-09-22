@@ -304,7 +304,7 @@ profile側では`camera_name`ではなく`sensor_kit_camera_name`、
 loaderを直接使う場合:
 
 ```bash
-python3 scripts/launch_profiles.py \
+python3 scripts/lib/launch_profiles.py \
   --root ros2_ws/src/launch/jetpilot_system_launch/config/bringup_profiles \
   validate
 ```

@@ -73,7 +73,7 @@ python3 python_ws/map_tools/hd_map_editor.py \
   --export-only
 ```
 
-After raceline generation, `scripts/create_map.sh` runs
+After raceline generation, `scripts/mapping/create_map.sh` runs
 `visualize_race_lines.py` and writes `<map_name>_line_preview.png` with the HD
 lane bounds, centerline, and raceline overlaid on the landmark raster.
 
@@ -117,7 +117,7 @@ outputs.
 
 Use `--direction forward` or `--direction reverse` to select the lap direction.
 The JetPilot Console exposes the same choice in the Raceline generation panel.
-When using `scripts/create_map.sh`, the workflow asks for the direction before
+When using `scripts/mapping/create_map.sh`, the workflow asks for the direction before
 generation; `RACELINE_DIRECTION=reverse` changes its default choice.
 
 ## Section gate editor

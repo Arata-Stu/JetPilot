@@ -15,7 +15,7 @@ MAP_ROOT="${MAP_ROOT:-/workspaces/map}"
 RECORD_ROOT="${RECORD_ROOT:-/workspaces/record}"
 LAUNCH_PACKAGE="${JETPILOT_LAUNCH_PACKAGE:-jetpilot_system_launch}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
-PROFILE_HELPER="${SCRIPT_DIR}/launch_profiles.py"
+PROFILE_HELPER="${SCRIPT_DIR}/lib/launch_profiles.py"
 PROFILE_ROOT="${BRINGUP_PROFILE_ROOT:-${PROJECT_ROOT}/ros2_ws/src/launch/jetpilot_system_launch/config/bringup_profiles}"
 
 PRESET=''
@@ -1806,7 +1806,7 @@ configure_e2e_model() {
   local event_bins event_channels='' event_polarity_mode event_preprocessor_mode
   local input_explicit=false event_preprocessor_explicit=false
   local model_root="${E2E_MODEL_BASE:-${ROS2_WS}/models/e2e}"
-  local helper="${SCRIPT_DIR}/e2e_models.py"
+  local helper="${SCRIPT_DIR}/lib/e2e_models.py"
   local options=() flags=() input_options=()
   local auto_throttle=true
   [[ "$PRESET" != e2e-steering ]] || auto_throttle=false

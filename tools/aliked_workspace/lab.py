@@ -332,7 +332,7 @@ def build(args):
     if not all(p.is_file() for p in exporters):
         raise ValueError('Isaac ROS exporter binaries not found')
     import tensorrt  # Fail before building if the inspection dependency is unavailable.
-    sys.path.insert(0, str(REPO / 'scripts'))
+    sys.path.insert(0, str(REPO / 'scripts/lib'))
     from configure_vgl_extractor import configure
     source_models = directory / 'source_models'
     source_models.mkdir(exist_ok=True)

@@ -345,5 +345,5 @@ flowchart LR
 
 - Packages: 18
 - Topic endpoints: 140
-- Generator: `scripts/generate_topic_graph.py`
+- Generator: `scripts/diagnostics/generate_topic_graph.py`
 - Contract: `docs/ros_package_readme_guideline.md`

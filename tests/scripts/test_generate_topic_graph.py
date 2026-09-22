@@ -1,6 +1,11 @@
-#!/usr/bin/env python3
-
 from pathlib import Path
+import sys
+
+_TEST_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(_TEST_ROOT / "scripts/lib"))
+sys.path.insert(0, str(_TEST_ROOT / "scripts/diagnostics"))
+
+
 import tempfile
 import unittest
 

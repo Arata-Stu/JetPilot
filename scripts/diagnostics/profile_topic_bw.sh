@@ -8,7 +8,7 @@ OUTPUT_FILE="${OUTPUT_FILE:-}"
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/profile_topic_bw.sh [options]
+  scripts/diagnostics/profile_topic_bw.sh [options]
 
 Options:
   -s, --sample-seconds SEC   Seconds to sample each topic with ros2 topic bw.

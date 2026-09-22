@@ -19,7 +19,7 @@ aliked_workspace/
     424x240/             小さいONNX・TensorRT・検査結果
 ```
 
-`vendor`、`reference`、`inputs`、`artifacts`はGit管理外。別マシンへGitで反映した場合は`prepare`で再取得する。ルートの`scripts/configure_vgl_extractor.py`をビルド時に使うため、このフォルダだけではなくJetPilotリポジトリとして配置する。
+`vendor`、`reference`、`inputs`、`artifacts`はGit管理外。別マシンへGitで反映した場合は`prepare`で再取得する。ルートの`scripts/lib/configure_vgl_extractor.py`をビルド時に使うため、このフォルダだけではなくJetPilotリポジトリとして配置する。
 
 既存の`/opt/ros`や通常のVGLモデル、mapは読み取るだけで上書きしない。再試験時は新しい`--name`を使う。エクスポートまたはビルドに失敗したフォルダは調査用に残り、自動削除しない。
 
@@ -124,7 +124,7 @@ source /workspaces/ros2_ws/install/setup.bash
 VGL_SHARE="$(ros2 pkg prefix --share jetpilot_system_launch)"
 mkdir -p artifacts/424x240/runtime_config
 cp -RL "$VGL_SHARE/config/localization/vgl_config/." artifacts/424x240/runtime_config/
-python3 /workspaces/scripts/configure_vgl_extractor.py \
+python3 /workspaces/scripts/lib/configure_vgl_extractor.py \
   "$VGL_SHARE/config/localization/vgl_config/keypoint_creation_config.pb.txt" \
   artifacts/424x240/runtime_config/keypoint_creation_config.pb.txt \
   --width 424 --height 240

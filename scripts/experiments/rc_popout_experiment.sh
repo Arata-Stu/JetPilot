@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${SCRIPT_DIR}/lib/project_env.sh"
 ROS2_WS="${ROS2_WS:-/workspaces/ros2_ws}"
 ROS2_SETUP_FILE="${ROS2_SETUP_FILE:-${ROS2_WS}/install/setup.bash}"
@@ -23,9 +23,9 @@ die() {
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/rc_popout_experiment.sh [--new] [--experiment-dir DIR]
-  scripts/rc_popout_experiment.sh --status [--experiment-dir DIR]
-  scripts/rc_popout_experiment.sh --dry-run [--experiment-dir DIR]
+  scripts/experiments/rc_popout_experiment.sh [--new] [--experiment-dir DIR]
+  scripts/experiments/rc_popout_experiment.sh --status [--experiment-dir DIR]
+  scripts/experiments/rc_popout_experiment.sh --dry-run [--experiment-dir DIR]
 
 Terminal 1で `scripts/bringup.sh rc-popout` を起動してから、Terminal 2で実行します。
 このスクリプトはセンサを起動せず、既存のBag Managerへ記録START/STOPを送ります。

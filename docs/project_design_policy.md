@@ -434,8 +434,8 @@ sensor kit packageへ置く。
 同時に更新する。topic契約を変更した場合は、README更新後に次を実行して静的なシステム図を更新する。
 
 ```bash
-python3 scripts/generate_topic_graph.py
-python3 scripts/generate_topic_graph.py --check
+python3 scripts/diagnostics/generate_topic_graph.py
+python3 scripts/diagnostics/generate_topic_graph.py --check
 ```
 
 生成される[`topic_graph.md`](topic_graph.md)は、実行中のROS graphではなく全`jetpilot_*` packageの

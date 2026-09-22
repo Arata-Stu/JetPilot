@@ -1,5 +1,11 @@
-import os
 from pathlib import Path
+import sys
+
+_TEST_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(_TEST_ROOT / "scripts/lib"))
+sys.path.insert(0, str(_TEST_ROOT / "scripts/diagnostics"))
+
+import os
 import subprocess
 import tempfile
 import unittest
@@ -7,9 +13,9 @@ import unittest
 from configure_vgl_extractor import block, configure
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / 'ros2_ws/src/launch/jetpilot_system_launch/config/localization/vgl_config/keypoint_creation_config.pb.txt'
-SCRIPT = ROOT / 'scripts/export_vgl_tensorrt_engines.sh'
+SCRIPT = ROOT / 'scripts/mapping/export_vgl_tensorrt_engines.sh'
 
 
 class ExtractorConfigTest(unittest.TestCase):

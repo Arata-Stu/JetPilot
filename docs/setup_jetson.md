@@ -171,7 +171,7 @@ SilkyEvCam を Docker コンテナ内の通常ユーザーから扱えるよう�
 
 ```bash
 cd "${RC_AS_ROOT}"
-./scripts/install_silky_evcam_udev_rules.sh
+./scripts/setup/install_silky_evcam_udev_rules.sh
 ```
 
 適用後、SilkyEvCam を抜き差しし、Docker コンテナを再起動してください。
@@ -209,7 +209,7 @@ export ISAAC_ROS_WS="${RC_AS_ROOT}/ros2_ws"
 export ISAAC_DIR="${ISAAC_ROS_WS}"
 
 cd "${RC_AS_ROOT}"
-./scripts/prepare_workspace_dirs.sh
+./scripts/setup/prepare_workspace_dirs.sh
 vcs import < packages.repos
 
 # CenturyArks SilkyEvCam plugin source を Docker build context に配置
@@ -236,7 +236,7 @@ EOF
 
 # Isaac ROS CLI のビルドとインストール
 cd "${RC_AS_ROOT}"
-./scripts/install_isaac_ros_cli.sh
+./scripts/setup/install_isaac_ros_cli.sh
 
 # インストールの確認
 dpkg -s isaac-ros-cli | grep Version
@@ -255,7 +255,7 @@ ls -l /etc/isaac-ros-cli/docker/Dockerfile.additional_setting
 以後、`isaac-ros-cli` の変更を再ビルド・再インストールする場合は、プロジェクトのルートから次を実行します。
 
 ```bash
-./scripts/install_isaac_ros_cli.sh
+./scripts/setup/install_isaac_ros_cli.sh
 ```
 
 ---

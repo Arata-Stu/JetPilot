@@ -261,7 +261,7 @@ def render(root: Path, endpoints: list[Endpoint], readmes: list[Path]) -> str:
             "",
             f"- Packages: {len(readmes)}",
             f"- Topic endpoints: {len(endpoints)}",
-            "- Generator: `scripts/generate_topic_graph.py`",
+            "- Generator: `scripts/diagnostics/generate_topic_graph.py`",
             "- Contract: `docs/ros_package_readme_guideline.md`",
             "",
         ]
@@ -277,7 +277,7 @@ def main() -> int:
     parser.add_argument("--validate-only", action="store_true", help="validate without writing")
     args = parser.parse_args()
 
-    root = (args.root or Path(__file__).resolve().parents[1]).resolve()
+    root = (args.root or Path(__file__).resolve().parents[2]).resolve()
     output = (args.output or root / "docs" / "topic_graph.md").resolve()
     try:
         endpoints, readmes = discover(root)

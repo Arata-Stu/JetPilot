@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${SCRIPT_DIR}/lib/project_env.sh"
 ROS2_WS="${ROS2_WS:-/workspaces/ros2_ws}"
 PYTHON_WS="${PYTHON_WS:-$(dirname -- "$ROS2_WS")/python_ws}"
@@ -29,7 +29,7 @@ OFFLINE_REPLAY_RATE="${OFFLINE_REPLAY_RATE:-1.0}"
 JETSON_REMOTE_USER="${JETSON_REMOTE_USER:-tamiya}"
 JETSON_REMOTE_IPS="${JETSON_REMOTE_IPS:-10.42.0.1 192.168.55.1 192.168.11.190}"
 JETSON_MAP_ROOT="${JETSON_MAP_ROOT:-/home/tamiya/workspaces/JetPilot/map}"
-VGL_TENSORRT_EXPORT_SCRIPT="${VGL_TENSORRT_EXPORT_SCRIPT:-${SCRIPT_DIR}/export_vgl_tensorrt_engines.sh}"
+VGL_TENSORRT_EXPORT_SCRIPT="${VGL_TENSORRT_EXPORT_SCRIPT:-${SCRIPT_DIR}/mapping/export_vgl_tensorrt_engines.sh}"
 
 die() {
   echo "error: $*" >&2
@@ -753,14 +753,14 @@ PY
   fi
 
   echo "[stage] offline eval graph ready; localizing from origin after tracking starts"
-  if ! python3 "${SCRIPT_DIR}/localize_offline_origin.py" \
+  if ! python3 "${SCRIPT_DIR}/lib/localize_offline_origin.py" \
     --timeout "$OFFLINE_LOCALIZATION_TIMEOUT_S" --replay-rate "$OFFLINE_REPLAY_RATE"; then
     offline_stop_launch TERM 5 || true
     die "offline origin localization failed; snapshot postprocess will not run"
   fi
 
   for offline_attempt in $(seq 1 15); do
-    if [[ -s "$snapshot_path" ]] && python3 "${SCRIPT_DIR}/localize_offline_origin.py" \
+    if [[ -s "$snapshot_path" ]] && python3 "${SCRIPT_DIR}/lib/localize_offline_origin.py" \
       --check-snapshot "$snapshot_path" >/dev/null 2>&1; then
       break
     fi
@@ -769,7 +769,7 @@ PY
     fi
     sleep 1
   done
-  if ! python3 "${SCRIPT_DIR}/localize_offline_origin.py" --check-snapshot "$snapshot_path"; then
+  if ! python3 "${SCRIPT_DIR}/lib/localize_offline_origin.py" --check-snapshot "$snapshot_path"; then
     offline_stop_launch TERM 5 || true
     die "offline eval produced no localized snapshot with landmarks; refusing to drain an invalid run"
   fi
@@ -815,7 +815,7 @@ PY
   trap - EXIT
 
   [[ -f "$snapshot_path" ]] || die "VSLAM snapshot was not created: $snapshot_path"
-  python3 "${SCRIPT_DIR}/localize_offline_origin.py" --check-snapshot "$snapshot_path" \
+  python3 "${SCRIPT_DIR}/lib/localize_offline_origin.py" --check-snapshot "$snapshot_path" \
     || die "offline eval snapshot is not localized or has no usable landmarks"
   [[ -d "$cuvslam_map_dir" ]] || die "cuVSLAM map was not created: $cuvslam_map_dir"
 
@@ -908,7 +908,7 @@ main() {
   validate_create_map_offline_steps
   read -r -a create_map_steps <<< "$CREATE_MAP_OFFLINE_STEPS"
 
-  python3 "${SCRIPT_DIR}/create_map_with_vgl.py" \
+  python3 "${SCRIPT_DIR}/lib/create_map_with_vgl.py" \
     --model-dir="$OUTPUT_MODEL_DIR" \
     --width="$VGL_IMAGE_WIDTH" --height="$VGL_IMAGE_HEIGHT" \
     --sensor_data_bag="$bag_dir" \

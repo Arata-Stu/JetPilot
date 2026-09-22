@@ -552,7 +552,7 @@ Every long-running operation is represented as a task:
   "task_id": "20260710-153000-build-map-a1b2",
   "kind": "map_build",
   "title": "Build VGL/VSLAM map",
-  "command": ["scripts/create_map.sh", "--stage", "build-map"],
+  "command": ["scripts/mapping/create_map.sh", "--stage", "build-map"],
   "cwd": "/workspaces",
   "status": "running",
   "pid": 12345,

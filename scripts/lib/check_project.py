@@ -26,17 +26,18 @@ def main(argv=None):
         # Only tracked project files plus newly created first-party maintenance modules.
         tracked = subprocess.check_output(['git', 'ls-files', '-z'], cwd=ROOT).decode().split('\0')
         paths = {ROOT / name for name in tracked if name}
-        for folder in ('scripts/lib', 'tests', 'tools/app/backend/jetpilot_console'):
-            paths.update((ROOT / folder).glob('*.py'))
-        paths.update((ROOT / 'scripts').glob('*.sh'))
-        paths.update((ROOT / 'scripts/lib').glob('*.sh'))
+        for folder in ('scripts', 'tests', 'tools/app/backend/jetpilot_console'):
+            paths.update((ROOT / folder).rglob('*.py'))
+        paths.update((ROOT / 'scripts').rglob('*.sh'))
         for path in sorted(paths):
+            if not path.is_file():
+                continue
             if path.suffix == '.py':
                 ast.parse(path.read_text(encoding='utf-8'), filename=str(path))
             elif path.suffix == '.sh':
                 run(['bash', '-n', str(path)], env=environment)
-        for folder in ('tests', 'scripts', 'tools/app/backend/tests'):
-            env = {**environment, 'PYTHONPATH': str(ROOT / 'tools/app/backend') + os.pathsep + str(ROOT / 'scripts')}
+        for folder in ('tests', 'tests/scripts', 'tools/app/backend/tests'):
+            env = {**environment, 'PYTHONPATH': str(ROOT / 'tools/app/backend') + os.pathsep + str(ROOT / 'scripts/lib')}
             run([sys.executable, '-S', '-m', 'unittest', 'discover', '-s', folder, '-p', 'test_*.py'], env=env)
     elif args.profile == 'frontend':
         node = os.environ.get('NODE_BIN') or shutil.which('node')
@@ -45,8 +46,8 @@ def main(argv=None):
         run([node, '--test', *map(str, sorted((ROOT / 'tools/app/frontend/tests').glob('*.test.*')))], env=environment)
     elif args.profile == 'locks':
         for name in ('training', 'calibration', 'analysis'):
-            run([str(ROOT / 'scripts/python_env.sh'), 'check', name], env=environment)
-            run([str(ROOT / 'scripts/python_env.sh'), 'export', name, '--check'], env=environment)
+            run([str(ROOT / 'scripts/maintenance/python_env.sh'), 'check', name], env=environment)
+            run([str(ROOT / 'scripts/maintenance/python_env.sh'), 'export', name, '--check'], env=environment)
     elif args.profile == 'ros':
         if sys.platform != 'linux' or not shutil.which('colcon'):
             parser.error('ros profile requires a sourced Linux ROS environment')

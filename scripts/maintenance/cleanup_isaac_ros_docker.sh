@@ -18,7 +18,7 @@ prune_all_cache=false
 usage() {
   cat <<'EOF'
 Usage:
-  ./scripts/cleanup_isaac_ros_docker.sh [options]
+  ./scripts/maintenance/cleanup_isaac_ros_docker.sh [options]
 
 Keeps the current Isaac ROS image and removes older hashed final images from the
 same image family. Containers and images referenced by containers are never
@@ -46,13 +46,13 @@ Options:
 
 Examples:
   # Show the plan, then choose interactively whether to proceed
-  ./scripts/cleanup_isaac_ros_docker.sh
+  ./scripts/maintenance/cleanup_isaac_ros_docker.sh
 
   # Preview only
-  ./scripts/cleanup_isaac_ros_docker.sh --dry-run
+  ./scripts/maintenance/cleanup_isaac_ros_docker.sh --dry-run
 
   # Non-interactive maintenance
-  ./scripts/cleanup_isaac_ros_docker.sh \
+  ./scripts/maintenance/cleanup_isaac_ros_docker.sh \
     --yes --cache-until 336h --cache-keep 80GB
 EOF
 }

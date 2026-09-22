@@ -146,7 +146,7 @@ rs-enumerate-devices -c > /workspaces/record/realsense-device-info.txt
 連続実験では、Terminal 1で上記bringupを起動したまま、Terminal 2で進行用スクリプトを実行します。
 
 ```bash
-scripts/rc_popout_experiment.sh
+scripts/experiments/rc_popout_experiment.sh
 ```
 
 このスクリプト自身はセンサを起動しません。最初にチェッカーボード校正を記録するか尋ねた後、事前登録した
@@ -159,10 +159,10 @@ scripts/rc_popout_experiment.sh
 
 ```bash
 # 進捗だけ確認
-scripts/rc_popout_experiment.sh --status
+scripts/experiments/rc_popout_experiment.sh --status
 
 # 条件表を新しく作り直す
-scripts/rc_popout_experiment.sh --new
+scripts/experiments/rc_popout_experiment.sh --new
 ```
 
 ```bash

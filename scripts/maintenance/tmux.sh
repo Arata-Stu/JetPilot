@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 source "${SCRIPT_DIR}/lib/project_env.sh"
 ROS2_WS="${ROS2_WS:-/workspaces/ros2_ws}"
 PROJECT_ROOT="${JETPILOT_PROJECT_ROOT:-$(dirname -- "$SCRIPT_DIR")}"
@@ -230,7 +230,7 @@ create_map_session() {
   prepare_pane \
     "$main_pane" \
     'create map' \
-    "cd ${PROJECT_ROOT_Q} && ${SCRIPT_DIR_Q}/create_map.sh"
+    "cd ${PROJECT_ROOT_Q} && ${SCRIPT_DIR_Q}/mapping/create_map.sh"
   prepare_pane \
     "$map_pane" \
     'map artifacts' \

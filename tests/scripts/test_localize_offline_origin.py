@@ -1,7 +1,13 @@
+from pathlib import Path
+import sys
+
+_TEST_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(_TEST_ROOT / "scripts/lib"))
+sys.path.insert(0, str(_TEST_ROOT / "scripts/diagnostics"))
+
 """Standard-library tests; ROS interfaces are replaced with fakes."""
 import copy
 import json
-from pathlib import Path
 import sys
 import tempfile
 from types import SimpleNamespace as NS

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
-source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/lib/project_env.sh"
+source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)/lib/project_env.sh"
 
 ROS2_WS="${ROS2_WS:-/workspaces/ros2_ws}"
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 IMAGE_WIDTH=424
 IMAGE_HEIGHT=240
 NATIVE_PROFILE=false
@@ -74,7 +74,7 @@ export_tensorrt_engines() {
   extractor_config="${visual_mapping_share}/configs/isaac/keypoint_creation_config.pb.txt"
   if [[ "$NATIVE_PROFILE" != true ]]; then
     command -v python3 >/dev/null 2>&1 || die "python3 is required (standard library only)"
-    python3 "${SCRIPT_DIR}/configure_vgl_extractor.py" \
+    python3 "${SCRIPT_DIR}/lib/configure_vgl_extractor.py" \
       "$extractor_config" "$OUTPUT_MODEL_DIR/keypoint_creation_config.pb.txt" \
       --width "$IMAGE_WIDTH" --height "$IMAGE_HEIGHT"
     extractor_config="$OUTPUT_MODEL_DIR/keypoint_creation_config.pb.txt"

@@ -1,13 +1,19 @@
+from pathlib import Path
+import sys
+
+_TEST_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(_TEST_ROOT / "scripts/lib"))
+sys.path.insert(0, str(_TEST_ROOT / "scripts/diagnostics"))
+
 import json
 import subprocess
 import tempfile
 import unittest
-from pathlib import Path
 
 from e2e_models import inspect_model, list_models
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 
 
 class E2EModelSelectionTests(unittest.TestCase):

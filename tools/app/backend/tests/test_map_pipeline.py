@@ -65,7 +65,7 @@ class BuildVglVslamScriptTest(unittest.TestCase):
             self.config, "/record/bag", "/maps/new", None,
             "edex compute_poses cuvgl", "low_res", "/models/small model",
             enable_rviz=False, vgl_image_width=424, vgl_image_height=240)
-        self.assertIn("create_map_with_vgl.py", script)
+        self.assertIn("/workspaces/scripts/lib/create_map_with_vgl.py", script)
         self.assertIn("--model-dir='/models/small model'", script)
         self.assertIn("--width=424 --height=240", script)
         self.assertNotIn("ros2 run isaac_mapping_ros create_map_offline.py", script)

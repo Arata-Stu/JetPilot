@@ -1,6 +1,12 @@
+from pathlib import Path
+import sys
+
+_TEST_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(_TEST_ROOT / "scripts/lib"))
+sys.path.insert(0, str(_TEST_ROOT / "scripts/diagnostics"))
+
 import tempfile
 import unittest
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 import create_map_with_vgl as mapping
@@ -24,7 +30,7 @@ class MappingTest(unittest.TestCase):
             model = root / 'models with spaces'
             share = root / 'share'
             launch = root / 'launch'
-            source = Path(__file__).resolve().parents[1] / 'ros2_ws/src/launch/jetpilot_system_launch/config/localization/vgl_config/keypoint_creation_config.pb.txt'
+            source = Path(__file__).resolve().parents[2] / 'ros2_ws/src/launch/jetpilot_system_launch/config/localization/vgl_config/keypoint_creation_config.pb.txt'
             original = source.read_text()
             config_dir = share / 'configs/isaac'
             config_dir.mkdir(parents=True)

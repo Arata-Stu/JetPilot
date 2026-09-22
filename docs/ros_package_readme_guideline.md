@@ -74,13 +74,13 @@ sensor構成固有の上書きは `jetpilot_system_launch/config` が所有し�
 全packageのREADMEからシステム図を更新します。
 
 ```bash
-python3 scripts/generate_topic_graph.py
+python3 scripts/diagnostics/generate_topic_graph.py
 ```
 
 生成済みの `docs/topic_graph.md` が最新かだけを確認する場合:
 
 ```bash
-python3 scripts/generate_topic_graph.py --check
+python3 scripts/diagnostics/generate_topic_graph.py --check
 ```
 
 生成器はPython標準ライブラリだけを使用し、同一topicのmessage型不一致と、README上で判定できる

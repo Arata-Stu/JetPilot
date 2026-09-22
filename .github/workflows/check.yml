@@ -14,13 +14,13 @@ jobs:
         with:
           node-version: '24'
       - name: Standard-library and syntax checks
-        run: ./scripts/check.sh quick
+        run: ./scripts/diagnostics/check.sh quick
       - name: Frontend regression tests
-        run: ./scripts/check.sh frontend
+        run: ./scripts/diagnostics/check.sh frontend
       - uses: astral-sh/setup-uv@v6
         with:
           version: '0.12.0'
       - name: Lock and generated requirements consistency
         env:
           JETPILOT_ENV_PYTHON: python3
-        run: ./scripts/check.sh locks
+        run: ./scripts/diagnostics/check.sh locks

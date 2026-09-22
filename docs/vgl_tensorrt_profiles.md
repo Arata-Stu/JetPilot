@@ -6,13 +6,13 @@ JetsonのROS環境内で実行する。Pythonは標準ライブラリのみ使�
 
 ```bash
 # 既定値：幅424、高さ240
-bash scripts/export_vgl_tensorrt_engines.sh
+bash scripts/mapping/export_vgl_tensorrt_engines.sh
 
 # サイズを明示する場合
-bash scripts/export_vgl_tensorrt_engines.sh --width 424 --height 240
+bash scripts/mapping/export_vgl_tensorrt_engines.sh --width 424 --height 240
 
 # 別サイズ・別出力先
-bash scripts/export_vgl_tensorrt_engines.sh \
+bash scripts/mapping/export_vgl_tensorrt_engines.sh \
   --width 640 --height 480 \
   --output-model-dir /workspaces/ros2_ws/isaac_ros_assets/models/vgl_640x480_test
 ```

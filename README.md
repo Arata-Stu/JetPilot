@@ -9,7 +9,7 @@
 ./scripts/repos.sh                 # 外部リポジトリの状態をまとめて確認
 ./scripts/repos.sh pull            # 作業中の変更を保護して一括更新
 ./scripts/build.sh --packages jetpilot_controller --jobs 2
-./scripts/check.sh quick           # Mac で実行できる軽量チェック
+./scripts/diagnostics/check.sh quick           # Mac で実行できる軽量チェック
 ```
 
 ## Docs
@@ -39,7 +39,7 @@ Dockerイメージを繰り返しビルドした後は、次のスクリプト�
 確認します。
 
 ```bash
-./scripts/cleanup_isaac_ros_docker.sh
+./scripts/maintenance/cleanup_isaac_ros_docker.sh
 ```
 
 `y` または `yes` を入力した場合だけ削除を実行します。それ以外の入力と
@@ -51,14 +51,14 @@ Enterのみの場合はキャンセルします。現行の
 表示だけ行い、確認プロンプトを出さずに終了する場合は `--dry-run` を使います。
 
 ```bash
-./scripts/cleanup_isaac_ros_docker.sh --dry-run
+./scripts/maintenance/cleanup_isaac_ros_docker.sh --dry-run
 ```
 
 使用されていないキャッシュ全体を対象にする場合は、`--all-cache` を付けます。
 イメージは同じ保護条件のままです。
 
 ```bash
-./scripts/cleanup_isaac_ros_docker.sh --all-cache
+./scripts/maintenance/cleanup_isaac_ros_docker.sh --all-cache
 ```
 
 処理後は、`docker system df` が報告するカテゴリ別の変更前・変更後・削減量と、
@@ -76,7 +76,9 @@ CIや定期メンテナンスなど、確認プロンプトを出せない場合
 併用します。
 
 ```bash
-./scripts/cleanup_isaac_ros_docker.sh \
+./scripts/maintenance/cleanup_isaac_ros_docker.sh \
   --yes --all-cache \
   --cache-builder default --cache-until 336h --cache-keep 80GB
 ```
+
+スクリプトの配置と用途は [scripts/README.md](scripts/README.md) を参照。

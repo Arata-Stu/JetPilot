@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 DEFAULT_REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 REQUESTED_ROOT="${JETPILOT_WORKSPACE_ROOT:-$DEFAULT_REPO_ROOT}"
 CHECK_ONLY=false
@@ -9,7 +9,7 @@ QUIET=false
 
 usage() {
   printf '%s\n' \
-    "Usage: scripts/prepare_workspace_dirs.sh [--check] [--quiet]" \
+    "Usage: scripts/setup/prepare_workspace_dirs.sh [--check] [--quiet]" \
     "" \
     "Prepare writable directories used through the JetPilot project-root mount." \
     "" \

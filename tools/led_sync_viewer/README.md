@@ -6,7 +6,7 @@
 
 ```bash
 cd /workspaces
-scripts/setup_multi_sensor_calibration_env.sh
+scripts/setup/setup_multi_sensor_calibration_env.sh
 source /workspaces/.venvs/multi_sensor_calibration/bin/activate
 
 source /opt/ros/jazzy/setup.bash
@@ -22,7 +22,7 @@ source /workspaces/ros2_ws/install/setup.bash
 Docker内で次を実行します。
 
 ```bash
-scripts/led_sync_gui.sh
+scripts/experiments/led_sync_gui.sh
 ```
 
 Macのbrowserで <http://localhost:8765> を開きます。GUIの「Docker内JSON」へ
@@ -33,7 +33,7 @@ Macのbrowserで <http://localhost:8765> を開きます。GUIの「Docker内JSO
 必要がある場合のみ、container起動時に`8765:8765`を公開したうえで次を使います。
 
 ```bash
-scripts/led_sync_gui.sh --host 0.0.0.0
+scripts/experiments/led_sync_gui.sh --host 0.0.0.0
 ```
 
 serverが読み出せるのは、既定では`/workspaces/record`配下の解析JSONと、そのJSONが
@@ -45,7 +45,7 @@ checkerboard校正sessionを除外し、`evs-popup-v1`と`evs-popup-v2`の各走
 処理します。既存の出力は自動的にskipされるため、途中で止まっても再実行できます。
 
 ```bash
-scripts/export_led_sync_batch.sh
+scripts/experiments/export_led_sync_batch.sh
 ```
 
 既定では各sessionの先頭・末尾12秒を20 fpsでpreview出力します。古いJSONを
@@ -54,7 +54,7 @@ preview付きで作り直す場合は`--force`を付けます。
 LEDのROIが分かっている場合は、全画面より小さいROIを指定してください。
 
 ```bash
-scripts/export_led_sync_batch.sh \
+scripts/experiments/export_led_sync_batch.sh \
   --rgb-roi X,Y,W,H \
   --evs-roi X,Y,W,H
 ```
