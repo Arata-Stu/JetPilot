@@ -97,6 +97,42 @@ def build_handler(html_path: Path, record_root: Path):
                 with candidate.open("rb") as stream:
                     shutil.copyfileobj(stream, self.wfile)
                 return
+            if request.path == "/api/file":
+                values = parse_qs(request.query).get("path", [])
+                if len(values) != 1 or not values[0].strip():
+                    self._send_json(
+                        {"error": "query parameter path is required"},
+                        HTTPStatus.BAD_REQUEST,
+                    )
+                    return
+                requested = Path(values[0])
+                candidate = (
+                    requested if requested.is_absolute() else record_root / requested
+                ).resolve()
+                if not _inside(candidate, record_root):
+                    self._send_json(
+                        {"error": f"path must be inside {record_root}"},
+                        HTTPStatus.FORBIDDEN,
+                    )
+                    return
+                if candidate.suffix.lower() not in {".jpg", ".jpeg", ".png", ".webp"}:
+                    self._send_json(
+                        {"error": "only preview image files may be loaded"},
+                        HTTPStatus.BAD_REQUEST,
+                    )
+                    return
+                if not candidate.is_file():
+                    self._send_json(
+                        {"error": f"file not found: {candidate}"},
+                        HTTPStatus.NOT_FOUND,
+                    )
+                    return
+                content_type = mimetypes.guess_type(candidate.name)[0] or "application/octet-stream"
+                size = candidate.stat().st_size
+                self._headers(HTTPStatus.OK, content_type, size)
+                with candidate.open("rb") as stream:
+                    shutil.copyfileobj(stream, self.wfile)
+                return
             self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
 
         def log_message(self, format: str, *args) -> None:

@@ -154,6 +154,15 @@
     .empty { padding: 22px 14px; color: var(--muted); text-align: center; font-size: .85rem; }
 
     .playback { margin-top: 14px; }
+    .frame-inspector { margin-top: 14px; }
+    .frame-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--line); }
+    .frame-cell { position: relative; min-height: 250px; background: #05080d; overflow: hidden; }
+    .frame-canvas { display: block; width: 100%; height: 100%; min-height: 250px; cursor: crosshair; touch-action: none; }
+    .frame-empty { position: absolute; inset: 0; display: grid; place-items: center; padding: 20px; color: #67798c; font-size: .84rem; text-align: center; pointer-events: none; }
+    .frame-empty[hidden], .video-empty[hidden] { display: none; }
+    .frame-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 11px 14px; border-top: 1px solid var(--line); }
+    .segment-button.active { border-color: var(--cyan); background: #153d39; color: #dffff8; }
+    .roi-readout { flex: 1 1 320px; color: var(--muted); font-size: .78rem; font-family: ui-monospace, monospace; }
     .video-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--line); }
     .video-cell { position: relative; min-height: 180px; background: #05080d; }
     video { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: contain; background: #05080d; }
@@ -180,6 +189,7 @@
       #timeline { height: 360px; }
       .timeline-controls { grid-template-columns: 1fr; }
       .video-grid { grid-template-columns: 1fr; }
+      .frame-grid { grid-template-columns: 1fr; }
       .timecode { width: 100%; margin-left: 0; }
     }
   </style>
@@ -262,6 +272,24 @@
           </div>
         </article>
 
+        <article class="panel frame-inspector">
+          <div class="panel-header">
+            <div><h2 class="panel-title">同一時刻の画像確認・ROI選択</h2><div class="panel-note">タイムライン表示中心に最も近いプレビューを表示</div></div>
+            <div class="panel-note" id="previewTime">プレビューなし</div>
+          </div>
+          <div class="frame-grid">
+            <div class="frame-cell"><span class="video-label">RGB</span><canvas class="frame-canvas" id="rgbFrame"></canvas><span class="frame-empty" id="rgbFrameEmpty">前処理でRGBプレビューを生成してください</span></div>
+            <div class="frame-cell"><span class="video-label">EVS · 極性イベント蓄積</span><canvas class="frame-canvas" id="evsFrame"></canvas><span class="frame-empty" id="evsFrameEmpty">前処理でEVSプレビューを生成してください</span></div>
+          </div>
+          <div class="frame-toolbar">
+            <span class="panel-note">ROI保存先</span>
+            <button class="segment-button active" id="startRoiMode" type="button">開始側</button>
+            <button class="segment-button" id="endRoiMode" type="button">終了側</button>
+            <button id="clearRoi" type="button">選択を消去</button>
+            <span class="roi-readout" id="roiReadout">画像上をドラッグしてLEDを囲んでください</span>
+          </div>
+        </article>
+
         <article class="panel playback">
           <div class="panel-header"><h2 class="panel-title">同期スロー再生（任意）</h2><div class="panel-note">同期計算には不要。目視確認・発表用</div></div>
           <div class="video-grid">
@@ -321,6 +349,11 @@
     const state = {
       meta: { session: 'デモセッション', rgbFps: 60 },
       rgb: [], evs: [], rgbEdges: [], evsEdges: [], pairs: [],
+      preview: { rgb: [], evs: [] }, dataPath: null,
+      previewImages: { rgb: null, evs: null }, previewUrls: { rgb: null, evs: null },
+      previewTransforms: { rgb: null, evs: null },
+      roiMode: 'start', rois: { start: { rgb: null, evs: null }, end: { rgb: null, evs: null } },
+      roiDrag: null,
       offsetS: 0, drift: 0, anchorS: 0, rmsS: 0,
       viewStart: 0, viewEnd: 2.2, fullStart: 0, fullEnd: 2.2,
       dragging: false, dragX: 0, dragStart: 0, dragEnd: 0,
@@ -371,7 +404,18 @@
     }
 
     function loadDataset(data) {
-      state.meta = { session: data.meta?.session || '読み込みデータ', rgbFps: Number(data.meta?.rgbFps || data.meta?.rgb_fps || 60) };
+      state.meta = {
+        ...data.meta,
+        session: data.meta?.session || '読み込みデータ',
+        rgbFps: Number(data.meta?.rgbFps || data.meta?.rgb_fps || 60)
+      };
+      state.preview = {
+        rgb: Array.isArray(data.preview?.rgb) ? data.preview.rgb : [],
+        evs: Array.isArray(data.preview?.evs) ? data.preview.evs : []
+      };
+      state.previewImages = { rgb: null, evs: null };
+      state.previewUrls = { rgb: null, evs: null };
+      state.rois = { start: { rgb: null, evs: null }, end: { rgb: null, evs: null } };
       state.rgb = (data.rgb || []).map(p => ({ t: Number(p.t ?? p.time_s), v: Number(p.v ?? p.value ?? p.rgb) })).filter(p => Number.isFinite(p.t) && Number.isFinite(p.v)).sort((a,b) => a.t-b.t);
       state.evs = (data.evs || []).map(p => ({ t: Number(p.t ?? p.time_s), pos: Number(p.pos ?? p.positive_count ?? 0), neg: Number(p.neg ?? p.negative_count ?? 0) })).filter(p => Number.isFinite(p.t) && Number.isFinite(p.pos) && Number.isFinite(p.neg)).sort((a,b) => a.t-b.t);
       let fullStart = Infinity;
@@ -393,6 +437,7 @@
       $('sessionName').textContent = `${state.meta.session} — EVS ${state.evs.length.toLocaleString()} bin / RGB ${state.rgb.length.toLocaleString()} frame`;
       $('viewDuration').value = 'full';
       analyze();
+      updatePreview();
     }
 
     function detectEvsEdges() {
@@ -613,8 +658,12 @@
         ctx.fillStyle = 'rgba(255,180,92,.14)';
         ctx.fillRect(x(edge.lo), pad.t, Math.max(2, x(edge.hi)-x(edge.lo)), topH);
       }
+      const centerX = x((state.viewStart + state.viewEnd) / 2);
+      ctx.strokeStyle = 'rgba(255,180,92,.85)'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(centerX, pad.t); ctx.lineTo(centerX, h-pad.b); ctx.stroke();
       ctx.restore();
       updateTimelineNavigation();
+      updatePreview();
     }
 
     function updateTimelineNavigation() {
@@ -689,6 +738,161 @@
       state.viewStart = start; state.viewEnd = start + span; draw();
     }
 
+    function nearestPreview(sensor, time) {
+      const frames = state.preview[sensor] || [];
+      if (!frames.length) return null;
+      let low = 0, high = frames.length - 1;
+      while (low < high) {
+        const middle = Math.floor((low + high) / 2);
+        if (Number(frames[middle].t) < time) low = middle + 1; else high = middle;
+      }
+      const after = frames[low];
+      const before = frames[Math.max(0, low - 1)];
+      return Math.abs(Number(before.t) - time) <= Math.abs(Number(after.t) - time) ? before : after;
+    }
+
+    function previewFileUrl(relativePath) {
+      if (!state.dataPath) return null;
+      const normalized = String(relativePath || '').replace(/\\/g, '/');
+      const absolute = normalized.startsWith('/')
+        ? normalized
+        : `${state.dataPath.replace(/\/[^/]*$/, '')}/${normalized}`;
+      return `/api/file?path=${encodeURIComponent(absolute)}`;
+    }
+
+    function sensorImageSize(sensor, image) {
+      const configured = sensor === 'rgb' ? state.meta.rgb_image_size : state.meta.evs_image_size;
+      return {
+        width: Number(configured?.width || image?.naturalWidth || 1),
+        height: Number(configured?.height || image?.naturalHeight || 1)
+      };
+    }
+
+    function drawPreview(sensor) {
+      const canvas = $(`${sensor}Frame`);
+      const image = state.previewImages[sensor];
+      const rect = canvas.getBoundingClientRect();
+      const ratio = window.devicePixelRatio || 1;
+      const width = Math.max(1, Math.round(rect.width * ratio));
+      const height = Math.max(1, Math.round(rect.height * ratio));
+      if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; }
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, width, height);
+      ctx.save(); ctx.scale(ratio, ratio);
+      const w = width / ratio, h = height / ratio;
+      ctx.fillStyle = '#05080d'; ctx.fillRect(0, 0, w, h);
+      if (!image) { state.previewTransforms[sensor] = null; ctx.restore(); return; }
+      const scale = Math.min(w / image.naturalWidth, h / image.naturalHeight);
+      const drawW = image.naturalWidth * scale, drawH = image.naturalHeight * scale;
+      const x = (w - drawW) / 2, y = (h - drawH) / 2;
+      ctx.drawImage(image, x, y, drawW, drawH);
+      const native = sensorImageSize(sensor, image);
+      state.previewTransforms[sensor] = { x, y, width: drawW, height: drawH, nativeWidth: native.width, nativeHeight: native.height };
+      const roi = state.rois[state.roiMode][sensor];
+      if (roi) {
+        ctx.fillStyle = 'rgba(55,230,196,.12)';
+        ctx.strokeStyle = '#37e6c4'; ctx.lineWidth = 2;
+        const rx = x + roi.x / native.width * drawW;
+        const ry = y + roi.y / native.height * drawH;
+        const rw = roi.width / native.width * drawW;
+        const rh = roi.height / native.height * drawH;
+        ctx.fillRect(rx, ry, rw, rh); ctx.strokeRect(rx, ry, rw, rh);
+      }
+      ctx.restore();
+    }
+
+    function updatePreview() {
+      const center = (state.viewStart + state.viewEnd) / 2;
+      const labels = [];
+      for (const sensor of ['rgb', 'evs']) {
+        const frame = nearestPreview(sensor, center);
+        const empty = $(`${sensor}FrameEmpty`);
+        if (!frame) {
+          empty.hidden = false;
+          state.previewImages[sensor] = null;
+          drawPreview(sensor);
+          continue;
+        }
+        labels.push(`${sensor.toUpperCase()} ${Number(frame.t).toFixed(3)} s`);
+        const url = previewFileUrl(frame.path);
+        if (!url) {
+          empty.hidden = false;
+          empty.textContent = 'Docker内JSONとして開くとプレビュー画像を表示できます';
+          continue;
+        }
+        empty.hidden = true;
+        if (state.previewUrls[sensor] === url && state.previewImages[sensor]) {
+          drawPreview(sensor);
+          continue;
+        }
+        state.previewUrls[sensor] = url;
+        const image = new Image();
+        image.onload = () => {
+          if (state.previewUrls[sensor] !== url) return;
+          state.previewImages[sensor] = image;
+          drawPreview(sensor);
+        };
+        image.onerror = () => {
+          if (state.previewUrls[sensor] !== url) return;
+          empty.hidden = false; empty.textContent = 'プレビュー画像を読み込めませんでした';
+        };
+        image.src = url;
+      }
+      $('previewTime').textContent = labels.length ? labels.join(' / ') : 'プレビューなし';
+      updateRoiReadout();
+    }
+
+    function canvasToSensorPoint(sensor, event) {
+      const canvas = $(`${sensor}Frame`);
+      const transform = state.previewTransforms[sensor];
+      if (!transform) return null;
+      const rect = canvas.getBoundingClientRect();
+      const px = event.clientX - rect.left, py = event.clientY - rect.top;
+      if (px < transform.x || py < transform.y || px > transform.x + transform.width || py > transform.y + transform.height) return null;
+      return {
+        x: Math.round(clamp((px - transform.x) / transform.width, 0, 1) * transform.nativeWidth),
+        y: Math.round(clamp((py - transform.y) / transform.height, 0, 1) * transform.nativeHeight)
+      };
+    }
+
+    function updateRoiReadout() {
+      const format = roi => roi ? `${roi.x},${roi.y},${roi.width},${roi.height}` : '未選択';
+      const selected = state.rois[state.roiMode];
+      $('roiReadout').textContent = `${state.roiMode === 'start' ? '開始' : '終了'} · RGB ${format(selected.rgb)} · EVS ${format(selected.evs)}`;
+    }
+
+    function setRoiMode(mode) {
+      state.roiMode = mode;
+      $('startRoiMode').classList.toggle('active', mode === 'start');
+      $('endRoiMode').classList.toggle('active', mode === 'end');
+      drawPreview('rgb'); drawPreview('evs'); updateRoiReadout();
+    }
+
+    function attachRoiCanvas(sensor) {
+      const canvas = $(`${sensor}Frame`);
+      canvas.addEventListener('pointerdown', event => {
+        const point = canvasToSensorPoint(sensor, event);
+        if (!point) return;
+        state.roiDrag = { sensor, start: point };
+        state.rois[state.roiMode][sensor] = { x: point.x, y: point.y, width: 1, height: 1 };
+        canvas.setPointerCapture(event.pointerId);
+      });
+      canvas.addEventListener('pointermove', event => {
+        if (!state.roiDrag || state.roiDrag.sensor !== sensor) return;
+        const point = canvasToSensorPoint(sensor, event);
+        if (!point) return;
+        const start = state.roiDrag.start;
+        state.rois[state.roiMode][sensor] = {
+          x: Math.min(start.x, point.x), y: Math.min(start.y, point.y),
+          width: Math.max(1, Math.abs(point.x - start.x)), height: Math.max(1, Math.abs(point.y - start.y))
+        };
+        drawPreview(sensor); updateRoiReadout();
+      });
+      const finish = () => { state.roiDrag = null; updateRoiReadout(); };
+      canvas.addEventListener('pointerup', finish);
+      canvas.addEventListener('pointercancel', finish);
+    }
+
     function parseCsv(text) {
       const lines = text.trim().split(/\r?\n/).filter(Boolean);
       if (lines.length < 2) return {};
@@ -708,6 +912,7 @@
     }
 
     async function openData(files) {
+      state.dataPath = null;
       const merged = { meta: { session: [...files].map(f => f.name).join(' + ') }, rgb: [], evs: [] };
       for (const file of files) {
         const text = await file.text();
@@ -725,6 +930,7 @@
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || `読み込みに失敗しました (${response.status})`);
       if (!Array.isArray(data.rgb) || !Array.isArray(data.evs)) throw new Error('RGBまたはEVS信号がありません。');
+      state.dataPath = path;
       loadDataset(data);
       toast('Docker内の解析データを読み込みました。');
     }
@@ -748,6 +954,11 @@
           drift_ppm: state.drift * 1e6,
           residual_rms_s: state.rmsS,
           matched_edges: state.pairs.length
+        },
+        roi_selection: {
+          coordinate_system: 'sensor_pixels',
+          start: state.rois.start,
+          end: state.rois.end
         },
         pairs: state.pairs.map(p => ({ kind:p.evs.kind, evs_time_s:p.evs.t, rgb_interval_s:[p.rgb.lo,p.rgb.hi], rgb_midpoint_s:p.rgb.t, residual_s:p.residual || 0 }))
       }, null, 2));
@@ -792,7 +1003,7 @@
       toast(`RGB差分閾値を ${threshold.toPrecision(4)} に設定しました。`);
     });
     $('analyzeButton').addEventListener('click', () => { analyze(); toast(`${state.pairs.length}個の点滅エッジを対応付けました。`); });
-    $('demoButton').addEventListener('click', () => loadDataset(demoData()));
+    $('demoButton').addEventListener('click', () => { state.dataPath = null; loadDataset(demoData()); });
     $('exportButton').addEventListener('click', exportResult);
     $('sampleButton').addEventListener('click', () => download('led_sync_sample.json', JSON.stringify(demoData(), null, 2)));
     $('dataFiles').addEventListener('change', event => openData(event.target.files).catch(error => toast(error.message)));
@@ -809,10 +1020,12 @@
     });
     $('startView').addEventListener('click', () => {
       $('viewDuration').value = '0.5';
+      setRoiMode('start');
       setView(state.evsEdges[0]?.t ?? state.fullStart, .5);
     });
     $('endView').addEventListener('click', () => {
       $('viewDuration').value = '0.5';
+      setRoiMode('end');
       setView(state.evsEdges.at(-1)?.t ?? state.fullEnd, .5);
     });
     $('viewDuration').addEventListener('change', event => {
@@ -846,6 +1059,14 @@
     navigator.addEventListener('pointerup', () => state.navigatorDragging = false);
     navigator.addEventListener('pointercancel', () => state.navigatorDragging = false);
 
+    $('startRoiMode').addEventListener('click', () => setRoiMode('start'));
+    $('endRoiMode').addEventListener('click', () => setRoiMode('end'));
+    $('clearRoi').addEventListener('click', () => {
+      state.rois[state.roiMode] = { rgb: null, evs: null };
+      drawPreview('rgb'); drawPreview('evs'); updateRoiReadout();
+    });
+    attachRoiCanvas('rgb'); attachRoiCanvas('evs');
+
     const canvas = $('timeline');
     canvas.addEventListener('wheel', event => {
       event.preventDefault(); const rect=canvas.getBoundingClientRect(); const ratio=clamp((event.clientX-rect.left)/rect.width,0,1);
@@ -874,7 +1095,7 @@
     function step(direction){const evs=$('evsVideo'),rgb=$('rgbVideo');const fps=Math.max(1,Number($('evsVideoFps').value));evs.pause();rgb.pause();evs.currentTime=Math.max(0,evs.currentTime+direction/fps);const evsT=evsSourceTime();const target=evsT+state.offsetS+state.drift*(evsT-state.anchorS);rgb.currentTime=Math.max(0,target);$('playButton').textContent='再生';updateTimecode();}
     $('stepBack').addEventListener('click',()=>step(-1)); $('stepForward').addEventListener('click',()=>step(1));
     $('evsVideo').addEventListener('timeupdate',updateTimecode);
-    window.addEventListener('resize', draw);
+    window.addEventListener('resize', () => { draw(); drawPreview('rgb'); drawPreview('evs'); });
 
     loadDataset(demoData());
     const requestedData = new URLSearchParams(location.search).get('data');

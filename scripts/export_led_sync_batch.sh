@@ -5,6 +5,8 @@ CONFIG="/workspaces/ros2_ws/src/tool/multi_sensor_calibration/config/rc_popout_e
 RGB_ROI="0,0,848,480"
 EVS_ROI="0,0,640,480"
 BIN_MS="1"
+PREVIEW_FPS="20"
+PREVIEW_WINDOW_S="12"
 FORCE=false
 CALIBRATION_SESSION="20260921_185407_rcp_calibration_checkerboard_20260921_185405"
 ROOTS=(
@@ -20,6 +22,9 @@ Options:
   --rgb-roi X,Y,W,H   RGB LED ROI (default: full 848x480 frame)
   --evs-roi X,Y,W,H   EVS LED ROI (default: full 640x480 frame)
   --bin-ms MS          EVS bin width (default: 1)
+  --preview-fps FPS    RGB/EVS preview rate (default: 20)
+  --preview-window-s S Export this many seconds at start and end (default: 12)
+  --no-preview         Do not export visual preview images
   --config PATH        Calibration config path
   --force              Reprocess sessions with an existing JSON output
   -h, --help           Show this help
@@ -42,6 +47,18 @@ while (($#)); do
     --bin-ms)
       BIN_MS="${2:?--bin-ms requires a value}"
       shift 2
+      ;;
+    --preview-fps)
+      PREVIEW_FPS="${2:?--preview-fps requires a value}"
+      shift 2
+      ;;
+    --preview-window-s)
+      PREVIEW_WINDOW_S="${2:?--preview-window-s requires a value}"
+      shift 2
+      ;;
+    --no-preview)
+      PREVIEW_FPS="0"
+      shift
       ;;
     --config)
       CONFIG="${2:?--config requires a path}"
@@ -111,6 +128,7 @@ echo "  sessions : $total"
 echo "  RGB ROI  : $RGB_ROI"
 echo "  EVS ROI  : $EVS_ROI"
 echo "  bin       : ${BIN_MS} ms"
+echo "  preview   : ${PREVIEW_FPS} fps, first/last ${PREVIEW_WINDOW_S} s"
 echo "  calibration session skipped: $CALIBRATION_SESSION"
 
 succeeded=0
@@ -163,6 +181,8 @@ for session in "${sessions[@]}"; do
     --rgb-roi "$RGB_ROI" \
     --evs-roi "$EVS_ROI" \
     --bin-ms "$BIN_MS" \
+    --preview-fps "$PREVIEW_FPS" \
+    --preview-window-s "$PREVIEW_WINDOW_S" \
     --session-name "$name" \
     --output-dir "$output_dir" \
     >"$output_dir/export.log" 2>&1; then

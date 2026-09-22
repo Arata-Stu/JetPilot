@@ -17,7 +17,8 @@ Macのbrowserで <http://localhost:8765> を開きます。GUIの「Docker内JSO
 scripts/led_sync_gui.sh --host 0.0.0.0
 ```
 
-serverが読み出せるのは、既定では`/workspaces/record`配下のJSONだけです。
+serverが読み出せるのは、既定では`/workspaces/record`配下の解析JSONと、そのJSONが
+参照するpreview画像だけです。
 
 ## v1/v2の一括export
 
@@ -28,6 +29,9 @@ checkerboard校正sessionを除外し、`evs-popup-v1`と`evs-popup-v2`の各走
 scripts/export_led_sync_batch.sh
 ```
 
+既定では各sessionの先頭・末尾12秒を20 fpsでpreview出力します。古いJSONを
+preview付きで作り直す場合は`--force`を付けます。
+
 LEDのROIが分かっている場合は、全画面より小さいROIを指定してください。
 
 ```bash
@@ -37,3 +41,7 @@ scripts/export_led_sync_batch.sh \
 ```
 
 出力先は`evs-popup-vN/analysis/led_sync/<session>/`です。
+
+GUIではタイムライン中央の橙線に近いRGB/EVS画像が並んで表示されます。「開始側」または
+「終了側」を選び、両方の画像上でLEDをドラッグして囲めます。選んだ4つのROIは
+「結果を書き出す」で保存されるJSONの`roi_selection`に含まれます。
