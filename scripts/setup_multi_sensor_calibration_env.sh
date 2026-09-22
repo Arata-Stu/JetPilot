@@ -2,18 +2,14 @@
 set -euo pipefail
 
 VENV_DIR="/workspaces/.venvs/multi_sensor_calibration"
-REQUIREMENTS="/workspaces/tools/isaac-ros-cli/docker/requirements-multi-sensor-calibration.txt"
-
-if [[ ! -f "$REQUIREMENTS" ]]; then
-  echo "Requirements file not found: $REQUIREMENTS" >&2
-  echo "Run this script inside the JetPilot container mounted at /workspaces." >&2
-  exit 1
-fi
 
 mkdir -p "$(dirname "$VENV_DIR")"
 /usr/bin/python3 -m venv --clear --system-site-packages "$VENV_DIR"
 "$VENV_DIR/bin/python" -m pip install --upgrade pip
-"$VENV_DIR/bin/python" -m pip install -r "$REQUIREMENTS"
+"$VENV_DIR/bin/python" -m pip install \
+  "numpy==1.26.4" \
+  "PyYAML==6.0.2" \
+  "rosbags==0.11.3"
 
 "$VENV_DIR/bin/python" - <<'PY'
 import cv2
