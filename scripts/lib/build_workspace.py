@@ -4,7 +4,6 @@ from __future__ import annotations
 import argparse
 import os
 from pathlib import Path
-import platform
 import re
 import shlex
 import shutil
@@ -38,7 +37,7 @@ def main(argv=None) -> int:
     mode.add_argument('--packages', nargs='+', metavar='PACKAGE')
     parser.add_argument('--workspace', type=Path, default=Path(os.environ.get('ROS2_WS', Path(__file__).resolve().parents[2] / 'ros2_ws')))
     parser.add_argument('--no-deps', action='store_true', help='select only named packages; default includes workspace dependencies')
-    parser.add_argument('--jobs', type=int, default=2 if platform.machine() in ('aarch64', 'arm64') else None)
+    parser.add_argument('--jobs', type=int, help='optional CMake build parallelism override; default uses the build tool settings')
     parser.add_argument('-c', '--clean', action='store_true', help='remove selected package outputs (all outputs in --all mode)')
     parser.add_argument('--clean-all', action='store_true', help='explicitly remove the entire workspace build/install/log')
     parser.add_argument('--no-ccache', action='store_true')
@@ -92,9 +91,6 @@ def main(argv=None) -> int:
     command = ['colcon', 'build', '--symlink-install']
     if args.packages:
         command += ['--packages-select' if args.no_deps else '--packages-up-to', *args.packages]
-    if args.jobs:
-        # Avoid multiplying package concurrency by compiler concurrency on Jetson.
-        command += ['--parallel-workers', '1']
     command += ['--cmake-args', '-DCMAKE_BUILD_TYPE=Release']
     if not args.no_ccache and shutil.which('ccache'):
         command += ['-DCMAKE_C_COMPILER_LAUNCHER=ccache', '-DCMAKE_CXX_COMPILER_LAUNCHER=ccache']

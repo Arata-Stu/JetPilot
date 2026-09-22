@@ -16,14 +16,14 @@ Mac は編集と軽量検証に使用する。ROS ビルドと Python 環境の�
 ./scripts/build.sh --all                            # 全体
 ./scripts/build.sh --packages jetpilot_controller   # 対象とワークスペース内の依存
 ./scripts/build.sh --packages jetpilot_controller --no-deps
-./scripts/build.sh --packages jetpilot_controller --clean --jobs 2
+./scripts/build.sh --packages jetpilot_controller --clean
 ./scripts/build.sh --all --clean-all --dry-run       # 削除予定とコマンドの確認のみ
 ```
 
 - `--packages` は既定で `--packages-up-to`、`--no-deps` は `--packages-select`。
 - `--clean` は指定パッケージの `build/<name>` と `install/<name>` のみ削除する。`--all --clean` または `--clean-all` では build/install/log 全体を削除する。
 - merged install のパッケージ別クリーンは拒否する。
-- ARM64 の既定は `--jobs 2`。jobs 指定時は同時パッケージ数を1にして、コンパイラの並列数を指定値に抑える。二重の並列化で Jetson のメモリを圧迫しない。
+- x86・Jetson ともに並列数は colcon／ビルドツールの標準設定に任せる。スクリプト独自の制限は加えない。必要な場合だけ `--jobs N` で `CMAKE_BUILD_PARALLEL_LEVEL` を指定できる。この指定でもパッケージ並列数は制限しない。
 - ccache がインストール済みなら自動使用する。`--no-ccache` で無効化できる。
 - `--workspace` または共通設定の `ROS2_WS` でワークスペースを変更できる。
 - CI・非対話入力では `--all` か `--packages` を必須にする。
