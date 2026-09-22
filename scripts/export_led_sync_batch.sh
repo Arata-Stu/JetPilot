@@ -95,7 +95,17 @@ else
   exit 1
 fi
 
-if [[ -f /workspaces/.venvs/multi_sensor_calibration/bin/activate ]]; then
+if [[ -n "${MULTI_SENSOR_CALIBRATION_VENV:-}" && -f "$MULTI_SENSOR_CALIBRATION_VENV/bin/activate" ]]; then
+  set +u
+  # shellcheck disable=SC1090
+  source "$MULTI_SENSOR_CALIBRATION_VENV/bin/activate"
+  set -u
+elif [[ -f /opt/multi_sensor_calibration_env/bin/activate ]]; then
+  set +u
+  # shellcheck disable=SC1091
+  source /opt/multi_sensor_calibration_env/bin/activate
+  set -u
+elif [[ -f /workspaces/.venvs/multi_sensor_calibration/bin/activate ]]; then
   set +u
   # shellcheck disable=SC1091
   source /workspaces/.venvs/multi_sensor_calibration/bin/activate

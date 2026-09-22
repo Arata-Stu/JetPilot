@@ -1,5 +1,24 @@
 # LED Sync Inspector
 
+## Python環境
+
+既存containerで解析環境を作る場合は、container内で次を実行します。
+
+```bash
+cd /workspaces
+scripts/setup_multi_sensor_calibration_env.sh
+source /workspaces/.venvs/multi_sensor_calibration/bin/activate
+
+source /opt/ros/jazzy/setup.bash
+cd /workspaces/ros2_ws
+colcon build --packages-select multi_sensor_calibration --symlink-install
+source /workspaces/ros2_ws/install/setup.bash
+```
+
+新しくbuildしたJetPilot imageには同じ環境が
+`/opt/multi_sensor_calibration_env`として含まれます。一括export scriptは、image内の
+環境、workspace内の一時環境の順で自動検出します。
+
 Docker内で次を実行します。
 
 ```bash
