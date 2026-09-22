@@ -109,6 +109,13 @@ class BagManagerNode(Node):
     def __init__(self) -> None:
         super().__init__("bag_manager_node")
         self.output_dir = Path(self.declare_parameter("output_dir", "/tmp/jetpilot_bags").value)
+        self.recording_name = str(self.declare_parameter("recording_name", "").value)
+        if self.recording_name and (
+            self.recording_name.strip() != self.recording_name
+            or self.recording_name in (".", "..")
+            or any(c in "/\\" or ord(c) < 32 or ord(c) == 127 for c in self.recording_name)
+        ):
+            raise ValueError("recording_name must be a single folder name without control characters")
         self.record_all = bool(self.declare_parameter("record_all", True).value)
         self.topics = declare_string_array_parameter(self, "topics", DEFAULT_TOPICS)
         self.exclude_topics = declare_string_array_parameter(self, "exclude_topics")
@@ -221,20 +228,31 @@ class BagManagerNode(Node):
             self.get_logger().warn(self.last_event)
         self.publish_status()
 
+    def next_recording_path(self, label: str) -> Path:
+        now = datetime.now()
+        if self.recording_name:
+            parent = self.output_dir / now.strftime("%Y-%m-%d")
+            name = self.recording_name
+        else:
+            parent = self.output_dir
+            stamp = now.strftime("%Y%m%d_%H%M%S")
+            safe_label = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in label).strip("_")
+            name = f"{stamp}_{safe_label}" if safe_label else stamp
+        output_path = parent / name
+        suffix = 1
+        while output_path.exists() or output_path.is_symlink():
+            output_path = parent / f"{name}_{suffix:02d}"
+            suffix += 1
+        return output_path
+
     def start_recording(self, label: str) -> bool:
         if self.recording:
             self.last_event = "start ignored: already recording"
             self.get_logger().warn(self.last_event)
             return True
 
-        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        safe_label = "".join(c if c.isalnum() or c in ("-", "_") else "_" for c in label).strip("_")
-        name = f"{stamp}_{safe_label}" if safe_label else stamp
-        output_path = self.output_dir / name
-        suffix = 1
-        while output_path.exists():
-            output_path = self.output_dir / f"{name}_{suffix:02d}"
-            suffix += 1
+        output_path = self.next_recording_path(label)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
         self.current_uri = str(output_path)
 
         command = self.build_record_command(self.current_uri)

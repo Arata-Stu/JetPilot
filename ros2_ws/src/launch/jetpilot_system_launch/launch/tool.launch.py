@@ -6,6 +6,7 @@ import isaac_ros_launch_utils as lu
 import isaac_ros_launch_utils.all_types as lut
 from launch.actions import GroupAction
 from launch_ros.actions import SetRemap
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def is_jetson_platform() -> bool:
@@ -31,12 +32,17 @@ def add_nodes(args: lu.ArgumentContainer):
     use_sim_time = lu.is_true(args.use_sim_time)
 
     if lu.is_true(args.enable_bag_manager):
+        bag_overrides = {'use_sim_time': use_sim_time}
+        if str(args.bag_manager_output_dir):
+            bag_overrides['output_dir'] = ParameterValue(str(args.bag_manager_output_dir), value_type=str)
+        if str(args.bag_manager_recording_name):
+            bag_overrides['recording_name'] = ParameterValue(str(args.bag_manager_recording_name), value_type=str)
         actions.append(lu.Node(
             package='jetpilot_bag_tools',
             executable='bag_manager_node.py',
             name='bag_manager_node',
             output='screen',
-            parameters=[args.bag_manager_param, {'use_sim_time': use_sim_time}],
+            parameters=[args.bag_manager_param, bag_overrides],
         ))
 
     if lu.is_true(args.enable_joy):
@@ -150,6 +156,8 @@ def add_nodes(args: lu.ArgumentContainer):
 def generate_launch_description() -> lut.LaunchDescription:
     args = lu.ArgumentContainer()
 
+    args.add_arg('bag_manager_output_dir', '', cli=True)
+    args.add_arg('bag_manager_recording_name', '', cli=True)
     args.add_arg(
         'bag_manager_param',
         lu.get_path('jetpilot_system_launch', 'config/tool/bag_manager.param.yaml'),

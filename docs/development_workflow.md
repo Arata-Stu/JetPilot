@@ -28,6 +28,31 @@ Mac は編集と軽量検証に使用する。ROS ビルドと Python 環境の�
 - `--workspace` または共通設定の `ROS2_WS` でワークスペースを変更できる。
 - CI・非対話入力では `--all` か `--packages` を必須にする。
 
+## 録画先を指定する
+
+bag manager が有効な bringup を端末から起動すると、録画名を入力する。
+保存先は `record/<録画日のYYYY-MM-DD>/<入力した名前>/`。このフォルダ自体が bag で、
+その下に `metadata.yaml` と MCAP 等のファイルが入る。時刻のサブフォルダは作らない。
+日付には bag manager が動作しているマシンのローカル日付を使い、録画開始ごとに決める。
+同じ日に同名で録画し直す場合は `名前_01`、`名前_02` と空いている連番に保存する。
+
+```bash
+./scripts/bringup.sh record                         # 起動時に録画名を入力
+./scripts/bringup.sh record --record-name コースA_低速
+./scripts/bringup.sh record --record-name コースA_低速 --dry-run
+```
+
+`RECORD_ROOT` で record の場所を変更できる。日本語・名前の途中の空白は使用可能。
+`/`・`\`・制御文字・前後の空白・`.`・`..` は録画名に使用できない。
+bag manager が無効なら入力は求めない。`--yes`・`--dry-run`・非対話実行でも入力は求めず、
+`--record-name` または `BRINGUP_RECORD_NAME` で指定する。これらで名前を省略した場合は、
+既存の自動実行との互換性のため従来の日時付き保存を維持する。
+名前の指定は録画開始を意味せず、実際の開始・停止はこれまでどおりJoy等で行う。
+
+ROS launch を直接呼ぶ場合は `bag_manager_output_dir` に保存ルート、
+`bag_manager_recording_name` に名前を指定する。
+変更反映には実行環境で `jetpilot_system_launch` と `jetpilot_bag_tools` をビルドする。
+
 ## 外部リポジトリ
 
 ```bash

@@ -40,6 +40,7 @@ DRY_RUN=false
 ASSUME_YES=false
 INTERACTIVE=false
 CLI_BAG_MANAGER=''
+RECORD_NAME="${BRINGUP_RECORD_NAME:-}"
 CLI_SENSOR_KIT=''
 CLI_E2E_MODEL=''
 CLI_LOCALIZATION_INIT=''
@@ -166,6 +167,7 @@ Options:
       --vehicle PROFILE
                         Select a discovered vehicle interface profile (default: jpbb for vehicle presets)
       --e2e-model DIR  Select an E2E model directory (metadata is checked)
+      --record-name NAME  Save bags to RECORD_ROOT/YYYY-MM-DD/NAME (repeats: NAME_01)
       --bag-manager    Enable bag manager recording control
       --no-bag-manager Disable bag manager recording control
       --sensor-kit NAME
@@ -1981,6 +1983,29 @@ configure_e2e_model() {
   fi
 }
 
+configure_record_destination() {
+  is_true "$(get_arg enable_bag_manager 2>/dev/null || true)" || return 0
+  local name="$RECORD_NAME"
+  [[ -n "$name" ]] || name="$(get_arg bag_manager_recording_name 2>/dev/null || true)"
+  if [[ -z "$name" && -t 0 && -t 1 && "$DRY_RUN" != true && "$ASSUME_YES" != true ]]; then
+    printf '\n録画先: %s/<録画日のYYYY-MM-DD>/<入力した名前>/\n' "$RECORD_ROOT" >&2
+    while [[ -z "$name" ]]; do
+      read -r -p '録画名（例: コースA_低速）: ' name || die 'recording name input cancelled'
+    done
+  fi
+  [[ -n "$name" ]] || return 0
+  "$PYTHON_BIN" - "$name" <<'PYNAME' || die 'recording name must be one folder name without slashes, control characters, or leading/trailing spaces'
+import sys
+name = sys.argv[1]
+raise SystemExit(0 if name.strip() == name and name not in (".", "..")
+                 and not any(c in "/\\" or ord(c) < 32 or ord(c) == 127 for c in name) else 1)
+PYNAME
+  set_arg bag_manager_recording_name "$name"
+  if [[ -z "$(get_arg bag_manager_output_dir 2>/dev/null || true)" ]]; then
+    set_arg bag_manager_output_dir "$RECORD_ROOT"
+  fi
+}
+
 configure_recording_interactively() {
   [[ "$PRESET" == 'record' ]] || return 0
   local override selection
@@ -2701,6 +2726,11 @@ print_summary() {
 
   printf '\nJetPilot bringup\n'
   printf '  preset       : %s\n' "$PRESET"
+  if is_true "$(get_arg enable_bag_manager 2>/dev/null || true)" \
+    && [[ -n "$(get_arg bag_manager_recording_name 2>/dev/null || true)" ]]; then
+    printf '  録画先       : %s/<YYYY-MM-DD>/%s/（重複時は連番）\n' \
+      "$(get_arg bag_manager_output_dir)" "$(get_arg bag_manager_recording_name)"
+  fi
   printf '  vehicle      : %s\n' "$displayed_backend"
   printf '  sensor       : %s\n' "$(get_arg enable_sensor_kit)"
   if is_true "$(get_arg enable_sensor_kit)"; then
@@ -2839,7 +2869,7 @@ print_summary() {
       "$(get_arg rviz_config_file 2>/dev/null || printf 'default')"
   fi
   printf '\nCommand:\n  '
-  printf '%q ' "${command[@]}"
+  "$PYTHON_BIN" -c 'import shlex, sys; print(" ".join(shlex.quote(arg) for arg in sys.argv[1:]), end="")' "${command[@]}"
   printf '\n\n'
 
   LAUNCH_COMMAND=("${command[@]}")
@@ -2929,6 +2959,16 @@ while (($# > 0)); do
       (($# >= 2)) || die '--e2e-model requires a model directory'
       CLI_E2E_MODEL="$2"
       shift 2
+      ;;
+    --record-name)
+      (($# >= 2)) && [[ -n "$2" ]] || die '--record-name requires a name'
+      RECORD_NAME="$2"
+      shift 2
+      ;;
+    --record-name=*)
+      RECORD_NAME="${1#*=}"
+      [[ -n "$RECORD_NAME" ]] || die '--record-name requires a name'
+      shift
       ;;
     --bag-manager)
       CLI_BAG_MANAGER=true
@@ -3118,6 +3158,7 @@ if ((${#EXTRA_LAUNCH_ARGS[@]} > 0)); then
     parse_override "$override"
   done
 fi
+configure_record_destination
 configure_rc_popout_event_image_interactively
 configure_e2e_model
 if [[ "$INTERACTIVE" == 'true' ]]; then

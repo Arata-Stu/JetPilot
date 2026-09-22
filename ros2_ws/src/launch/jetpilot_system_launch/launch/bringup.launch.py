@@ -390,6 +390,8 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('jetson_stats_diagnostics_topic', '/jetson/diagnostics', cli=True)
     args.add_arg('jetson_stats_interval', '0.5', cli=True)
     args.add_arg('control_authority', 'hardware_mux', cli=True)
+    args.add_arg('bag_manager_output_dir', '', cli=True)
+    args.add_arg('bag_manager_recording_name', '', cli=True)
     args.add_arg(
         'bag_manager_param',
         lu.get_path('jetpilot_system_launch', 'config/tool/bag_manager.param.yaml'),
@@ -934,6 +936,8 @@ def generate_launch_description() -> lut.LaunchDescription:
             'launch/tool.launch.py',
             launch_arguments={
                 'bag_manager_param': args.bag_manager_param,
+                'bag_manager_output_dir': args.bag_manager_output_dir,
+                'bag_manager_recording_name': args.bag_manager_recording_name,
                 'teleop_cmd_param': args.teleop_cmd_param,
                 'teleop_fixed_throttle_mode': args.teleop_fixed_throttle_mode,
                 'fixed_throttle': args.fixed_throttle,
