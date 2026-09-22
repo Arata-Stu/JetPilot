@@ -164,7 +164,7 @@ textarea {
 .app {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: 56px 1fr auto;
+  grid-template-rows: 56px auto 1fr auto;
   min-width: 0;
   min-height: 100vh;
   width: 100%;
@@ -4558,7 +4558,7 @@ tr:last-child td {
 
 @media (max-width: 700px) {
   .app {
-    grid-template-rows: auto 1fr auto;
+    grid-template-rows: auto auto 1fr auto;
   }
 
   .topbar {
@@ -4768,3 +4768,41 @@ tr:last-child td {
 .runtime-state-chips span.ok { border-color: #2a6d48; color: #7fe0a4; }
 .runtime-log { max-height: 420px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 @media (max-width: 1100px) { .runtime-workflow { grid-template-columns: 1fr; } .runtime-hero { align-items: flex-start; } }
+
+/* Shared runtime snapshot and dense asset lists. */
+.runtime-status-bar {
+  position: sticky; top: 0; z-index: 35;
+  display: flex; align-items: center; flex-wrap: wrap; gap: 10px 22px;
+  padding: 8px 20px; border-bottom: 1px solid var(--line);
+  background: #151d25; font-size: 12px;
+}
+.runtime-status-target { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px; }
+.runtime-status-snapshot, .runtime-status-record { display: grid; gap: 2px; }
+.runtime-status-bar small { color: var(--muted); font-size: 11px; }
+.runtime-status-record.recording { color: #ff9b91; }
+.runtime-status-bar > button { margin-left: auto; padding: 6px 10px; }
+.analysis-setup-summary { padding: 12px; background: #151d25; border: 1px solid #38658a; border-radius: 8px; }
+.analysis-setup-summary dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 18px; margin: 10px 0 0; }
+.analysis-setup-summary dl > div { min-width: 0; }
+.analysis-setup-summary dt { font-size: 11px; color: var(--muted); }
+.analysis-setup-summary dd { margin: 3px 0 0; font-size: 12px; overflow-wrap: anywhere; }
+.compact-list-item { padding: 9px 10px; gap: 5px; }
+.compact-list-heading { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.compact-list-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.compact-list-heading > button { flex: none; padding: 5px 10px; min-height: 30px; }
+.compact-list-heading > .status { flex: none; }
+.compact-map-meta .status { font-size: 10px; padding: 2px 7px; }
+.compact-item-details > summary { cursor: pointer; font-size: 12px; color: var(--muted); padding: 3px 0; }
+.compact-details-body { display: grid; gap: 9px; padding-top: 9px; }
+.compact-details-body .path { white-space: normal; overflow-wrap: anywhere; }
+.compact-warning { color: #e7b96b; margin-left: 8px; }
+.map-list-panel .date-group, .analysis-list-panel .date-group { border: 0; border-radius: 0; background: transparent; margin-bottom: 8px; }
+.map-list-panel .date-group > summary, .analysis-list-panel .date-group > summary { padding: 6px 0; font-size: 12px; }
+.map-list-panel .date-group > .map-list, .analysis-list-panel .date-group > .analysis-list { padding: 0; }
+.map-list, .analysis-list { gap: 6px; }
+.list-controls .check-row { flex-shrink: 0; white-space: nowrap; }
+@media (max-width: 700px) {
+  .runtime-status-bar { gap: 6px 12px; padding: 8px 12px; }
+  .runtime-status-target { max-width: 180px; }
+  .analysis-setup-summary dl { grid-template-columns: minmax(0, 1fr); }
+}

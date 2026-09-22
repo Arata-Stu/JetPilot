@@ -180,3 +180,13 @@ function toggleDateGroup(kind, key, open) {
 function commandText(task) {
   return (task?.command || []).map((part) => JSON.stringify(part)).join(" ");
 }
+
+function listItemDetailsAttrs(kind, id) {
+  const expanded = listControl(kind).expandedItems || {};
+  return `${expanded[id] ? "open" : ""} ontoggle="toggleListItemDetails(${js(kind)}, ${js(id)}, this.open)"`;
+}
+function toggleListItemDetails(kind, id, open) {
+  const control = listControl(kind);
+  control.expandedItems ||= {};
+  control.expandedItems[id] = open;
+}

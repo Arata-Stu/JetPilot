@@ -34,6 +34,7 @@ function runtimeChange(key, value, redraw = false) {
   runtimeSavedKeys.add(key);
   runtimeConfig[key] = value;
   localStorage.setItem('jetpilot-runtime-v1', JSON.stringify(runtimeConfig));
+  runtimeError = '';
   runtimeResult = null; // Old target's state must never be shown as the new target's state.
   runtimeLastUpdate = '';
   runtimeBag = {state:'unknown'}; runtimeBagTime = '';
@@ -61,6 +62,20 @@ function runtimeConnectionState() {
   if (runtimeResult) return ['idle','SSH接続済み'];
   return ['idle','未確認'];
 }
+function renderRuntimeStatusBar() {
+  const connection = runtimeError ? '確認失敗' : runtimeResult?.container_running ? '接続済み' : runtimeResult ? 'Docker未接続' : '未確認';
+  const process = runtimeError ? '未確認' : ({running:'実行中',exited:'終了',not_started:'未起動'})[runtimeResult?.state] || '未確認';
+  const bag = ({recording:'● 記録中',idle:'記録停止中',unknown:'記録未確認'})[runtimeBag.state] || '記録未確認';
+  return `<div class="runtime-status-target" title="${esc(runtimeConfig.host)}"><strong>Jetson</strong> ${esc(runtimeConfig.host || '接続先未設定')}</div>
+    <div class="runtime-status-snapshot"><span>接続 ${connection} · プロセス ${process}</span><small>確認時点 ${esc(runtimeLastUpdate || '未取得')}${runtimeError ? ' · 更新失敗' : ''}</small></div>
+    <div class="runtime-status-record ${runtimeBag.state === 'recording' ? 'recording' : ''}"><strong>${bag}</strong><small>確認時点 ${esc(runtimeBagTime || '未取得')}</small></div>
+    <button onclick="setTab('runtime')">起動・運転へ</button>`;
+}
+function refreshRuntimeStatusBar() {
+  const bar = document.querySelector('#runtime-status-bar');
+  if (bar) bar.innerHTML = renderRuntimeStatusBar();
+}
+
 function runtimeLogToggle(details) {
   runtimeLogViewOpen = details.open;
   if (!details.open && state.tab === 'runtime') render();
@@ -171,7 +186,7 @@ async function runtimeAction(action) {
     runtimeLastUpdate = new Date().toLocaleTimeString();
     runtimeRefreshBag();
   } catch (error) { runtimeError = error.message; runtimePreparePollRemaining = 0; }
-  finally { runtimeBusy = false; if (state.tab === 'runtime' && !runtimeLogViewOpen) render(); }
+  finally { runtimeBusy = false; refreshRuntimeStatusBar(); if (state.tab === 'runtime' && !runtimeLogViewOpen) render(); }
 }
 
 async function runtimeRefreshBag() {
@@ -188,6 +203,7 @@ async function runtimeRefreshBag() {
     runtimeBag = {state:'unknown',message:error.message}; runtimeBagTime = '';
   } finally {
     runtimeBagBusy = false;
+    refreshRuntimeStatusBar();
     if (state.tab === 'runtime' && !runtimeLogViewOpen && !document.querySelector('.runtime-panel input:focus, .runtime-panel select:focus')) render();
   }
 }
@@ -206,7 +222,7 @@ async function runtimeTuningAction(action) {
   finally {runtimeBusy=false;if(state.tab==='runtime')render();}
 }
 setInterval(()=>{
-  if (state.tab === 'runtime' && runtimeResult?.container_running && !runtimeBusy && !runtimeLogViewOpen) runtimeRefreshBag();
+  if (runtimeResult?.container_running && !runtimeError && !runtimeBusy && !(state.tab === 'runtime' && runtimeLogViewOpen)) runtimeRefreshBag();
 },5000);
 setInterval(()=>{
   if (state.tab !== 'runtime' || runtimeBusy || runtimeLogViewOpen || runtimePreparePollRemaining <= 0) return;

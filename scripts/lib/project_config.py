@@ -33,7 +33,7 @@ def load_environment(root: Path, environ=None) -> dict[str, str]:
     for key, folder in (('ROS2_WS', 'ros2_ws'), ('PYTHON_WS', 'python_ws'), ('RECORD_ROOT', 'record'), ('MAP_ROOT', 'map')):
         values.setdefault(key, str(root / folder))
     values.setdefault('JETSON_REMOTE_USER', 'tamiya')
-    values.setdefault('JETSON_REMOTE_IPS', '192.168.55.1')
+    values.setdefault('JETSON_REMOTE_IPS', '192.168.55.1 192.168.11.190 10.42.0.1 192.168.11.11')
     values.setdefault('JETSON_WORKSPACE_ROOT', f'/home/{values["JETSON_REMOTE_USER"]}/workspaces/JetPilot')
     values.setdefault('JETSON_MAP_ROOT', values['JETSON_WORKSPACE_ROOT'].rstrip('/') + '/map')
     values.setdefault('JETSON_RECORD_ROOT', values['JETSON_WORKSPACE_ROOT'].rstrip('/') + '/record')

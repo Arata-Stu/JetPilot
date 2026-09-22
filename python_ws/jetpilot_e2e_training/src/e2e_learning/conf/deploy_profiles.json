@@ -26,6 +26,14 @@
       "remote_root": "/home/tamiya/workspaces/JetPilot/ros2_ws/models/e2e"
     },
     {
+      "id": "lan-11",
+      "label": "Jetson LAN (192.168.11.11)",
+      "description": "Jetson on the configured local network",
+      "user": "tamiya",
+      "host": "192.168.11.11",
+      "remote_root": "/home/tamiya/workspaces/JetPilot/ros2_ws/models/e2e"
+    },
+    {
       "id": "manual",
       "label": "Manual IP",
       "description": "Enter a Jetson IP address or hostname interactively",

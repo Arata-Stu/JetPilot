@@ -970,6 +970,7 @@ function render() {
           </div></details>
         </div>
       </header>
+      <div id="runtime-status-bar" class="runtime-status-bar" aria-label="運転状態">${renderRuntimeStatusBar()}</div>
       <main class="content">${renderWorkspaceSubnav()}${renderPage()}</main>
       ${renderTerminal()}
       ${renderLogDialog()}
@@ -2680,6 +2681,7 @@ function renderE2EAnalysisForm() {
         <label class="check-row"><input type="checkbox" ${analysis.eventTensorPreview ? "checked" : ""} onchange="updateE2EOption('eventTensorPreview', this.checked)" /><span>Generate one preview for every extracted RGB frame (tensor data is not saved)</span></label>
         ${analysis.eventTensorPreview ? `<div class="e2e-compact-fields"><label>Event topic<select onchange="updateE2EOption('eventTopic', this.value)">${analysisTopicOptions("event", analysis.eventTopic)}</select></label><label>Bins<input type="number" min="1" max="64" value="${esc(analysis.eventBins)}" onchange="updateE2EOption('eventBins', this.value)" /></label><label>Window (ms)<input type="number" min="0.1" step="0.1" value="${esc(analysis.eventWindowMs)}" onchange="updateE2EOption('eventWindowMs', this.value)" /></label><label>Stride (ms)<input type="number" min="0.1" step="0.1" value="${esc(analysis.eventStrideMs)}" onchange="updateE2EOption('eventStrideMs', this.value)" /></label></div><label class="check-row"><input type="checkbox" ${analysis.eventLinearInterpolation ? "checked" : ""} onchange="updateE2EOption('eventLinearInterpolation', this.checked)" /><span>Temporal linear interpolation (off is faster)</span></label><div class="field-hint">Preview rate follows Max extraction FPS (normally 10 Hz). Blue tiles are positive bins, red tiles are negative bins, followed by both polarity aggregates.</div>` : ""}
       </details>
+      ${renderAnalysisSetupSummary(payload)}
       <div class="field full e2e-action-row"><button class="primary ${actionBusy("e2e-analysis:start") ? "is-busy" : ""}" onclick="startE2EAnalysis()" ${preflightButtonAttrs("analyze-e2e", payload)} ${actionButtonAttrs("e2e-analysis:start", "E2E analysis is starting...")}>${esc(actionButtonLabel("e2e-analysis:start", "Start E2E Analysis", "Starting..."))}</button><button onclick="scheduleE2EPreflight({ immediate:true, force:true })">Recheck</button><span>${renderPreflightButtonReason("analyze-e2e", payload)}</span></div>
       <details class="field full"><summary>Preflight readiness</summary><div>${renderReadinessPanel("analyze-e2e", payload, { title: "E2E analysis readiness" })}</div></details>
     </div>`;
@@ -2712,6 +2714,30 @@ async function startE2EAnalysis() {
     releasePreflightExecution("analyze-e2e", payload);
     endAction("e2e-analysis:start", { renderAfter: state.tab === "e2e-analysis" });
   }
+}
+
+function renderAnalysisSetupSummary(payload) {
+  const modes = { supervised: "モデルと教師操作の比較", offline_localization: "走行結果＋自己位置の再推定", recorded_localization: "記録済みの自己位置で評価" };
+  const trajectory = { auto: "自動", recorded: "記録済みの自己位置", offline: "自己位置を再推定", none: "軌跡なし" };
+  const rows = [
+    ["走行記録", payload.rosbag || "未選択"],
+    ["解析方式", modes[payload.e2e_mode] || (state.analysis.analysisPreset === "map_vslam" ? "地図・自己位置解析" : "映像・操作データ")],
+    ["カメラ", (payload.image_topics || []).join("、") || "未選択"],
+    ["主カメラ", payload.primary_image_topic || payload.image_topic || "未選択"],
+    ["地図", payload.map_dir || "使用しない"],
+    ["軌跡", trajectory[payload.trajectory_mode] || payload.trajectory_mode || "なし"],
+    ["操作トピック", payload.control_topic || "未選択"],
+    ["抽出上限", `${payload.max_fps} FPS`],
+  ];
+  if (payload.model_path) rows.push(["モデル", payload.model_path]);
+  if (payload.offline_object_detection) rows.push(["物体検出", payload.object_detection_model_root || "モデル未選択"]);
+  if (payload.event_tensor_preview) rows.push(["EVSプレビュー", "生成する"]);
+  return `<section class="analysis-setup-summary field full" id="analysis-setup-summary" aria-label="解析開始前の設定要約"><strong>この設定で解析します</strong><dl>${rows.map(([label, value]) => `<div><dt>${esc(label)}</dt><dd title="${esc(value)}">${esc(value)}</dd></div>`).join("")}</dl></section>`;
+}
+
+function refreshAnalysisSetupSummary() {
+  const element = document.getElementById("analysis-setup-summary");
+  if (element) element.outerHTML = renderAnalysisSetupSummary(state.tab === "e2e-analysis" ? e2eAnalysisPayload() : analysisPreflightPayload());
 }
 
 function renderAnalysisForm() {
@@ -2748,15 +2774,6 @@ function renderAnalysisForm() {
             <span style="font-size:0.76rem; color:#8a99a8; line-height:1.25; display:block;">Run VSLAM / VGL to align trajectory on an HD Map.</span>
           </div>
         </div>
-      </div>
-
-      <!-- Action Button Area (Placed at the top for zero scrolling) -->
-      <div class="field full" style="background:rgba(255,255,255,0.02); border:1px solid #28333e; border-radius:8px; padding:0.75rem 0.85rem; display:flex; align-items:center; justify-content:space-between; gap:1rem; margin:0.25rem 0;">
-        <div>
-          <button id="analysis-start" class="primary ${actionBusy("analysis:start") ? "is-busy" : ""}" onclick="startBagAnalysis()" style="padding:0.55rem 1.4rem; font-size:0.95rem; font-weight:700;" ${preflightButtonAttrs("analyze-rosbag", payload)} ${actionButtonAttrs("analysis:start", "Analysis is starting...")}>${esc(actionButtonLabel("analysis:start", "Start Analysis", "Starting..."))}</button>
-          <button onclick="scheduleAnalysisPreflight({ immediate: true, force: true })" style="padding:0.55rem 0.8rem;">Recheck</button>
-        </div>
-        <div id="analysis-preflight-reason" style="font-size:0.8rem; color:#8a99a8; text-align:right;">${renderPreflightButtonReason("analyze-rosbag", payload)}</div>
       </div>
 
       <!-- 3. Multiple Camera Selection -->
@@ -2867,6 +2884,15 @@ function renderAnalysisForm() {
         </div>
       ` : ''}
 
+      ${renderAnalysisSetupSummary(payload)}
+      <div class="field full" style="background:rgba(255,255,255,0.02); border:1px solid #28333e; border-radius:8px; padding:0.75rem 0.85rem; display:flex; align-items:center; justify-content:space-between; gap:1rem; margin:0.25rem 0;">
+        <div>
+          <button id="analysis-start" class="primary ${actionBusy("analysis:start") ? "is-busy" : ""}" onclick="startBagAnalysis()" style="padding:0.55rem 1.4rem; font-size:0.95rem; font-weight:700;" ${preflightButtonAttrs("analyze-rosbag", payload)} ${actionButtonAttrs("analysis:start", "Analysis is starting...")}>${esc(actionButtonLabel("analysis:start", "解析を開始", "開始中..."))}</button>
+          <button onclick="scheduleAnalysisPreflight({ immediate: true, force: true })" style="padding:0.55rem 0.8rem;">再確認</button>
+        </div>
+        <div id="analysis-preflight-reason" style="font-size:0.8rem; color:#8a99a8; text-align:right;">${renderPreflightButtonReason("analyze-rosbag", payload)}</div>
+      </div>
+
       <!-- Detailed Readiness Report (Collapsible) -->
       <details class="full" style="margin-top:0.5rem; background:#111417; border:1px solid #252e37; border-radius:6px; padding:0.5rem 0.8rem;">
         <summary style="font-size:0.82rem; font-weight:600; color:#8a99a8; cursor:pointer;">Preflight Readiness Details</summary>
@@ -2921,22 +2947,31 @@ function renderAnalysisCards(items) {
     const taskId = String(item.task_id || item.task?.task_id || item.manifest?.task_id || item.status?.task_id || "");
     const bagPath = String(item.rosbag || item.bag_path || item.source?.rosbag || "");
     const mapPath = String(item.map_dir || item.map_path || item.map?.path || "");
+    const active = ["running", "queued"].includes(status);
+    const title = item.name || item.label || item.title || shortName(bagPath) || id || "解析";
     return `
-      <article class="analysis-job ${selected ? "selected" : ""}">
-        <div class="analysis-job-heading">
-          <div><strong>${esc(item.name || item.label || item.title || shortName(bagPath) || id || "Analysis")}</strong><span>${esc(id)}</span></div>
-          <span class="status ${esc(status)}">${esc(status)}</span>
+      <article class="analysis-job compact-list-item ${selected ? "selected" : ""}">
+        <div class="compact-list-heading">
+          <strong class="compact-list-title" title="${esc(title)}">${esc(title)}</strong>
+          <span class="status ${esc(status)}">${esc(({success:"完了",running:"実行中",queued:"待機中",failed:"失敗",stopped:"中止"})[status] || status)}</span>
+          <button class="${canOpen ? "primary" : ""}" onclick="focusAnalysisResult(${js(id)})" ${id && canOpen && !(selected && state.analysis.loadingResult) ? "" : "disabled"}>${selected && state.analysis.loadingResult ? "読込中…" : selected && state.analysis.timeline ? "表示中" : "開く"}</button>
         </div>
-        <div class="analysis-progress"><span style="width:${progress.toFixed(1)}%"></span></div>
-        <div class="analysis-progress-label"><span>${esc(analysisRecordStage(item))}</span><strong>${progress.toFixed(0)}%</strong></div>
-        ${bagPath ? `<div class="path" title="${esc(bagPath)}">Bag: ${esc(bagPath)}</div>` : ""}
-        ${mapPath ? `<div class="path" title="${esc(mapPath)}">Map: ${esc(mapPath)}</div>` : ""}
-        ${missing.length ? `<div class="analysis-missing"><strong>Missing / degraded data</strong>${missing.slice(0, 4).map((message) => `<span>${esc(message)}</span>`).join("")}</div>` : ""}
-        <div class="actions">
-          <button class="${status === "success" ? "primary" : ""}" onclick="focusAnalysisResult(${js(id)})" ${id && canOpen && !(selected && state.analysis.loadingResult) ? "" : "disabled"}>${selected && state.analysis.loadingResult ? "Loading..." : selected && state.analysis.timeline ? "Viewing" : canOpen ? "Open" : "Processing"}</button>
-          ${taskId ? `<button onclick="openTaskLog(${js(taskId)})">Log</button><button class="danger ${actionBusy(`task:stop:${taskId}`) ? "is-busy" : ""}" onclick="stopTask(${js(taskId)})" ${["running", "queued"].includes(status) ? "" : "disabled"} ${actionButtonAttrs(`task:stop:${taskId}`, "Stop request is being sent...")}>${esc(actionButtonLabel(`task:stop:${taskId}`, "Stop", "Stopping..."))}</button>` : ""}
-          <button class="danger" onclick="deleteAnalysis(${js(id)})" ${["running", "queued"].includes(status) ? "disabled" : ""} title="Delete this analysis and all its data">Delete</button>
-        </div>
+        ${active ? `<div class="analysis-progress"><span style="width:${progress.toFixed(1)}%"></span></div><div class="analysis-progress-label"><span>${esc(analysisRecordStage(item))}</span><strong>${progress.toFixed(0)}%</strong></div>` : ""}
+        <details class="compact-item-details" ${listItemDetailsAttrs("analyses", id)}>
+          <summary>詳細${missing.length ? ` <span class="compact-warning">注意 ${missing.length}件</span>` : ""}</summary>
+          <div class="compact-details-body">
+            <div class="path">${esc(id)}</div>
+            ${bagPath ? `<div class="path">Bag: ${esc(bagPath)}</div>` : ""}
+            ${mapPath ? `<div class="path">Map: ${esc(mapPath)}</div>` : ""}
+            <div>${esc(analysisRecordStage(item))} · ${progress.toFixed(0)}%</div>
+            ${missing.length ? `<div class="analysis-missing"><strong>不足・利用できないデータ</strong>${missing.map(message => `<span>${esc(message)}</span>`).join("")}</div>` : ""}
+            <div class="actions">
+              ${taskId ? `<button onclick="openTaskLog(${js(taskId)})">ログ</button>` : ""}
+              <button class="danger" onclick="deleteAnalysis(${js(id)})" ${active ? "disabled" : ""}>削除</button>
+            </div>
+          </div>
+        </details>
+        ${active && taskId ? `<div class="actions"><button class="danger" onclick="stopTask(${js(taskId)})" ${actionButtonAttrs(`task:stop:${taskId}`, "停止を要求中…")}>${esc(actionButtonLabel(`task:stop:${taskId}`, "処理を停止", "停止中…"))}</button></div>` : ""}
       </article>`;
   }).join("")}</div>`;
 }
@@ -3476,6 +3511,7 @@ function updateAnalysisOption(key, value) {
     bindAnalysisPreflight(payload);
     scheduleAnalysisPreflight();
   }
+  refreshAnalysisSetupSummary();
   if (key === "selectedMapPath" && state.analysis.timeline) updateAnalysisConsistencyDom();
   if (key === "offlineObjectDetection" && isAnalysisTab()) render();
 }
@@ -5667,9 +5703,14 @@ function mapList(items = state.maps) {
           const artifactKeys = ["cuvgl_map", "cuvslam_map", "hd_map", "centerline_csv", "raceline_csv", "custom_line_csv", "custom_line_meta", "line_preview"];
           const title = mapDisplayName(map);
           return `
-            <article class="map-list-item ${selected ? "selected" : ""}">
+            <article class="map-list-item compact-list-item ${selected ? "selected" : ""}">
+              <div class="compact-list-heading">
+                <strong class="compact-list-title" title="${esc(title)}">${esc(title)}</strong>
+                <button class="primary" onclick="openMapWorkspace(${js(map.path)})">${selected ? "表示中" : "開く"}</button>
+              </div>
+              <div class="compact-map-meta"><span class="status ${map.complete_runtime_bundle ? "success" : "failed"}">${map.complete_runtime_bundle ? "走行用データあり" : "データ未完備"}</span></div>
+              <details class="compact-item-details" ${listItemDetailsAttrs("maps", map.path)}><summary>詳細・操作</summary><div class="compact-details-body">
               <div class="map-list-main">
-                <strong title="${esc(map.name)}">${esc(title)}</strong>
                 ${title !== map.name ? `<span class="map-list-subtitle" title="${esc(map.name)}">${esc(map.name)}</span>` : ""}
                 <div class="path" title="${esc(map.path)}">${esc(map.path)}</div>
                 <div class="chips">${artifactKeys
@@ -5677,10 +5718,7 @@ function mapList(items = state.maps) {
                   .join("")}</div>
               </div>
               <div class="map-list-actions">
-                ${map.complete_runtime_bundle ? `<span class="status success">runtime ready</span>` : `<span class="status failed">incomplete</span>`}
-                <button class="primary" onclick="openMapWorkspace(${js(map.path)})">${selected ? "Viewing" : "Open"}</button>
-                <details class="map-list-more">
-                  <summary>More</summary>
+                <div class="map-list-more">
                   <div class="map-list-more-actions">
                     <button onclick="copyText(${js(map.path)})">Copy</button>
                     <button onclick="copyHdMapEditorCommand(${js(map.path)})">Editor Cmd</button>
@@ -5690,7 +5728,7 @@ function mapList(items = state.maps) {
                     <button onclick="fillTransferLocal(${js(map.path)})">Transfer</button>
                     <button class="danger" onclick="deleteMapFolder(${js(map.path)})">Delete</button>
                   </div>
-                </details>
+                </div>
               </div>
               <details class="map-list-readiness">
                 <summary><strong>Build checks</strong><span>Raster · Raceline · Preview</span></summary>
@@ -5700,6 +5738,7 @@ function mapList(items = state.maps) {
                   ${renderMapStageReadiness("generate-preview", map.path, "Preview", { micro: true })}
                 </div>
               </details>
+              </div></details>
             </article>`;
         })
         .join("")}

@@ -23,7 +23,7 @@ const context = vm.createContext({
   api: async (...args)=>{calls.push(args);return {state:'running',message:'sent'};},
 });
 vm.runInContext(source, context);
-vm.runInContext("runtimeApplyHostConfig({jetson_ips:['192.168.11.190','10.42.0.1','192.168.55.1'],jetson_user:'tamiya',jetson_workspace_root:'/home/tamiya/workspaces/JetPilot'})", context);
+vm.runInContext("runtimeApplyHostConfig({jetson_ips:['192.168.11.190','10.42.0.1','192.168.55.1','192.168.11.11'],jetson_user:'tamiya',jetson_workspace_root:'/home/tamiya/workspaces/JetPilot'})", context);
 assert.match(vm.runInContext('renderRuntime()',context), /環境を準備/);
 assert.match(vm.runInContext('renderRuntime()',context), /runtime-connect-card/);
 assert.match(vm.runInContext('renderRuntime()',context), /runtime-launch-card/);
@@ -39,6 +39,7 @@ assert.equal(vm.runInContext('runtimeConfig.container',context),'isaac_ros_dev_c
 assert.equal(vm.runInContext('runtimeConfig.host_workspace',context),'/home/tamiya/workspaces/JetPilot');
 assert.match(vm.runInContext('renderRuntime()',context), /10\.42\.0\.1/);
 assert.match(vm.runInContext('renderRuntime()',context), /192\.168\.55\.1/);
+assert.match(vm.runInContext('renderRuntime()',context), /192\.168\.11\.11/);
 assert.match(vm.runInContext('renderRuntime()',context), /\/home\/tamiya/);
 vm.runInContext("runtimeChange('host','10.42.0.1')",context);
 vm.runInContext('runtimeResetConnectionDefaults()',context);

@@ -1,6 +1,6 @@
 # スクリプトの使い分け
 
-普段使う8本は `scripts/` 直下に置く。
+普段使うコマンドは `scripts/` 直下に置く。
 
 | コマンド | 用途 |
 | --- | --- |
@@ -12,6 +12,11 @@
 | `jetson_max_performance.sh` | Jetson の性能設定 |
 | `bluetooth.sh` | Bluetooth の復旧 |
 | `e2e_trt.sh` | E2E TensorRT エンジン生成 |
+| `foxglove.sh` | 接続先IPを選択してFoxgloveを起動 |
+
+`./scripts/foxglove.sh` は、FoxgloveをインストールしたMacなどのデスクトップで実行する。
+`192.168.11.190` / `192.168.55.1` / `10.42.0.1` / `192.168.11.11` / `manual` から選択でき、
+手入力ではIPv4アドレスを指定する。ポートは `8767`。Enterで最初の候補、`q`で中止。
 
 その他のコマンドは用途別に配置する。以下はプロジェクトルートからのパス。
 
