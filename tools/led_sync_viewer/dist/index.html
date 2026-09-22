@@ -285,16 +285,17 @@
           <div class="form">
             <div class="form-grid">
               <label for="evsThreshold">EVS閾値 / ms</label><input id="evsThreshold" type="number" min="1" step="1" value="26">
-              <label for="rgbThreshold">RGB差分閾値</label><input id="rgbThreshold" type="number" min="0" step="0.01" value="0.16">
+              <label for="rgbThreshold">RGB差分閾値</label><input id="rgbThreshold" type="number" min="0" step="any" value="0.001">
               <label for="matchWindow">対応探索幅 / ms</label><input id="matchWindow" type="number" min="10" step="10" value="100">
               <label for="provisionalOffset">初期オフセット / ms</label><input id="provisionalOffset" type="number" step="1" value="0">
               <label for="evsFrameStep">EVS実時間 / frame</label><input id="evsFrameStep" type="number" min="0.1" step="0.1" value="1">
               <label for="evsVideoFps">EVS動画 fps</label><input id="evsVideoFps" type="number" min="1" step="1" value="60">
             </div>
             <div class="stack">
+              <button id="autoRgbThreshold" type="button">RGB閾値を自動設定</button>
               <button class="primary" id="analyzeButton" type="button">自動推定を実行</button>
             </div>
-            <p class="helper">閾値は時刻そのものを手入力するためではなく、点滅候補を選別するために使います。</p>
+            <p class="helper">RGB閾値はframe間差分のnoiseから自動設定されます。全画面平均では値が非常に小さくなるため、小数表示でも正常です。</p>
           </div>
         </section>
 
@@ -388,6 +389,7 @@
       state.viewStart = state.fullStart;
       state.viewEnd = state.fullEnd;
       buildNavigatorBins();
+      suggestRgbThreshold();
       $('sessionName').textContent = `${state.meta.session} — EVS ${state.evs.length.toLocaleString()} bin / RGB ${state.rgb.length.toLocaleString()} frame`;
       $('viewDuration').value = 'full';
       analyze();
@@ -423,6 +425,20 @@
         });
       }
       return edges;
+    }
+
+    function suggestRgbThreshold() {
+      const deltas = [];
+      for (let index = 1; index < state.rgb.length; index += 1) {
+        deltas.push(Math.abs(state.rgb[index].v - state.rgb[index - 1].v));
+      }
+      if (!deltas.length) return 0;
+      const baseline = median(deltas);
+      const deviations = deltas.map(value => Math.abs(value - baseline));
+      const robustSigma = 1.4826 * median(deviations);
+      const threshold = Math.max(1e-7, baseline * 3, baseline + 8 * robustSigma);
+      $('rgbThreshold').value = threshold.toPrecision(6);
+      return threshold;
     }
 
     function pairEdges(evsEdges, rgbEdges) {
@@ -528,15 +544,33 @@
         ctx.fillText(`${t.toFixed(span < .3 ? 3 : 2)} s`, xx - 17, h - 10);
       }
       ctx.fillStyle = '#93a4b7'; ctx.font = '600 12px ui-sans-serif, sans-serif';
-      ctx.fillText('RGB 輝度', 9, pad.t + 11);
+      ctx.fillText('RGB 輝度（区間内拡大）', 9, pad.t + 11);
       ctx.fillText('EVS / ms', 9, bottomTop + 11);
 
       const visibleRgb = state.rgb.filter(p => p.t >= state.viewStart && p.t <= state.viewEnd);
+      let rgbLow = Infinity, rgbHigh = -Infinity;
+      for (const point of visibleRgb) {
+        if (point.v < rgbLow) rgbLow = point.v;
+        if (point.v > rgbHigh) rgbHigh = point.v;
+      }
+      if (!Number.isFinite(rgbLow) || !Number.isFinite(rgbHigh)) { rgbLow = 0; rgbHigh = 1; }
+      let rgbRange = rgbHigh - rgbLow;
+      if (rgbRange < 1e-8) {
+        const center = (rgbHigh + rgbLow) / 2;
+        rgbLow = center - 5e-5; rgbHigh = center + 5e-5; rgbRange = rgbHigh - rgbLow;
+      } else {
+        const margin = rgbRange * .1;
+        rgbLow -= margin; rgbHigh += margin; rgbRange = rgbHigh - rgbLow;
+      }
+      const rgbY = value => pad.t + topH * (1 - clamp((value - rgbLow) / rgbRange, 0, 1));
       ctx.strokeStyle = '#ffb45c'; ctx.fillStyle = '#ffb45c'; ctx.lineWidth = 1.6;
       ctx.beginPath();
-      visibleRgb.forEach((p, i) => { const xx=x(p.t), yy=pad.t + topH * (1 - clamp(p.v, 0, 1)); i ? ctx.lineTo(xx,yy) : ctx.moveTo(xx,yy); });
+      visibleRgb.forEach((p, i) => { const xx=x(p.t), yy=rgbY(p.v); i ? ctx.lineTo(xx,yy) : ctx.moveTo(xx,yy); });
       ctx.stroke();
-      if (span < .8) visibleRgb.forEach(p => { ctx.beginPath(); ctx.arc(x(p.t), pad.t + topH*(1-clamp(p.v,0,1)), 2.6, 0, Math.PI*2); ctx.fill(); });
+      if (span < .8) visibleRgb.forEach(p => { ctx.beginPath(); ctx.arc(x(p.t), rgbY(p.v), 2.6, 0, Math.PI*2); ctx.fill(); });
+      ctx.fillStyle = '#7e91a4'; ctx.font = '11px ui-monospace, monospace';
+      ctx.fillText(rgbHigh.toFixed(6), pad.l + 5, pad.t + 12);
+      ctx.fillText(rgbLow.toFixed(6), pad.l + 5, pad.t + topH - 5);
 
       const rawVisibleEvs = state.evs.filter(p => p.t >= state.viewStart && p.t <= state.viewEnd);
       const targetEvsPoints = Math.max(600, Math.floor(plotW * 2));
@@ -752,6 +786,11 @@
     let toastTimer;
     function toast(message) { clearTimeout(toastTimer); $('toast').textContent=message; $('toast').classList.add('show'); toastTimer=setTimeout(()=>$('toast').classList.remove('show'),2600); }
 
+    $('autoRgbThreshold').addEventListener('click', () => {
+      const threshold = suggestRgbThreshold();
+      analyze();
+      toast(`RGB差分閾値を ${threshold.toPrecision(4)} に設定しました。`);
+    });
     $('analyzeButton').addEventListener('click', () => { analyze(); toast(`${state.pairs.length}個の点滅エッジを対応付けました。`); });
     $('demoButton').addEventListener('click', () => loadDataset(demoData()));
     $('exportButton').addEventListener('click', exportResult);
