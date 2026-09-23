@@ -14,6 +14,7 @@
 
 ## Docs
 
+- [Isaac ROS 5.0 移行計画（将来対応・未着手）](docs/isaac_ros_50_migration_plan.md)
 - [Project Design Policy](docs/project_design_policy.md)
 - [ROS package README guideline](docs/ros_package_readme_guideline.md)
 - [JetPilot Topic Graph](docs/topic_graph.md)
