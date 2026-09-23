@@ -1574,7 +1574,15 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ dataset_path: state.dataPath, yaml })
       });
-      const result = await response.json();
+      const responseText = await response.text();
+      let result;
+      try {
+        result = JSON.parse(responseText);
+      } catch (_) {
+        throw new Error(
+          '時刻YAML保存APIを利用できません。GUIサーバーを再起動し、ブラウザを再読み込みしてください。'
+        );
+      }
       if (!response.ok) throw new Error(result.error || `保存に失敗しました (${response.status})`);
       toast(`Dockerへ保存しました: ${result.path}`);
     }
