@@ -260,10 +260,15 @@
             <button id="setManualOffset" type="button">この2枚を手動同期</button>
             <button id="centerTimelineAtPreview" type="button">この時刻をグラフ表示</button>
             <button class="primary" id="previewPlay" type="button">同期スロー再生</button>
+            <button id="syncPreviewBack" type="button">同期 −1コマ</button>
+            <button id="syncPreviewForward" type="button">同期 ＋1コマ</button>
             <label class="duration-control" for="previewSpeed">速度
               <select id="previewSpeed"><option value="0.1">0.1×</option><option value="0.25" selected>0.25×</option><option value="0.5">0.5×</option><option value="1">1×</option></select>
             </label>
-            <label class="panel-note"><input id="previewLoop" type="checkbox" checked> 現在位置の前後1秒をループ</label>
+            <label class="duration-control" for="previewRange">再生範囲
+              <select id="previewRange"><option value="current">現在位置 ±1秒</option><option value="start">開始区間（約12秒）</option><option value="end">終了区間（約12秒）</option></select>
+            </label>
+            <label class="panel-note"><input id="previewLoop" type="checkbox" checked> 繰り返す</label>
             <span class="panel-note sync-explanation">手動同期値はRGB時刻−EVS時刻です。半自動推定時はEVS位置を固定し、RGBを推定量だけ移動します。</span>
           </div>
           <div class="frame-toolbar">
@@ -964,21 +969,47 @@
       seekPreview('rgb', mappedRgbTime);
     }
 
+    function previewSegments() {
+      const frames = state.preview.evs || [];
+      if (!frames.length) return [];
+      const segments = [];
+      let start = Number(frames[0].t);
+      let previous = start;
+      for (let index = 1; index < frames.length; index += 1) {
+        const current = Number(frames[index].t);
+        if (current - previous > .25) {
+          segments.push({ start, end: previous });
+          start = current;
+        }
+        previous = current;
+      }
+      segments.push({ start, end: previous });
+      return segments;
+    }
+
+    function previewPlaybackBounds() {
+      const frames = state.preview.evs || [];
+      const minimum = Number(frames[0]?.t ?? 0);
+      const maximum = Number(frames.at(-1)?.t ?? minimum);
+      const mode = $('previewRange').value;
+      const segments = previewSegments();
+      if (mode === 'start' && segments.length) return segments[0];
+      if (mode === 'end' && segments.length) return segments.at(-1);
+      return {
+        start: Math.max(minimum, state.previewPlayback.loopCenter - 1),
+        end: Math.min(maximum, state.previewPlayback.loopCenter + 1)
+      };
+    }
+
     function previewPlaybackTick(wallMs) {
       if (!state.previewPlayback.running) return;
       const elapsedS = Math.max(0, wallMs - state.previewPlayback.lastWallMs) / 1000;
       state.previewPlayback.lastWallMs = wallMs;
       state.previewPlayback.time += elapsedS * Number($('previewSpeed').value || .25);
-      const evsFrames = state.preview.evs || [];
-      const minimum = Number(evsFrames[0]?.t ?? 0);
-      const maximum = Number(evsFrames.at(-1)?.t ?? minimum);
-      if ($('previewLoop').checked) {
-        const low = Math.max(minimum, state.previewPlayback.loopCenter - 1);
-        const high = Math.min(maximum, state.previewPlayback.loopCenter + 1);
-        if (state.previewPlayback.time > high) state.previewPlayback.time = low;
-      } else if (state.previewPlayback.time > maximum) {
-        stopPreviewPlayback();
-        return;
+      const bounds = previewPlaybackBounds();
+      if (state.previewPlayback.time > bounds.end) {
+        if ($('previewLoop').checked) state.previewPlayback.time = bounds.start;
+        else { stopPreviewPlayback(); return; }
       }
       showSynchronizedPreview(state.previewPlayback.time);
       state.previewPlayback.frameRequest = requestAnimationFrame(previewPlaybackTick);
@@ -989,11 +1020,31 @@
       const frame = state.preview.evs?.[state.previewIndex.evs];
       if (!frame || !state.preview.rgb?.length) { toast('RGBとEVSのプレビューが必要です。'); return; }
       state.previewPlayback.running = true;
-      state.previewPlayback.time = Number(frame.t);
       state.previewPlayback.loopCenter = Number(frame.t);
+      const mode = $('previewRange').value;
+      const bounds = previewPlaybackBounds();
+      state.previewPlayback.time = mode === 'current' ? Number(frame.t) : bounds.start;
       state.previewPlayback.lastWallMs = performance.now();
       $('previewPlay').textContent = '停止';
+      showSynchronizedPreview(state.previewPlayback.time);
       state.previewPlayback.frameRequest = requestAnimationFrame(previewPlaybackTick);
+    }
+
+    function stepSynchronizedPreview(direction) {
+      stopPreviewPlayback();
+      const frames = state.preview.evs || [];
+      if (!frames.length || !state.preview.rgb?.length) { toast('RGBとEVSのプレビューが必要です。'); return; }
+      const bounds = previewPlaybackBounds();
+      const eligible = [];
+      frames.forEach((frame, index) => {
+        const time = Number(frame.t);
+        if (time >= bounds.start - 1e-9 && time <= bounds.end + 1e-9) eligible.push(index);
+      });
+      if (!eligible.length) return;
+      let position = eligible.indexOf(state.previewIndex.evs);
+      if (position < 0) position = direction > 0 ? -1 : eligible.length;
+      position = clamp(position + direction, 0, eligible.length - 1);
+      showSynchronizedPreview(Number(frames[eligible[position]].t));
     }
 
     function previewFileUrl(relativePath) {
@@ -1630,6 +1681,15 @@
       setView(Number(evsFrame.t), .5);
     });
     $('previewPlay').addEventListener('click', togglePreviewPlayback);
+    $('syncPreviewBack').addEventListener('click', () => stepSynchronizedPreview(-1));
+    $('syncPreviewForward').addEventListener('click', () => stepSynchronizedPreview(1));
+    $('previewRange').addEventListener('change', () => {
+      stopPreviewPlayback();
+      if ($('previewRange').value !== 'current') {
+        const bounds = previewPlaybackBounds();
+        showSynchronizedPreview(bounds.start);
+      }
+    });
     $('applyRoiAnalysis').addEventListener('click', () => {
       try { recomputeSignalsFromRois(); } catch (error) { toast(error.message); }
     });
