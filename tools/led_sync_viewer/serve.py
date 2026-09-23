@@ -161,6 +161,51 @@ def build_handler(html_path: Path, record_root: Path):
                 return
             self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
 
+        def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
+            request = urlparse(self.path)
+            if request.path != "/api/save-time-sync":
+                self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
+                return
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+            except ValueError:
+                length = 0
+            if length <= 0 or length > 65536:
+                self._send_json(
+                    {"error": "invalid request size"}, HTTPStatus.BAD_REQUEST
+                )
+                return
+            try:
+                payload = json.loads(self.rfile.read(length))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                self._send_json({"error": "invalid JSON"}, HTTPStatus.BAD_REQUEST)
+                return
+            requested = Path(str(payload.get("dataset_path", "")))
+            dataset = (
+                requested if requested.is_absolute() else record_root / requested
+            ).resolve()
+            if (
+                not _inside(dataset, record_root)
+                or dataset.name != "led_sync_data.json"
+                or not dataset.is_file()
+            ):
+                self._send_json(
+                    {"error": "dataset must be an existing led_sync_data.json inside record root"},
+                    HTTPStatus.FORBIDDEN,
+                )
+                return
+            content = payload.get("yaml")
+            if not isinstance(content, str) or not content.strip():
+                self._send_json(
+                    {"error": "yaml content is required"}, HTTPStatus.BAD_REQUEST
+                )
+                return
+            output = dataset.parent / "time_sync_led.yaml"
+            temporary = output.with_suffix(".yaml.tmp")
+            temporary.write_text(content, encoding="utf-8")
+            temporary.replace(output)
+            self._send_json({"path": str(output)})
+
         def log_message(self, format: str, *args) -> None:
             print(f"[led-sync-gui] {self.address_string()} {format % args}")
 

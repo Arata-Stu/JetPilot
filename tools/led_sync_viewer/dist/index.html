@@ -227,6 +227,7 @@
         <button class="primary" id="browseDockerData" type="button">Docker解析を選ぶ</button>
         <button class="ghost" id="demoButton" type="button">デモを復元</button>
         <button id="exportButton" type="button">結果を書き出す</button>
+        <button id="exportTimeSync" type="button">Kalibr時刻YAML</button>
       </div>
     </header>
 
@@ -1482,7 +1483,8 @@
     }
 
     function download(name, value) {
-      const url = URL.createObjectURL(new Blob([value], { type: 'application/json' }));
+      const type = name.endsWith('.yaml') ? 'application/yaml' : 'application/json';
+      const url = URL.createObjectURL(new Blob([value], { type }));
       const a = document.createElement('a'); a.href = url; a.download = name; a.click();
       setTimeout(() => URL.revokeObjectURL(url), 500);
     }
@@ -1517,6 +1519,64 @@
         },
         pairs: state.pairs.map(p => ({ kind:p.evs.kind, evs_time_s:p.evs.t, rgb_interval_s:[p.rgb.lo,p.rgb.hi], rgb_midpoint_s:p.rgb.t, residual_s:p.residual || 0 }))
       }, null, 2));
+    }
+
+    function yamlNumber(value) {
+      if (!Number.isFinite(value)) throw new Error('時刻同期値が確定していません。');
+      return Number(value).toPrecision(15).replace(/(?:\.0+|(?:(\.\d*?)0+))$/, '$1');
+    }
+
+    function buildTimeSyncYaml() {
+      const origin = Number(state.meta.time_origin_reference_s);
+      if (!Number.isFinite(origin)) throw new Error('元データに絶対時刻原点がありません。デモデータでは出力できません。');
+      const anchorAbsolute = origin + state.anchorS;
+      const rgbPeriod = 1 / Math.max(1, Number(state.meta.rgbFps || 60));
+      const evsBin = Number(state.meta.evs_bin_ms || 1) / 1000;
+      const method = state.analysisMethod === 'manual' ? 'manual_led_visual_alignment' : ($('useLedPattern').checked ? 'known_led_pattern_alignment' : 'nearest_led_edge_alignment');
+      const lines = [
+        'schema_version: 1',
+        'reference_sensor: rgb',
+        `method: ${method}`,
+        'models:',
+        '  rgb:',
+        `    anchor_sensor_time_s: ${yamlNumber(anchorAbsolute)}`,
+        '    offset_at_anchor_s: 0.0',
+        '    drift: 0.0',
+        '    correlation: 1.0',
+        `    window_count: ${Math.max(1, state.pairs.length)}`,
+        `    bin_width_s: ${yamlNumber(rgbPeriod)}`,
+        '  evs:',
+        `    anchor_sensor_time_s: ${yamlNumber(anchorAbsolute)}`,
+        `    offset_at_anchor_s: ${yamlNumber(state.offsetS)}`,
+        `    drift: ${yamlNumber(state.drift)}`,
+        '    correlation: 0.0',
+        `    window_count: ${Math.max(1, state.pairs.length)}`,
+        `    bin_width_s: ${yamlNumber(evsBin)}`,
+        'quality:',
+        `  residual_rms_s: ${yamlNumber(state.rmsS)}`,
+        `  matched_edges: ${state.pairs.length}`,
+        `  drift_ppm: ${yamlNumber(state.drift * 1e6)}`,
+        `  led_pattern_used: ${$('useLedPattern').checked ? 'true' : 'false'}`,
+        ''
+      ];
+      return lines.join('\n');
+    }
+
+    async function exportTimeSyncYaml() {
+      const yaml = buildTimeSyncYaml();
+      if (!state.dataPath) {
+        download('time_sync_led.yaml', yaml);
+        toast('Kalibr互換の time_sync_led.yaml をダウンロードしました。');
+        return;
+      }
+      const response = await fetch('/api/save-time-sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dataset_path: state.dataPath, yaml })
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || `保存に失敗しました (${response.status})`);
+      toast(`Dockerへ保存しました: ${result.path}`);
     }
 
     function attachVideo(inputId, videoId, emptyId, key) {
@@ -1567,6 +1627,7 @@
       $('dataSourceLabel').textContent = 'デモデータ';
     });
     $('exportButton').addEventListener('click', exportResult);
+    $('exportTimeSync').addEventListener('click', () => exportTimeSyncYaml().catch(error => toast(error.message)));
     $('sampleButton').addEventListener('click', () => download('led_sync_sample.json', JSON.stringify(demoData(), null, 2)));
     $('localBundle').addEventListener('change', event => {
       openLocalBundle(event.target.files).catch(error => toast(error.message));
