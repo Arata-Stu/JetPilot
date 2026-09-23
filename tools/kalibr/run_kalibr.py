@@ -184,13 +184,17 @@ def main() -> int:
             raise ValueError("approximate_sync_s must be non-negative")
 
         bag_command = [
+            "rosrun",
+            "kalibr",
             "kalibr_bagcreater",
             "--folder",
-            str(input_dir),
+            f"{input_dir}/.",
             "--output-bag",
             str(bag_path),
         ]
         calibration_command = [
+            "rosrun",
+            "kalibr",
             "kalibr_calibrate_cameras",
             "--bag",
             str(bag_path),
