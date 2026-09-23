@@ -142,6 +142,7 @@
     .form-grid { display: grid; grid-template-columns: 1fr 108px; gap: 10px 8px; align-items: center; }
     .form label { color: #becbd8; font-size: .82rem; }
     .form input { width: 100%; }
+    .form input[type="checkbox"] { width: auto; margin-right: 5px; }
     .helper { margin: 10px 0 0; color: var(--muted); font-size: .77rem; }
     .stack { display: grid; gap: 8px; margin-top: 13px; }
 
@@ -353,14 +354,16 @@
               <label for="rgbThreshold">RGB差分閾値</label><input id="rgbThreshold" type="number" min="0" step="any" value="0.001">
               <label for="matchWindow">対応探索幅 / ms</label><input id="matchWindow" type="number" min="10" step="10" value="100">
               <label for="provisionalOffset">初期オフセット / ms</label><input id="provisionalOffset" type="number" step="1" value="0">
+              <label for="patternTolerance">周期許容誤差 / ms</label><input id="patternTolerance" type="number" min="5" max="100" step="1" value="35">
               <label for="evsFrameStep">EVS実時間 / frame</label><input id="evsFrameStep" type="number" min="0.1" step="0.1" value="1">
               <label for="evsVideoFps">EVS動画 fps</label><input id="evsVideoFps" type="number" min="1" step="1" value="60">
             </div>
+            <label class="panel-note"><input id="useLedPattern" type="checkbox" checked> 既知LED周期を使って対応付ける（2.3秒周期）</label>
             <div class="stack">
               <button id="autoRgbThreshold" type="button">RGB閾値を自動設定</button>
               <button class="primary" id="analyzeButton" type="button">自動推定を実行</button>
             </div>
-            <p class="helper">RGB閾値はframe間差分のnoiseから自動設定されます。全画面平均では値が非常に小さくなるため、小数表示でも正常です。</p>
+            <p class="helper">周期モードでは100・300・1000 msのエッジ間隔系列を照合します。無効にすると従来の最近傍対応になります。RGB閾値はframe間差分のnoiseから自動設定されます。</p>
           </div>
         </section>
 
@@ -406,7 +409,8 @@
       originalSignals: { rgb: [], evs: [] },
       roiDataMeta: null, spatial: { rgb: null, evs: null },
       analysisMethod: 'semi_auto',
-      previewPlayback: { running: false, frameRequest: 0, lastWallMs: 0, time: 0, loopCenter: 0 }
+      previewPlayback: { running: false, frameRequest: 0, lastWallMs: 0, time: 0, loopCenter: 0 },
+      patternFit: null
     };
 
     const median = (values) => {
@@ -544,7 +548,102 @@
       return threshold;
     }
 
-    function pairEdges(evsEdges, rgbEdges) {
+    const LED_PATTERN = {
+      periodS: 2.3,
+      transitions: [
+        { t: .5, kind: 'on' }, { t: .6, kind: 'off' },
+        { t: .7, kind: 'on' }, { t: .8, kind: 'off' },
+        { t: .9, kind: 'on' }, { t: 1.2, kind: 'off' },
+        { t: 1.3, kind: 'on' }, { t: 1.4, kind: 'off' },
+        { t: 1.5, kind: 'on' }, { t: 1.8, kind: 'off' }
+      ]
+    };
+
+    function positiveModulo(value, modulus) {
+      return ((value % modulus) + modulus) % modulus;
+    }
+
+    function assignPatternEdges(edges, phaseS, toleranceS) {
+      const assignments = new Map();
+      for (const edge of edges) {
+        let best = null;
+        LED_PATTERN.transitions.forEach((transition, patternIndex) => {
+          if (transition.kind !== edge.kind) return;
+          const cycle = Math.round((edge.t - phaseS - transition.t) / LED_PATTERN.periodS);
+          const expected = phaseS + transition.t + cycle * LED_PATTERN.periodS;
+          const residual = edge.t - expected;
+          if (!best || Math.abs(residual) < Math.abs(best.residual)) best = { cycle, patternIndex, residual, edge };
+        });
+        if (!best || Math.abs(best.residual) > toleranceS) continue;
+        const key = `${best.cycle}:${best.patternIndex}`;
+        const previous = assignments.get(key);
+        if (!previous || Math.abs(best.residual) < Math.abs(previous.residual) || (Math.abs(best.residual) === Math.abs(previous.residual) && edge.strength > previous.edge.strength)) {
+          assignments.set(key, best);
+        }
+      }
+      return assignments;
+    }
+
+    function fitLedPattern(edges, toleranceS) {
+      if (!edges.length) return null;
+      const strongest = [...edges].sort((a, b) => b.strength - a.strength).slice(0, 160);
+      const candidates = [];
+      for (const edge of strongest) {
+        LED_PATTERN.transitions.forEach(transition => {
+          if (transition.kind === edge.kind) candidates.push(positiveModulo(edge.t - transition.t, LED_PATTERN.periodS));
+        });
+      }
+      let best = null;
+      for (const phaseS of candidates) {
+        const assignments = assignPatternEdges(edges, phaseS, toleranceS);
+        if (!assignments.size) continue;
+        let residual = 0;
+        let strength = 0;
+        for (const item of assignments.values()) {
+          residual += Math.abs(item.residual);
+          strength += Math.log1p(Math.max(0, item.edge.strength));
+        }
+        const score = assignments.size * 1000 - residual / Math.max(1e-6, toleranceS) + strength * .01;
+        if (!best || score > best.score) best = { phaseS, assignments, score, residual };
+      }
+      return best;
+    }
+
+    function pairEdgesByPattern(evsEdges, rgbEdges) {
+      const toleranceS = Number($('patternTolerance').value) / 1000;
+      const maxDelta = Number($('matchWindow').value) / 1000;
+      const provisional = Number($('provisionalOffset').value) / 1000;
+      const evsFit = fitLedPattern(evsEdges, toleranceS);
+      const rgbFit = fitLedPattern(rgbEdges, Math.max(toleranceS, 1 / Math.max(1, state.meta.rgbFps || 60) * 1.5));
+      state.patternFit = { evs: evsFit, rgb: rgbFit };
+      if (!evsFit || !rgbFit) return [];
+
+      let best = { pairs: [], score: -Infinity, cycleShift: 0 };
+      for (let cycleShift = -3; cycleShift <= 3; cycleShift += 1) {
+        const pairs = [];
+        let distanceSum = 0;
+        for (const evsAssignment of evsFit.assignments.values()) {
+          const rgbKey = `${evsAssignment.cycle + cycleShift}:${evsAssignment.patternIndex}`;
+          const rgbAssignment = rgbFit.assignments.get(rgbKey);
+          if (!rgbAssignment) continue;
+          const distance = Math.abs(rgbAssignment.edge.t - (evsAssignment.edge.t + provisional));
+          if (distance > maxDelta) continue;
+          distanceSum += distance;
+          pairs.push({
+            evs: evsAssignment.edge,
+            rgb: rgbAssignment.edge,
+            patternIndex: evsAssignment.patternIndex,
+            cycle: evsAssignment.cycle
+          });
+        }
+        const score = pairs.length * 1000 - distanceSum / Math.max(1e-6, maxDelta);
+        if (score > best.score) best = { pairs, score, cycleShift };
+      }
+      state.patternFit.cycleShift = best.cycleShift;
+      return best.pairs.sort((a, b) => a.evs.t - b.evs.t);
+    }
+
+    function pairEdgesNearest(evsEdges, rgbEdges) {
       const maxDelta = Number($('matchWindow').value) / 1000;
       const provisional = Number($('provisionalOffset').value) / 1000;
       const used = new Set();
@@ -562,6 +661,13 @@
         }
       }
       return pairs.sort((a,b) => a.evs.t - b.evs.t);
+    }
+
+    function pairEdges(evsEdges, rgbEdges) {
+      state.patternFit = null;
+      return $('useLedPattern').checked
+        ? pairEdgesByPattern(evsEdges, rgbEdges)
+        : pairEdgesNearest(evsEdges, rgbEdges);
     }
 
     function fitClock(pairs) {
@@ -595,7 +701,8 @@
     function updateResults() {
       const count = state.pairs.length;
       const manual = state.analysisMethod === 'manual';
-      $('statusValue').textContent = manual ? '手動同期' : count >= 4 ? '同期候補を推定' : count ? '要確認' : '未検出';
+      const pattern = !manual && $('useLedPattern').checked;
+      $('statusValue').textContent = manual ? '手動同期' : count >= 4 ? (pattern ? '周期照合で推定' : '同期候補を推定') : count ? '要確認' : '未検出';
       $('statusValue').className = `metric-value ${manual || count >= 4 ? 'cyan' : count ? 'amber' : ''}`;
       $('offsetValue').textContent = formatMs(state.offsetS, true);
       $('driftValue').textContent = `${(state.drift * 1e6).toFixed(1)} ppm`;
@@ -1336,6 +1443,14 @@
         reference_sensor: 'rgb',
         model: {
           method: state.analysisMethod,
+          edge_pairing: $('useLedPattern').checked ? 'known_led_pattern' : 'nearest_same_polarity',
+          led_pattern: $('useLedPattern').checked ? {
+            period_s: LED_PATTERN.periodS,
+            transition_times_s: LED_PATTERN.transitions.map(item => item.t),
+            transition_kinds: LED_PATTERN.transitions.map(item => item.kind),
+            tolerance_s: Number($('patternTolerance').value) / 1000,
+            cycle_shift: state.patternFit?.cycleShift ?? null
+          } : null,
           equation: 'rgb_time = evs_time + offset_s + drift * (evs_time - anchor_evs_time_s)',
           anchor_evs_time_s: state.anchorS,
           offset_s: state.offsetS,
@@ -1390,6 +1505,10 @@
       const threshold = suggestRgbThreshold();
       analyze();
       toast(`RGB差分閾値を ${threshold.toPrecision(4)} に設定しました。`);
+    });
+    $('useLedPattern').addEventListener('change', () => {
+      analyze();
+      toast($('useLedPattern').checked ? '既知LED周期による対応付けを有効にしました。' : '最近傍による対応付けへ戻しました。');
     });
     $('analyzeButton').addEventListener('click', () => { analyze(); toast(`${state.pairs.length}個の点滅エッジを対応付けました。`); });
     $('demoButton').addEventListener('click', () => {
