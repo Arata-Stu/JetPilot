@@ -1,4 +1,4 @@
-"""Manage the Git repositories declared in packages.repos, using only stdlib."""
+"""Manage JetPilot itself and repositories in packages.repos using only stdlib."""
 from __future__ import annotations
 
 import argparse
@@ -24,7 +24,7 @@ def read_manifest(path: Path) -> dict[str, dict[str, str]]:
         match = re.fullmatch(r'  ([A-Za-z0-9_./-]+):\s*', raw)
         if match and header:
             current = match[1]
-            if current in repos or Path(current).is_absolute() or '..' in Path(current).parts:
+            if current in repos or Path(current) == Path('.') or Path(current).is_absolute() or '..' in Path(current).parts:
                 raise ValueError(f'{path}:{number}: duplicate or unsafe path')
             repos[current] = {}
             continue
@@ -66,9 +66,9 @@ def inspect(path: Path) -> tuple[str, str, bool]:
 
 
 def main(argv=None) -> int:
-    parser = argparse.ArgumentParser(description='外部リポジトリの一覧・更新・取得・コミット記録')
+    parser = argparse.ArgumentParser(description='JetPilot本体と外部リポジトリの一覧・更新・取得・コミット記録')
     parser.add_argument('command', choices=('status', 'pull', 'import', 'lock'), nargs='?', default='status')
-    parser.add_argument('repositories', nargs='*', help='対象パス。省略時はすべて')
+    parser.add_argument('repositories', nargs='*', help='対象パス。本体は .（status/pullのみ）。省略時のstatus/pullは本体も含む')
     parser.add_argument('--root', type=Path, default=Path(__file__).resolve().parents[2])
     parser.add_argument('--manifest', type=Path, help='既定: packages.repos。再現時は packages.lock.repos')
     parser.add_argument('--output', type=Path, help='lock の保存先。既定: packages.lock.repos')
@@ -78,7 +78,10 @@ def main(argv=None) -> int:
         parser.error('部分 lock には --output を指定してください。全体 lock の上書きを防ぎます')
     root = args.root.resolve()
     try:
-        repos = read_manifest(args.manifest or root / 'packages.repos')
+        include_root = args.command in ('status', 'pull')
+        repos = {} if include_root and args.repositories == ['.'] else read_manifest(args.manifest or root / 'packages.repos')
+        if include_root:
+            repos = {'.': {}, **repos}
         if set(args.repositories) - repos.keys():
             raise ValueError('unknown repository selection')
         selected = args.repositories or list(repos)
@@ -112,7 +115,8 @@ def main(argv=None) -> int:
                         git(path, 'checkout', '--detach', item['version'])
                 revision, branch, dirty = inspect(path)
                 label = branch or 'DETACHED (固定コミット/タグ)'
-                print(f'{"DIRTY" if dirty else "CLEAN":8} {name}  {label}  {revision[:12]}', flush=True)
+                display_name = 'JetPilot (.)' if name == '.' else name
+                print(f'{"DIRTY" if dirty else "CLEAN":8} {display_name}  {label}  {revision[:12]}', flush=True)
                 tracking = git(path, 'rev-list', '--left-right', '--count', 'HEAD...@{upstream}', check=False)
                 if tracking.returncode == 0:
                     ahead, behind = tracking.stdout.split()

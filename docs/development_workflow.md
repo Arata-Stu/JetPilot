@@ -53,19 +53,23 @@ ROS launch を直接呼ぶ場合は `bag_manager_output_dir` に保存ルート�
 `bag_manager_recording_name` に名前を指定する。
 変更反映には実行環境で `jetpilot_system_launch` と `jetpilot_bag_tools` をビルドする。
 
-## 外部リポジトリ
+## 本体・外部リポジトリ
 
 ```bash
-./scripts/repos.sh                                 # 全リポジトリの状態
+./scripts/repos.sh                                 # JetPilot本体と外部リポジトリの状態
 ./scripts/repos.sh pull --dry-run                   # 更新方針を表示
 ./scripts/repos.sh pull                             # クリーンなブランチを一括更新
+./scripts/repos.sh status .                         # 本体だけ状態確認
+./scripts/repos.sh pull .                           # 本体だけ更新
 ./scripts/repos.sh pull tools/isaac-ros-cli          # 一つだけ更新
 ./scripts/repos.sh import                           # packages.repos の不足分のみ取得
 ./scripts/repos.sh lock                             # 現在のコミットを packages.lock.repos に記録
 ./scripts/repos.sh import --manifest packages.lock.repos
 ```
 
-`packages.repos` を唯一の対象一覧として使い、vcstool や PyYAML は不要。
+`status` と `pull` は、対象省略時に JetPilot 本体（`.`）と `packages.repos` の全リポジトリを扱う。明示した場合は指定対象だけを扱う。vcstool や PyYAML は不要。
+`import` と `lock` は従来どおり外部リポジトリだけが対象で、本体を lock に含めない。
+対象一覧は開始時に読み込む。本体の pull で `packages.repos` が変わった場合、新しい一覧は次回実行時に反映される。
 状態には branch、HEAD、未コミット変更、ローカルに記録された upstream との差を表示する。
 status と dry-run では fetch しないので、upstream 差分は最後に取得した情報に基づく。
 

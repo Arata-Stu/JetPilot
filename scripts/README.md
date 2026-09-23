@@ -7,7 +7,7 @@
 | `screen.sh` | screen セッションを開始・再接続 |
 | `bringup.sh` | ROS 起動・録画設定 |
 | `build.sh` | ROS パッケージのビルド |
-| `repos.sh` | 外部リポジトリの状態確認・更新 |
+| `repos.sh` | JetPilot本体・外部リポジトリの状態確認・更新 |
 | `jetson_display_mode.sh` | Jetson の画面設定 |
 | `jetson_max_performance.sh` | Jetson の性能設定 |
 | `bluetooth.sh` | Bluetooth の復旧 |
