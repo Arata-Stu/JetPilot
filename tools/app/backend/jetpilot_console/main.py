@@ -28,6 +28,7 @@ from .remote_runtime import request as runtime_request
 from .live_tuning import prepare_snapshot, remote_request, map_identity, encoded
 from .vgl_models import input_size, resolve_model, scan_models
 from .e2e_analysis import scan_e2e_models
+from . import section_multihead_pipeline
 from .e2e_pipeline import (
     PipelineTaskSpec,
     build_deploy_task,
@@ -346,6 +347,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/e2e/models":
             self._json({"models": scan_e2e_models(self.server.state.config)})
             return
+        if path == "/api/section-multihead/pipeline":
+            self._json(section_multihead_pipeline.snapshot(self.server.state.config))
+            return
         if path == "/api/e2e/pipeline":
             self._json(pipeline_catalog(self.server.state.config))
             return
@@ -564,6 +568,16 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path in {"/api/e2e-analyses", "/api/e2e-analyses/start"}:
             self._start_analysis(body, e2e=True)
+            return
+        section_actions = {
+            "/api/section-multihead/preprocess": section_multihead_pipeline.build_preprocess,
+            "/api/section-multihead/train": section_multihead_pipeline.build_train,
+            "/api/section-multihead/export": section_multihead_pipeline.build_export,
+            "/api/section-multihead/analyze": section_multihead_pipeline.build_analyze,
+            "/api/section-multihead/deploy": section_multihead_pipeline.build_deploy,
+        }
+        if path in section_actions:
+            self._start_e2e_pipeline_task(section_actions[path], body, pipeline_label="Section Multihead")
             return
         if path == "/api/e2e/datasets/create":
             self._start_e2e_pipeline_task(build_preprocess_task, body)

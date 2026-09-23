@@ -16,6 +16,7 @@
 #include "isaac_ros_nitros_tensor_list_type/nitros_tensor_list.hpp"
 #include "jetpilot_msgs/msg/control_command.hpp"
 #include "rclcpp/rclcpp.hpp"
+#include "std_msgs/msg/string.hpp"
 #include "rcl_interfaces/msg/set_parameters_result.hpp"
 
 namespace jetpilot_e2e_inference
@@ -54,6 +55,22 @@ private:
     const TensorList & message, double callback_ms, double output_interval_ms,
     bool has_output_interval, const PipelineTiming & pipeline_timing);
 
+  std::vector<std::string> section_head_names_;
+  std::vector<std::string> section_ids_;
+  std::vector<std::int64_t> section_head_indices_;
+  std::vector<double> section_throttles_;
+  std::size_t generic_head_index_{0U};
+  double generic_throttle_{0.2};
+  double section_timeout_sec_{0.3};
+  double throttle_rise_per_sec_{0.2};
+  double steering_rate_per_sec_{3.0};
+  double previous_throttle_{0.0};
+  double previous_steering_{0.0};
+  std::mutex section_mutex_;
+  std::string current_section_;
+  SteadyTime section_received_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr section_sub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr active_head_pub_;
   std::string output_tensor_name_;
   std::vector<std::string> output_fields_;
   double steering_min_{-1.0};

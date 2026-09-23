@@ -42,6 +42,10 @@ DEFAULT_TOPICS = [
     # Localization output/state retained for online and offline drive analysis.
     "/visual_slam/tracking/odometry",
     "/localization/pose_hint_state",
+    "/localization/current_section",
+    "/localization/section_state",
+    "/e2e/active_head",
+    "/e2e/validated_section",
     "/localization/pose_hint_required",
     "/localization/vslam/diagnostics",
     "/localization/manager/diagnostics",

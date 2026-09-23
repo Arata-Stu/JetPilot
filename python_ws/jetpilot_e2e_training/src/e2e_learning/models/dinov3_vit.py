@@ -375,6 +375,7 @@ def load_dinov3_backbone_weights(
     backbone: nn.Module,
     *,
     trusted_checkpoint: bool = False,
+    require_all_parameters: bool = False,
 ) -> tuple[int, int]:
     """Load a raw DINOv3 or GEP event-encoder checkpoint into the compatible backbone.
 
@@ -421,5 +422,9 @@ def load_dinov3_backbone_weights(
         raise RuntimeError(
             "Checkpoint is not a DINOv3 ViT-S/16 backbone: RoPE or storage tokens are missing"
         )
+    if require_all_parameters:
+        missing = sorted(name for name, _ in backbone.named_parameters() if name not in compatible)
+        if missing:
+            raise RuntimeError(f"Frozen DINOv3 checkpoint is missing parameters: {missing}")
     backbone.load_state_dict(compatible, strict=False)
     return len(compatible), len(target)

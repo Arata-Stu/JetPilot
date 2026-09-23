@@ -95,6 +95,9 @@ _REPLAY_ISOLATED_TOPICS = (
     '/localization/pose_hint_required',
     '/localization/pose_hint_state',
     '/localization/current_section',
+    '/localization/section_state',
+    '/e2e/validated_section',
+    '/e2e/active_head',
     '/tf',
 )
 
@@ -227,6 +230,13 @@ def _validate_autonomous_command_source(context):
             'enable_e2e_inference requires an explicit e2e_model_root. '
             'Select the named model directory deployed to this Jetson.'
         )
+
+    if _launch_bool(context, 'e2e_section_multihead_mode'):
+        if not e2e_enabled or any(_launch_bool(context, name) for name in (
+            'e2e_async_rgb_evs_mode', 'e2e_event_tensor_mode', 'e2e_event_image_mode', 'enable_section_localizer')):
+            raise RuntimeError('Section multihead requires RGB E2E and owns its section localizer')
+        if not _launch_bool(context, 'enable_localization') or not _launch_bool(context, 'enable_localization_manager'):
+            raise RuntimeError('Section multihead requires localization and localization health manager')
 
     if sum((controller_enabled, e2e_enabled, shared_vit_enabled)) > 1:
         raise RuntimeError(
@@ -579,6 +589,7 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('e2e_event_image_mode', False, cli=True)
     args.add_arg('e2e_event_tensor_mode', False, cli=True)
     args.add_arg('e2e_async_rgb_evs_mode', False, cli=True)
+    args.add_arg('e2e_section_multihead_mode', False, cli=True)
     args.add_arg('e2e_event_preprocessor_mode', 'legacy', cli=True)
     args.add_arg('e2e_event_topic', '/event_camera/events', cli=True)
     args.add_arg('e2e_event_bins', '10', cli=True)
@@ -1156,8 +1167,28 @@ def generate_launch_description() -> lut.LaunchDescription:
             },
             condition=IfCondition(lut.AndSubstitution(
                 lu.is_true(args.enable_e2e_inference),
-                lut.NotSubstitution(_LaunchBoolean(args.e2e_async_rgb_evs_mode)))),
+                lut.AndSubstitution(
+                    lut.NotSubstitution(_LaunchBoolean(args.e2e_async_rgb_evs_mode)),
+                    lut.NotSubstitution(_LaunchBoolean(args.e2e_section_multihead_mode))))),
         ))
+
+    actions.append(lu.include(
+        'jetpilot_e2e_inference', 'launch/section_multihead_tensor_rt.launch.py',
+        launch_arguments={
+            'model_root': args.e2e_model_root,
+            'localization_map': args.map_dir,
+            'container_name': args.sensor_kit_container_name,
+            'run_standalone': False,
+            'image_topic': args.e2e_image_topic,
+            'camera_info_topic': args.e2e_camera_info_topic,
+            'input_image_width': args.e2e_input_image_width,
+            'input_image_height': args.e2e_input_image_height,
+            'control_cmd_topic': args.e2e_control_cmd_topic,
+            'use_sim_time': args.use_sim_time,
+        },
+        condition=IfCondition(lut.AndSubstitution(
+            lu.is_true(args.enable_e2e_inference), _LaunchBoolean(args.e2e_section_multihead_mode))),
+    ))
 
     actions.append(
         lu.include(

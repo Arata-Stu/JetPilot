@@ -344,3 +344,9 @@ TensorRT engineはSSH転送中に生成せず、Jetsonの実行用Docker環境�
 単一画像・IMUなしモデル（`trajectory_pilotnet`）です。複数画像GRUとIMU入力モデルは
 offline比較には対応していますが、実車online推論には時系列/IMU tensor producerの追加が
 必要です。
+
+## Section Multihead E2E
+
+共有DINOv3を固定し、直線・カーブ・汎用headをsectionで選択する構成を追加しました。
+Consoleの「E2E → Section Multihead」で前処理・全head学習・head別解析・Jetson転送を行えます。
+[データ作成・学習・実機起動の手順](../../docs/section_multihead_e2e.md)を参照してください。

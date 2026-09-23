@@ -2609,9 +2609,10 @@ function scheduleE2EPreflight(options = {}) {
 }
 
 function setE2EWorkspace(workspace) {
-  if (!["train", "evaluate", "shared-vit"].includes(workspace)) return;
+  if (!["train", "evaluate", "shared-vit", "section-multihead"].includes(workspace)) return;
   if (workspace !== "evaluate") pauseAnalysisPlayback();
   state.e2eWorkspace = workspace;
+  if (workspace === "section-multihead") refreshSectionMultihead();
   render();
 }
 
@@ -2622,8 +2623,9 @@ function renderE2EAnalysis() {
         <button class="${state.e2eWorkspace === "evaluate" ? "active" : ""}" aria-pressed="${state.e2eWorkspace === "evaluate"}" onclick="setE2EWorkspace('evaluate')">評価・走行結果</button>
         <button class="${state.e2eWorkspace === "train" ? "active" : ""}" aria-pressed="${state.e2eWorkspace === "train"}" onclick="setE2EWorkspace('train')">学習・配備</button>
         <button class="${state.e2eWorkspace === "shared-vit" ? "active" : ""}" aria-pressed="${state.e2eWorkspace === "shared-vit"}" onclick="setE2EWorkspace('shared-vit')">共有ViT</button>
+        <button class="${state.e2eWorkspace === "section-multihead" ? "active" : ""}" onclick="setE2EWorkspace('section-multihead')">Section Multihead</button>
       </nav>
-      ${state.e2eWorkspace === "train" ? renderE2EPipeline() : state.e2eWorkspace === "shared-vit" ? renderSharedVitPipeline() : `
+      ${state.e2eWorkspace === "section-multihead" ? renderSectionMultihead() : state.e2eWorkspace === "train" ? renderE2EPipeline() : state.e2eWorkspace === "shared-vit" ? renderSharedVitPipeline() : `
       <div class="analysis-create-layout">
         <section class="panel analysis-create-panel" id="e2e-offline-eval">
           <div class="panel-header"><h2>New E2E Analysis</h2><span class="spacer"></span><button onclick="refreshAnalysisData()">Refresh</button></div>

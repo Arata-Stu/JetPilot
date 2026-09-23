@@ -48,6 +48,43 @@ E2EControlDecoderNode::E2EControlDecoderNode(const rclcpp::NodeOptions & options
   output_tensor_name_ = declare_parameter<std::string>("output_tensor_name", "output_tensor");
   output_fields_ = declare_parameter<std::vector<std::string>>(
     "output_fields", std::vector<std::string>{"steering", "throttle"});
+  section_head_names_ = declare_parameter<std::vector<std::string>>("section_head_names", std::vector<std::string>{});
+  section_ids_ = declare_parameter<std::vector<std::string>>("section_ids", std::vector<std::string>{});
+  section_head_indices_ = declare_parameter<std::vector<std::int64_t>>("section_head_indices", std::vector<std::int64_t>{});
+  section_throttles_ = declare_parameter<std::vector<double>>("section_throttles", std::vector<double>{});
+  const auto generic_index = declare_parameter<int>("generic_head_index", 0);
+  generic_throttle_ = declare_parameter<double>("generic_throttle", 0.2);
+  section_timeout_sec_ = declare_parameter<double>("section_timeout_sec", 0.3);
+  throttle_rise_per_sec_ = declare_parameter<double>("throttle_rise_per_sec", 0.2);
+  steering_rate_per_sec_ = declare_parameter<double>("steering_rate_per_sec", 3.0);
+  if (!section_head_names_.empty()) {
+    if (generic_index < 0 || static_cast<std::size_t>(generic_index) >= section_head_names_.size() ||
+      section_ids_.size() != section_head_indices_.size() || section_ids_.size() != section_throttles_.size() ||
+      !std::isfinite(generic_throttle_) || generic_throttle_ < 0.0 || generic_throttle_ > 1.0 ||
+      !std::isfinite(section_timeout_sec_) || section_timeout_sec_ <= 0.0 ||
+      !std::isfinite(throttle_rise_per_sec_) || throttle_rise_per_sec_ <= 0.0 ||
+      !std::isfinite(steering_rate_per_sec_) || steering_rate_per_sec_ <= 0.0)
+    {
+      throw std::invalid_argument("Invalid section multihead contract");
+    }
+    generic_head_index_ = static_cast<std::size_t>(generic_index);
+    for (std::size_t i = 0; i < section_ids_.size(); ++i) {
+      if (section_head_indices_[i] < 0 ||
+        static_cast<std::size_t>(section_head_indices_[i]) >= section_head_names_.size() ||
+        !std::isfinite(section_throttles_[i]) || section_throttles_[i] < 0.0 || section_throttles_[i] > 1.0)
+      {
+        throw std::invalid_argument("Invalid section head index or throttle");
+      }
+    }
+    section_sub_ = create_subscription<std_msgs::msg::String>(
+      declare_parameter<std::string>("section_topic", "/e2e/validated_section"), rclcpp::QoS(1),
+      [this](std_msgs::msg::String::ConstSharedPtr message) {
+        std::lock_guard<std::mutex> lock(section_mutex_);
+        current_section_ = message->data;
+        section_received_ = std::chrono::steady_clock::now();
+      });
+    active_head_pub_ = create_publisher<std_msgs::msg::String>("/e2e/active_head", 1);
+  }
   steering_min_ = declare_parameter<double>("steering_min", -1.0);
   steering_max_ = declare_parameter<double>("steering_max", 1.0);
   throttle_min_ = declare_parameter<double>("throttle_min", 0.0);
@@ -234,7 +271,12 @@ void E2EControlDecoderNode::on_tensor(TensorList::ConstSharedPtr message)
       RCLCPP_WARN(get_logger(), "Tensor '%s' is not float32", output_tensor_name_.c_str());
       return;
     }
-    if (tensor->element_count() < output_fields_.size()) {
+    const auto value_count = section_head_names_.empty() ? output_fields_.size() : section_head_names_.size();
+    if (!section_head_names_.empty() && tensor->element_count() != value_count) {
+      RCLCPP_ERROR(get_logger(), "Multihead output count does not match metadata");
+      return;
+    }
+    if (tensor->element_count() < value_count) {
       RCLCPP_WARN(
         get_logger(), "Tensor '%s' has %lu values; expected at least %lu",
         output_tensor_name_.c_str(), static_cast<unsigned long>(tensor->element_count()),
@@ -242,7 +284,7 @@ void E2EControlDecoderNode::on_tensor(TensorList::ConstSharedPtr message)
       return;
     }
 
-    std::vector<float> values(output_fields_.size());
+    std::vector<float> values(value_count);
     auto stream_handle =
       nvidia::isaac_ros::nitros::CudaStreamPool::instance().get_stream_handle();
     auto read_handle = tensor->get_read_handle(stream_handle.get());
@@ -284,16 +326,41 @@ void E2EControlDecoderNode::on_tensor(TensorList::ConstSharedPtr message)
 
     float steering = 0.0F;
     float throttle = 0.0F;
-    for (std::size_t index = 0U; index < output_fields_.size(); ++index) {
-      if (!std::isfinite(values[index])) {
-        RCLCPP_WARN(get_logger(), "Tensor contains a non-finite control value");
+    std::size_t selected_head = generic_head_index_;
+    double selected_throttle = generic_throttle_;
+    if (!section_head_names_.empty()) {
+      const auto sensor_age = (now() - rclcpp::Time(message->get_header().stamp)).seconds();
+      if (sensor_age < -0.05 || sensor_age > stale_timeout_sec_) {
+        RCLCPP_WARN(get_logger(), "Dropping stale multihead inference");
         return;
       }
-      if (output_fields_[index] == "steering") {
-        steering = values[index];
-      } else if (output_fields_[index] == "throttle") {
-        throttle = values[index];
+      {
+        std::lock_guard<std::mutex> lock(section_mutex_);
+        if (std::chrono::duration<double>(callback_started - section_received_).count() <= section_timeout_sec_) {
+          for (std::size_t i = 0; i < section_ids_.size(); ++i) {
+            if (section_ids_[i] == current_section_) {
+              selected_head = static_cast<std::size_t>(section_head_indices_[i]);
+              selected_throttle = section_throttles_[i];
+              break;
+            }
+          }
+        }
       }
+      steering = values[selected_head];
+      throttle = static_cast<float>(selected_throttle);
+    } else {
+      for (std::size_t index = 0U; index < output_fields_.size(); ++index) {
+        if (!std::isfinite(values[index])) {
+          RCLCPP_WARN(get_logger(), "Tensor contains a non-finite control value");
+          return;
+        }
+        if (output_fields_[index] == "steering") steering = values[index];
+        else if (output_fields_[index] == "throttle") throttle = values[index];
+      }
+    }
+    if (!std::isfinite(steering) || !std::isfinite(throttle)) {
+      RCLCPP_WARN(get_logger(), "Tensor contains a non-finite control value");
+      return;
     }
 
     jetpilot_msgs::msg::ControlCommand command;
@@ -304,8 +371,20 @@ void E2EControlDecoderNode::on_tensor(TensorList::ConstSharedPtr message)
     command.steering = std::clamp(
       static_cast<double>(steering) * steering_scale_.load() + steering_offset_.load(), steering_min_, steering_max_);
     command.throttle = std::clamp(
-      fixed_throttle_mode_ ? fixed_throttle_.load() : static_cast<double>(throttle),
+      (section_head_names_.empty() && fixed_throttle_mode_) ? fixed_throttle_.load() : static_cast<double>(throttle),
       throttle_min_, throttle_max_);
+    if (!section_head_names_.empty()) {
+      const double dt = has_output_interval ? std::clamp(output_interval_ms / 1000.0, 0.0, 0.1) : 0.0;
+      command.throttle = std::min(command.throttle, previous_throttle_ + throttle_rise_per_sec_ * dt);
+      command.steering = std::clamp(command.steering,
+        previous_steering_ - steering_rate_per_sec_ * dt,
+        previous_steering_ + steering_rate_per_sec_ * dt);
+      previous_throttle_ = command.throttle;
+      previous_steering_ = command.steering;
+      std_msgs::msg::String selected;
+      selected.data = section_head_names_[selected_head];
+      active_head_pub_->publish(selected);
+    }
     command.brake = 0.0;
     command.reverse = 0.0;
     command_pub_->publish(command);

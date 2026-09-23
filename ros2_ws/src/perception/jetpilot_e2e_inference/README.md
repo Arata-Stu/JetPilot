@@ -662,3 +662,9 @@ CUDA対応PyTorchが安定して利用できる環境では`device:=cuda`を明�
 PyTorchノードは`rclpy`プロセスとして動作するため、`rclcpp_components`の
 Composable Node containerへはロードされません。カメラcomponentは従来どおり
 `multi_sensor_container`で実行されます。
+
+## Section Multihead E2E
+
+共有DINOv3を固定し、直線・カーブ・汎用headをsectionで選択する構成を追加しました。
+Consoleの「E2E → Section Multihead」で前処理・全head学習・head別解析・Jetson転送を行えます。
+[データ作成・学習・実機起動の手順](../../../../docs/section_multihead_e2e.md)を参照してください。

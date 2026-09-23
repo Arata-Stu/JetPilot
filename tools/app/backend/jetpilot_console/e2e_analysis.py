@@ -105,7 +105,9 @@ def scan_e2e_models(config: Any) -> list[dict[str, Any]]:
                 if not _is_relative_to(resolved, root):
                     continue
                 seen.add(resolved)
-                records.append(_model_record(resolved, root))
+                record = _model_record(resolved, root)
+                if record["kind"] != "section_multihead":
+                    records.append(record)
     records.sort(key=lambda item: int(item["modified_at_ns"]), reverse=True)
     return records
 

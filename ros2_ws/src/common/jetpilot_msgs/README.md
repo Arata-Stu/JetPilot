@@ -60,3 +60,6 @@ mode は `AUTO`、`MANUAL`、`STOP`、`PROPO` の4種類です。`OperationModeR
 ## Bag request
 
 `BagRequest.START` は `label` を session 名の一部として使います。`STOP` は現在の recording を終了します。`SPLIT` と `MARK` は将来拡張用の command として定義済みですが、現行の bag manager では `SPLIT` は未実装、`MARK` は event log として扱います。
+
+`SectionState` はsection判定に使ったTF時刻、地図hash、section ID、有効性を記録するメッセージです。
+`/localization/section_state` をbagへ保存すると、Multihead学習用の前処理で優先的に使用します。

@@ -1278,3 +1278,9 @@ centerline / raceline / custom lineは制御方式とは別の軌道選択です
 接続・プロセスは最後に取得した状態です。「起動・運転へ」から状態を更新できます。
 一度コンテナ接続を確認すると、ほかの画面でも記録状態を約5秒ごとに取得し、
 地図や映像を再描画せずバーだけ更新します。ページを開くだけで実機を起動することはありません。
+
+## Section Multihead E2E
+
+共有DINOv3を固定し、直線・カーブ・汎用headをsectionで選択する構成を追加しました。
+Consoleの「E2E → Section Multihead」で前処理・全head学習・head別解析・Jetson転送を行えます。
+[データ作成・学習・実機起動の手順](../../docs/section_multihead_e2e.md)を参照してください。

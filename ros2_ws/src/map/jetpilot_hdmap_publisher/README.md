@@ -32,6 +32,7 @@ ROS package と Python module の名前は `jetpilot_hdmap_publisher` です。
 | `hd_map_publisher_node` | `/hd_map/primary_centerline_path` | `nav_msgs/msg/Path` | Reliable / Transient Local | primary laneのcenterline |
 | `hd_map_publisher_node` | `/hd_map/junctions` | `jetpilot_msgs/msg/JunctionArray` | Reliable / Transient Local | signal区間と方向別laneの対応 |
 | `hd_map_section_localizer_node` | `/localization/current_section` | `std_msgs/msg/String` | Reliable / Transient Local | 現在section ID。推定不能時は`unknown` |
+| `hd_map_section_localizer_node` | `/localization/section_state` | `jetpilot_msgs/msg/SectionState` | Reliable / Transient Local | TF時刻・section ID・地図hash・判定有効性。学習データの対応付け用 |
 | `hd_map_section_localizer_node` | `/localization/current_section_marker` | `visualization_msgs/msg/Marker` | Reliable / Transient Local | 現在sectionのhighlight |
 
 ### TF

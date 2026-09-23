@@ -16,6 +16,8 @@ def inspect_model(
     metadata = json.loads((path / "metadata.json").read_text())
     if metadata.get("benchmark_only") is True and not allow_benchmark_only:
         raise ValueError("benchmark-only model is not allowed for vehicle inference")
+    if metadata.get("model_kind") == "section_multihead":
+        raise ValueError("section_multihead requires e2e_section_multihead_mode:=true and the dedicated TensorRT launch")
     config = metadata.get("config", {})
     data = config.get("data", {})
     output = metadata.get("output", {})

@@ -12,6 +12,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   msg/BagRequest.msg
   msg/BagStatus.msg
   msg/ControlCommand.msg
+  msg/SectionState.msg
   msg/DirectionSignal.msg
   msg/Junction.msg
   msg/JunctionArray.msg

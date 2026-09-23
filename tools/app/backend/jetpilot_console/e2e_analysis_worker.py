@@ -388,6 +388,8 @@ def _supervised_predictions(
     trajectory_times = [float(item["t"]) for item in trajectory]
     imu_times = [float(item["t"]) for item in imu_records]
     metadata = _metadata(model_path)
+    if metadata.get("model_kind") == "section_multihead":
+        raise ValueError("Section Multihead画面で解析するheadを選択してください")
     if dataset_path is not None:
         metadata = {**metadata, "source_dataset": str(dataset_path)}
     modality = str(metadata.get("modality") or "rgb")

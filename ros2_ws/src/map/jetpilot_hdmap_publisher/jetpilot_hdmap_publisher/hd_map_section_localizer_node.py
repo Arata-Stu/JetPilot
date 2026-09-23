@@ -4,6 +4,9 @@
 from __future__ import annotations
 
 import math
+import hashlib
+import json
+import yaml
 import time
 from pathlib import Path
 from typing import Optional, Sequence, Tuple
@@ -17,6 +20,7 @@ from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.time import Time
 from std_msgs.msg import String
+from jetpilot_msgs.msg import SectionState
 from visualization_msgs.msg import Marker
 
 from jetpilot_hdmap_publisher.hd_map_publisher_node import (
@@ -107,6 +111,9 @@ class HdMapSectionLocalizerNode(Node):
         self.current_lane_received = None
         self.create_subscription(String, "/planning/current_lane", self.receive_current_lane, qos)
         self.section_pub = self.create_publisher(String, self.current_section_topic, qos)
+        self.section_state_pub = self.create_publisher(SectionState, "/localization/section_state", qos)
+        self.section_map_sha256 = ""
+        self.pose_stamp = None
         self.marker_pub = self.create_publisher(Marker, self.current_marker_topic, qos)
         self.tf_buffer = tf2_ros.Buffer(cache_time=Duration(seconds=20.0))
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
@@ -159,6 +166,10 @@ class HdMapSectionLocalizerNode(Node):
             return False
         try:
             candidate, stable_signature = load_stable_hd_map(path, str(self.frame_id_override))
+            document = yaml.safe_load(path.read_text())
+            section_digest = hashlib.sha256(json.dumps(document, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+            if hd_map_file_signature(path) != stable_signature:
+                raise RuntimeError("HD map changed while reading section metadata")
         except Exception as exc:  # noqa: BLE001
             self.rejected_map_signature = signature
             suffix = "; keeping the previous valid map" if self.hd_map is not None else ""
@@ -169,6 +180,7 @@ class HdMapSectionLocalizerNode(Node):
             return False
         reloaded = self.hd_map is not None
         self.hd_map = candidate
+        self.section_map_sha256 = section_digest
         self.loaded_map_signature = stable_signature
         self.rejected_map_signature = None
         self.last_load_issue_key = None
@@ -201,6 +213,7 @@ class HdMapSectionLocalizerNode(Node):
                 throttle_duration_sec=2.0,
             )
             return None
+        self.pose_stamp = tf_msg.header.stamp
         t = tf_msg.transform.translation
         return (float(t.x), float(t.y), float(t.z))
 
@@ -277,6 +290,13 @@ class HdMapSectionLocalizerNode(Node):
         msg = String()
         msg.data = section_id
         self.section_pub.publish(msg)
+        state = SectionState()
+        state.header.stamp = self.pose_stamp if section_id != "unknown" and self.pose_stamp is not None else self.get_clock().now().to_msg()
+        state.header.frame_id = self.hd_map.frame_id if self.hd_map else "map"
+        state.section_id = section_id
+        state.map_sha256 = self.section_map_sha256
+        state.valid = section_id != "unknown"
+        self.section_state_pub.publish(state)
         self.marker_pub.publish(self.build_current_marker(section_id))
         if section_id != self.current_section:
             self.get_logger().info(f"HD map section changed: {self.current_section} -> {section_id}")
