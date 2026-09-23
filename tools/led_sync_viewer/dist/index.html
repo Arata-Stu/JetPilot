@@ -173,6 +173,23 @@
 
     .toast { position: fixed; right: 20px; bottom: 20px; max-width: min(420px, calc(100vw - 40px)); padding: 11px 14px; border: 1px solid var(--line-strong); border-radius: 10px; background: #162230; color: var(--text); box-shadow: 0 15px 40px rgba(0,0,0,.38); opacity: 0; transform: translateY(8px); pointer-events: none; transition: .2s ease; }
     .toast.show { opacity: 1; transform: translateY(0); }
+    dialog { width: min(760px, calc(100vw - 28px)); max-height: min(720px, calc(100vh - 40px)); padding: 0; color: var(--text); border: 1px solid var(--line-strong); border-radius: 14px; background: #0d141e; box-shadow: 0 24px 80px rgba(0,0,0,.65); }
+    dialog::backdrop { background: rgba(0, 4, 9, .76); backdrop-filter: blur(3px); }
+    .dialog-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+    .dialog-body { padding: 14px 16px 18px; }
+    .dataset-search { width: 100%; margin-bottom: 12px; }
+    .dataset-list { display: grid; gap: 7px; max-height: 520px; overflow: auto; }
+    .dataset-item { display: grid; gap: 3px; width: 100%; text-align: left; padding: 10px 12px; }
+    .dataset-name { color: var(--text); font-weight: 700; }
+    .dataset-path { color: var(--muted); font-size: .75rem; overflow-wrap: anywhere; }
+    .primary-inspector .frame-canvas { height: clamp(280px, 38vh, 520px); }
+    .sensor-scrubber { display: grid; grid-template-columns: auto 1fr auto auto; align-items: center; gap: 8px; padding: 10px 12px 12px; border-top: 1px solid var(--line); }
+    .sensor-scrubber input[type="range"] { width: 100%; accent-color: var(--cyan); }
+    .sensor-time { min-width: 78px; color: var(--text); font: 700 .78rem ui-monospace, monospace; text-align: right; }
+    .sync-toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 11px 13px; border-top: 1px solid var(--line); }
+    .sync-explanation { margin-left: auto; max-width: 520px; }
+    .roi-ready { color: var(--cyan); }
+    .roi-warning { color: var(--amber); }
 
     @media (max-width: 980px) {
       .workspace { grid-template-columns: 1fr; }
@@ -205,7 +222,8 @@
         </div>
       </div>
       <div class="actions">
-        <label class="file-button">解析データを開く<input id="dataFiles" type="file" accept=".json,.csv,application/json,text/csv" multiple></label>
+        <label class="file-button">Mac・ローカル解析フォルダ<input id="localBundle" type="file" webkitdirectory directory multiple></label>
+        <button class="primary" id="browseDockerData" type="button">Docker解析を選ぶ</button>
         <button class="ghost" id="demoButton" type="button">デモを復元</button>
         <button id="exportButton" type="button">結果を書き出す</button>
       </div>
@@ -221,6 +239,38 @@
 
     <section class="workspace">
       <div>
+        <article class="panel frame-inspector primary-inspector">
+          <div class="panel-header">
+            <div><h2 class="panel-title">RGB・EVS目視同期</h2><div class="panel-note">両センサを独立にシークし、同じ点滅エッジを表示して手動同期できます</div></div>
+            <div class="panel-note" id="previewTime">プレビューなし</div>
+          </div>
+          <div class="frame-grid">
+            <div class="frame-cell">
+              <span class="video-label">RGB · 60 Hz観測</span><canvas class="frame-canvas" id="rgbFrame"></canvas><span class="frame-empty" id="rgbFrameEmpty">前処理でRGBプレビューを生成してください</span>
+              <div class="sensor-scrubber"><button id="rgbPreviewBack" type="button">−1</button><input id="rgbPreviewSeek" type="range" min="0" max="0" value="0"><button id="rgbPreviewForward" type="button">＋1</button><output class="sensor-time" id="rgbPreviewTime">0.000 s</output></div>
+            </div>
+            <div class="frame-cell">
+              <span class="video-label">EVS · 極性イベント蓄積</span><canvas class="frame-canvas" id="evsFrame"></canvas><span class="frame-empty" id="evsFrameEmpty">前処理でEVSプレビューを生成してください</span>
+              <div class="sensor-scrubber"><button id="evsPreviewBack" type="button">−1</button><input id="evsPreviewSeek" type="range" min="0" max="0" value="0"><button id="evsPreviewForward" type="button">＋1</button><output class="sensor-time" id="evsPreviewTime">0.000 s</output></div>
+            </div>
+          </div>
+          <div class="sync-toolbar">
+            <button class="primary" id="applyEstimatedOffset" type="button">推定オフセットを表示へ反映</button>
+            <button id="setManualOffset" type="button">この2枚を手動同期</button>
+            <button id="centerTimelineAtPreview" type="button">この時刻をグラフ表示</button>
+            <span class="panel-note sync-explanation">手動同期値はRGB時刻−EVS時刻です。半自動推定時はEVS位置を固定し、RGBを推定量だけ移動します。</span>
+          </div>
+          <div class="frame-toolbar">
+            <span class="panel-note">LED ROI</span>
+            <button class="segment-button active" id="startRoiMode" type="button">開始側</button>
+            <button class="segment-button" id="endRoiMode" type="button">終了側</button>
+            <button id="clearRoi" type="button">選択を消去</button>
+            <button class="primary" id="applyRoiAnalysis" type="button">選択ROIで再解析</button>
+            <span class="roi-readout" id="roiReadout">画像上をドラッグしてLEDを囲んでください</span>
+            <span class="panel-note" id="roiDataStatus">ROI再解析データを確認中</span>
+          </div>
+        </article>
+
         <article class="panel">
           <div class="panel-header">
             <div><h2 class="panel-title">点滅タイムライン</h2><div class="panel-note">シークバーで移動・表示幅で拡大</div></div>
@@ -272,24 +322,6 @@
           </div>
         </article>
 
-        <article class="panel frame-inspector">
-          <div class="panel-header">
-            <div><h2 class="panel-title">同一時刻の画像確認・ROI選択</h2><div class="panel-note">タイムライン表示中心に最も近いプレビューを表示</div></div>
-            <div class="panel-note" id="previewTime">プレビューなし</div>
-          </div>
-          <div class="frame-grid">
-            <div class="frame-cell"><span class="video-label">RGB</span><canvas class="frame-canvas" id="rgbFrame"></canvas><span class="frame-empty" id="rgbFrameEmpty">前処理でRGBプレビューを生成してください</span></div>
-            <div class="frame-cell"><span class="video-label">EVS · 極性イベント蓄積</span><canvas class="frame-canvas" id="evsFrame"></canvas><span class="frame-empty" id="evsFrameEmpty">前処理でEVSプレビューを生成してください</span></div>
-          </div>
-          <div class="frame-toolbar">
-            <span class="panel-note">ROI保存先</span>
-            <button class="segment-button active" id="startRoiMode" type="button">開始側</button>
-            <button class="segment-button" id="endRoiMode" type="button">終了側</button>
-            <button id="clearRoi" type="button">選択を消去</button>
-            <span class="roi-readout" id="roiReadout">画像上をドラッグしてLEDを囲んでください</span>
-          </div>
-        </article>
-
         <article class="panel playback">
           <div class="panel-header"><h2 class="panel-title">同期スロー再生（任意）</h2><div class="panel-note">同期計算には不要。目視確認・発表用</div></div>
           <div class="video-grid">
@@ -328,12 +360,10 @@
         </section>
 
         <section class="panel">
-          <div class="panel-header"><h2 class="panel-title">データ仕様</h2></div>
+          <div class="panel-header"><h2 class="panel-title">現在のデータ</h2></div>
           <div class="form">
-            <label for="dockerDataPath">Docker内JSON</label>
-            <input id="dockerDataPath" type="text" style="width:100%;margin-top:6px" placeholder="/workspaces/record/.../led_sync_data.json">
-            <div class="stack"><button class="primary" id="loadDockerData" type="button">Dockerから読み込む</button></div>
-            <p class="helper" style="margin-top:0">JSONは <code>rgb[{t,v}]</code> と <code>evs[{t,pos,neg}]</code> を読み込みます。時刻は秒です。CSVは <code>t,rgb</code> または <code>t,pos,neg</code> に対応します。</p>
+            <p class="helper" id="dataSourceLabel" style="margin-top:0">デモデータ</p>
+            <p class="helper">Macでは<code>led_sync_data.json</code>と<code>preview/</code>を含むフォルダを選択します。Dockerでは記録一覧から選ぶだけで、パス入力は不要です。</p>
             <div class="stack"><button id="sampleButton" type="button">サンプルJSONを保存</button></div>
           </div>
         </section>
@@ -341,6 +371,13 @@
     </section>
   </main>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <dialog id="dockerDatasetDialog">
+    <div class="dialog-header"><div><h2 class="panel-title">Docker内の解析データ</h2><div class="panel-note">/workspaces/record から自動検出</div></div><button id="closeDockerDialog" type="button">閉じる</button></div>
+    <div class="dialog-body">
+      <input class="dataset-search" id="datasetSearch" type="text" placeholder="セッション名・v1・v2・calibrationで絞り込み">
+      <div class="dataset-list" id="datasetList"><div class="empty">検索中...</div></div>
+    </div>
+  </dialog>
 
   <script>
     'use strict';
@@ -358,7 +395,12 @@
       viewStart: 0, viewEnd: 2.2, fullStart: 0, fullEnd: 2.2,
       dragging: false, dragX: 0, dragStart: 0, dragEnd: 0,
       navigatorDragging: false, navigatorBins: [],
-      rgbUrl: null, evsUrl: null
+      rgbUrl: null, evsUrl: null,
+      localFiles: new Map(), localObjectUrls: new Map(), dockerDatasets: [],
+      previewIndex: { rgb: 0, evs: 0 },
+      originalSignals: { rgb: [], evs: [] },
+      roiDataMeta: null, spatial: { rgb: null, evs: null },
+      analysisMethod: 'semi_auto'
     };
 
     const median = (values) => {
@@ -415,9 +457,14 @@
       };
       state.previewImages = { rgb: null, evs: null };
       state.previewUrls = { rgb: null, evs: null };
+      state.previewIndex = { rgb: 0, evs: 0 };
       state.rois = { start: { rgb: null, evs: null }, end: { rgb: null, evs: null } };
       state.rgb = (data.rgb || []).map(p => ({ t: Number(p.t ?? p.time_s), v: Number(p.v ?? p.value ?? p.rgb) })).filter(p => Number.isFinite(p.t) && Number.isFinite(p.v)).sort((a,b) => a.t-b.t);
       state.evs = (data.evs || []).map(p => ({ t: Number(p.t ?? p.time_s), pos: Number(p.pos ?? p.positive_count ?? 0), neg: Number(p.neg ?? p.negative_count ?? 0) })).filter(p => Number.isFinite(p.t) && Number.isFinite(p.pos) && Number.isFinite(p.neg)).sort((a,b) => a.t-b.t);
+      state.originalSignals = { rgb: [...state.rgb], evs: [...state.evs] };
+      state.roiDataMeta = data.roi_data || null;
+      state.spatial = { rgb: null, evs: null };
+      state.analysisMethod = 'semi_auto';
       let fullStart = Infinity;
       let fullEnd = -Infinity;
       for (const point of state.rgb) {
@@ -436,6 +483,8 @@
       suggestRgbThreshold();
       $('sessionName').textContent = `${state.meta.session} — EVS ${state.evs.length.toLocaleString()} bin / RGB ${state.rgb.length.toLocaleString()} frame`;
       $('viewDuration').value = 'full';
+      configurePreviewSeekers();
+      updateRoiDataStatus();
       analyze();
       updatePreview();
     }
@@ -460,6 +509,8 @@
       const edges = [];
       for (let i = 1; i < state.rgb.length; i += 1) {
         const before = state.rgb[i - 1], after = state.rgb[i];
+        const expectedPeriod = 1 / Math.max(1, state.meta.rgbFps || 60);
+        if (after.t - before.t > expectedPeriod * 2.5) continue;
         const delta = after.v - before.v;
         if (Math.abs(delta) >= threshold) edges.push({
           t: (before.t + after.t) / 2,
@@ -529,18 +580,20 @@
       state.drift = fit.drift;
       state.anchorS = fit.anchor;
       state.rmsS = fit.rms;
+      state.analysisMethod = 'semi_auto';
       updateResults();
       draw();
     }
 
     function updateResults() {
       const count = state.pairs.length;
-      $('statusValue').textContent = count >= 4 ? '同期候補を推定' : count ? '要確認' : '未検出';
-      $('statusValue').className = `metric-value ${count >= 4 ? 'cyan' : count ? 'amber' : ''}`;
+      const manual = state.analysisMethod === 'manual';
+      $('statusValue').textContent = manual ? '手動同期' : count >= 4 ? '同期候補を推定' : count ? '要確認' : '未検出';
+      $('statusValue').className = `metric-value ${manual || count >= 4 ? 'cyan' : count ? 'amber' : ''}`;
       $('offsetValue').textContent = formatMs(state.offsetS, true);
       $('driftValue').textContent = `${(state.drift * 1e6).toFixed(1)} ppm`;
       $('pairCount').textContent = String(count);
-      $('rmsValue').textContent = formatMs(state.rmsS);
+      $('rmsValue').textContent = manual ? '—' : formatMs(state.rmsS);
       const rows = $('pairRows');
       rows.innerHTML = '';
       $('pairEmpty').hidden = count > 0;
@@ -738,9 +791,9 @@
       state.viewStart = start; state.viewEnd = start + span; draw();
     }
 
-    function nearestPreview(sensor, time) {
+    function nearestPreviewIndex(sensor, time) {
       const frames = state.preview[sensor] || [];
-      if (!frames.length) return null;
+      if (!frames.length) return -1;
       let low = 0, high = frames.length - 1;
       while (low < high) {
         const middle = Math.floor((low + high) / 2);
@@ -748,12 +801,52 @@
       }
       const after = frames[low];
       const before = frames[Math.max(0, low - 1)];
-      return Math.abs(Number(before.t) - time) <= Math.abs(Number(after.t) - time) ? before : after;
+      return Math.abs(Number(before.t) - time) <= Math.abs(Number(after.t) - time) ? Math.max(0, low - 1) : low;
+    }
+
+    function nearestPreview(sensor, time) {
+      const index = nearestPreviewIndex(sensor, time);
+      return index >= 0 ? state.preview[sensor][index] : null;
+    }
+
+    function configurePreviewSeekers() {
+      for (const sensor of ['rgb', 'evs']) {
+        const frames = state.preview[sensor] || [];
+        const seek = $(`${sensor}PreviewSeek`);
+        seek.max = String(Math.max(0, frames.length - 1));
+        seek.value = String(clamp(state.previewIndex[sensor], 0, Math.max(0, frames.length - 1)));
+        seek.disabled = !frames.length;
+      }
+    }
+
+    function seekPreview(sensor, time) {
+      const index = nearestPreviewIndex(sensor, time);
+      if (index < 0) return;
+      state.previewIndex[sensor] = index;
+      $(`${sensor}PreviewSeek`).value = String(index);
+      updatePreviewSensor(sensor);
+      updatePreviewHeader();
+    }
+
+    function stepPreview(sensor, direction) {
+      const frames = state.preview[sensor] || [];
+      if (!frames.length) return;
+      state.previewIndex[sensor] = clamp(state.previewIndex[sensor] + direction, 0, frames.length - 1);
+      $(`${sensor}PreviewSeek`).value = String(state.previewIndex[sensor]);
+      updatePreviewSensor(sensor);
+      updatePreviewHeader();
     }
 
     function previewFileUrl(relativePath) {
+      const normalized = String(relativePath || '').replace(/\\/g, '/').replace(/^\.\//, '');
+      const localFile = state.localFiles.get(normalized);
+      if (localFile) {
+        if (!state.localObjectUrls.has(normalized)) {
+          state.localObjectUrls.set(normalized, URL.createObjectURL(localFile));
+        }
+        return state.localObjectUrls.get(normalized);
+      }
       if (!state.dataPath) return null;
-      const normalized = String(relativePath || '').replace(/\\/g, '/');
       const absolute = normalized.startsWith('/')
         ? normalized
         : `${state.dataPath.replace(/\/[^/]*$/, '')}/${normalized}`;
@@ -801,29 +894,31 @@
       ctx.restore();
     }
 
-    function updatePreview() {
-      const center = (state.viewStart + state.viewEnd) / 2;
-      const labels = [];
-      for (const sensor of ['rgb', 'evs']) {
-        const frame = nearestPreview(sensor, center);
+    function updatePreviewSensor(sensor) {
+        const frames = state.preview[sensor] || [];
+        const index = clamp(state.previewIndex[sensor], 0, Math.max(0, frames.length - 1));
+        const frame = frames[index] || null;
         const empty = $(`${sensor}FrameEmpty`);
         if (!frame) {
           empty.hidden = false;
           state.previewImages[sensor] = null;
           drawPreview(sensor);
-          continue;
+          $(`${sensor}PreviewTime`).textContent = '—';
+          return;
         }
-        labels.push(`${sensor.toUpperCase()} ${Number(frame.t).toFixed(3)} s`);
+        state.previewIndex[sensor] = index;
+        $(`${sensor}PreviewSeek`).value = String(index);
+        $(`${sensor}PreviewTime`).textContent = `${Number(frame.t).toFixed(3)} s`;
         const url = previewFileUrl(frame.path);
         if (!url) {
           empty.hidden = false;
-          empty.textContent = 'Docker内JSONとして開くとプレビュー画像を表示できます';
-          continue;
+          empty.textContent = '解析フォルダまたはDocker一覧からデータを開いてください';
+          return;
         }
         empty.hidden = true;
         if (state.previewUrls[sensor] === url && state.previewImages[sensor]) {
           drawPreview(sensor);
-          continue;
+          return;
         }
         state.previewUrls[sensor] = url;
         const image = new Image();
@@ -837,9 +932,22 @@
           empty.hidden = false; empty.textContent = 'プレビュー画像を読み込めませんでした';
         };
         image.src = url;
+    }
+
+    function updatePreviewHeader() {
+      const labels = [];
+      for (const sensor of ['rgb', 'evs']) {
+        const frame = state.preview[sensor]?.[state.previewIndex[sensor]];
+        if (frame) labels.push(`${sensor.toUpperCase()} ${Number(frame.t).toFixed(3)} s`);
       }
       $('previewTime').textContent = labels.length ? labels.join(' / ') : 'プレビューなし';
       updateRoiReadout();
+    }
+
+    function updatePreview() {
+      updatePreviewSensor('rgb');
+      updatePreviewSensor('evs');
+      updatePreviewHeader();
     }
 
     function canvasToSensorPoint(sensor, event) {
@@ -911,18 +1019,199 @@
       return result;
     }
 
-    async function openData(files) {
-      state.dataPath = null;
-      const merged = { meta: { session: [...files].map(f => f.name).join(' + ') }, rgb: [], evs: [] };
-      for (const file of files) {
-        const text = await file.text();
-        const data = file.name.toLowerCase().endsWith('.json') ? JSON.parse(text) : parseCsv(text);
-        if (data.meta) merged.meta = { ...merged.meta, ...data.meta };
-        if (data.rgb) merged.rgb = merged.rgb.concat(data.rgb);
-        if (data.evs) merged.evs = merged.evs.concat(data.evs);
+    function updateRoiDataStatus(message = '') {
+      const element = $('roiDataStatus');
+      if (message) {
+        element.textContent = message;
+        element.className = 'panel-note roi-warning';
+      } else if (state.spatial.rgb && state.spatial.evs) {
+        const tile = state.roiDataMeta?.rgb?.tile_size || '?';
+        element.textContent = `動的ROI再解析可能（${tile}pxタイル）`;
+        element.className = 'panel-note roi-ready';
+      } else if (state.roiDataMeta) {
+        element.textContent = 'ROI再解析データを読み込み中…';
+        element.className = 'panel-note';
+      } else {
+        element.textContent = '旧データ：ROI再解析には再エクスポートが必要';
+        element.className = 'panel-note roi-warning';
       }
-      if (!merged.rgb.length || !merged.evs.length) throw new Error('RGBとEVSの両方の信号が必要です。');
-      loadDataset(merged); toast('解析データを読み込みました。');
+    }
+
+    async function resourceArrayBuffer(relativePath) {
+      const normalized = String(relativePath || '').replace(/\\/g, '/').replace(/^\.\//, '');
+      const localFile = state.localFiles.get(normalized);
+      if (localFile) return localFile.arrayBuffer();
+      const url = previewFileUrl(normalized);
+      if (!url) throw new Error(`ROIデータを開けません: ${normalized}`);
+      const response = await fetch(url, { cache: 'no-store' });
+      if (!response.ok) throw new Error(`ROIデータの読み込みに失敗しました (${response.status})`);
+      return response.arrayBuffer();
+    }
+
+    async function loadRoiBundle() {
+      if (!state.roiDataMeta?.rgb || !state.roiDataMeta?.evs) {
+        updateRoiDataStatus();
+        return;
+      }
+      updateRoiDataStatus();
+      const [rgbBuffer, evsBuffer] = await Promise.all([
+        resourceArrayBuffer(state.roiDataMeta.rgb.path),
+        resourceArrayBuffer(state.roiDataMeta.evs.path)
+      ]);
+      const rgbMeta = state.roiDataMeta.rgb;
+      const tileCount = Number(rgbMeta.grid_width) * Number(rgbMeta.grid_height);
+      const recordBytes = Number(rgbMeta.record_bytes || 8 + tileCount);
+      const frameCount = Math.min(Number(rgbMeta.frame_count || 0), Math.floor(rgbBuffer.byteLength / recordBytes));
+      const view = new DataView(rgbBuffer);
+      const frames = [];
+      for (let index = 0; index < frameCount; index += 1) {
+        const offset = index * recordBytes;
+        frames.push({
+          t: view.getFloat64(offset, true),
+          tiles: new Uint8Array(rgbBuffer, offset + 8, tileCount)
+        });
+      }
+      state.spatial = {
+        rgb: { meta: rgbMeta, frames, buffer: rgbBuffer },
+        evs: { meta: state.roiDataMeta.evs, buffer: evsBuffer }
+      };
+      updateRoiDataStatus();
+    }
+
+    function roiTileWeights(meta, roi, sensor, normalizeToTile) {
+      const imageSize = sensor === 'rgb' ? state.meta.rgb_image_size : state.meta.evs_image_size;
+      const imageWidth = Number(imageSize?.width || Number(meta.grid_width) * Number(meta.tile_size));
+      const imageHeight = Number(imageSize?.height || Number(meta.grid_height) * Number(meta.tile_size));
+      const tileSize = Number(meta.tile_size);
+      const gridWidth = Number(meta.grid_width);
+      const gridHeight = Number(meta.grid_height);
+      const rx0 = clamp(roi.x, 0, imageWidth), ry0 = clamp(roi.y, 0, imageHeight);
+      const rx1 = clamp(roi.x + roi.width, 0, imageWidth), ry1 = clamp(roi.y + roi.height, 0, imageHeight);
+      const weights = new Map();
+      for (let tileY = Math.floor(ry0 / tileSize); tileY <= Math.floor(Math.max(ry0, ry1 - 1) / tileSize); tileY += 1) {
+        if (tileY < 0 || tileY >= gridHeight) continue;
+        const y0 = tileY * tileSize, y1 = Math.min(imageHeight, y0 + tileSize);
+        for (let tileX = Math.floor(rx0 / tileSize); tileX <= Math.floor(Math.max(rx0, rx1 - 1) / tileSize); tileX += 1) {
+          if (tileX < 0 || tileX >= gridWidth) continue;
+          const x0 = tileX * tileSize, x1 = Math.min(imageWidth, x0 + tileSize);
+          const overlap = Math.max(0, Math.min(rx1, x1) - Math.max(rx0, x0)) * Math.max(0, Math.min(ry1, y1) - Math.max(ry0, y0));
+          if (overlap <= 0) continue;
+          const tileArea = Math.max(1, (x1 - x0) * (y1 - y0));
+          weights.set(tileY * gridWidth + tileX, normalizeToTile ? overlap / tileArea : overlap);
+        }
+      }
+      return weights;
+    }
+
+    function roiSideForTime(time, ranges) {
+      if (!Array.isArray(ranges) || ranges.length < 2) return time <= (state.fullStart + state.fullEnd) / 2 ? 'start' : 'end';
+      const firstCenter = (Number(ranges[0][0]) + Number(ranges[0][1])) / 2;
+      const last = ranges.at(-1);
+      const lastCenter = (Number(last[0]) + Number(last[1])) / 2;
+      return Math.abs(time - firstCenter) <= Math.abs(time - lastCenter) ? 'start' : 'end';
+    }
+
+    function requireRois() {
+      for (const side of ['start', 'end']) {
+        for (const sensor of ['rgb', 'evs']) {
+          if (!state.rois[side][sensor]) throw new Error(`${side === 'start' ? '開始側' : '終了側'}の${sensor.toUpperCase()} ROIを選択してください。`);
+        }
+      }
+    }
+
+    function recomputeSignalsFromRois() {
+      requireRois();
+      if (!state.spatial.rgb || !state.spatial.evs) throw new Error('このデータには動的ROI再解析用データがありません。新しい形式で再エクスポートしてください。');
+
+      const rgbMeta = state.spatial.rgb.meta;
+      const rgbWeights = {
+        start: roiTileWeights(rgbMeta, state.rois.start.rgb, 'rgb', false),
+        end: roiTileWeights(rgbMeta, state.rois.end.rgb, 'rgb', false)
+      };
+      state.rgb = state.spatial.rgb.frames.map(frame => {
+        const side = roiSideForTime(frame.t, rgbMeta.ranges);
+        let weighted = 0, area = 0;
+        for (const [tile, weight] of rgbWeights[side]) { weighted += frame.tiles[tile] * weight; area += weight; }
+        return { t: frame.t, v: area ? weighted / area : 0 };
+      }).sort((a, b) => a.t - b.t);
+
+      const evsMeta = state.spatial.evs.meta;
+      const evsWeights = {
+        start: roiTileWeights(evsMeta, state.rois.start.evs, 'evs', true),
+        end: roiTileWeights(evsMeta, state.rois.end.evs, 'evs', true)
+      };
+      const binWidth = Number(evsMeta.bin_ms || 1) / 1000;
+      const counts = new Map();
+      const view = new DataView(state.spatial.evs.buffer);
+      const recordBytes = Number(evsMeta.record_bytes || 12);
+      for (let offset = 0; offset + recordBytes <= view.byteLength; offset += recordBytes) {
+        const bin = view.getUint32(offset, true);
+        const tile = view.getUint16(offset + 4, true);
+        const time = (bin + .5) * binWidth;
+        const side = roiSideForTime(time, evsMeta.ranges);
+        const weight = evsWeights[side].get(tile) || 0;
+        if (!weight) continue;
+        const value = counts.get(bin) || [0, 0];
+        value[0] += view.getUint16(offset + 6, true) * weight;
+        value[1] += view.getUint16(offset + 8, true) * weight;
+        counts.set(bin, value);
+      }
+      const bins = new Set();
+      for (const range of evsMeta.ranges || []) {
+        const first = Math.max(0, Math.floor(Number(range[0]) / binWidth));
+        const last = Math.floor(Number(range[1]) / binWidth);
+        for (let bin = first; bin <= last; bin += 1) bins.add(bin);
+      }
+      state.evs = [...bins].sort((a, b) => a - b).map(bin => ({
+        t: (bin + .5) * binWidth,
+        pos: counts.get(bin)?.[0] || 0,
+        neg: counts.get(bin)?.[1] || 0
+      }));
+      buildNavigatorBins();
+      suggestRgbThreshold();
+      analyze();
+      toast('選択した開始側・終了側ROIから信号を再計算しました。');
+    }
+
+    function clearLocalBundle() {
+      for (const url of state.localObjectUrls.values()) URL.revokeObjectURL(url);
+      state.localObjectUrls.clear();
+      state.localFiles.clear();
+    }
+
+    function removeDataQuery() {
+      const url = new URL(location.href);
+      url.searchParams.delete('data');
+      history.replaceState(null, '', url);
+    }
+
+    async function openLocalBundle(fileList) {
+      const files = [...fileList];
+      const jsonFiles = files.filter(file => file.name === 'led_sync_data.json');
+      if (!jsonFiles.length) throw new Error('選択したフォルダに led_sync_data.json がありません。');
+      if (jsonFiles.length > 1) throw new Error('複数の解析データがあります。led_sync_data.json が1つだけ入ったフォルダを選んでください。');
+
+      const jsonFile = jsonFiles[0];
+      const jsonPath = String(jsonFile.webkitRelativePath || jsonFile.name).replace(/\\/g, '/');
+      const base = jsonPath.includes('/') ? jsonPath.slice(0, jsonPath.lastIndexOf('/')) : '';
+      const prefix = base ? `${base}/` : '';
+      const localFiles = new Map();
+      for (const file of files) {
+        const fullPath = String(file.webkitRelativePath || file.name).replace(/\\/g, '/');
+        const relativePath = prefix && fullPath.startsWith(prefix) ? fullPath.slice(prefix.length) : file.name;
+        localFiles.set(relativePath.replace(/^\.\//, ''), file);
+      }
+
+      const data = JSON.parse(await jsonFile.text());
+      if (!Array.isArray(data.rgb) || !Array.isArray(data.evs)) throw new Error('RGBまたはEVS信号がありません。');
+      clearLocalBundle();
+      state.localFiles = localFiles;
+      state.dataPath = null;
+      removeDataQuery();
+      loadDataset(data);
+      try { await loadRoiBundle(); } catch (error) { updateRoiDataStatus(error.message); }
+      $('dataSourceLabel').textContent = `Mac・ローカル: ${jsonPath}`;
+      toast(`解析フォルダを読み込みました（プレビュー ${state.preview.rgb.length} + ${state.preview.evs.length} 枚）。`);
     }
 
     async function openDockerData(path) {
@@ -930,9 +1219,56 @@
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || `読み込みに失敗しました (${response.status})`);
       if (!Array.isArray(data.rgb) || !Array.isArray(data.evs)) throw new Error('RGBまたはEVS信号がありません。');
+      clearLocalBundle();
       state.dataPath = path;
+      const url = new URL(location.href);
+      url.searchParams.set('data', path);
+      history.replaceState(null, '', url);
       loadDataset(data);
+      try { await loadRoiBundle(); } catch (error) { updateRoiDataStatus(error.message); }
+      $('dataSourceLabel').textContent = `Docker: ${path}`;
       toast('Docker内の解析データを読み込みました。');
+    }
+
+    function renderDockerDatasets() {
+      const query = $('datasetSearch').value.trim().toLowerCase();
+      const datasets = state.dockerDatasets.filter(item =>
+        `${item.session} ${item.relative_path}`.toLowerCase().includes(query)
+      );
+      const list = $('datasetList');
+      list.replaceChildren();
+      if (!datasets.length) {
+        const empty = document.createElement('div');
+        empty.className = 'empty';
+        empty.textContent = state.dockerDatasets.length ? '条件に合う解析データがありません。' : '解析データが見つかりません。';
+        list.append(empty);
+        return;
+      }
+      for (const item of datasets) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'dataset-item';
+        const name = document.createElement('span');
+        name.className = 'dataset-name';
+        name.textContent = item.session;
+        const path = document.createElement('span');
+        path.className = 'dataset-path';
+        path.textContent = item.relative_path;
+        button.append(name, path);
+        button.addEventListener('click', () => {
+          $('dockerDatasetDialog').close();
+          openDockerData(item.path).catch(error => toast(error.message));
+        });
+        list.append(button);
+      }
+    }
+
+    async function refreshDockerDatasets() {
+      const response = await fetch('/api/datasets', { cache: 'no-store' });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || `一覧の取得に失敗しました (${response.status})`);
+      state.dockerDatasets = Array.isArray(data.datasets) ? data.datasets : [];
+      renderDockerDatasets();
     }
 
     function download(name, value) {
@@ -947,6 +1283,7 @@
         session: state.meta.session,
         reference_sensor: 'rgb',
         model: {
+          method: state.analysisMethod,
           equation: 'rgb_time = evs_time + offset_s + drift * (evs_time - anchor_evs_time_s)',
           anchor_evs_time_s: state.anchorS,
           offset_s: state.offsetS,
@@ -1003,15 +1340,29 @@
       toast(`RGB差分閾値を ${threshold.toPrecision(4)} に設定しました。`);
     });
     $('analyzeButton').addEventListener('click', () => { analyze(); toast(`${state.pairs.length}個の点滅エッジを対応付けました。`); });
-    $('demoButton').addEventListener('click', () => { state.dataPath = null; loadDataset(demoData()); });
+    $('demoButton').addEventListener('click', () => {
+      clearLocalBundle(); state.dataPath = null; removeDataQuery(); loadDataset(demoData());
+      $('dataSourceLabel').textContent = 'デモデータ';
+    });
     $('exportButton').addEventListener('click', exportResult);
     $('sampleButton').addEventListener('click', () => download('led_sync_sample.json', JSON.stringify(demoData(), null, 2)));
-    $('dataFiles').addEventListener('change', event => openData(event.target.files).catch(error => toast(error.message)));
-    $('loadDockerData').addEventListener('click', () => {
-      const path = $('dockerDataPath').value.trim();
-      if (!path) { toast('Docker内のJSONパスを入力してください。'); return; }
-      openDockerData(path).catch(error => toast(error.message));
+    $('localBundle').addEventListener('change', event => {
+      openLocalBundle(event.target.files).catch(error => toast(error.message));
+      event.target.value = '';
     });
+    $('browseDockerData').addEventListener('click', () => {
+      $('datasetSearch').value = '';
+      $('datasetList').innerHTML = '<div class="empty">検索中...</div>';
+      $('dockerDatasetDialog').showModal();
+      refreshDockerDatasets().catch(error => {
+        const empty = document.createElement('div');
+        empty.className = 'empty';
+        empty.textContent = error.message;
+        $('datasetList').replaceChildren(empty);
+      });
+    });
+    $('closeDockerDialog').addEventListener('click', () => $('dockerDatasetDialog').close());
+    $('datasetSearch').addEventListener('input', renderDockerDatasets);
     $('resetView').addEventListener('click', () => {
       $('viewDuration').value = 'full';
       state.viewStart = state.fullStart;
@@ -1021,12 +1372,18 @@
     $('startView').addEventListener('click', () => {
       $('viewDuration').value = '0.5';
       setRoiMode('start');
-      setView(state.evsEdges[0]?.t ?? state.fullStart, .5);
+      const time = state.evsEdges[0]?.t ?? Number(state.preview.evs[0]?.t ?? state.fullStart);
+      seekPreview('evs', time);
+      seekPreview('rgb', time + state.offsetS);
+      setView(time, .5);
     });
     $('endView').addEventListener('click', () => {
       $('viewDuration').value = '0.5';
       setRoiMode('end');
-      setView(state.evsEdges.at(-1)?.t ?? state.fullEnd, .5);
+      const time = state.evsEdges.at(-1)?.t ?? Number(state.preview.evs.at(-1)?.t ?? state.fullEnd);
+      seekPreview('evs', time);
+      seekPreview('rgb', time + state.offsetS);
+      setView(time, .5);
     });
     $('viewDuration').addEventListener('change', event => {
       if (event.target.value === 'custom') return;
@@ -1061,6 +1418,44 @@
 
     $('startRoiMode').addEventListener('click', () => setRoiMode('start'));
     $('endRoiMode').addEventListener('click', () => setRoiMode('end'));
+    for (const sensor of ['rgb', 'evs']) {
+      $(`${sensor}PreviewSeek`).addEventListener('input', event => {
+        state.previewIndex[sensor] = Number(event.target.value);
+        updatePreviewSensor(sensor); updatePreviewHeader();
+      });
+      $(`${sensor}PreviewBack`).addEventListener('click', () => stepPreview(sensor, -1));
+      $(`${sensor}PreviewForward`).addEventListener('click', () => stepPreview(sensor, 1));
+    }
+    $('applyEstimatedOffset').addEventListener('click', () => {
+      const evsFrame = state.preview.evs?.[state.previewIndex.evs];
+      if (!evsFrame) { toast('EVSプレビューがありません。'); return; }
+      const evsTime = Number(evsFrame.t);
+      seekPreview('rgb', evsTime + state.offsetS + state.drift * (evsTime - state.anchorS));
+      toast(`推定オフセット ${formatMs(state.offsetS, true)} をRGB表示へ反映しました。`);
+    });
+    $('setManualOffset').addEventListener('click', () => {
+      const rgbFrame = state.preview.rgb?.[state.previewIndex.rgb];
+      const evsFrame = state.preview.evs?.[state.previewIndex.evs];
+      if (!rgbFrame || !evsFrame) { toast('RGBとEVSの両方のプレビューが必要です。'); return; }
+      state.offsetS = Number(rgbFrame.t) - Number(evsFrame.t);
+      state.drift = 0;
+      state.anchorS = Number(evsFrame.t);
+      state.rmsS = 0;
+      state.pairs = [];
+      state.analysisMethod = 'manual';
+      $('provisionalOffset').value = (state.offsetS * 1000).toFixed(3);
+      updateResults(); draw();
+      toast(`手動オフセットを ${formatMs(state.offsetS, true)} に設定しました。`);
+    });
+    $('centerTimelineAtPreview').addEventListener('click', () => {
+      const evsFrame = state.preview.evs?.[state.previewIndex.evs];
+      if (!evsFrame) { toast('EVSプレビューがありません。'); return; }
+      $('viewDuration').value = '0.5';
+      setView(Number(evsFrame.t), .5);
+    });
+    $('applyRoiAnalysis').addEventListener('click', () => {
+      try { recomputeSignalsFromRois(); } catch (error) { toast(error.message); }
+    });
     $('clearRoi').addEventListener('click', () => {
       state.rois[state.roiMode] = { rgb: null, evs: null };
       drawPreview('rgb'); drawPreview('evs'); updateRoiReadout();
@@ -1100,7 +1495,6 @@
     loadDataset(demoData());
     const requestedData = new URLSearchParams(location.search).get('data');
     if (requestedData) {
-      $('dockerDataPath').value = requestedData;
       openDockerData(requestedData).catch(error => toast(error.message));
     }
   </script>

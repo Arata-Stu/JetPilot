@@ -25,9 +25,17 @@ Docker内で次を実行します。
 scripts/experiments/led_sync_gui.sh
 ```
 
-Macのbrowserで <http://localhost:8765> を開きます。GUIの「Docker内JSON」へ
-`/workspaces/record`配下の`led_sync_data.json`を入力すると、Docker内の解析データを
-直接読み込めます。
+Macのbrowserで <http://localhost:8765> を開きます。データの開き方は2通りあります。
+
+- `Mac・ローカル解析フォルダ`: Finderで`led_sync_data.json`と`preview/`を含む解析
+  フォルダを選びます。JSONと画像をMacへコピー済みなら、serverを介さず読み込めます。
+- `Docker解析を選ぶ`: serverが`/workspaces/record`配下の`led_sync_data.json`を自動で
+  探し、一覧を表示します。Docker内のpathを手入力する必要はありません。
+
+browserの安全制約により、ローカル側ではJSON単体ではなく解析フォルダを選択します。
+これによりJSONから参照される`preview/rgb/`と`preview/evs/`も同時に利用できます。
+新しい解析フォルダには`roi_data/`も含まれます。これはUIでLED位置を選び直したときに、
+開始側・終了側それぞれのRGB輝度と1 ms EVSイベント数を再計算するためのデータです。
 
 既定ではlocalhostだけで待ち受けます。Dockerがbridge networkでhost側へportを公開する
 必要がある場合のみ、container起動時に`8765:8765`を公開したうえで次を使います。
@@ -48,8 +56,17 @@ checkerboard校正sessionを除外し、`evs-popup-v1`と`evs-popup-v2`の各走
 scripts/experiments/export_led_sync_batch.sh
 ```
 
-既定では各sessionの先頭・末尾12秒を20 fpsでpreview出力します。古いJSONを
+既定では各sessionの先頭・末尾12秒を60 fpsでpreview出力します。RGBの観測周期に
+合わせて目視同期できる設定です。古いJSONを
 preview付きで作り直す場合は`--force`を付けます。
+
+動的ROIに対応する前に作った既存JSONには`roi_data/`がないため、一度だけ次を実行して
+再エクスポートしてください。同期オフセットの推定はここでは行わず、UIの
+「選択ROIで再解析」「自動推定を実行」で行います。
+
+```bash
+scripts/experiments/export_led_sync_batch.sh --force
+```
 
 LEDのROIが分かっている場合は、全画面より小さいROIを指定してください。
 
@@ -61,6 +78,12 @@ scripts/experiments/export_led_sync_batch.sh \
 
 出力先は`evs-popup-vN/analysis/led_sync/<session>/`です。
 
-GUIではタイムライン中央の橙線に近いRGB/EVS画像が並んで表示されます。「開始側」または
-「終了側」を選び、両方の画像上でLEDをドラッグして囲めます。選んだ4つのROIは
-「結果を書き出す」で保存されるJSONの`roi_selection`に含まれます。
+GUI上部ではRGBとEVSを別々のシークバーで移動できます。同じLEDエッジを表示して
+「この2枚を手動同期」を押すと、RGB時刻−EVS時刻が手動オフセットになります。
+半自動推定後は「推定オフセットを表示へ反映」でEVS位置を固定したままRGB表示だけを
+移動できます。
+
+「開始側」または「終了側」を選び、両方の画像上でLEDをドラッグして囲んだ後、
+「選択ROIで再解析」を押すと、選んだ4つのROIから信号を作り直します。ROIは16 pxタイル
+単位の空間集計を使うため、LEDより十分小さく、背景を含めすぎない矩形にしてください。
+選択ROIと同期方法は「結果を書き出す」のJSONにも保存されます。

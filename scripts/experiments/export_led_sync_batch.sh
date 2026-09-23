@@ -5,8 +5,9 @@ CONFIG="/workspaces/ros2_ws/src/tool/multi_sensor_calibration/config/rc_popout_e
 RGB_ROI="0,0,848,480"
 EVS_ROI="0,0,640,480"
 BIN_MS="1"
-PREVIEW_FPS="20"
+PREVIEW_FPS="60"
 PREVIEW_WINDOW_S="12"
+ROI_TILE_SIZE="16"
 FORCE=false
 CALIBRATION_SESSION="20260921_185407_rcp_calibration_checkerboard_20260921_185405"
 ROOTS=(
@@ -22,8 +23,9 @@ Options:
   --rgb-roi X,Y,W,H   RGB LED ROI (default: full 848x480 frame)
   --evs-roi X,Y,W,H   EVS LED ROI (default: full 640x480 frame)
   --bin-ms MS          EVS bin width (default: 1)
-  --preview-fps FPS    RGB/EVS preview rate (default: 20)
+  --preview-fps FPS    RGB/EVS preview rate (default: 60)
   --preview-window-s S Export this many seconds at start and end (default: 12)
+  --roi-tile-size PX   Spatial tile size for UI ROI recalculation (default: 16)
   --no-preview         Do not export visual preview images
   --config PATH        Calibration config path
   --force              Reprocess sessions with an existing JSON output
@@ -54,6 +56,10 @@ while (($#)); do
       ;;
     --preview-window-s)
       PREVIEW_WINDOW_S="${2:?--preview-window-s requires a value}"
+      shift 2
+      ;;
+    --roi-tile-size)
+      ROI_TILE_SIZE="${2:?--roi-tile-size requires a value}"
       shift 2
       ;;
     --no-preview)
@@ -139,6 +145,7 @@ echo "  RGB ROI  : $RGB_ROI"
 echo "  EVS ROI  : $EVS_ROI"
 echo "  bin       : ${BIN_MS} ms"
 echo "  preview   : ${PREVIEW_FPS} fps, first/last ${PREVIEW_WINDOW_S} s"
+echo "  ROI tiles : ${ROI_TILE_SIZE} px"
 echo "  calibration session skipped: $CALIBRATION_SESSION"
 
 succeeded=0
@@ -193,6 +200,7 @@ for session in "${sessions[@]}"; do
     --bin-ms "$BIN_MS" \
     --preview-fps "$PREVIEW_FPS" \
     --preview-window-s "$PREVIEW_WINDOW_S" \
+    --roi-tile-size "$ROI_TILE_SIZE" \
     --session-name "$name" \
     --output-dir "$output_dir" \
     >"$output_dir/export.log" 2>&1; then

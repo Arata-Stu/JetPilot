@@ -61,6 +61,26 @@ def build_handler(html_path: Path, record_root: Path):
             if request.path == "/health":
                 self._send_json({"status": "ok", "record_root": str(record_root)})
                 return
+            if request.path == "/api/datasets":
+                datasets = []
+                for candidate in record_root.rglob("led_sync_data.json"):
+                    if not candidate.is_file():
+                        continue
+                    stat = candidate.stat()
+                    datasets.append(
+                        {
+                            "path": str(candidate),
+                            "relative_path": str(candidate.relative_to(record_root)),
+                            "session": candidate.parent.name,
+                            "modified_ns": stat.st_mtime_ns,
+                            "size": stat.st_size,
+                        }
+                    )
+                datasets.sort(key=lambda item: item["modified_ns"], reverse=True)
+                self._send_json(
+                    {"record_root": str(record_root), "datasets": datasets}
+                )
+                return
             if request.path == "/api/data":
                 values = parse_qs(request.query).get("path", [])
                 if len(values) != 1 or not values[0].strip():
@@ -115,9 +135,15 @@ def build_handler(html_path: Path, record_root: Path):
                         HTTPStatus.FORBIDDEN,
                     )
                     return
-                if candidate.suffix.lower() not in {".jpg", ".jpeg", ".png", ".webp"}:
+                if candidate.suffix.lower() not in {
+                    ".jpg",
+                    ".jpeg",
+                    ".png",
+                    ".webp",
+                    ".bin",
+                }:
                     self._send_json(
-                        {"error": "only preview image files may be loaded"},
+                        {"error": "only preview images and ROI binary data may be loaded"},
                         HTTPStatus.BAD_REQUEST,
                     )
                     return
