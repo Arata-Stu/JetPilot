@@ -375,8 +375,9 @@ void E2EControlDecoderNode::on_tensor(TensorList::ConstSharedPtr message)
       throttle_min_, throttle_max_);
     if (!section_head_names_.empty()) {
       const double dt = has_output_interval ? std::clamp(output_interval_ms / 1000.0, 0.0, 0.1) : 0.0;
-      command.throttle = std::min(command.throttle, previous_throttle_ + throttle_rise_per_sec_ * dt);
-      command.steering = std::clamp(command.steering,
+      command.throttle = std::min(
+        static_cast<double>(command.throttle), previous_throttle_ + throttle_rise_per_sec_ * dt);
+      command.steering = std::clamp(static_cast<double>(command.steering),
         previous_steering_ - steering_rate_per_sec_ * dt,
         previous_steering_ + steering_rate_per_sec_ * dt);
       previous_throttle_ = command.throttle;
