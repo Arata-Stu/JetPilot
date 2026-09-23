@@ -11,7 +11,7 @@
 | `jetson_display_mode.sh` | Jetson の画面設定 |
 | `jetson_max_performance.sh` | Jetson の性能設定 |
 | `bluetooth.sh` | Bluetooth の復旧 |
-| `e2e_trt.sh` | E2E TensorRT エンジン生成 |
+| `e2e_trt.sh` | E2E TensorRT エンジン生成・推論時間の統計表示 |
 | `foxglove.sh` | 接続先IPを選択してFoxgloveを起動 |
 
 `./scripts/foxglove.sh` は、FoxgloveをインストールしたMacなどのデスクトップで実行する。

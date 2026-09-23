@@ -18,6 +18,7 @@ Build a selected E2E TensorRT engine inside the Jetson runtime container.
 With no MODEL_DIR, interactively select a deployed model under E2E_MODEL_BASE.
 fzf is used when available; a numbered selector is the fallback.
 Precision defaults to FP16. Async RGB-EVS models build both split engines.
+After building, print inference timing statistics from the trtexec build logs.
 
 Examples:
   scripts/e2e_trt.sh
@@ -111,10 +112,13 @@ if [[ -d "$MODEL_PATH" || "$MODEL_PATH" != *.onnx ]]; then
   MODEL_PATH="${MODEL_PATH%/}"
   if [[ -f "$MODEL_PATH/rgb_encoder.onnx" && -f "$MODEL_PATH/event_updater.onnx" ]]; then
     [[ -f "$ASYNC_BUILDER" ]] || die "Async RGB-EVS build script was not found: $ASYNC_BUILDER"
-    exec bash "$ASYNC_BUILDER" "$MODEL_PATH"
+    bash "$ASYNC_BUILDER" "$MODEL_PATH"
+    exec python3 "${SCRIPT_DIR}/lib/trt_build_summary.py" \
+      "$MODEL_PATH/build_rgb_encoder.log" "$MODEL_PATH/build_event_updater.log"
   fi
   MODEL_PATH="$MODEL_PATH/model.onnx"
 fi
 ENGINE_PATH="${MODEL_PATH%.onnx}.plan"
 
-exec bash "$BUILDER" "$MODEL_PATH" "$ENGINE_PATH"
+bash "$BUILDER" "$MODEL_PATH" "$ENGINE_PATH"
+exec python3 "${SCRIPT_DIR}/lib/trt_build_summary.py" "$(dirname -- "$ENGINE_PATH")/build_engine.log"
