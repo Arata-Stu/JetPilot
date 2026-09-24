@@ -242,6 +242,7 @@ value = json.load(open(sys.argv[1], encoding="utf-8"))
 clock = value["clock"]
 print(
     value.get("overall_confidence", "unknown"),
+    value.get("overall_localization_confidence", "unknown"),
     clock.get("matched_edges", 0),
     clock.get("offset_at_anchor_s", 0.0) * 1000.0,
     clock.get("drift_ppm", 0.0),
@@ -249,9 +250,9 @@ print(
 )
 PY
 )"
-  read -r confidence matched offset_ms drift_ppm rms_ms <<<"$result_fields"
+  read -r confidence localization_confidence matched offset_ms drift_ppm rms_ms <<<"$result_fields"
   review=no
-  if [[ "$confidence" != high ]]; then
+  if [[ "$confidence" != high || "$localization_confidence" != high ]]; then
     review=yes
     review_count=$((review_count + 1))
   fi

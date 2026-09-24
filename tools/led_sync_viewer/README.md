@@ -169,7 +169,9 @@ ROI・同期だけ先に評価する場合は`--no-video`、1記録だけ試す�
 
 同じdirectoryには`start_roi_debug.jpg`、`end_roi_debug.jpg`、センサ別ROI画像、
 `review.json`も保存されます。HTMLと動画をMacへ持ち出す場合は、相対リンクを維持するため
-対象の`analysis` directoryをまとめてコピーしてください。
+対象の`analysis` directoryをまとめてコピーしてください。EVSのROI画像には、対応edgeの
+前後120 msからROI内イベント量が最大のpreviewを選ぶため、瞬間的な点滅eventを目視しやすく
+しています。判定は時刻検出品質`Timing`と候補位置の一意性`Location`を分けて表示します。
 
 `review=yes`または信頼度`medium/low`だけを優先して目視確認します。各解析フォルダの
 `auto_led_sync_result.json`はUIが自動的に読み込み、開始・終了の候補枠、信頼度、同期値を
