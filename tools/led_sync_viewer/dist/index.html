@@ -106,6 +106,16 @@
       background: var(--line);
       margin-bottom: 14px;
     }
+    .overlay-generator { margin-bottom: 14px; }
+    .overlay-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 12px 14px; }
+    .overlay-status { flex: 1 1 280px; color: var(--muted); font-size: .82rem; }
+    .overlay-status.running { color: var(--amber); }
+    .overlay-status.completed { color: var(--cyan); }
+    .overlay-status.failed { color: var(--red); }
+    .overlay-video { width: 100%; max-height: min(62vh, 720px); border-top: 1px solid var(--line); aspect-ratio: auto; }
+    .overlay-video[hidden], .overlay-links[hidden] { display: none; }
+    .overlay-links { display: flex; flex-wrap: wrap; gap: 10px; padding: 10px 14px 13px; border-top: 1px solid var(--line); }
+    .overlay-links a { color: var(--cyan); font-size: .82rem; }
     .metric { background: var(--panel); padding: 12px 14px; min-width: 0; }
     .metric-label { color: var(--muted); font-size: .76rem; letter-spacing: .04em; }
     .metric-value { margin-top: 2px; font-size: 1.04rem; font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -191,6 +201,11 @@
     .sync-explanation { margin-left: auto; max-width: 520px; }
     .roi-ready { color: var(--cyan); }
     .roi-warning { color: var(--amber); }
+    .auto-roi-status { flex: 1 1 100%; color: var(--muted); font-size: .78rem; }
+    .auto-roi-status.running { color: var(--amber); }
+    .auto-roi-status.high { color: var(--cyan); }
+    .auto-roi-status.medium { color: var(--amber); }
+    .auto-roi-status.low { color: var(--red); }
 
     @media (max-width: 980px) {
       .workspace { grid-template-columns: 1fr; }
@@ -239,6 +254,24 @@
       <div class="metric"><div class="metric-label">残差 RMS</div><div class="metric-value" id="rmsValue">0.0 ms</div></div>
     </section>
 
+    <section class="panel overlay-generator" aria-label="同期・校正済み動画生成">
+      <div class="panel-header">
+        <div><h2 class="panel-title">同期・校正済み DSEC型重畳動画</h2><div class="panel-note">現在の時刻補正を保存し、全区間のRGBへ正極性＝青・負極性＝赤のイベントを重ねます（深度不使用）</div></div>
+      </div>
+      <div class="overlay-controls">
+        <label class="duration-control" for="overlayWindow">イベント蓄積
+          <select id="overlayWindow"><option value="5">5 ms</option><option value="10" selected>10 ms</option><option value="20">20 ms</option></select>
+        </label>
+        <label class="duration-control" for="overlayDotSize">点の太さ
+          <select id="overlayDotSize"><option value="1">1 px</option><option value="2" selected>見やすく</option><option value="3">太め</option></select>
+        </label>
+        <button class="primary" id="generateOverlay" type="button">全区間の重畳動画を生成</button>
+        <span class="overlay-status" id="overlayStatus">Docker内の解析データを選び、オフセット推定後に実行してください。</span>
+      </div>
+      <video class="overlay-video" id="overlayResultVideo" controls playsinline muted hidden></video>
+      <div class="overlay-links" id="overlayLinks" hidden></div>
+    </section>
+
     <section class="workspace">
       <div>
         <article class="panel frame-inspector primary-inspector">
@@ -277,9 +310,11 @@
             <button class="segment-button active" id="startRoiMode" type="button">開始側</button>
             <button class="segment-button" id="endRoiMode" type="button">終了側</button>
             <button id="clearRoi" type="button">選択を消去</button>
+            <button class="primary" id="autoDetectRoi" type="button">LED ROIを自動検出</button>
             <button class="primary" id="applyRoiAnalysis" type="button">選択ROIで再解析</button>
             <span class="roi-readout" id="roiReadout">画像上をドラッグしてLEDを囲んでください</span>
             <span class="panel-note" id="roiDataStatus">ROI再解析データを確認中</span>
+            <span class="auto-roi-status" id="autoRoiStatus">自動検出は32・48・64 pxの窓を既知の2.3秒周期で探索します。</span>
           </div>
         </article>
 
@@ -416,7 +451,9 @@
       roiDataMeta: null, spatial: { rgb: null, evs: null },
       analysisMethod: 'semi_auto',
       previewPlayback: { running: false, frameRequest: 0, lastWallMs: 0, time: 0, loopCenter: 0 },
-      patternFit: null
+      patternFit: null,
+      autoRoiResults: { start: { rgb: null, evs: null }, end: { rgb: null, evs: null } },
+      overlayJobTimer: 0
     };
 
     const median = (values) => {
@@ -463,6 +500,7 @@
 
     function loadDataset(data) {
       stopPreviewPlayback();
+      resetOverlayResult();
       state.meta = {
         ...data.meta,
         session: data.meta?.session || '読み込みデータ',
@@ -476,6 +514,9 @@
       state.previewUrls = { rgb: null, evs: null };
       state.previewIndex = { rgb: 0, evs: 0 };
       state.rois = { start: { rgb: null, evs: null }, end: { rgb: null, evs: null } };
+      state.autoRoiResults = { start: { rgb: null, evs: null }, end: { rgb: null, evs: null } };
+      $('autoRoiStatus').className = 'auto-roi-status';
+      $('autoRoiStatus').textContent = '自動検出は32・48・64 pxの窓を既知の2.3秒周期で探索します。';
       state.rgb = (data.rgb || []).map(p => ({ t: Number(p.t ?? p.time_s), v: Number(p.v ?? p.value ?? p.rgb) })).filter(p => Number.isFinite(p.t) && Number.isFinite(p.v)).sort((a,b) => a.t-b.t);
       state.evs = (data.evs || []).map(p => ({ t: Number(p.t ?? p.time_s), pos: Number(p.pos ?? p.positive_count ?? 0), neg: Number(p.neg ?? p.negative_count ?? 0) })).filter(p => Number.isFinite(p.t) && Number.isFinite(p.pos) && Number.isFinite(p.neg)).sort((a,b) => a.t-b.t);
       state.originalSignals = { rgb: [...state.rgb], evs: [...state.evs] };
@@ -615,6 +656,382 @@
       return best;
     }
 
+    const AUTO_ROI_PHASE_BINS = 230;
+    const AUTO_ROI_WINDOW_TILES = [2, 3, 4];
+
+    function quantile(values, fraction) {
+      if (!values.length) return 0;
+      const sorted = Array.from(values).sort((a, b) => a - b);
+      return sorted[Math.min(sorted.length - 1, Math.max(0, Math.floor((sorted.length - 1) * fraction)))];
+    }
+
+    function roiRange(meta, side) {
+      const ranges = Array.isArray(meta?.ranges) ? meta.ranges : [];
+      if (!ranges.length) return [state.fullStart, state.fullEnd];
+      const range = side === 'start' ? ranges[0] : ranges.at(-1);
+      return [Number(range[0]), Number(range[1])];
+    }
+
+    function phaseBin(time) {
+      return Math.floor(positiveModulo(time, LED_PATTERN.periodS) / LED_PATTERN.periodS * AUTO_ROI_PHASE_BINS) % AUTO_ROI_PHASE_BINS;
+    }
+
+    function emptyPhaseStore(tileCount) {
+      return {
+        start: { pos: new Float32Array(tileCount * AUTO_ROI_PHASE_BINS), neg: new Float32Array(tileCount * AUTO_ROI_PHASE_BINS) },
+        end: { pos: new Float32Array(tileCount * AUTO_ROI_PHASE_BINS), neg: new Float32Array(tileCount * AUTO_ROI_PHASE_BINS) }
+      };
+    }
+
+    function buildRgbPhaseStore() {
+      const spatial = state.spatial.rgb;
+      const meta = spatial.meta;
+      const tileCount = Number(meta.grid_width) * Number(meta.grid_height);
+      const store = emptyPhaseStore(tileCount);
+      const frameMeans = new Float32Array(spatial.frames.length);
+      spatial.frames.forEach((frame, index) => {
+        let sum = 0;
+        for (let tile = 0; tile < tileCount; tile += 1) sum += frame.tiles[tile];
+        frameMeans[index] = sum / Math.max(1, tileCount);
+      });
+      for (let index = 1; index < spatial.frames.length; index += 1) {
+        const before = spatial.frames[index - 1], after = spatial.frames[index];
+        const side = roiSideForTime(after.t, meta.ranges);
+        if (roiSideForTime(before.t, meta.ranges) !== side || after.t - before.t > .06) continue;
+        const bin = phaseBin((before.t + after.t) / 2);
+        const globalDelta = frameMeans[index] - frameMeans[index - 1];
+        for (let tile = 0; tile < tileCount; tile += 1) {
+          const delta = Number(after.tiles[tile]) - Number(before.tiles[tile]) - globalDelta;
+          const offset = tile * AUTO_ROI_PHASE_BINS + bin;
+          if (delta >= 0) store[side].pos[offset] += delta;
+          else store[side].neg[offset] -= delta;
+        }
+      }
+      return { store, frameMeans };
+    }
+
+    function buildEvsPhaseStore() {
+      const spatial = state.spatial.evs;
+      const meta = spatial.meta;
+      const tileCount = Number(meta.grid_width) * Number(meta.grid_height);
+      const store = emptyPhaseStore(tileCount);
+      const view = new DataView(spatial.buffer);
+      const recordBytes = Number(meta.record_bytes || 12);
+      const binWidth = Number(meta.bin_ms || 1) / 1000;
+      for (let offset = 0; offset + recordBytes <= view.byteLength; offset += recordBytes) {
+        const time = (view.getUint32(offset, true) + .5) * binWidth;
+        const side = roiSideForTime(time, meta.ranges);
+        const tile = view.getUint16(offset + 4, true);
+        if (tile >= tileCount) continue;
+        const index = tile * AUTO_ROI_PHASE_BINS + phaseBin(time);
+        store[side].pos[index] += view.getUint16(offset + 6, true);
+        store[side].neg[index] += view.getUint16(offset + 8, true);
+      }
+      return { store };
+    }
+
+    function tilesForCandidate(candidate, gridWidth) {
+      const tiles = [];
+      for (let y = candidate.tileY; y < candidate.tileY + candidate.sizeTiles; y += 1) {
+        for (let x = candidate.tileX; x < candidate.tileX + candidate.sizeTiles; x += 1) tiles.push(y * gridWidth + x);
+      }
+      return tiles;
+    }
+
+    function scorePhaseWindow(phaseStore, tiles) {
+      const positive = new Float64Array(AUTO_ROI_PHASE_BINS);
+      const negative = new Float64Array(AUTO_ROI_PHASE_BINS);
+      let total = 0;
+      for (const tile of tiles) {
+        const base = tile * AUTO_ROI_PHASE_BINS;
+        for (let bin = 0; bin < AUTO_ROI_PHASE_BINS; bin += 1) {
+          positive[bin] += phaseStore.pos[base + bin];
+          negative[bin] += phaseStore.neg[base + bin];
+        }
+      }
+      for (let bin = 0; bin < AUTO_ROI_PHASE_BINS; bin += 1) total += positive[bin] + negative[bin];
+      if (total <= 0) return { score: -Infinity, phaseS: 0 };
+      const baseline = total / (AUTO_ROI_PHASE_BINS * 2);
+      let best = { score: -Infinity, phaseS: 0 };
+      const peak = (values, center) => {
+        let value = 0;
+        for (let delta = -1; delta <= 1; delta += 1) value = Math.max(value, values[positiveModulo(center + delta, AUTO_ROI_PHASE_BINS)]);
+        return value;
+      };
+      for (let shift = 0; shift < AUTO_ROI_PHASE_BINS; shift += 1) {
+        let matched = 0, opposite = 0;
+        for (const transition of LED_PATTERN.transitions) {
+          const expected = positiveModulo(shift + Math.round(transition.t / LED_PATTERN.periodS * AUTO_ROI_PHASE_BINS), AUTO_ROI_PHASE_BINS);
+          const correct = transition.kind === 'on' ? positive : negative;
+          const wrong = transition.kind === 'on' ? negative : positive;
+          matched += peak(correct, expected);
+          opposite += peak(wrong, expected);
+        }
+        const score = (matched - .45 * opposite - baseline * LED_PATTERN.transitions.length * 2.2) / (Math.sqrt(total) + 1);
+        if (score > best.score) best = { score, phaseS: shift / AUTO_ROI_PHASE_BINS * LED_PATTERN.periodS };
+      }
+      return best;
+    }
+
+    function spatialWindowCandidates(meta, phaseStore, sensor) {
+      const gridWidth = Number(meta.grid_width), gridHeight = Number(meta.grid_height), tileSize = Number(meta.tile_size);
+      const imageSize = sensor === 'rgb' ? state.meta.rgb_image_size : state.meta.evs_image_size;
+      const imageWidth = Number(imageSize?.width || gridWidth * tileSize);
+      const imageHeight = Number(imageSize?.height || gridHeight * tileSize);
+      const candidates = [];
+      for (const sizeTiles of AUTO_ROI_WINDOW_TILES) {
+        if (sizeTiles > gridWidth || sizeTiles > gridHeight) continue;
+        for (let tileY = 0; tileY <= gridHeight - sizeTiles; tileY += 1) {
+          for (let tileX = 0; tileX <= gridWidth - sizeTiles; tileX += 1) {
+            const candidate = { tileX, tileY, sizeTiles };
+            const phase = scorePhaseWindow(phaseStore, tilesForCandidate(candidate, gridWidth));
+            candidates.push({
+              ...candidate,
+              ...phase,
+              roi: {
+                x: tileX * tileSize,
+                y: tileY * tileSize,
+                width: Math.min(sizeTiles * tileSize, imageWidth - tileX * tileSize),
+                height: Math.min(sizeTiles * tileSize, imageHeight - tileY * tileSize)
+              }
+            });
+          }
+        }
+      }
+      return candidates.sort((a, b) => b.score - a.score).slice(0, 24);
+    }
+
+    function groupRgbEdges(points, threshold) {
+      const raw = [];
+      for (let index = 1; index < points.length; index += 1) {
+        const delta = points[index].v - points[index - 1].v;
+        if (Math.abs(delta) < threshold) continue;
+        raw.push({
+          t: (points[index].t + points[index - 1].t) / 2,
+          lo: points[index - 1].t,
+          hi: points[index].t,
+          kind: delta >= 0 ? 'on' : 'off',
+          strength: Math.abs(delta)
+        });
+      }
+      const grouped = [];
+      for (const edge of raw) {
+        const last = grouped.at(-1);
+        if (!last || edge.t - last.t > .04) grouped.push(edge);
+        else if (edge.strength > last.strength) grouped[grouped.length - 1] = edge;
+      }
+      return grouped;
+    }
+
+    function patternDetectionQuality(fit, edges, toleranceS) {
+      if (!fit || !edges.length) return -Infinity;
+      const matched = fit.assignments.size;
+      const precision = matched / edges.length;
+      const extras = Math.max(0, edges.length - matched);
+      return matched * 10 + precision * 25 - extras * .2 - fit.residual / Math.max(1e-6, toleranceS);
+    }
+
+    function fitRgbCandidates(candidates, side, phaseData) {
+      const spatial = state.spatial.rgb, meta = spatial.meta, gridWidth = Number(meta.grid_width);
+      const range = roiRange(meta, side);
+      const evaluated = [];
+      for (const candidate of candidates) {
+        const tiles = tilesForCandidate(candidate, gridWidth);
+        const points = [];
+        spatial.frames.forEach((frame, frameIndex) => {
+          if (frame.t < range[0] || frame.t > range[1]) return;
+          let value = 0;
+          for (const tile of tiles) value += frame.tiles[tile];
+          points.push({ t: frame.t, v: value / tiles.length - phaseData.frameMeans[frameIndex] });
+        });
+        const magnitudes = [];
+        for (let index = 1; index < points.length; index += 1) magnitudes.push(Math.abs(points[index].v - points[index - 1].v));
+        const center = median(magnitudes);
+        const mad = median(magnitudes.map(value => Math.abs(value - center)));
+        const thresholds = [...new Set([
+          Math.max(.05, center + 4 * 1.4826 * mad),
+          Math.max(.05, quantile(magnitudes, .90)),
+          Math.max(.05, quantile(magnitudes, .95))
+        ].map(value => Number(value.toFixed(6))))];
+        let bestFit = null, bestEdges = [], bestDetectionScore = -1e9;
+        for (const threshold of thresholds) {
+          const edges = groupRgbEdges(points, threshold);
+          const tolerance = Math.max(.035, 1.5 / Math.max(1, state.meta.rgbFps || 60));
+          const fit = fitLedPattern(edges, tolerance);
+          if (!fit) continue;
+          const detectionScore = patternDetectionQuality(fit, edges, tolerance);
+          if (detectionScore > bestDetectionScore) {
+            bestFit = fit; bestEdges = edges; bestDetectionScore = detectionScore;
+          }
+        }
+        const matched = bestFit?.assignments.size || 0;
+        const precision = matched / Math.max(1, bestEdges.length);
+        evaluated.push({ ...candidate, fit: bestFit, edges: bestEdges, matched, precision, detectionScore: bestDetectionScore, rank: bestDetectionScore * 1000 + candidate.score });
+      }
+      return evaluated.sort((a, b) => b.rank - a.rank);
+    }
+
+    function groupEvsEdges(positive, negative, firstBin, binWidth, threshold) {
+      const candidates = [];
+      for (let index = 0; index < positive.length; index += 1) {
+        const total = positive[index] + negative[index];
+        if (total >= threshold) candidates.push({
+          t: (firstBin + index + .5) * binWidth,
+          kind: positive[index] >= negative[index] ? 'on' : 'off',
+          strength: total
+        });
+      }
+      const groups = [];
+      for (const edge of candidates) {
+        const last = groups.at(-1);
+        if (!last || edge.t - last.at(-1).t > .008) groups.push([edge]);
+        else last.push(edge);
+      }
+      return groups.map(group => group.reduce((best, edge) => edge.strength > best.strength ? edge : best, group[0]));
+    }
+
+    function fitEvsCandidates(candidates, side) {
+      const spatial = state.spatial.evs, meta = spatial.meta;
+      const gridWidth = Number(meta.grid_width), binWidth = Number(meta.bin_ms || 1) / 1000;
+      const range = roiRange(meta, side);
+      const firstBin = Math.max(0, Math.floor(range[0] / binWidth));
+      const lastBin = Math.ceil(range[1] / binWidth);
+      const length = Math.max(1, lastBin - firstBin + 1);
+      const series = candidates.map(() => ({ pos: new Uint32Array(length), neg: new Uint32Array(length) }));
+      const memberships = new Map();
+      candidates.forEach((candidate, candidateIndex) => {
+        for (const tile of tilesForCandidate(candidate, gridWidth)) {
+          if (!memberships.has(tile)) memberships.set(tile, []);
+          memberships.get(tile).push(candidateIndex);
+        }
+      });
+      const view = new DataView(spatial.buffer);
+      const recordBytes = Number(meta.record_bytes || 12);
+      for (let offset = 0; offset + recordBytes <= view.byteLength; offset += recordBytes) {
+        const bin = view.getUint32(offset, true);
+        if (bin < firstBin || bin > lastBin) continue;
+        const targets = memberships.get(view.getUint16(offset + 4, true));
+        if (!targets) continue;
+        const index = bin - firstBin;
+        const positive = view.getUint16(offset + 6, true), negative = view.getUint16(offset + 8, true);
+        for (const candidateIndex of targets) {
+          series[candidateIndex].pos[index] += positive;
+          series[candidateIndex].neg[index] += negative;
+        }
+      }
+      const evaluated = candidates.map((candidate, candidateIndex) => {
+        const positive = series[candidateIndex].pos, negative = series[candidateIndex].neg;
+        const totals = new Uint32Array(length);
+        for (let index = 0; index < length; index += 1) totals[index] = positive[index] + negative[index];
+        const thresholds = [...new Set([.97, .985, .995].map(level => Math.max(2, quantile(totals, level))))];
+        let bestFit = null, bestEdges = [], bestDetectionScore = -1e9;
+        for (const threshold of thresholds) {
+          const edges = groupEvsEdges(positive, negative, firstBin, binWidth, threshold);
+          const fit = fitLedPattern(edges, .035);
+          if (!fit) continue;
+          const detectionScore = patternDetectionQuality(fit, edges, .035);
+          if (detectionScore > bestDetectionScore) {
+            bestFit = fit; bestEdges = edges; bestDetectionScore = detectionScore;
+          }
+        }
+        const matched = bestFit?.assignments.size || 0;
+        const precision = matched / Math.max(1, bestEdges.length);
+        return { ...candidate, fit: bestFit, edges: bestEdges, matched, precision, detectionScore: bestDetectionScore, rank: bestDetectionScore * 1000 + candidate.score };
+      });
+      return evaluated.sort((a, b) => b.rank - a.rank);
+    }
+
+    function roiIntersectionOverUnion(a, b) {
+      const x0 = Math.max(a.x, b.x), y0 = Math.max(a.y, b.y);
+      const x1 = Math.min(a.x + a.width, b.x + b.width), y1 = Math.min(a.y + a.height, b.y + b.height);
+      const intersection = Math.max(0, x1 - x0) * Math.max(0, y1 - y0);
+      const union = a.width * a.height + b.width * b.height - intersection;
+      return union > 0 ? intersection / union : 0;
+    }
+
+    function expectedPatternEdges(range, phaseS) {
+      let count = 0;
+      for (const transition of LED_PATTERN.transitions) {
+        const first = Math.ceil((range[0] - phaseS - transition.t) / LED_PATTERN.periodS);
+        const last = Math.floor((range[1] - phaseS - transition.t) / LED_PATTERN.periodS);
+        count += Math.max(0, last - first + 1);
+      }
+      return count;
+    }
+
+    function finalizeAutoCandidate(evaluated, range) {
+      const best = evaluated[0];
+      if (!best) throw new Error('ROI候補を生成できませんでした。');
+      const second = evaluated.find(candidate => candidate !== best && roiIntersectionOverUnion(candidate.roi, best.roi) < .15);
+      const expected = Math.max(1, expectedPatternEdges(range, best.fit?.phaseS ?? best.phaseS));
+      const coverage = best.matched / expected;
+      const gap = best.detectionScore - (second?.detectionScore ?? -Infinity);
+      let confidence = 'low', confidenceLabel = '低';
+      if (best.matched >= 18 && coverage >= .35 && best.precision >= .45 && gap >= 15) { confidence = 'high'; confidenceLabel = '高'; }
+      else if (best.matched >= 9 && coverage >= .18 && best.precision >= .20 && gap >= 3) { confidence = 'medium'; confidenceLabel = '中'; }
+      const onEdges = [...(best.fit?.assignments?.values() || [])].map(item => item.edge).filter(edge => edge.kind === 'on');
+      const previewTime = onEdges.sort((a, b) => b.strength - a.strength)[0]?.t ?? (range[0] + range[1]) / 2;
+      return { ...best, expected, coverage, gap, confidence, confidenceLabel, previewTime };
+    }
+
+    function autoRoiSummary() {
+      const labels = [];
+      let worst = 'high';
+      for (const side of ['start', 'end']) {
+        for (const sensor of ['rgb', 'evs']) {
+          const result = state.autoRoiResults[side][sensor];
+          if (!result) continue;
+          if (result.confidence === 'low') worst = 'low';
+          else if (result.confidence === 'medium' && worst === 'high') worst = 'medium';
+          labels.push(`${side === 'start' ? '開始' : '終了'}${sensor.toUpperCase()} ${result.confidenceLabel} ${result.matched}/${result.expected}`);
+        }
+      }
+      const element = $('autoRoiStatus');
+      element.className = `auto-roi-status ${worst}`;
+      element.textContent = `${labels.join(' · ')}。矩形を目視確認し、必要ならドラッグし直してください。`;
+    }
+
+    function showAutoRoiSide(side) {
+      setRoiMode(side);
+      for (const sensor of ['rgb', 'evs']) {
+        const result = state.autoRoiResults[side][sensor];
+        if (result) seekPreview(sensor, result.previewTime + (sensor === 'rgb' ? .03 : 0));
+      }
+    }
+
+    async function autoDetectLedRois() {
+      if (!state.spatial.rgb || !state.spatial.evs) throw new Error('動的ROIデータがありません。--forceで再エクスポートしてください。');
+      const button = $('autoDetectRoi'), status = $('autoRoiStatus');
+      button.disabled = true;
+      status.className = 'auto-roi-status running';
+      status.textContent = 'RGBの32・48・64 px窓を探索しています…';
+      await new Promise(resolve => requestAnimationFrame(() => resolve()));
+      try {
+        const rgbPhase = buildRgbPhaseStore();
+        for (const side of ['start', 'end']) {
+          const candidates = spatialWindowCandidates(state.spatial.rgb.meta, rgbPhase.store[side], 'rgb');
+          state.autoRoiResults[side].rgb = finalizeAutoCandidate(fitRgbCandidates(candidates, side, rgbPhase), roiRange(state.spatial.rgb.meta, side));
+          state.rois[side].rgb = { ...state.autoRoiResults[side].rgb.roi };
+        }
+        status.textContent = 'EVSの32・48・64 px窓を探索しています…';
+        await new Promise(resolve => setTimeout(resolve, 0));
+        const evsPhase = buildEvsPhaseStore();
+        for (const side of ['start', 'end']) {
+          const candidates = spatialWindowCandidates(state.spatial.evs.meta, evsPhase.store[side], 'evs');
+          state.autoRoiResults[side].evs = finalizeAutoCandidate(fitEvsCandidates(candidates, side), roiRange(state.spatial.evs.meta, side));
+          state.rois[side].evs = { ...state.autoRoiResults[side].evs.roi };
+        }
+        autoRoiSummary();
+        showAutoRoiSide('start');
+        recomputeSignalsFromRois();
+        state.analysisMethod = 'auto_roi';
+        updateResults();
+        toast('4つのLED ROIを自動検出し、同期を再推定しました。');
+      } finally {
+        button.disabled = false;
+      }
+    }
+
     function pairEdgesByPattern(evsEdges, rgbEdges) {
       const toleranceS = Number($('patternTolerance').value) / 1000;
       const maxDelta = Number($('matchWindow').value) / 1000;
@@ -707,8 +1124,9 @@
     function updateResults() {
       const count = state.pairs.length;
       const manual = state.analysisMethod === 'manual';
+      const automaticRoi = state.analysisMethod === 'auto_roi';
       const pattern = !manual && $('useLedPattern').checked;
-      $('statusValue').textContent = manual ? '手動同期' : count >= 4 ? (pattern ? '周期照合で推定' : '同期候補を推定') : count ? '要確認' : '未検出';
+      $('statusValue').textContent = manual ? '手動同期' : automaticRoi && count >= 4 ? 'ROI・同期を自動推定' : count >= 4 ? (pattern ? '周期照合で推定' : '同期候補を推定') : count ? '要確認' : '未検出';
       $('statusValue').className = `metric-value ${manual || count >= 4 ? 'cyan' : count ? 'amber' : ''}`;
       $('offsetValue').textContent = formatMs(state.offsetS, true);
       $('driftValue').textContent = `${(state.drift * 1e6).toFixed(1)} ppm`;
@@ -1094,13 +1512,20 @@
       state.previewTransforms[sensor] = { x, y, width: drawW, height: drawH, nativeWidth: native.width, nativeHeight: native.height };
       const roi = state.rois[state.roiMode][sensor];
       if (roi) {
-        ctx.fillStyle = 'rgba(55,230,196,.12)';
-        ctx.strokeStyle = '#37e6c4'; ctx.lineWidth = 2;
+        const automatic = state.autoRoiResults?.[state.roiMode]?.[sensor];
+        const color = automatic?.confidence === 'low' ? '#ff6b7a' : automatic?.confidence === 'medium' ? '#ffb45c' : '#37e6c4';
+        ctx.fillStyle = automatic?.confidence === 'low' ? 'rgba(255,107,122,.12)' : automatic?.confidence === 'medium' ? 'rgba(255,180,92,.12)' : 'rgba(55,230,196,.12)';
+        ctx.strokeStyle = color; ctx.lineWidth = 2;
         const rx = x + roi.x / native.width * drawW;
         const ry = y + roi.y / native.height * drawH;
         const rw = roi.width / native.width * drawW;
         const rh = roi.height / native.height * drawH;
         ctx.fillRect(rx, ry, rw, rh); ctx.strokeRect(rx, ry, rw, rh);
+        if (automatic) {
+          ctx.fillStyle = color;
+          ctx.font = '700 12px ui-sans-serif, sans-serif';
+          ctx.fillText(`自動 ${automatic.confidenceLabel}`, rx + 3, Math.max(13, ry - 5));
+        }
       }
       ctx.restore();
     }
@@ -1177,7 +1602,9 @@
     function updateRoiReadout() {
       const format = roi => roi ? `${roi.x},${roi.y},${roi.width},${roi.height}` : '未選択';
       const selected = state.rois[state.roiMode];
-      $('roiReadout').textContent = `${state.roiMode === 'start' ? '開始' : '終了'} · RGB ${format(selected.rgb)} · EVS ${format(selected.evs)}`;
+      const automatic = state.autoRoiResults?.[state.roiMode];
+      const confidence = sensor => automatic?.[sensor] ? ` [自動:${automatic[sensor].confidenceLabel}]` : '';
+      $('roiReadout').textContent = `${state.roiMode === 'start' ? '開始' : '終了'} · RGB ${format(selected.rgb)}${confidence('rgb')} · EVS ${format(selected.evs)}${confidence('evs')}`;
     }
 
     function setRoiMode(mode) {
@@ -1192,6 +1619,7 @@
       canvas.addEventListener('pointerdown', event => {
         const point = canvasToSensorPoint(sensor, event);
         if (!point) return;
+        state.autoRoiResults[state.roiMode][sensor] = null;
         state.roiDrag = { sensor, start: point };
         state.rois[state.roiMode][sensor] = { x: point.x, y: point.y, width: 1, height: 1 };
         canvas.setPointerCapture(event.pointerId);
@@ -1207,7 +1635,12 @@
         };
         drawPreview(sensor); updateRoiReadout();
       });
-      const finish = () => { state.roiDrag = null; updateRoiReadout(); };
+      const finish = () => {
+        state.roiDrag = null;
+        updateRoiReadout();
+        $('autoRoiStatus').className = 'auto-roi-status';
+        $('autoRoiStatus').textContent = '手動で修正しました。「選択ROIで再解析」で反映できます。';
+      };
       canvas.addEventListener('pointerup', finish);
       canvas.addEventListener('pointercancel', finish);
     }
@@ -1396,6 +1829,103 @@
       history.replaceState(null, '', url);
     }
 
+    function previewTimeForSavedRoi(entry, meta, side, sensor) {
+      const range = roiRange(meta, side);
+      const phase = Number(entry?.phase_s);
+      if (!Number.isFinite(phase)) return (range[0] + range[1]) / 2;
+      const onTransition = LED_PATTERN.transitions.find(item => item.kind === 'on')?.t || .5;
+      const cycle = Math.ceil((range[0] - phase - onTransition) / LED_PATTERN.periodS);
+      const edge = phase + onTransition + cycle * LED_PATTERN.periodS;
+      return clamp(edge + (sensor === 'rgb' ? .03 : 0), range[0], range[1]);
+    }
+
+    async function loadSavedAutoRoiResult() {
+      let value = null;
+      const local = state.localFiles.get('auto_led_sync_result.json');
+      if (local) {
+        value = JSON.parse(await local.text());
+      } else if (state.dataPath) {
+        const path = `${state.dataPath.replace(/\/[^/]*$/, '')}/auto_led_sync_result.json`;
+        const response = await fetch(`/api/data?path=${encodeURIComponent(path)}`, { cache: 'no-store' });
+        if (response.status === 404) return false;
+        value = await response.json();
+        if (!response.ok) throw new Error(value.error || '保存済み自動ROI結果を読み込めません。');
+      } else {
+        return false;
+      }
+      if (!value?.roi?.start || !value?.roi?.end) return false;
+      const confidenceLabel = confidence => confidence === 'high' ? '高' : confidence === 'medium' ? '中' : '低';
+      for (const side of ['start', 'end']) {
+        for (const sensor of ['rgb', 'evs']) {
+          const entry = value.roi?.[side]?.[sensor];
+          if (!entry?.roi) continue;
+          const meta = state.spatial[sensor]?.meta || state.roiDataMeta?.[sensor];
+          state.rois[side][sensor] = { ...entry.roi };
+          state.autoRoiResults[side][sensor] = {
+            confidence: entry.confidence || 'low',
+            confidenceLabel: confidenceLabel(entry.confidence),
+            matched: Number(entry.matched_edges || 0),
+            expected: Number(entry.expected_edges || 0),
+            coverage: Number(entry.coverage || 0),
+            precision: Number(entry.edge_precision || 0),
+            gap: Number(entry.candidate_gap || 0),
+            previewTime: previewTimeForSavedRoi(entry, meta, side, sensor)
+          };
+        }
+      }
+      recomputeSignalsFromRois();
+      const clock = value.clock || {};
+      if (Array.isArray(value.pairs) && value.pairs.length) {
+        state.pairs = value.pairs.map(pair => ({
+          evs: { t: Number(pair.evs_time_s), kind: pair.kind, strength: 0 },
+          rgb: {
+            t: Number(pair.rgb_time_s),
+            lo: Number(pair.rgb_interval_s?.[0] ?? pair.rgb_time_s),
+            hi: Number(pair.rgb_interval_s?.[1] ?? pair.rgb_time_s),
+            kind: pair.kind,
+            strength: 0
+          },
+          residual: Number(pair.residual_s || 0)
+        }));
+      }
+      state.offsetS = Number(clock.offset_at_anchor_s || 0);
+      state.drift = Number(clock.drift || 0);
+      state.anchorS = Number(clock.anchor_relative_s || 0);
+      state.rmsS = Number(clock.residual_rms_s || 0);
+      state.analysisMethod = 'auto_roi';
+      autoRoiSummary();
+      showAutoRoiSide('start');
+      updateResults();
+      draw();
+      toast(`保存済み自動ROI結果を復元しました（信頼度 ${value.overall_confidence || 'unknown'}）。`);
+      return true;
+    }
+
+    async function loadSavedBatchOverlay() {
+      if (!state.dataPath) return false;
+      const syncDirectory = state.dataPath.replace(/\/[^/]*$/, '');
+      const marker = '/analysis/led_sync/';
+      const markerIndex = syncDirectory.lastIndexOf(marker);
+      if (markerIndex < 0) return false;
+      const experimentRoot = syncDirectory.slice(0, markerIndex);
+      const session = String(state.meta.session || syncDirectory.slice(markerIndex + marker.length));
+      const outputDir = `${experimentRoot}/analysis/scenario_overlay/${session}/rotation_only_auto`;
+      const videos = {
+        comparison: `${outputDir}/rgb_vs_overlay.mp4`,
+        overlay: `${outputDir}/overlay_polarity.mp4`,
+        events: `${outputDir}/polarity_only.mp4`
+      };
+      const response = await fetch(overlayFileUrl(videos.comparison), {
+        cache: 'no-store',
+        headers: { Range: 'bytes=0-0' }
+      });
+      if (!response.ok) return false;
+      showOverlayVideos(videos, outputDir);
+      $('overlayStatus').className = 'overlay-status completed';
+      $('overlayStatus').textContent = '一括処理済みの全区間動画を読み込みました。';
+      return true;
+    }
+
     async function openLocalBundle(fileList) {
       const files = [...fileList];
       const jsonFiles = files.filter(file => file.name === 'led_sync_data.json');
@@ -1421,6 +1951,7 @@
       removeDataQuery();
       loadDataset(data);
       try { await loadRoiBundle(); } catch (error) { updateRoiDataStatus(error.message); }
+      try { await loadSavedAutoRoiResult(); } catch (error) { toast(error.message); }
       $('dataSourceLabel').textContent = `Mac・ローカル: ${jsonPath}`;
       toast(`解析フォルダを読み込みました（プレビュー ${state.preview.rgb.length} + ${state.preview.evs.length} 枚）。`);
     }
@@ -1437,6 +1968,8 @@
       history.replaceState(null, '', url);
       loadDataset(data);
       try { await loadRoiBundle(); } catch (error) { updateRoiDataStatus(error.message); }
+      try { await loadSavedAutoRoiResult(); } catch (error) { toast(error.message); }
+      try { await loadSavedBatchOverlay(); } catch (_) { /* optional batch video */ }
       $('dataSourceLabel').textContent = `Docker: ${path}`;
       toast('Docker内の解析データを読み込みました。');
     }
@@ -1515,7 +2048,20 @@
         roi_selection: {
           coordinate_system: 'sensor_pixels',
           start: state.rois.start,
-          end: state.rois.end
+          end: state.rois.end,
+          automatic_detection: Object.fromEntries(['start', 'end'].map(side => [side,
+            Object.fromEntries(['rgb', 'evs'].map(sensor => {
+              const result = state.autoRoiResults[side][sensor];
+              return [sensor, result ? {
+                confidence: result.confidence,
+                matched_edges: result.matched,
+                expected_edges: result.expected,
+                coverage: result.coverage,
+                edge_precision: result.precision,
+                candidate_gap: result.gap
+              } : null];
+            }))
+          ]))
         },
         pairs: state.pairs.map(p => ({ kind:p.evs.kind, evs_time_s:p.evs.t, rgb_interval_s:[p.rgb.lo,p.rgb.hi], rgb_midpoint_s:p.rgb.t, residual_s:p.residual || 0 }))
       }, null, 2));
@@ -1587,6 +2133,117 @@
       toast(`Dockerへ保存しました: ${result.path}`);
     }
 
+    function resetOverlayResult() {
+      if (state.overlayJobTimer) clearTimeout(state.overlayJobTimer);
+      state.overlayJobTimer = 0;
+      const video = $('overlayResultVideo');
+      video.pause();
+      video.removeAttribute('src');
+      video.load();
+      video.hidden = true;
+      $('overlayLinks').replaceChildren();
+      $('overlayLinks').hidden = true;
+      $('generateOverlay').disabled = false;
+      const status = $('overlayStatus');
+      status.className = 'overlay-status';
+      status.textContent = state.dataPath
+        ? 'オフセット推定後に実行できます。'
+        : 'Docker内の解析データを選び、オフセット推定後に実行してください。';
+      status.removeAttribute('title');
+    }
+
+    function overlayFileUrl(path) {
+      return `/api/file?path=${encodeURIComponent(path)}`;
+    }
+
+    function showOverlayVideos(videos, outputDir) {
+      const comparison = videos?.comparison;
+      if (!comparison) throw new Error('生成された比較動画が見つかりません。');
+      const video = $('overlayResultVideo');
+      video.src = overlayFileUrl(comparison);
+      video.hidden = false;
+      const links = $('overlayLinks');
+      links.replaceChildren();
+      const labels = {
+        comparison: 'RGB・重畳の比較動画',
+        overlay: '重畳映像のみ',
+        events: 'イベント映像のみ'
+      };
+      for (const [key, label] of Object.entries(labels)) {
+        if (!videos[key]) continue;
+        const anchor = document.createElement('a');
+        anchor.href = overlayFileUrl(videos[key]);
+        anchor.target = '_blank';
+        anchor.rel = 'noopener';
+        anchor.textContent = label;
+        links.append(anchor);
+      }
+      const location = document.createElement('span');
+      location.className = 'panel-note';
+      location.textContent = `保存先: ${outputDir}`;
+      links.append(location);
+      links.hidden = false;
+    }
+
+    async function pollOverlayJob(jobId) {
+      const response = await fetch(`/api/overlay-job?id=${encodeURIComponent(jobId)}`, { cache: 'no-store' });
+      const job = await response.json();
+      if (!response.ok) throw new Error(job.error || `処理状態を取得できません (${response.status})`);
+      const status = $('overlayStatus');
+      if (job.status === 'completed') {
+        status.className = 'overlay-status completed';
+        status.textContent = '全区間の動画が完成しました。下のプレイヤーで確認できます。';
+        $('generateOverlay').disabled = false;
+        showOverlayVideos(job.videos, job.output_dir);
+        toast('同期・校正済みの重畳動画が完成しました。');
+        return;
+      }
+      if (job.status === 'failed') {
+        status.className = 'overlay-status failed';
+        status.textContent = job.error || '動画生成に失敗しました。';
+        if (job.log_tail) status.title = job.log_tail;
+        $('generateOverlay').disabled = false;
+        return;
+      }
+      status.className = 'overlay-status running';
+      status.textContent = '全区間を処理中です。記録の長さに応じて数分かかります…';
+      state.overlayJobTimer = setTimeout(() => {
+        pollOverlayJob(jobId).catch(error => {
+          status.className = 'overlay-status failed';
+          status.textContent = error.message;
+          $('generateOverlay').disabled = false;
+        });
+      }, 1500);
+    }
+
+    async function generateOverlayVideo() {
+      if (!state.dataPath) throw new Error('Docker内の解析データを先に選択してください。');
+      const button = $('generateOverlay');
+      const status = $('overlayStatus');
+      button.disabled = true;
+      status.className = 'overlay-status running';
+      status.textContent = '時刻補正を保存し、動画生成を開始しています…';
+      const response = await fetch('/api/generate-overlay', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          dataset_path: state.dataPath,
+          yaml: buildTimeSyncYaml(),
+          options: {
+            event_window_ms: Number($('overlayWindow').value),
+            event_dilate_px: Number($('overlayDotSize').value),
+            alpha: 0.85
+          }
+        })
+      });
+      const responseText = await response.text();
+      let job;
+      try { job = JSON.parse(responseText); }
+      catch (_) { throw new Error('動画生成APIを利用できません。GUIサーバーを再起動してください。'); }
+      if (!response.ok) throw new Error(job.error || `動画生成を開始できません (${response.status})`);
+      await pollOverlayJob(job.id);
+    }
+
     function attachVideo(inputId, videoId, emptyId, key) {
       $(inputId).addEventListener('change', event => {
         const file = event.target.files[0]; if (!file) return;
@@ -1636,6 +2293,14 @@
     });
     $('exportButton').addEventListener('click', exportResult);
     $('exportTimeSync').addEventListener('click', () => exportTimeSyncYaml().catch(error => toast(error.message)));
+    $('generateOverlay').addEventListener('click', () => {
+      generateOverlayVideo().catch(error => {
+        $('generateOverlay').disabled = false;
+        $('overlayStatus').className = 'overlay-status failed';
+        $('overlayStatus').textContent = error.message;
+        toast(error.message);
+      });
+    });
     $('sampleButton').addEventListener('click', () => download('led_sync_sample.json', JSON.stringify(demoData(), null, 2)));
     $('localBundle').addEventListener('change', event => {
       openLocalBundle(event.target.files).catch(error => toast(error.message));
@@ -1709,8 +2374,8 @@
     navigator.addEventListener('pointerup', () => state.navigatorDragging = false);
     navigator.addEventListener('pointercancel', () => state.navigatorDragging = false);
 
-    $('startRoiMode').addEventListener('click', () => setRoiMode('start'));
-    $('endRoiMode').addEventListener('click', () => setRoiMode('end'));
+    $('startRoiMode').addEventListener('click', () => showAutoRoiSide('start'));
+    $('endRoiMode').addEventListener('click', () => showAutoRoiSide('end'));
     for (const sensor of ['rgb', 'evs']) {
       $(`${sensor}PreviewSeek`).addEventListener('input', event => {
         stopPreviewPlayback();
@@ -1762,8 +2427,19 @@
     $('applyRoiAnalysis').addEventListener('click', () => {
       try { recomputeSignalsFromRois(); } catch (error) { toast(error.message); }
     });
+    $('autoDetectRoi').addEventListener('click', () => {
+      autoDetectLedRois().catch(error => {
+        $('autoDetectRoi').disabled = false;
+        $('autoRoiStatus').className = 'auto-roi-status low';
+        $('autoRoiStatus').textContent = error.message;
+        toast(error.message);
+      });
+    });
     $('clearRoi').addEventListener('click', () => {
       state.rois[state.roiMode] = { rgb: null, evs: null };
+      state.autoRoiResults[state.roiMode] = { rgb: null, evs: null };
+      $('autoRoiStatus').className = 'auto-roi-status';
+      $('autoRoiStatus').textContent = `${state.roiMode === 'start' ? '開始側' : '終了側'}ROIを消去しました。`;
       drawPreview('rgb'); drawPreview('evs'); updateRoiReadout();
     });
     attachRoiCanvas('rgb'); attachRoiCanvas('evs');
