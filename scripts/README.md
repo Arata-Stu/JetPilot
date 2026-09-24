@@ -26,7 +26,7 @@
 | `scripts/setup/` | `install_isaac_ros_cli.sh`, `install_silky_evcam_udev_rules.sh`, `prepare_workspace_dirs.sh`, `setup_multi_sensor_calibration_env.sh` |
 | `scripts/maintenance/` | `cleanup_isaac_ros_docker.sh`, `python_env.sh`, `scp_data.sh`, `tmux.sh` |
 | `scripts/diagnostics/` | `check.sh`, `generate_topic_graph.py`, `profile_topic_bw.sh` |
-| `scripts/experiments/` | `export_led_sync_batch.sh`, `run_rc_popout_auto_pipeline.sh`, `led_sync_gui.sh`, `rc_popout_experiment.sh` |
+| `scripts/experiments/` | `export_led_sync_batch.sh`, `run_rc_popout_auto_pipeline.sh`, `normalize_mp4_for_macos.sh`, `led_sync_gui.sh`, `rc_popout_experiment.sh` |
 | `scripts/lib/` | コマンド・Console が共通で使う内部処理 |
 | `tests/scripts/` | スクリプトの軽量テスト |
 

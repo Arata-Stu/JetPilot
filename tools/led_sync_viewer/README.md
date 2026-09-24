@@ -134,13 +134,16 @@ DSEC型のrotation-only射影で正極性eventを青、負極性eventを赤と�
 `rgb_vs_overlay.mp4`（RGBと重畳の左右比較）、`overlay_polarity.mp4`（重畳のみ）、
 `polarity_only.mp4`（eventのみ）の3本を生成します。この機能は元のMCAP/RAWへアクセス
 するためDocker読込時だけ利用できます。Macへコピーした解析フォルダは目視解析には
-使えますが、動画の再生成には使えません。
+使えますが、動画の再生成には使えません。新しく生成する動画は、QuickTimeとbrowserに
+対応するH.264・yuv420p・fast-start MP4として保存されます。旧`mp4v`動画はDocker内で
+`scripts/experiments/normalize_mp4_for_macos.sh VIDEO.mp4`により変換できます。
 
 ## 全シーケンスの無人処理
 
 次の専用scriptは、校正記録を除く`evs-popup-v1`と`evs-popup-v2`の全記録について、
 空間タイルの不足時だけ前処理し、LED ROI自動検出、時刻同期、DSEC型全区間動画生成を
-順番に実行します。
+順番に実行します。最後に開始・終了それぞれのRGB/EVS ROIデバッグ画像と、ROI指標・
+重畳動画を1画面で確認できるportable HTML reviewも生成します。
 
 ```bash
 cd /workspaces
@@ -157,6 +160,16 @@ ROI・同期だけ先に評価する場合は`--no-video`、1記録だけ試す�
 ```text
 /workspaces/record/evs-popup-analysis/auto_pipeline/summary.tsv
 ```
+
+各記録の目視確認ページは次に保存され、`summary.tsv`の`review_page`列からも参照できます。
+
+```text
+/workspaces/record/evs-popup-vN/analysis/led_sync/<session>/review/index.html
+```
+
+同じdirectoryには`start_roi_debug.jpg`、`end_roi_debug.jpg`、センサ別ROI画像、
+`review.json`も保存されます。HTMLと動画をMacへ持ち出す場合は、相対リンクを維持するため
+対象の`analysis` directoryをまとめてコピーしてください。
 
 `review=yes`または信頼度`medium/low`だけを優先して目視確認します。各解析フォルダの
 `auto_led_sync_result.json`はUIが自動的に読み込み、開始・終了の候補枠、信頼度、同期値を
