@@ -58,7 +58,7 @@ ROS launch を直接呼ぶ場合は `bag_manager_output_dir` に保存ルート�
 ```bash
 ./scripts/repos.sh                                 # JetPilot本体と外部リポジトリの状態
 ./scripts/repos.sh pull --dry-run                   # 更新方針を表示
-./scripts/repos.sh pull                             # クリーンなブランチを一括更新
+./scripts/repos.sh pull                             # 本体・外部リポジトリを一括更新
 ./scripts/repos.sh status .                         # 本体だけ状態確認
 ./scripts/repos.sh pull .                           # 本体だけ更新
 ./scripts/repos.sh pull tools/isaac-ros-cli          # 一つだけ更新
@@ -73,8 +73,9 @@ ROS launch を直接呼ぶ場合は `bag_manager_output_dir` に保存ルート�
 状態には branch、HEAD、未コミット変更、ローカルに記録された upstream との差を表示する。
 status と dry-run では fetch しないので、upstream 差分は最後に取得した情報に基づく。
 
-pull は追跡先からの fast-forward のみ。未コミット変更があるもの、upstream 未設定、履歴が分岐したものは更新せず、その対象を報告する。タグなど detached HEAD は固定状態として維持する。
-一つが失敗しても他の対象を確認し、失敗や未コミット変更によるスキップがあれば終了コードを非ゼロにする。自動 stash、reset、rebase はしない。
+pull は追跡先からの fast-forward のみ。未コミット変更があっても更新を試み、ローカル変更の上書きが必要な場合は Git が停止する。upstream 未設定や履歴の分岐も報告する。タグなど detached HEAD は固定状態として維持する。
+一つが失敗しても他の対象を確認し、失敗や upstream 未設定によるスキップがあれば終了コードを非ゼロにする。自動 stash、reset、rebase はしない。Git の個人設定で autostash や rebase が有効でも、このコマンドでは無効にする。
+pull の最後に「更新済み・変更なし・実行予定・スキップ・失敗」の件数と対象一覧を表示する。失敗した対象は理由（Git のエラー出力）もまとめて表示する。dry-run は実際の更新結果と区別して表示する。
 import は存在するリポジトリのブランチを切り替えない。取得先に通常ディレクトリがある場合も上書きしない。
 
 `packages.lock.repos` も作成後は Git 管理に含める。未コミット変更があると再現できないため、lock の書き込みを拒否する。

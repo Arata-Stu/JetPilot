@@ -65,6 +65,22 @@ def inspect(path: Path) -> tuple[str, str, bool]:
     return revision, branch, dirty
 
 
+def print_pull_summary(results, dry_run: bool) -> None:
+    print('\n=== pull 結果' + ('（dry-run・更新未実行）' if dry_run else '') + ' ===', flush=True)
+    states = ('更新済み', '変更なし', '実行予定', 'スキップ', '失敗')
+    print(' / '.join(f'{state}: {sum(item[1] == state for item in results)}' for state in states))
+    for state in states:
+        entries = [item for item in results if item[1] == state]
+        if not entries:
+            continue
+        print(f'\n{state}:')
+        for name, _, detail in entries:
+            print(f'  - {"JetPilot (.)" if name == "." else name}')
+            for line in detail.splitlines():
+                print(f'      {line}')
+    print(flush=True)
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description='JetPilot本体と外部リポジトリの一覧・更新・取得・コミット記録')
     parser.add_argument('command', choices=('status', 'pull', 'import', 'lock'), nargs='?', default='status')
@@ -87,16 +103,18 @@ def main(argv=None) -> int:
         selected = args.repositories or list(repos)
         locked = {}
         failures = 0
+        results = []
         for name in selected:
             path = root / name
-            if not path.resolve().is_relative_to(root):
-                raise ValueError(f'{name}: path escapes workspace')
             item = repos[name]
             try:
+                if not path.resolve().is_relative_to(root):
+                    raise ValueError(f'{name}: path escapes workspace')
                 if not path.exists():
                     if args.command != 'import':
                         print(f'MISSING  {name} (repos.sh import で取得)')
                         failures += 1
+                        results.append((name, '失敗', '未取得です。repos.sh import で取得してください'))
                         continue
                     print(f'CLONE    {name} @ {item["version"]}', flush=True)
                     if args.dry_run:
@@ -122,20 +140,29 @@ def main(argv=None) -> int:
                     ahead, behind = tracking.stdout.split()
                     print(f'  upstream cache: ahead={ahead}, behind={behind}')
                 if args.command == 'pull':
-                    if dirty or not branch:
-                        print('  SKIP: 作業中の変更または固定コミットを保護しました')
-                        failures += 1 if dirty else 0
+                    if not branch:
+                        print('  SKIP: 固定コミット/タグを維持しました')
+                        results.append((name, 'スキップ', '固定コミット/タグを維持しました'))
                         continue
+                    if dirty:
+                        print('  INFO: 未コミット変更を残して更新を試みます。上書きが必要な場合はGitが停止します')
                     upstream = git(path, 'rev-parse', '--abbrev-ref', '@{upstream}', check=False)
                     if upstream.returncode:
                         print('  SKIP: upstream が未設定です')
                         failures += 1
+                        results.append((name, '失敗', 'upstream が未設定のためpullできません'))
                         continue
                     if args.dry_run:
                         print(f'  PLAN: git pull --ff-only ({upstream.stdout.strip()})')
+                        results.append((name, '実行予定', upstream.stdout.strip()))
                     else:
-                        result = git(path, 'pull', '--ff-only')
+                        result = git(path, '-c', 'merge.autostash=false', '-c', 'rebase.autostash=false',
+                                     'pull', '--no-rebase', '--ff-only')
                         print(result.stdout.strip())
+                        current = git(path, 'rev-parse', 'HEAD').stdout.strip()
+                        state = '更新済み' if current != revision else '変更なし'
+                        detail = f'{revision[:12]} → {current[:12]}' if current != revision else current[:12]
+                        results.append((name, state, detail))
                 elif args.command == 'lock':
                     if dirty:
                         raise ValueError('未コミット変更は lock に再現できません。先にコミットしてください')
@@ -143,10 +170,13 @@ def main(argv=None) -> int:
                     if origin.removesuffix('.git').rstrip('/') != item['url'].removesuffix('.git').rstrip('/'):
                         raise ValueError('origin と manifest の URL が異なります。先に manifest を更新してください')
                     locked[name] = {**item, 'version': revision}
-            except (ValueError, subprocess.CalledProcessError) as exc:
-                detail = exc.stderr if isinstance(exc, subprocess.CalledProcessError) else str(exc)
+            except (ValueError, OSError, subprocess.CalledProcessError) as exc:
+                detail = (exc.stderr or exc.stdout or str(exc)) if isinstance(exc, subprocess.CalledProcessError) else str(exc)
                 print(f'ERROR    {name}: {detail}', file=sys.stderr)
                 failures += 1
+                results.append((name, '失敗', detail.strip()))
+        if args.command == 'pull':
+            print_pull_summary(results, args.dry_run)
         if args.command == 'lock' and not failures:
             lines = ['# Exact commits; commit this file with packages.repos.', 'repositories:']
             for name, item in locked.items():
