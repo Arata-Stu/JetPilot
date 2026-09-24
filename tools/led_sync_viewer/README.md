@@ -49,6 +49,16 @@ serverが読み出せるのは、既定では`/workspaces/record`配下の解析
 
 ## v1/v2の一括export
 
+まず非校正シーケンスを1本だけ確認する場合は、記録ディレクトリを明示します。
+
+```bash
+scripts/experiments/export_led_sync_batch.sh \
+  --session /workspaces/record/evs-popup-v1/<session-directory>
+```
+
+出力先は
+`/workspaces/record/evs-popup-v1/analysis/led_sync/<session-directory>/`です。
+
 checkerboard校正sessionを除外し、`evs-popup-v1`と`evs-popup-v2`の各走行を順番に
 処理します。既存の出力は自動的にskipされるため、途中で止まっても再実行できます。
 

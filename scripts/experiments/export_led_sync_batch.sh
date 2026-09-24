@@ -9,6 +9,7 @@ PREVIEW_FPS="60"
 PREVIEW_WINDOW_S="12"
 ROI_TILE_SIZE="16"
 FORCE=false
+SELECTED_SESSION=""
 CALIBRATION_SESSION="20260921_185407_rcp_calibration_checkerboard_20260921_185405"
 ROOTS=(
   "/workspaces/record/evs-popup-v1"
@@ -28,6 +29,7 @@ Options:
   --roi-tile-size PX   Spatial tile size for UI ROI recalculation (default: 16)
   --no-preview         Do not export visual preview images
   --config PATH        Calibration config path
+  --session DIR        Process only this recording session directory
   --force              Reprocess sessions with an existing JSON output
   -h, --help           Show this help
 
@@ -68,6 +70,10 @@ while (($#)); do
       ;;
     --config)
       CONFIG="${2:?--config requires a path}"
+      shift 2
+      ;;
+    --session)
+      SELECTED_SESSION="${2:?--session requires a directory}"
       shift 2
       ;;
     --force)
@@ -119,19 +125,32 @@ elif [[ -f /workspaces/.venvs/multi_sensor_calibration/bin/activate ]]; then
 fi
 
 sessions=()
-for root in "${ROOTS[@]}"; do
-  if [[ ! -d "$root" ]]; then
-    echo "[skip root] not found: $root"
-    continue
+if [[ -n "$SELECTED_SESSION" ]]; then
+  if [[ ! -d "$SELECTED_SESSION" ]]; then
+    echo "Session directory not found: $SELECTED_SESSION" >&2
+    exit 1
   fi
-  while IFS= read -r -d '' session; do
-    name="$(basename "$session")"
-    if [[ "$name" == "analysis" || "$name" == "$CALIBRATION_SESSION" || "$name" == *"_calibration_"* ]]; then
+  selected_name="$(basename "$SELECTED_SESSION")"
+  if [[ "$selected_name" == "analysis" || "$selected_name" == "$CALIBRATION_SESSION" || "$selected_name" == *"_calibration_"* ]]; then
+    echo "--session must select a non-calibration recording: $SELECTED_SESSION" >&2
+    exit 1
+  fi
+  sessions+=("$(cd -- "$SELECTED_SESSION" && pwd)")
+else
+  for root in "${ROOTS[@]}"; do
+    if [[ ! -d "$root" ]]; then
+      echo "[skip root] not found: $root"
       continue
     fi
-    sessions+=("$session")
-  done < <(find "$root" -mindepth 1 -maxdepth 1 -type d -print0)
-done
+    while IFS= read -r -d '' session; do
+      name="$(basename "$session")"
+      if [[ "$name" == "analysis" || "$name" == "$CALIBRATION_SESSION" || "$name" == *"_calibration_"* ]]; then
+        continue
+      fi
+      sessions+=("$session")
+    done < <(find "$root" -mindepth 1 -maxdepth 1 -type d -print0)
+  done
+fi
 
 total=${#sessions[@]}
 if ((total == 0)); then
