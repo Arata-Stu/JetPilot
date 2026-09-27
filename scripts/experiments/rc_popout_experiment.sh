@@ -82,10 +82,10 @@ create_plan() {
   printf '今回の初期値は、壁基準でカメラ200 cm・段ボール100 cmの配置です。\n\n'
   camera_wall_distance="$(prompt_default '壁からカメラまでの距離' '200cm')"
   obstacle_wall_distance="$(prompt_default '壁から段ボールまでの距離' '100cm')"
-  gaps="$(prompt_default '2つの段ボール間の開口幅' '150cm,120cm,90cm')"
+  gaps="$(prompt_default '2つの段ボール間の開口幅' '150cm')"
   lightings="$(prompt_default '部屋の照明条件' 'normal')"
-  directions="$(prompt_default '飛び出し方向' 'left,right')"
-  throttles="$(prompt_default 'RCカーのスロットル指令値' '20pct,40pct,60pct')"
+  directions="$(prompt_default '条件（left/right/none）' 'left,right,none')"
+  throttles="$(prompt_default 'プロポのアクセル上限設定（実速度ではありません）' '20pct')"
   repetitions="$(prompt_default '各条件の反復回数' '3')"
   [[ "$repetitions" =~ ^[1-9][0-9]*$ ]] || die '反復回数は1以上の整数にしてください'
 
@@ -118,14 +118,18 @@ create_plan() {
       lighting="$(trim "$lighting")"; [[ -n "$lighting" ]] || die '照明条件に空の値があります'
       for direction in "${direction_values[@]}"; do
         direction="$(trim "$direction")"; [[ -n "$direction" ]] || die '方向に空の値があります'
+        case "$direction" in left|right|none) ;; *) die '条件はleft/right/noneを指定してください' ;; esac
         for throttle in "${throttle_values[@]}"; do
           throttle="$(trim "$throttle")"; [[ -n "$throttle" ]] || die 'スロットルに空の値があります'
+          # 出現なしはアクセル条件を持たず、上限設定数だけ重複させない。
+          if [[ "$direction" == none ]]; then throttle=na; fi
           for ((repetition=1; repetition<=repetitions; repetition++)); do
             printf 'r%03d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
               "$run_number" "$camera_wall_distance" "$obstacle_wall_distance" \
               "$gap" "$lighting" "$direction" "$throttle" "$repetition" >>"$PLAN_FILE"
             run_number=$((run_number + 1))
           done
+          if [[ "$direction" == none ]]; then break; fi
         done
       done
     done
@@ -145,6 +149,9 @@ repetitions=${repetitions}
 bringup=rc-popout
 rgb=848x480@60
 evs=native_RAW
+ego_motion=stationary
+target_control=propo_limit_full_trigger
+throttle_semantics=propo_setting_not_measured_speed
 EOF
   printf '\n'
   show_status
@@ -163,6 +170,23 @@ publish_request() {
   fi
   ros2 topic pub --once /bag/request jetpilot_msgs/msg/BagRequest \
     "{command: ${command}, label: '${label}'}" >/dev/null
+}
+
+log_attempt() {
+  local outcome="$1" note="$2"
+  [[ "$DRY_RUN" != true ]] || return 0
+  python3 - "$EXP_DIR/attempts.jsonl" "$run_id" "$label" "$outcome" "$note" <<'PY'
+import datetime
+import json
+import sys
+path, trial, label, outcome, note = sys.argv[1:]
+with open(path, 'a', encoding='utf-8') as stream:
+    stream.write(json.dumps(dict(
+        logged_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        trial_id=trial, recording_label=label, outcome=outcome, note=note,
+        clock_semantics='operator_log_wall_time_not_sensor_or_reaction_time',
+    ), ensure_ascii=False) + '\n')
+PY
 }
 
 save_result() {
@@ -275,11 +299,17 @@ while trial="$(next_trial)"; do
   printf '  段ボール間の開口幅 : %s\n' "$gap"
   printf '  部屋の照明         : %s\n' "$lighting"
   printf '  飛び出し方向       : %s\n' "$direction"
-  printf '  スロットル指令値   : %s\n' "$throttle"
+  printf '  プロポ上限設定     : %s（実速度ではありません）\n' "$throttle"
   printf '  反復番号           : %s\n' "$repetition"
   printf '============================================================\n'
   printf '開口幅は段ボールの内側端面どうしで測り、床の基準テープに合わせてください。\n'
-  printf 'RCカーを指定方向側の段ボール裏へ完全に隠し、毎回同じ開始線にセットしてください。\n'
+  if [[ "$direction" == none ]]; then
+    printf '出現なし試行です。相手車を出現させず、飛び出し試行と同じ長さを記録してください。\n'
+  else
+    printf 'RCカーを指定方向側へ隠し、開始位置・向き・助走距離を揃えてください。\n'
+    printf 'プロポ上限設定を確認し、走行区間はフルトリガを保持してください。\n'
+  fi
+  printf '自車・カメラは静止させます。設定画面・配置・バッテリー情報を台帳へ残してください。\n'
   printf '上記の条件になるよう、カメラ・障害物・照明・RCカーを正しい場所にセットしてください。\n'
   read -r -p '[Enter]=記録開始 / s=この条件を除外 / q=中断: ' action
   case "$action" in
@@ -289,21 +319,31 @@ while trial="$(next_trial)"; do
     *) printf '入力を認識できないため開始しません。\n'; continue ;;
   esac
 
-  label="rcp_${run_id}_cam-$(sanitize_label "$camera_wall_distance")_obs-$(sanitize_label "$obstacle_wall_distance")_gap-$(sanitize_label "$gap")_lux-$(sanitize_label "$lighting")_dir-$(sanitize_label "$direction")_thr-$(sanitize_label "$throttle")_rep-${repetition}"
+  attempt_id="$(python3 -c 'import uuid; print(uuid.uuid4().hex[:12])')"
+  label="rcp_${run_id}_cam-$(sanitize_label "$camera_wall_distance")_obs-$(sanitize_label "$obstacle_wall_distance")_gap-$(sanitize_label "$gap")_lux-$(sanitize_label "$lighting")_dir-$(sanitize_label "$direction")_thr-$(sanitize_label "$throttle")_rep-${repetition}_attempt-${attempt_id}"
+  log_attempt start_requested ''
   publish_request 1 "$label"
   RECORDING=true
   printf '\n記録中です。まずLED同期パターンをRGBとEVSの画面内に映してください。\n'
-  printf 'その後、指定したスロットル・方向でRCカーを操縦し、飛び出しを行ってください。\n'
+  printf 'LED板を外して1秒以上待ち、出現前の映像を十分に残してください。\n'
+  if [[ "$direction" == none ]]; then
+    printf '相手車は動かさず、通常試行と同じ観測時間を確保してください。\n'
+  else
+    printf '指定方向から、プロポ上限設定＋フルトリガで飛び出しを行ってください。\n'
+  fi
+  printf '試行後は車両を停止し、終了LEDを撮影します。開始表示だけでは保存成功は保証されません。\n'
   read -r -p '飛び出しと終了側のLED撮影が終わったらEnterで記録終了: ' _
   publish_request 2 "$label"
   RECORDING=false
+  log_attempt stop_requested ''
 
   read -r -p '[Enter]=採用 / r=同じ条件をやり直す / s=除外: ' result
+  read -r -p 'メモ（操作介入・電池交換・失敗理由等。空欄可）: ' note
   case "$result" in
-    '') save_result "$COMPLETED_FILE" "$run_id" ;;
-    r|R) printf 'この条件を未完了のまま残します。\n' ;;
-    s|S) save_result "$SKIPPED_FILE" "$run_id" ;;
-    *) printf '入力を認識できないため、同じ条件をやり直します。\n' ;;
+    '') log_attempt accepted "$note"; save_result "$COMPLETED_FILE" "$run_id" ;;
+    r|R) log_attempt retry "$note"; printf 'この条件を未完了のまま残します。\n' ;;
+    s|S) log_attempt excluded "$note"; save_result "$SKIPPED_FILE" "$run_id" ;;
+    *) log_attempt unresolved "$note"; printf '入力を認識できないため、同じ条件をやり直します。\n' ;;
   esac
   show_status
   if [[ "$DRY_RUN" == true ]]; then
