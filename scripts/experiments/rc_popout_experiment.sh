@@ -338,12 +338,11 @@ while trial="$(next_trial)"; do
   log_attempt stop_requested ''
 
   read -r -p '[Enter]=採用 / r=同じ条件をやり直す / s=除外: ' result
-  read -r -p 'メモ（操作介入・電池交換・失敗理由等。空欄可）: ' note
   case "$result" in
-    '') log_attempt accepted "$note"; save_result "$COMPLETED_FILE" "$run_id" ;;
-    r|R) log_attempt retry "$note"; printf 'この条件を未完了のまま残します。\n' ;;
-    s|S) log_attempt excluded "$note"; save_result "$SKIPPED_FILE" "$run_id" ;;
-    *) log_attempt unresolved "$note"; printf '入力を認識できないため、同じ条件をやり直します。\n' ;;
+    '') log_attempt accepted ''; save_result "$COMPLETED_FILE" "$run_id" ;;
+    r|R) log_attempt retry ''; printf 'この条件を未完了のまま残します。\n' ;;
+    s|S) log_attempt excluded ''; save_result "$SKIPPED_FILE" "$run_id" ;;
+    *) log_attempt unresolved ''; printf '入力を認識できないため、同じ条件をやり直します。\n' ;;
   esac
   show_status
   if [[ "$DRY_RUN" == true ]]; then

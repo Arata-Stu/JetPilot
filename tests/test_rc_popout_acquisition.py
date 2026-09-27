@@ -48,7 +48,7 @@ class AcquisitionTests(unittest.TestCase):
             result = subprocess.run(
                 ['bash', str(ROOT / 'scripts/experiments/rc_popout_experiment.sh'),
                  '--dry-run', '--experiment-dir', tmp],
-                input='n\n\n\n\nメモ\n', text=True, capture_output=True)
+                input='n\n\n\n\n', text=True, capture_output=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn('相手車は動かさず', result.stdout)
             self.assertIn('[dry-run] BagRequest', result.stdout)
