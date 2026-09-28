@@ -47,6 +47,7 @@ from .indexes import (
     scan_trashed_rosbags,
     update_rosbag_metadata,
 )
+from .map_registration import preview_registration, apply_registration
 from .map_detail import (
     activate_custom_line,
     activate_hd_map_version,
@@ -652,6 +653,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/maps/generate-preview":
             self._start_map_stage(body, "generate-preview")
             return
+        if path in ("/api/maps/preview-registration", "/api/maps/apply-registration"):
+            self._register_hd_map(body, apply=path.endswith("/apply-registration"))
+            return
         if path == "/api/maps/save-hd-map":
             self._save_hd_map(body)
             return
@@ -1178,6 +1182,24 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
         except Exception as exc:
             self._json({"error": f"failed to read map detail: {exc}"}, HTTPStatus.INTERNAL_SERVER_ERROR)
+
+    def _register_hd_map(self, body: dict[str, Any], *, apply: bool) -> None:
+        try:
+            config = self.server.state.config
+            folders = [resolve_allowed_path(config, str(body.get(key) or ""))
+                       for key in ("source_map_dir", "map_dir")]
+            with self.server.state.tasks.guard_resources(sorted({f"map-dir:{p}" for p in folders})):
+                result = (apply_registration if apply else preview_registration)(config, body)
+            self._json(result)
+        except TaskResourceConflict as exc:
+            self._json({"error": "Map is in use; stop the task before aligning HD maps.",
+                        "active_task": exc.active_task}, HTTPStatus.CONFLICT)
+        except FileNotFoundError as exc:
+            self._json({"error": str(exc)}, HTTPStatus.NOT_FOUND)
+        except ValueError as exc:
+            self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+        except Exception as exc:
+            self._json({"error": f"HD map registration failed: {exc}"}, HTTPStatus.INTERNAL_SERVER_ERROR)
 
     def _save_hd_map(self, body: dict[str, Any], *, delete: bool = False) -> None:
         try:

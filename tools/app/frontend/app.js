@@ -625,7 +625,7 @@ function actionButtonLabel(key, label, busyLabel = "Working...") {
 }
 
 function mapEditorInteractionLocked() {
-  return tuningVisible() || actionBusy("hd-map-version:activate") || actionBusy("hd-map:delete");
+  return tuningVisible() || actionBusy("hd-map-version:activate") || actionBusy("hd-map:delete") || actionBusy("hd-registration");
 }
 
 function beginAction(key, message = "") {
@@ -5900,7 +5900,7 @@ function renderMapModePanel(detail) {
   const mode = state.mapWorkspaceMode;
   let content;
   if (mode === "geometry") {
-    content = `${renderHdMapEditor(detail)}`;
+    content = `${renderMapRegistration(detail)}${renderHdMapEditor(detail)}`;
   } else if (mode === "topology") {
     content = `${renderTopologyToolSwitcher()}${state.mapTopologyTool === "sections" ? renderSectionGateEditor(detail) : renderJunctionEditor(detail)}`;
   } else if (mode === "routes") {
@@ -5909,7 +5909,7 @@ function renderMapModePanel(detail) {
     content = `${renderMapInspector(detail)}${renderHdMapVersions(detail)}`;
   }
   if (!mapEditorInteractionLocked()) return content;
-  return `<div class="inline-status warn" role="status">Activating the HD map version… editing is temporarily locked.</div><div inert aria-busy="true">${content}</div>`;
+  return `<div class="inline-status warn" role="status">地図の更新中です。完了まで編集を一時停止しています。</div><div inert aria-busy="true">${content}</div>`;
 }
 
 function applyMapLayerPreset(mode) {
@@ -7316,6 +7316,141 @@ function renderCustomLineRow(line, activeId, selectedId) {
       <button onclick="activateCustomLine(${js(line.id)})" ${active || needsRepair ? "disabled" : ""}>${needsRepair ? "Repair" : active ? "Drive default" : "Use"}</button>
     </div>
   `;
+}
+
+function registrationFor(detail) {
+  if (!state.mapRegistration || state.mapRegistration.map_dir !== detail.map.path) {
+    state.mapRegistration = {map_dir: detail.map.path, source_map_dir: "", x_m: "0", y_m: "0", yaw_deg: "0", preview: null,
+      anchors: {source_x: "0", source_y: "0", source_yaw: "0", target_x: "0", target_y: "0", target_yaw: "0"}};
+  }
+  return state.mapRegistration;
+}
+
+function renderMapRegistration(detail) {
+  const form = registrationFor(detail);
+  const sources = state.maps.filter(m => m.path !== detail.map.path && m.artifacts?.hd_map?.exists);
+  const busy = actionBusy("hd-registration");
+  return `<details class="inspector-block" ${form.source_map_dir ? "open" : ""}>
+    <summary>別会場のHDMapを再利用</summary>
+    <p class="field-hint">保存済みの境界・区間・走行ラインを、新会場の地図に合わせます。元のHDMapは保持します。</p>
+    <label>元の地図<select aria-label="再利用する元の地図" onchange="updateMapRegistration('source_map_dir',this.value)" ${busy ? "disabled" : ""}>
+      <option value="">地図を選択</option>${sources.map(m => `<option value="${esc(m.path)}" ${m.path === form.source_map_dir ? "selected" : ""}>${esc(m.name || shortName(m.path))}</option>`).join("")}</select></label>
+    ${[["x_m","X移動 (m)"],["y_m","Y移動 (m)"],["yaw_deg","回転 (度・反時計回り)"]].map(([key,label]) => `<label>${label}<input type="number" step="${key === "yaw_deg" ? "1" : "0.05"}" value="${esc(form[key])}" aria-label="${label}" oninput="updateMapRegistration('${key}',this.value,false)" ${busy ? "disabled" : ""}></label>`).join("")}
+    <p class="field-hint">元の地図の原点を中心に回転し、その後X/Y移動します。縮尺は変えません。水色の重ね表示でコース全体を確認してください。</p>
+    <details><summary>同じ基準位置・向きから計算</summary>
+      <p class="field-hint">同じスタート枠などの位置と向きを、各地図の座標で入力します。異なるスタート枠同士は使わないでください。</p>
+      ${[["source","元の地図"],["target","新会場の地図"]].map(([prefix,label]) => `<div>${label}${[["x","X (m)"],["y","Y (m)"],["yaw","向き (度)"]].map(([key,unit]) => `<label>${unit}<input type="number" step="0.1" value="${esc(form.anchors[`${prefix}_${key}`])}" aria-label="${label}の基準${unit}" oninput="updateRegistrationAnchor('${prefix}_${key}',this.value)" ${busy ? "disabled" : ""}></label>`).join("")}</div>`).join("")}
+      <button onclick="calculateMapRegistration()" ${busy ? "disabled" : ""}>基準姿勢から移動・回転を計算</button>
+    </details>
+    <button onclick="previewMapRegistration()" ${busy || !form.source_map_dir || hasUnsavedMapEdits() ? "disabled" : ""}>位置合わせをプレビュー</button>
+    <button id="registration-apply" onclick="applyMapRegistration()" ${busy || !form.preview || hasUnsavedMapEdits() ? "disabled" : ""}>この位置で保存</button>
+    <button onclick="clearMapRegistration()" ${busy || !form.preview ? "disabled" : ""}>重ね表示を解除</button>
+    ${hasUnsavedMapEdits() ? '<p class="field-hint">先に編集中の変更を保存または破棄してください。</p>' : ""}
+    ${form.preview ? `<p class="field-hint">${form.preview.hd_map.lanes.length}レーン・${form.preview.trajectories.length}走行ラインを再利用。${form.preview.replaces_existing ? "適用先の既存HDMapはバックアップして置き換えます。" : ""}</p>` : ""}
+    <p class="field-hint">地図編集時に適用し、走行開始前に位置合わせを確認してください。会場の設営差やVSLAMの局所的な歪みは、適用後に通常の編集で調整できます。</p>
+  </details>`;
+}
+
+function updateMapRegistration(key, value, renderAfter = true) {
+  const detail = state.selectedMapDetail;
+  if (!detail || actionBusy("hd-registration")) return;
+  const form = registrationFor(detail);
+  form[key] = value;
+  form.preview = null;
+  if (renderAfter) render();
+  else {
+    if ($("registration-apply")) $("registration-apply").disabled = true;
+    drawMapPreview();
+  }
+}
+
+function updateRegistrationAnchor(key, value) {
+  const detail = state.selectedMapDetail;
+  if (!detail || actionBusy("hd-registration")) return;
+  registrationFor(detail).anchors[key] = value;
+}
+
+function registrationFromPoses(source, target) {
+  if (![...source, ...target].every(Number.isFinite)) throw new Error("基準姿勢には有限の数値を入力してください");
+  const yaw_deg = target[2] - source[2], a = yaw_deg * Math.PI / 180;
+  return {x_m: target[0] - Math.cos(a)*source[0] + Math.sin(a)*source[1],
+    y_m: target[1] - Math.sin(a)*source[0] - Math.cos(a)*source[1], yaw_deg};
+}
+
+function calculateMapRegistration() {
+  const detail = state.selectedMapDetail;
+  if (!detail || actionBusy("hd-registration")) return;
+  const form = registrationFor(detail), a = form.anchors;
+  try {
+    const number = v => String(v).trim() === "" ? NaN : Number(v);
+    const transform = registrationFromPoses([a.source_x,a.source_y,a.source_yaw].map(number),
+      [a.target_x,a.target_y,a.target_yaw].map(number));
+    Object.assign(form, transform, {preview:null});
+    render();
+  } catch (error) { toast(error.message, "error"); }
+}
+
+function clearMapRegistration() {
+  if (state.mapRegistration) state.mapRegistration.preview = null;
+  render();
+}
+
+async function previewMapRegistration() {
+  const detail = state.selectedMapDetail;
+  if (!detail || tuningVisible() || hasUnsavedMapEdits() || !beginAction("hd-registration", "位置合わせを確認中")) return;
+  const form = registrationFor(detail);
+  const payload = {map_dir: form.map_dir, source_map_dir: form.source_map_dir,
+    x_m: form.x_m, y_m: form.y_m, yaw_deg: form.yaw_deg};
+  form.preview = null;
+  try {
+    const result = await api("/api/maps/preview-registration", {method:"POST", body:JSON.stringify(payload)});
+    if (state.selectedMapPath === payload.map_dir && state.mapRegistration === form) form.preview = result;
+  } catch (error) { toast(error.message, "error"); }
+  finally { endAction("hd-registration"); render(); }
+}
+
+async function applyMapRegistration() {
+  const detail = state.selectedMapDetail;
+  if (!detail || tuningVisible() || hasUnsavedMapEdits()) return;
+  const form = registrationFor(detail), preview = form.preview;
+  if (!preview || !beginAction("hd-registration", "HDMapを位置合わせして保存中")) return;
+  const context = captureSelectedMapContext(form.map_dir);
+  try {
+    const saved = await api("/api/maps/apply-registration", {method:"POST", body:JSON.stringify({
+      source_map_dir: preview.source_map_dir, map_dir: preview.map_dir,
+      ...preview.transform, preview_token: preview.preview_token,
+    })});
+    form.preview = null;
+    if (commitSelectedMapDetail(context, saved)) {
+      state.mapEditor.mapPath = "";
+      state.sectionEditor.mapPath = "";
+      state.junctionEditor.mapPath = "";
+      state.customLineEditor.mapPath = "";
+      invalidateMapPreflights(saved.map.path);
+    }
+    toast("HDMapと走行ラインを新会場の座標で保存しました");
+  } catch (error) { form.preview = null; toast(error.message, "error"); }
+  finally { endAction("hd-registration"); render(); }
+}
+
+function drawMapRegistration(ctx, detail, toPixel, uiScale) {
+  const form = state.mapRegistration;
+  if (tuningVisible() || form?.map_dir !== detail.map.path || !form.preview) return;
+  const preview = form.preview;
+  ctx.save();
+  ctx.setLineDash([6 * uiScale, 4 * uiScale]);
+  for (const lane of preview.hd_map.lanes) {
+    for (const key of ["left_bound", "right_bound", "centerline"]) {
+      drawPolyline(ctx, (lane[key] || []).map(toPixel), "#00e5ff", 3, lane.closed_loop, uiScale);
+    }
+  }
+  for (const gate of preview.hd_map.section_gates || []) drawPolyline(ctx, gate.line.map(toPixel), "#ffffff", 3, false, uiScale);
+  for (const obstacle of preview.hd_map.obstacles || []) drawPolyline(ctx, obstacle.polygon.map(toPixel), "#ff9f43", 3, true, uiScale);
+  for (const line of preview.trajectories) drawPolyline(ctx, line.points.map(toPixel), "#00e5ff", 2, false, uiScale);
+  for (const junction of preview.hd_map.junctions || []) {
+    if (junction.position) { const [x,y] = toPixel(junction.position); drawLabel(ctx, junction.id, x, y, uiScale); }
+  }
+  ctx.restore();
 }
 
 function renderHdMapVersions(detail) {
@@ -13309,6 +13444,7 @@ function drawMapLayers(ctx, detail, width, height) {
   }
   if (state.mapLayers.junctions) drawJunctionLayers(ctx, detail, toPixel, uiScale);
   drawMapObstacles(ctx, detail, toPixel, uiScale);
+  drawMapRegistration(ctx, detail, toPixel, uiScale);
   drawLanePlacementPreview(ctx, detail, toPixel, uiScale);
   drawTopologyPlacementPreview(ctx, detail, toPixel, uiScale);
 }
