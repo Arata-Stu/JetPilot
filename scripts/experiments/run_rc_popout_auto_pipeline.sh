@@ -192,7 +192,7 @@ for session in "${sessions[@]}"; do
   needs_export=false
   if [[ "$FORCE_EXPORT" == true || ! -s "$data_json" ]]; then
     needs_export=true
-  elif ! grep -q '"roi_data"' "$data_json"; then
+  elif ! grep -q '"uint8_0_255_v1"' "$data_json"; then
     needs_export=true
   fi
   if [[ "$needs_export" == true ]]; then

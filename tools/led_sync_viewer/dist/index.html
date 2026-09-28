@@ -668,6 +668,11 @@
     function roiRange(meta, side) {
       const ranges = Array.isArray(meta?.ranges) ? meta.ranges : [];
       if (!ranges.length) return [state.fullStart, state.fullEnd];
+      if (ranges.length === 1) {
+        const [low, high] = ranges[0].map(Number);
+        const middle = (low + high) / 2;
+        return side === 'start' ? [low, middle] : [middle, high];
+      }
       const range = side === 'start' ? ranges[0] : ranges.at(-1);
       return [Number(range[0]), Number(range[1])];
     }
