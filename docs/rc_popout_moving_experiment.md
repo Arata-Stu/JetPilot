@@ -1,0 +1,90 @@
+# 飛び出し実験：自車の固定スロットル走行
+
+既存の `scripts/experiments/rc_popout_experiment.sh` に自車走行オプションを追加した。
+オプションなしでは従来どおり自車静止で記録する。相手車の飛び出し操作は引き続きプロポで行う。
+
+## 起動
+
+Terminal 1（ROS 2環境／Isaac ROS container内）:
+
+```bash
+scripts/bringup.sh rc-popout --vehicle jpbb
+```
+
+Terminal 2で、ビルド済みROS 2環境を読み込んで実行する。
+以下の数値は引数の書式例であり、実車で校正した値に置き換える。
+
+```bash
+source /workspaces/ros2_ws/install/setup.bash
+scripts/experiments/rc_popout_experiment.sh \
+  --experiment-dir /workspaces/record/rc_popout_moving_t010_d2 \
+  --ego-throttle 0.10 \
+  --ego-duration 2.0 \
+  --ego-brake 0.20 \
+  --ego-brake-duration 1.0 \
+  --ego-steering 0.0
+```
+
+- `ego-throttle`: 自車の正規化スロットル `[0,1]`。一定速度を保証するものではない。
+- `ego-duration`: 最初のスロットル指令から制動指令までの秒数 `(0,60]`。
+- `ego-brake`: 正規化制動指令 `[0,1]`。`0` は中立であり能動制動ではない。
+- `ego-brake-duration`: 制動指令の保持時間 `(0,10]`。既定1秒。
+- `ego-steering`: 固定操舵 `[-1,1]`。既定0。経路追従・方位保持は行わない。
+
+スロットル・時間・制動値は明示指定を必須にしている。相手車の `plan.tsv` の `throttle`
+は従来のプロポ上限設定であり、自車の値とは別物。
+開始位置へ毎回戻し、壁－カメラ距離は発進前の距離として記録する。
+静止実験とは別の `--experiment-dir` を使い、自車条件を変える場合も別ディレクトリにする。
+再開時は同じ自車オプションを指定する。保存条件と一致しない場合は開始しない。
+
+## 各試行の流れ
+
+1. CH3をHOST許可側にし、操作モードをSTOPにする。自車・相手車を開始位置へ戻す。
+2. 開始LEDをRGBとEVSの両方に見える位置へ配置し、条件を確認してEnterで記録開始。LED同期パターンを撮影する。このEnterでは発進しない。
+3. LEDを外して1秒以上待つ。記録を継続したまま待機し、準備ができたら別のEnterで走行を開始する。
+4. 補助プログラムが記録状態とJPBBを確認し、AUTOを1回要求。中立ハンドシェイク完了後に発進する。
+5. 固定スロットルを50 Hzで送り、指定時間後にスロットル0＋指定brakeへ切り替える。
+   相手車の飛び出しはこの走行中に手動で行う。`none`試行でも自車は走行する。
+6. 制動保持時間後に中立＋STOPを要求。記録は継続する。車両が実際に停止したことを確認し、LEDをRGBとEVSの両方に見える位置へ再配置して終了同期パターンを撮影する。
+7. Enterで記録を終了し、従来どおり採用／取り直し／除外を選ぶ。
+
+走行が失敗・中断した試行は自動採用せず未完了のまま保持する。
+記録は終了LED撮影のため継続する。スクリプト自体のCtrl+C／TERMでは走行補助へTERMを送り、
+STOP処理後にBag STOPを要求する。
+
+## 指令経路と中断
+
+`/auto/control_cmd` → 既存command mux → `/vehicle/control_cmd` → JPBBを使用する。
+`/vehicle/control_cmd`への直接publishは行わない。
+発進にはSTOP状態、正常かつHOST許可のJPBB診断、この試行のlabelを含むURIでの記録中状態、
+AUTO publisherがこの補助だけであることが必要。AUTOアームを待つ間は中立を送る。
+
+走行中に操作モード変更、記録停止、診断の異常・期限切れ、競合publisher、
+150 msを超える送信ループ遅延を検知すると中断し、再アームしない。
+通常の制動はAUTOを維持したまま `brake` を送り、その後STOPにする。
+異常中断・Ctrl+Cでは中立＋STOPを要求する。**既存muxのSTOPはbrake=0であり、能動制動ではない。**
+プロセス強制終了やUSB断ではこの終了処理は実行できず、既存mux／JPBB／firmwareのタイムアウト処理に依存する。
+
+このチェックアウトには基板firmwareのソースがなく、実機のESCによる制動・後退挙動は未検証。
+初回はタイヤを浮かせて中立・前進方向・制動時の動作・CH3切替を確認し、走行中の制動距離は別途実測する。
+固定指令時間はホストのmonotonic clockで管理し、実際の発進時刻・速度・停止時刻とは区別する。
+
+## 保存と確認
+
+- `ego_motion.json`: 自車の固定条件。
+- `ego_drive.jsonl`: 試行labelと各指令段階のホスト時刻・設定値。
+- `attempts.jsonl`: 既存の採否に加え、自車開始要求・正常終了・失敗。
+- MCAP: `/auto/control_cmd`、`/vehicle/control_cmd`、`/operation_mode/request`、
+  `/operation_mode/state`、`/diagnostics`、JPBBの`output_channels`を収録対象にする。
+  Bag Managerの設定変更を反映するにはbringupを再起動する。
+
+送信なしで時間と指令の組み合わせを確認するには:
+
+```bash
+python3 scripts/experiments/rc_popout_timed_drive.py \
+  --throttle 0.10 --duration 2 --brake 0.20 --brake-duration 1 --dry-run
+```
+
+作成済み試行表に対しては、進行shの同じ引数へ `--dry-run` を追加すれば、
+最初の未完了試行の画面をROSなしで確認できる。ROSへの送信・採否更新・走行ログ保存は行わない。
+新規の試行表作成は従来どおり対話端末が必要。

@@ -14,6 +14,14 @@ DRY_RUN=false
 NEW_PLAN=false
 STATUS_ONLY=false
 RECORDING=false
+EGO_REQUESTED=false
+EGO_THROTTLE=''
+EGO_DURATION=''
+EGO_BRAKE=''
+EGO_BRAKE_DURATION=1.0
+EGO_STEERING=0.0
+DRIVE_PID=''
+DRIVE_HELPER="${SCRIPT_DIR}/experiments/rc_popout_timed_drive.py"
 
 die() {
   printf 'error: %s\n' "$*" >&2
@@ -29,6 +37,13 @@ Usage:
 
 Terminal 1で `scripts/bringup.sh rc-popout` を起動してから、Terminal 2で実行します。
 このスクリプトはセンサを起動せず、既存のBag Managerへ記録START/STOPを送ります。
+自車走行時は bringup.sh rc-popout --vehicle jpbb を使用し、以下を追加します:
+  --ego-throttle VALUE       自車の正規化スロットル [0,1]（実速度ではない）
+  --ego-duration SEC         発進指令から制動までの秒数 (0,60]
+  --ego-brake VALUE          制動指令 [0,1]（0=中立）
+  --ego-brake-duration SEC   制動指令の保持秒数 (0,10]、既定1秒
+  --ego-steering VALUE       固定操舵 [-1,1]、既定0
+走行条件ごとに新しい --experiment-dir を指定してください。
 EOF
 }
 
@@ -149,7 +164,7 @@ repetitions=${repetitions}
 bringup=rc-popout
 rgb=848x480@60
 evs=native_RAW
-ego_motion=stationary
+ego_motion=$([[ -n "$EGO_THROTTLE" ]] && printf fixed_throttle || printf stationary)
 target_control=propo_limit_full_trigger
 throttle_semantics=propo_setting_not_measured_speed
 EOF
@@ -202,6 +217,10 @@ save_result() {
 cleanup() {
   local exit_code=$?
   trap - EXIT INT TERM
+  if [[ -n "$DRIVE_PID" ]]; then
+    kill -TERM "$DRIVE_PID" 2>/dev/null || true
+    wait "$DRIVE_PID" 2>/dev/null || true
+  fi
   if [[ "$RECORDING" == true ]]; then
     publish_request 2 interrupted || true
   fi
@@ -259,6 +278,17 @@ next_trial() {
 
 while (($# > 0)); do
   case "$1" in
+    --ego-throttle|--ego-duration|--ego-brake|--ego-brake-duration|--ego-steering)
+      EGO_REQUESTED=true
+      (($# >= 2)) || die "$1 には値が必要です"
+      case "$1" in
+        --ego-throttle) EGO_THROTTLE="$2" ;;
+        --ego-duration) EGO_DURATION="$2" ;;
+        --ego-brake) EGO_BRAKE="$2" ;;
+        --ego-brake-duration) EGO_BRAKE_DURATION="$2" ;;
+        --ego-steering) EGO_STEERING="$2" ;;
+      esac
+      shift 2 ;;
     --new) NEW_PLAN=true; shift ;;
     --experiment-dir) (($# >= 2)) || die '--experiment-dirにはpathが必要です'; EXP_DIR="$2"; shift 2 ;;
     --status) STATUS_ONLY=true; shift ;;
@@ -267,6 +297,37 @@ while (($# > 0)); do
     *) die "不明なoptionです: $1" ;;
   esac
 done
+
+DRIVE_ARGS=()
+if [[ "$EGO_REQUESTED" == true ]]; then
+  [[ -n "$EGO_THROTTLE" && -n "$EGO_DURATION" && -n "$EGO_BRAKE" ]] \
+    || die '--ego-throttle / --ego-duration / --ego-brake をすべて指定してください'
+  DRIVE_ARGS=(--throttle "$EGO_THROTTLE" --duration "$EGO_DURATION"
+    --brake "$EGO_BRAKE" --brake-duration "$EGO_BRAKE_DURATION" --steering "$EGO_STEERING")
+  python3 "$DRIVE_HELPER" "${DRIVE_ARGS[@]}" --validate
+fi
+# Prevent accidental mixing of stationary and moving runs, or changing ego settings on resume.
+if [[ "$STATUS_ONLY" != true ]]; then
+  python3 - "$EXP_DIR" "$EGO_THROTTLE" "$EGO_DURATION" "$EGO_BRAKE" "$EGO_BRAKE_DURATION" "$EGO_STEERING" "$DRY_RUN" <<'PYCONFIG'
+import json, sys
+from pathlib import Path
+root = Path(sys.argv[1])
+values = sys.argv[2:7]
+config = dict(ego_motion='stationary')
+if values[0]:
+    config = dict(ego_motion='fixed_throttle', **dict(zip(
+        ['throttle', 'duration_s', 'brake', 'brake_duration_s', 'steering'], map(float, values))))
+path = root / 'ego_motion.json'
+if path.exists():
+    if json.loads(path.read_text()) != config:
+        raise SystemExit('自車条件が保存済み条件と異なります。別の --experiment-dir を使用してください')
+elif (root / 'plan.tsv').exists() and values[0]:
+    raise SystemExit('静止実験の試行表へ走行条件を追加できません。別の --experiment-dir を使用してください')
+elif sys.argv[7] != 'true':
+    root.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + '\n')
+PYCONFIG
+fi
 
 PLAN_FILE="${EXP_DIR}/plan.tsv"
 COMPLETED_FILE="${EXP_DIR}/completed.txt"
@@ -287,7 +348,9 @@ if [[ "$DRY_RUN" != true ]]; then
   [[ -t 0 && -t 1 ]] || die '実験進行には対話型terminalが必要です'
 fi
 check_bag_manager
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 record_calibration
 
 while trial="$(next_trial)"; do
@@ -309,8 +372,18 @@ while trial="$(next_trial)"; do
     printf 'RCカーを指定方向側へ隠し、開始位置・向き・助走距離を揃えてください。\n'
     printf 'プロポ上限設定を確認し、走行区間はフルトリガを保持してください。\n'
   fi
-  printf '自車・カメラは静止させます。設定画面・配置・バッテリー情報を台帳へ残してください。\n'
+  if [[ -n "$EGO_THROTTLE" ]]; then
+    printf '自車: throttle=%s / 走行=%ss / brake=%sを%ss / steering=%s\n' \
+      "$EGO_THROTTLE" "$EGO_DURATION" "$EGO_BRAKE" "$EGO_BRAKE_DURATION" "$EGO_STEERING"
+    printf '自車を開始位置へ戻し、CH3をHOST許可側、操作モードをSTOPにしてください。\n'
+  else
+    printf '自車・カメラは静止させます。設定画面・配置・バッテリー情報を台帳へ残してください。\n'
+  fi
   printf '上記の条件になるよう、カメラ・障害物・照明・RCカーを正しい場所にセットしてください。\n'
+  printf '開始同期用LEDをRGBとEVSの両方に見える位置へ配置してください。\n'
+  if [[ -n "$EGO_THROTTLE" ]]; then
+    printf 'ここでは記録だけを開始します。自車は後の発進用Enterまで動かしません。\n'
+  fi
   read -r -p '[Enter]=記録開始 / s=この条件を除外 / q=中断: ' action
   case "$action" in
     q|Q) break ;;
@@ -331,12 +404,43 @@ while trial="$(next_trial)"; do
   else
     printf '指定方向から、プロポ上限設定＋フルトリガで飛び出しを行ってください。\n'
   fi
-  printf '試行後は車両を停止し、終了LEDを撮影します。開始表示だけでは保存成功は保証されません。\n'
+  drive_ok=true
+  if [[ -n "$EGO_THROTTLE" ]]; then
+    printf '記録を継続したまま発進操作を待っています。開始LEDの撮影・撤去を済ませてください。\n'
+    read -r -p '開始LEDを外して1秒以上待ち、走行準備ができたらEnterで自車発進 / q=試行中断: ' action
+    if [[ -z "$action" ]]; then
+      log_attempt ego_start_requested ''
+      if [[ "$DRY_RUN" == true ]]; then
+        python3 "$DRIVE_HELPER" "${DRIVE_ARGS[@]}" --dry-run
+      else
+        python3 "$DRIVE_HELPER" "${DRIVE_ARGS[@]}" --label "$label" --log "$EXP_DIR/ego_drive.jsonl" &
+        DRIVE_PID=$!
+        if wait "$DRIVE_PID"; then
+          log_attempt ego_finished ''
+        else
+          drive_ok=false
+          log_attempt ego_failed '走行中断または事前確認失敗'
+        fi
+        DRIVE_PID=''
+      fi
+    else
+      drive_ok=false
+      log_attempt ego_cancelled ''
+    fi
+  fi
+  printf '記録は継続中です。車両の停止を確認し、LEDをRGBとEVSの両方に見える位置へ再配置してください。\n'
+  printf '終了側のLED同期パターンを撮影してから記録を終了します。開始表示だけでは保存成功は保証されません。\n'
   read -r -p '飛び出しと終了側のLED撮影が終わったらEnterで記録終了: ' _
   publish_request 2 "$label"
   RECORDING=false
   log_attempt stop_requested ''
 
+  if [[ "$drive_ok" != true ]]; then
+    log_attempt retry '自車走行が正常終了しなかったため未完了のまま保持'
+    printf '自車走行が完了していないため採用せず、同じ条件を再提示します。\n'
+    [[ "$DRY_RUN" != true ]] || break
+    continue
+  fi
   read -r -p '[Enter]=採用 / r=同じ条件をやり直す / s=除外: ' result
   case "$result" in
     '') log_attempt accepted ''; save_result "$COMPLETED_FILE" "$run_id" ;;

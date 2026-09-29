@@ -1,5 +1,7 @@
 # 共通ROIを使う活動量ベースライン
 
+2026-09-30時点の実験結果は[予備評価の結果まとめ](rc_popout_results_20260930.md)を参照。
+
 `tools/rc_popout_detection.py`は`common_detection_roi.json`の全sessionを逐次処理します。
 各sessionの`sequence_annotations.json`から評価区間とRGB初出現を読みます。
 個別の`rois`ではなく共通設定の`roi`を採用し、注釈ファイルは変更しません。
