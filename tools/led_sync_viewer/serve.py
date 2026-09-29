@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import mimetypes
+import math
 import re
 import shutil
 import subprocess
@@ -46,6 +47,12 @@ def build_handler(html_path: Path, record_root: Path, camchain_path: Path):
         event_dilate_px: int,
         alpha: float,
         log_path: Path,
+        view_frame: str = "rgb",
+        projection: str = "rotation-only",
+        depth_m: float = 2.2,
+        start_s: float = 0.0,
+        duration_s: float | None = None,
+        rgb_timestamp_source: str = "bag",
     ) -> None:
         command = [
             sys.executable,
@@ -61,7 +68,11 @@ def build_handler(html_path: Path, record_root: Path, camchain_path: Path):
             "--camchain",
             str(camchain_path),
             "--projection",
-            "rotation-only",
+            projection,
+            "--view-frame", view_frame,
+            "--depth-m", str(depth_m),
+            "--start-s", str(start_s),
+            "--rgb-timestamp-source", rgb_timestamp_source,
             "--event-window-ms",
             str(event_window_ms),
             "--event-dilate-px",
@@ -71,6 +82,8 @@ def build_handler(html_path: Path, record_root: Path, camchain_path: Path):
             "--output-dir",
             str(output_dir),
         ]
+        if duration_s is not None:
+            command.extend(["--duration-s", str(duration_s)])
         set_job(job_id, status="running", started_at=time.time())
         try:
             log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -212,6 +225,9 @@ def build_handler(html_path: Path, record_root: Path, camchain_path: Path):
 
         def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
             request = urlparse(self.path)
+            if request.path == "/annotate":
+                self._send_file(html_path.parent / "annotate.html")
+                return
             if request.path in {"/", "/index.html"}:
                 payload = html_path.read_bytes()
                 self._send_bytes(payload, content_type="text/html; charset=utf-8")
@@ -336,7 +352,7 @@ def build_handler(html_path: Path, record_root: Path, camchain_path: Path):
 
         def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
             request = urlparse(self.path)
-            if request.path not in {"/api/save-time-sync", "/api/generate-overlay"}:
+            if request.path not in {"/api/save-time-sync", "/api/generate-overlay", "/api/annotation-context", "/api/save-annotations", "/api/annotation-preview"}:
                 self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
                 return
             try:
@@ -353,6 +369,9 @@ def build_handler(html_path: Path, record_root: Path, camchain_path: Path):
             except (UnicodeDecodeError, json.JSONDecodeError):
                 self._send_json({"error": "invalid JSON"}, HTTPStatus.BAD_REQUEST)
                 return
+            if not isinstance(payload, dict):
+                self._send_json({"error": "JSON object required"}, HTTPStatus.BAD_REQUEST)
+                return
             requested = Path(str(payload.get("dataset_path", "")))
             dataset = (
                 requested if requested.is_absolute() else record_root / requested
@@ -367,16 +386,34 @@ def build_handler(html_path: Path, record_root: Path, camchain_path: Path):
                     HTTPStatus.FORBIDDEN,
                 )
                 return
-            content = payload.get("yaml")
-            if not isinstance(content, str) or not content.strip():
-                self._send_json(
-                    {"error": "yaml content is required"}, HTTPStatus.BAD_REQUEST
-                )
+            if request.path in {"/api/annotation-context", "/api/save-annotations"}:
+                import annotations
+                try:
+                    result = (annotations.context(dataset, payload.get("preview_id"))
+                              if request.path == "/api/annotation-context"
+                              else annotations.save(dataset, payload))
+                    self._send_json(result)
+                except (ValueError, OSError, KeyError, TypeError) as exc:
+                    self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
                 return
-            output = dataset.parent / "time_sync_led.yaml"
-            temporary = output.with_suffix(".yaml.tmp")
-            temporary.write_text(content, encoding="utf-8")
-            temporary.replace(output)
+            annotation_preview = request.path == "/api/annotation-preview"
+            if annotation_preview:
+                output = (dataset.parent / "time_sync_led_auto.yaml").resolve()
+                if not _inside(output, record_root) or not output.is_file():
+                    self._send_json({"error": "保存済みの自動同期YAMLが必要です"}, HTTPStatus.BAD_REQUEST)
+                    return
+            else:
+                content = payload.get("yaml")
+                if not isinstance(content, str) or not content.strip():
+                    self._send_json({"error": "yaml content is required"}, HTTPStatus.BAD_REQUEST)
+                    return
+                output = (dataset.parent / "time_sync_led.yaml").resolve()
+                if not _inside(output, record_root):
+                    self._send_json({"error": "invalid output path"}, HTTPStatus.BAD_REQUEST)
+                    return
+                temporary = output.with_suffix(".yaml.tmp")
+                temporary.write_text(content, encoding="utf-8")
+                temporary.replace(output)
             if request.path == "/api/save-time-sync":
                 self._send_json({"path": str(output)})
                 return
@@ -424,29 +461,51 @@ def build_handler(html_path: Path, record_root: Path, camchain_path: Path):
             if not 1.0 <= event_window_ms <= 100.0 or not 1 <= event_dilate_px <= 5 or not 0.1 <= alpha <= 1.0:
                 self._send_json({"error": "動画設定が範囲外です"}, HTTPStatus.BAD_REQUEST)
                 return
+            view_frame, projection, depth_m, start_s, duration_s = "rgb", "rotation-only", 2.2, 0.0, None
+            rgb_timestamp_source = "bag"
+            if annotation_preview:
+                try:
+                    view_frame = "evs"
+                    projection = str(options.get("projection", "fixed-depth"))
+                    depth_m = float(options.get("depth_m", 2.2))
+                    start_s = float(options.get("start_s", 0.0))
+                    duration_s = options.get("duration_s")
+                    duration_s = float(duration_s) if duration_s is not None else None
+                    if (projection not in {"fixed-depth", "rotation-only"}
+                        or not math.isfinite(depth_m) or depth_m <= 0
+                        or not math.isfinite(start_s) or start_s < 0
+                        or (duration_s is not None and (not math.isfinite(duration_s) or duration_s <= 0))):
+                        raise ValueError("投影または時間範囲が不正です")
+                    meta = json.loads(dataset.read_text()).get("meta", {})
+                    rgb_timestamp_source = meta.get("rgb_timestamp_source", "bag")
+                    if rgb_timestamp_source not in {"bag", "header"}:
+                        raise ValueError("RGB時刻の種類が不正です")
+                except (ValueError, TypeError) as exc:
+                    self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                    return
             with jobs_lock:
                 running = next(
                     (job for job in jobs.values() if job.get("status") in {"queued", "running"}),
                     None,
                 )
-            if running:
-                self._send_json(
-                    {"error": "別の動画を生成中です。完了後にもう一度実行してください。"},
-                    HTTPStatus.CONFLICT,
-                )
-                return
-            stamp = time.strftime("%Y%m%d_%H%M%S")
-            output_dir = experiment_root / "analysis" / "scenario_overlay" / session.name / f"rotation_only_{stamp}"
-            log_path = output_dir.parent / f"{output_dir.name}.log"
-            job_id = uuid.uuid4().hex
-            jobs[job_id] = {
-                "id": job_id,
-                "status": "queued",
-                "session": session.name,
-                "output_dir": str(output_dir),
-                "log_path": str(log_path),
-                "created_at": time.time(),
-            }
+                if running:
+                    self._send_json(
+                        {"error": "別の動画を生成中です。完了後にもう一度実行してください。"},
+                        HTTPStatus.CONFLICT,
+                    )
+                    return
+                stamp = time.strftime("%Y%m%d_%H%M%S")
+                output_dir = experiment_root / "analysis" / "scenario_overlay" / session.name / (f"common_evs_{stamp}_{uuid.uuid4().hex[:6]}" if annotation_preview else f"rotation_only_{stamp}")
+                log_path = output_dir.parent / f"{output_dir.name}.log"
+                job_id = uuid.uuid4().hex
+                jobs[job_id] = {
+                    "id": job_id,
+                    "status": "queued",
+                    "session": session.name,
+                    "output_dir": str(output_dir),
+                    "log_path": str(log_path),
+                    "created_at": time.time(),
+                }
             worker = threading.Thread(
                 target=run_overlay_job,
                 kwargs={
@@ -459,6 +518,9 @@ def build_handler(html_path: Path, record_root: Path, camchain_path: Path):
                     "event_dilate_px": event_dilate_px,
                     "alpha": alpha,
                     "log_path": log_path,
+                    "view_frame": view_frame, "projection": projection,
+                    "depth_m": depth_m, "start_s": start_s, "duration_s": duration_s,
+                    "rgb_timestamp_source": rgb_timestamp_source,
                 },
                 daemon=True,
             )

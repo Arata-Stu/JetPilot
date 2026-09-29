@@ -242,6 +242,7 @@
         <button class="primary" id="browseDockerData" type="button">Docker解析を選ぶ</button>
         <button class="ghost" id="demoButton" type="button">デモを復元</button>
         <button id="exportButton" type="button">結果を書き出す</button>
+        <button id="openAnnotations" type="button">区間・共通視野・ROI</button>
         <button id="exportTimeSync" type="button">Kalibr時刻YAML</button>
       </div>
     </header>
@@ -2295,6 +2296,10 @@
     $('demoButton').addEventListener('click', () => {
       clearLocalBundle(); state.dataPath = null; removeDataQuery(); loadDataset(demoData());
       $('dataSourceLabel').textContent = 'デモデータ';
+    });
+    $('openAnnotations').addEventListener('click', () => {
+      if (!state.dataPath) { toast('Docker解析を選択してください。'); return; }
+      window.open('/annotate?data=' + encodeURIComponent(state.dataPath), '_blank', 'noopener');
     });
     $('exportButton').addEventListener('click', exportResult);
     $('exportTimeSync').addEventListener('click', () => exportTimeSyncYaml().catch(error => toast(error.message)));
