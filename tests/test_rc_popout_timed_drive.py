@@ -74,13 +74,17 @@ class FakeROS:
         self.callbacks['/operation_mode/state'](NS(mode=self.mode))
         self.callbacks['/bag/status'](NS(
             recording=not (self.started and self.failure == 'recording'),
-            current_uri='/record/other' if self.failure == 'label' else '/record/trial'))
+            current_uri=('/workspaces/record/2026-09-30/test_move_02'
+                         if self.failure in ('fixed_name', 'byte_level') else
+                         '/record/other' if self.started and self.failure == 'uri_changed' else '/record/trial'),
+            last_event='start ignored: already recording' if self.failure == 'already_recording' else 'recording started'))
         if self.failure == 'no_diagnostics' or self.started and self.failure == 'stale':
             return
         values = dict(selector='HOST', status_fresh='true',
                       host_arm_state='ARMED' if self.mode == Message.AUTO else 'DISARMED')
         self.callbacks['/diagnostics'](NS(status=[NS(
-            name='jetpilot_bridge_interface', level=0,
+            name='jetpilot_bridge_interface',
+            level=b'\x00' if self.failure == 'byte_level' else b'\x02' if self.failure == 'byte_error' else 0,
             values=[NS(key=k, value=v) for k, v in values.items()])]))
 
     def modules(self):
@@ -122,7 +126,7 @@ class TimedDriveTests(unittest.TestCase):
         self.assertTrue(all(not (c[1] and c[2]) and c[3] == 0 for c in ros.commands))
 
     def test_aborts_do_not_resume_or_rearm(self):
-        for failure in ('override', 'recording', 'stall', 'stale', 'late_competitor', 'signal'):
+        for failure in ('override', 'recording', 'stall', 'stale', 'late_competitor', 'signal', 'uri_changed'):
             with self.subTest(failure=failure):
                 ros = FakeROS(failure)
                 with self.assertRaises(RuntimeError):
@@ -141,7 +145,8 @@ class TimedDriveTests(unittest.TestCase):
     def test_preflight_reports_failed_condition_without_commands(self):
         for failure, expected in (
                 ('propo', '[NG] /operation_mode/state: PROPO'),
-                ('label', '[NG] 試行labelと記録先の一致'),
+                ('already_recording', '[NG] Bag STARTの重複拒否なし'),
+                ('byte_error', '[NG] JPBB診断level: 2'),
                 ('no_diagnostics', '[NG] JPBB診断の受信: 未受信'),
                 ('competitor', '[NG] AUTO publisher数: 2')):
             with self.subTest(failure=failure):
@@ -151,6 +156,20 @@ class TimedDriveTests(unittest.TestCase):
                 self.assertIn(expected, str(result.exception))
                 self.assertFalse(ros.commands)
                 self.assertFalse(ros.requests)
+
+    def test_fixed_recording_name_and_ros_byte_level(self):
+        for case in ('fixed_name', 'byte_level'):
+            with self.subTest(case=case):
+                ros = FakeROS(case)
+                self.execute(ros)
+                self.assertTrue(ros.started)
+                self.assertEqual(ros.requests[-1], Message.STOP)
+
+    def test_diagnostic_level_normalization(self):
+        for raw in (0, b'\x00', bytearray([0])):
+            self.assertEqual(DRIVE.diagnostic_level(raw), 0)
+        for raw in (b'\x01', b'\x02', b'\x03', b'', b'00', '0', None):
+            self.assertNotEqual(DRIVE.diagnostic_level(raw), 0)
 
     def test_invalid_inputs(self):
         for key, value in [('throttle', 'nan'), ('duration', '0'), ('duration', '61'),

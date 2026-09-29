@@ -34,6 +34,13 @@ def arguments(argv=None):
     return args
 
 
+def diagnostic_level(value):
+    """ROS byte fields may be exposed as a one-byte bytes object or an int."""
+    if isinstance(value, (bytes, bytearray)):
+        return value[0] if len(value) == 1 else None
+    return value if isinstance(value, int) else None
+
+
 def command_at(args, elapsed):
     if elapsed < args.duration:
         return 'drive', args.throttle, 0.0
@@ -58,6 +65,7 @@ def run(args):
     latest = {}
     interrupted = False
     owned = False
+    recording_uri = None
 
     def receive(key, value):
         latest[key] = (value, time.monotonic())
@@ -83,7 +91,8 @@ def run(args):
         if args.log:
             with open(args.log, 'a', encoding='utf-8') as stream:
                 stream.write(json.dumps(dict(
-                    phase=phase, details=details, recording_label=args.label, wall_time_ns=time.time_ns(),
+                    phase=phase, details=details, recording_label=args.label,
+                    recording_uri=recording_uri, wall_time_ns=time.time_ns(),
                     monotonic_s=time.monotonic(), settings=vars(args),
                     semantics='host_command_timing_not_measured_motion',
                 ), ensure_ascii=False) + '\n')
@@ -108,14 +117,16 @@ def run(args):
     def ready(armed=False):
         status = fresh('bridge', 1.5)
         bag = fresh('bag', 2.5)
-        if status is None or status.level != 0:
+        if status is None or diagnostic_level(status.level) != 0:
             return False
         values = {item.key: item.value for item in status.values}
         return (values.get('selector') == 'HOST'
                 and values.get('status_fresh') == 'true'
                 and (not armed or values.get('host_arm_state') == 'ARMED')
                 and bag is not None and bag.recording
-                and args.label in bag.current_uri)
+                and bool(bag.current_uri)
+                and bag.last_event != 'start ignored: already recording'
+                and (recording_uri is None or bag.current_uri == recording_uri))
 
     def exclusive():
         return (node.count_publishers('/auto/control_cmd') == 1
@@ -143,8 +154,8 @@ def run(args):
         row(fresh('bridge', 1.5) is not None, 'JPBB診断の受信', age)
         if status is not None:
             values = {item.key: item.value for item in status.values}
-            row(status.level == 0, 'JPBB診断level',
-                f'{status.level} / {getattr(status, "message", "")} / fault_bits={values.get("fault_bits", "不明")}')
+            row(diagnostic_level(status.level) == 0, 'JPBB診断level',
+                f'{diagnostic_level(status.level)} (raw={status.level!r}) / {getattr(status, "message", "")} / fault_bits={values.get("fault_bits", "不明")}')
             row(values.get('selector') == 'HOST', 'CH3 selector', values.get('selector', '不明'))
             row(values.get('status_fresh') == 'true', '基板status_fresh', values.get('status_fresh', '不明'))
             if armed:
@@ -153,8 +164,10 @@ def run(args):
         row(fresh('bag', 2.5) is not None, '/bag/statusの受信', age)
         if bag is not None:
             row(bag.recording, '記録状態', f'recording={bag.recording}')
-            row(args.label in bag.current_uri, '試行labelと記録先の一致',
-                f'expected_label={args.label!r} / current_uri={bag.current_uri!r}')
+            row(bool(bag.current_uri) and (recording_uri is None or bag.current_uri == recording_uri),
+                '記録先URI', f'current_uri={bag.current_uri!r} / 確認済みURI={recording_uri!r}')
+            row(bag.last_event != 'start ignored: already recording',
+                'Bag STARTの重複拒否なし', bag.last_event)
         publishers = node.count_publishers('/auto/control_cmd')
         subscribers = node.count_subscribers('/auto/control_cmd')
         mode_subscribers = mode_pub.get_subscription_count()
@@ -176,6 +189,8 @@ def run(args):
             details = failure_details(OperationModeState.STOP)
             log('preflight_failed', details)
             raise RuntimeError('開始不可（自車指令は未送信）:\n' + details)
+        recording_uri = latest['bag'][0].current_uri
+        log('recording_confirmed')
         owned = True
         command()
         arm_started = time.monotonic()

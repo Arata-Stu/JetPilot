@@ -56,8 +56,10 @@ STOP処理後にBag STOPを要求する。
 
 `/auto/control_cmd` → 既存command mux → `/vehicle/control_cmd` → JPBBを使用する。
 `/vehicle/control_cmd`への直接publishは行わない。
-発進にはSTOP状態、正常かつHOST許可のJPBB診断、この試行のlabelを含むURIでの記録中状態、
+発進にはSTOP状態、正常かつHOST許可のJPBB診断、空でないURIでの記録中状態（STARTの重複拒否がないこと）、
 AUTO publisherがこの補助だけであることが必要。AUTOアームを待つ間は中立を送る。
+記録先の固定名設定にも対応し、開始確認時のURIを試行labelとともにログへ保存する。
+走行中にそのURIが変更された場合も中断する。
 
 走行中に操作モード変更、記録停止、診断の異常・期限切れ、競合publisher、
 150 msを超える送信ループ遅延を検知すると中断し、再アームしない。
@@ -72,7 +74,7 @@ AUTO publisherがこの補助だけであることが必要。AUTOアームを�
 ## 保存と確認
 
 - `ego_motion.json`: 自車の固定条件。
-- `ego_drive.jsonl`: 試行labelと各指令段階のホスト時刻・設定値。
+- `ego_drive.jsonl`: 試行labelと実際の記録先URI、各指令段階のホスト時刻・設定値。
 - `attempts.jsonl`: 既存の採否に加え、自車開始要求・正常終了・失敗。
 - MCAP: `/auto/control_cmd`、`/vehicle/control_cmd`、`/operation_mode/request`、
   `/operation_mode/state`、`/diagnostics`、JPBBの`output_channels`を収録対象にする。
