@@ -14,6 +14,16 @@ SPEC.loader.exec_module(a)
 
 
 class SequenceAnnotationTests(unittest.TestCase):
+    def test_preview_switch_preserves_saved_timing(self):
+        import shutil
+        a.save(self.dataset, dict(annotation=self.value, revision=None))
+        shutil.copytree(self.folder, self.folder.parent / 'other')
+        result = a.context(self.dataset, 'other')
+        self.assertTrue(result['migrated'])
+        self.assertEqual(result['annotation']['intervals'], json.loads(a.annotation_file(self.dataset).read_text())['intervals'])
+        self.assertEqual(result['annotation']['preview_id'], 'other')
+        self.assertEqual(json.loads(a.annotation_file(self.dataset).read_text())['preview_id'], 'common')
+
     def test_activity_candidates_use_source_time_and_group_bursts(self):
         with tempfile.TemporaryDirectory() as tmp:
             folder = Path(tmp)
@@ -99,6 +109,12 @@ class SequenceAnnotationTests(unittest.TestCase):
             result=a.validate(self.dataset,self.value)
             self.assertEqual(result['rois'][0]['x'],4)
             self.value['rois'][0]['x']=0
+            with self.assertRaises(ValueError): a.validate(self.dataset,self.value)
+            self.value['rois'][0].update(x=0,width=64,mask_policy='intersect_common')
+            result=a.validate(self.dataset,self.value)
+            self.assertEqual(result['rois'][0]['valid_pixel_count'],61*10)
+            self.assertEqual(result['rois'][0]['mask_policy'],'intersect_common')
+            self.value['rois'][0].update(width=2)
             with self.assertRaises(ValueError): a.validate(self.dataset,self.value)
             self.value['rois'][0].update(x=4,y=0)
             with self.assertRaises(ValueError): a.validate(self.dataset,self.value)

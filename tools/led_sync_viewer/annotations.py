@@ -122,6 +122,27 @@ def context(dataset, selected=None):
                   revision=revision(path), selected=selected)
     if selected:
         folder, summary, rows = preview(dataset, selected)
+        if saved and saved['preview_id'] != selected:
+            # Only migrate temporal annotations when the recorded clock is unchanged.
+            if saved.get('rois'):
+                raise ValueError('ROI設定済みの別動画への切替はできません。元の動画で確認してください')
+            origin = rows[0]['reference_time_s'] - rows[0]['relative_time_s']
+            if (abs(origin - saved['reference_origin_s']) > 1e-6
+                    or saved.get('rgb_timestamp_source', 'bag') != summary.get('rgb_timestamp_source', 'bag')
+                    or saved.get('time_sync_sha256') != summary.get('time_sync_sha256')):
+                raise ValueError('時刻基準が異なるため注釈を移行できません')
+            if any(not rows[0]['relative_time_s'] <= x['start_s'] < x['end_s'] <= rows[-1]['relative_time_s']
+                   for x in saved['intervals']):
+                raise ValueError('保存済み区間を含む全区間動画を選んでください')
+            migrated = json.loads(json.dumps(saved))
+            for key, entry in migrated.get('onset', {}).items():
+                index = next((i for i, row in enumerate(rows)
+                              if abs(row['rgb_time_s'] - entry['rgb_time_s']) < 1e-6), None)
+                if index is None:
+                    raise ValueError('出現注釈のRGBが選択動画にありません')
+                migrated['onset'][key] = dict(preview_frame=index, **rows[index])
+            migrated.update(preview_id=selected, spatial=None)
+            result.update(annotation=migrated, migrated=True)
         result.update(summary=summary, frames=rows, video=str(folder / 'rgb_vs_overlay.mp4'),
                       candidates=motion_candidates(folder, rows))
     return result
@@ -192,9 +213,16 @@ def validate(dataset, value):
             x, y, w, h = map(int, values)
             if not (0 <= x < x+w <= width and 32 <= y < y+h <= height):
                 raise ValueError('ROIが画像外または動画の上部ラベルに重なっています')
-            if not np.all(mask[y:y+h, x:x+w] == 255):
+            policy = item.get('mask_policy', 'inside_common')
+            if policy not in ('inside_common', 'intersect_common'):
+                raise ValueError('ROIマスク方式が不正です')
+            pixels = int(np.count_nonzero(mask[y:y+h, x:x+w] == 255))
+            if not pixels:
+                raise ValueError('ROIと共通視野が重なっていません')
+            if policy == 'inside_common' and pixels != w*h:
                 raise ValueError('ROIに共通視野外の画素が含まれます')
-            cleaned.append(dict(name=str(item.get('name', 'ROI'))[:80], x=x, y=y, width=w, height=h))
+            cleaned.append(dict(name=str(item.get('name', 'ROI'))[:80], x=x, y=y, width=w, height=h,
+                                mask_policy=policy, valid_pixel_count=pixels))
         rois = cleaned
         spatial = {key: summary.get(key) for key in (
             'view_frame', 'output_size', 'projection', 'depth_m', 'camchain', 'camchain_sha256',
