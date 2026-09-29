@@ -465,13 +465,14 @@ def build_handler(html_path: Path, record_root: Path, camchain_path: Path):
             rgb_timestamp_source = "bag"
             if annotation_preview:
                 try:
-                    view_frame = "evs"
+                    view_frame = str(options.get("view_frame", "evs"))
                     projection = str(options.get("projection", "fixed-depth"))
                     depth_m = float(options.get("depth_m", 2.2))
                     start_s = float(options.get("start_s", 0.0))
                     duration_s = options.get("duration_s")
                     duration_s = float(duration_s) if duration_s is not None else None
-                    if (projection not in {"fixed-depth", "rotation-only"}
+                    if (view_frame not in {"evs", "rgb-common"}
+                        or projection not in {"fixed-depth", "rotation-only"}
                         or not math.isfinite(depth_m) or depth_m <= 0
                         or not math.isfinite(start_s) or start_s < 0
                         or (duration_s is not None and (not math.isfinite(duration_s) or duration_s <= 0))):
@@ -495,7 +496,7 @@ def build_handler(html_path: Path, record_root: Path, camchain_path: Path):
                     )
                     return
                 stamp = time.strftime("%Y%m%d_%H%M%S")
-                output_dir = experiment_root / "analysis" / "scenario_overlay" / session.name / (f"common_evs_{stamp}_{uuid.uuid4().hex[:6]}" if annotation_preview else f"rotation_only_{stamp}")
+                output_dir = experiment_root / "analysis" / "scenario_overlay" / session.name / (f"common_{view_frame}_{stamp}_{uuid.uuid4().hex[:6]}" if annotation_preview else f"rotation_only_{stamp}")
                 log_path = output_dir.parent / f"{output_dir.name}.log"
                 job_id = uuid.uuid4().hex
                 jobs[job_id] = {
