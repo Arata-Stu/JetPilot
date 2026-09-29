@@ -14,6 +14,22 @@ SPEC.loader.exec_module(a)
 
 
 class SequenceAnnotationTests(unittest.TestCase):
+    def test_activity_candidates_use_source_time_and_group_bursts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            counts = [1] * 30
+            counts[10:13] = [100, 200, 100]
+            counts[23] = 150
+            (folder / 'frames.csv').write_text('event_count\n' + '\n'.join(map(str, counts)))
+            frames = [dict(relative_time_s=5+i/10, video_time_s=i) for i in range(30)]
+            candidates = a.motion_candidates(folder, frames)
+            self.assertEqual(len(candidates), 2)
+            self.assertAlmostEqual(candidates[0]['time_s'], 6.1)
+            self.assertAlmostEqual(candidates[0]['start_s'], 5.5)
+            self.assertAlmostEqual(candidates[0]['end_s'], 6.7)
+            (folder / 'frames.csv').write_text('event_count\n' + '\n'.join(['1']*30))
+            self.assertEqual(a.motion_candidates(folder, frames), [])
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)

@@ -59,6 +59,38 @@ def preview(dataset, preview_id):
     return folder, summary, rows
 
 
+def motion_candidates(folder, frames):
+    """Suggest bursts of EVS activity in source time; never infer a vehicle label."""
+    import statistics
+    with (folder / 'frames.csv').open() as stream:
+        rows = list(csv.DictReader(stream))
+    try:
+        counts = [float(row['event_count']) for row in rows]
+    except (KeyError, ValueError, TypeError):
+        return []
+    if len(counts) != len(frames) or not counts or not all(math.isfinite(v) and v >= 0 for v in counts):
+        return []
+    baseline = statistics.median(counts)
+    mad = statistics.median(abs(v - baseline) for v in counts)
+    threshold = max(20.0, baseline * 3, baseline + 6 * mad)
+    groups = []
+    for i, count in enumerate(counts):
+        if count <= threshold:
+            continue
+        t = frames[i]['relative_time_s']
+        if not groups or t - frames[groups[-1][-1]]['relative_time_s'] > 0.3:
+            groups.append([])
+        groups[-1].append(i)
+    candidates = []
+    for group in groups:
+        peak = max(group, key=lambda i: counts[i])
+        candidates.append(dict(frame=peak, time_s=frames[peak]['relative_time_s'],
+            start_s=max(frames[0]['relative_time_s'], frames[group[0]]['relative_time_s'] - 0.5),
+            end_s=min(frames[-1]['relative_time_s'], frames[group[-1]]['relative_time_s'] + 0.5),
+            score=counts[peak]))
+    return sorted(sorted(candidates, key=lambda c: c['score'], reverse=True)[:12], key=lambda c: c['time_s'])
+
+
 def annotation_file(dataset):
     return contained(dataset.parent / 'sequence_annotations.json', dataset.parent)
 
@@ -90,7 +122,8 @@ def context(dataset, selected=None):
                   revision=revision(path), selected=selected)
     if selected:
         folder, summary, rows = preview(dataset, selected)
-        result.update(summary=summary, frames=rows, video=str(folder / 'rgb_vs_overlay.mp4'))
+        result.update(summary=summary, frames=rows, video=str(folder / 'rgb_vs_overlay.mp4'),
+                      candidates=motion_candidates(folder, rows))
     return result
 
 
