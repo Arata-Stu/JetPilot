@@ -15,6 +15,25 @@ spec=importlib.util.spec_from_file_location('detection',ROOT/'tools/rc_popout_de
 m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
 
 class DetectionTests(unittest.TestCase):
+    def test_spatial_rejects_single_pixel_and_diffuse_activity(self):
+        hot=np.array([[0,0]]*22)
+        score,peak,pixels=m.spatial_scores([hot],3,2,64,64,32,3,np)
+        self.assertEqual(score,[0,0]);self.assertEqual(peak[0],22);self.assertEqual(pixels[0],1)
+        # Enough total events, but fewer than 20 in each separate tile.
+        diffuse=np.array([[0,p] for p in [0,1,2,32,33,34,2048,2049,2050,2080,2081,2082]]*2)
+        score,_,_=m.spatial_scores([diffuse],3,2,64,64,32,3,np)
+        self.assertEqual(score[0],6)
+        cluster=np.array([[1,p] for p in [0,1,2]]*8)
+        score,_,_=m.spatial_scores([cluster],4,2,64,64,32,3,np)
+        self.assertEqual(score,[24,24,0])
+        reverse,_,_=m.spatial_scores([cluster[::-1][:7],cluster[::-1][7:]],4,2,64,64,32,3,np)
+        self.assertEqual(score,reverse)
+
+    def test_spatial_counts_distinct_pixels_across_window_once(self):
+        parts=[np.array([[0,0],[0,1],[1,0],[1,1]])]
+        score,peak,pixels=m.spatial_scores(parts,2,2,64,64,32,3,np)
+        self.assertEqual(score,[0]);self.assertEqual(peak,[4]);self.assertEqual(pixels,[2])
+
     def test_intervals_exclude_and_reject_overlap(self):
         ann={'intervals':[dict(label='evaluation',start_s=1,end_s=5),dict(label='exclude',start_s=2,end_s=3)]}
         self.assertEqual(m.evaluation_intervals(ann),[(1,2),(3,5)])
@@ -56,7 +75,7 @@ class DetectionTests(unittest.TestCase):
             events=np.zeros(5,dtype=[('x','u2'),('y','u2'),('t','i8')]);events['t']=[0,350100,350100,350100,1000000]
             source=SimpleNamespace(width=4,height=4,anchor=SimpleNamespace(reference_time_s=100.,scale=1.,source_time_us=0.),batches=lambda:iter([SimpleNamespace(events=events)]))
             stack.enter_context(patch('multi_sensor_calibration.evs_sources.MetavisionFileSource',return_value=source))
-            args=SimpleNamespace(rgb_topic='rgb',rgb_pixel_delta=15,rgb_threshold=.1,evs_threshold=3,step_ms=1,window_bins=2)
+            args=SimpleNamespace(rgb_topic='rgb',rgb_pixel_delta=15,rgb_threshold=.1,evs_threshold=3,step_ms=1,window_bins=2,spatial=True,tile_px=32,min_active_pixels=3,spatial_threshold=3)
             entry=dict(session='scene',annotation=str(ann_path))
             result,rgb,evs=m.analyze(config,entry,args)
             self.assertEqual(max(x[2] for x in evs),3)
@@ -64,6 +83,8 @@ class DetectionTests(unittest.TestCase):
             self.assertGreater(result['evs']['first_trigger_s'],.3501)
             self.assertLess(result['evs']['first_trigger_s'],.354)
             self.assertEqual(result['valid_pixels'],16)
+            self.assertEqual(result['evs_spatial']['episodes'],0)
+            self.assertIn('evs_spatial',result['score_distribution'])
             m.write_plot(root/'scores.svg',result,rgb,evs)
             m.write_report(root,[result])
             self.assertTrue((root/'index.html').is_file())

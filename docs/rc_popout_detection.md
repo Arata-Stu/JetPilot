@@ -70,3 +70,39 @@ RAWの最初・最後のイベントが評価区間を覆わなければ、欠�
 `result.json`の`event_ordering`に逆転回数と隣接イベントの最大逆転幅（µs）を記録します。
 この処理は格納順への対応であり、時計のリセットや壊れたタイムスタンプを補正するものではありません。
 大きな逆転幅がある場合は診断値と元記録を確認してください。
+
+## 空間的なまとまりとの比較
+
+```bash
+bash scripts/experiments/run_rc_popout_detection.sh \
+  --config /workspaces/record/09-28/common_detection_roi.json \
+  --output /workspaces/record/09-28/analysis/detection_trial04_spatial \
+  --rgb-threshold 0.001 --evs-threshold 20 \
+  --spatial --tile-px 32 --min-active-pixels 3 --spatial-threshold 20
+```
+
+RGBと従来のEVS全ROIスコアはそのまま残します。追加方式はEVS座標原点に固定した
+32×32 pxタイルに区切り、同じ過去2 ms窓で3画素以上が活動したタイルの最大イベント数を
+スコアとします。閾値20以上で検知候補となります。20イベントと3画素は必ず同じタイルの
+条件です。重複イベントはイベント数には数え、画素数は時間窓全体で一度だけ数えます。
+共通ROI外は除外し、極性は合算します。元イベントは削除・補正しません。
+
+上記は仮設定です。単一画素の集中発火や分散した活動を抑える狙いですが、複数画素の
+局所ノイズは通過することがあります。タイル境界に車がまたがるとスコアが下がる場合も
+あります。車の分類や一般的なノイズ除去を保証する方式ではありません。検知時刻に
+過去への補正は加えず、空間条件を満たした時点で比較します。
+
+追加出力:
+
+- `summary.csv`：`evs_spatial_first_trigger_s`, `evs_spatial_episodes`
+- `<session>/evs_spatial_scores.csv`：条件付き最大タイルイベント数、条件なし最大タイル
+  イベント数、最大タイル活動画素数（後者2つの最大値は同じタイルとは限りません）
+- `<session>/spatial_scores.svg`：RGBと局所EVSの波形
+- `index.html`：通常・局所方式の波形リンクと候補時刻
+- `result.json`の`score_distribution`：各方式の50/95/99/99.9百分位点と最大値
+- `background_distribution.csv`：RGB初出現が未設定の記録の分布と活動回数。
+  今回は飛び出しなし6記録を想定しますが、未注釈の記録を混ぜないでください。
+
+長さの異なる各記録を分けて分布を示します。背景記録を見て調整した後は、同じ記録だけを
+使って独立した性能評価と主張せず、固定条件で別の記録にも検証してください。
+空間方式はROI内イベントの画素・時間情報を保持して集計するため、従来よりメモリを使います。

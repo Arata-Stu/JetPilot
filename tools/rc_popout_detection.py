@@ -48,6 +48,44 @@ def trailing_counts(counts, window_bins, np):
     return cumulative[ends]-cumulative[ends-window_bins]
 
 
+def spatial_scores(parts, n_bins, window_bins, width, height, tile_px, min_pixels, np):
+    """Exact trailing-window counts and distinct pixels in fixed nonoverlapping tiles.
+
+    Input order is irrelevant. Only occupied pixel/bin pairs are stored.
+    """
+    pixel_count=width*height
+    tile_cols=(width+tile_px-1)//tile_px
+    tile_count=tile_cols*((height+tile_px-1)//tile_px)
+    if parts:
+        data=np.concatenate(parts)
+        keys,multiplicity=np.unique(data[:,0]*pixel_count+data[:,1],return_counts=True)
+        bin_ids=keys//pixel_count;pixels=keys%pixel_count
+    else:
+        bin_ids=pixels=multiplicity=np.array([],dtype=np.int64)
+    offsets=np.searchsorted(bin_ids,np.arange(n_bins+1))
+    live={}; tile_events=np.zeros(tile_count,np.int64);tile_pixels=np.zeros(tile_count,np.int64)
+    scores=[];peak_events=[];peak_pixels=[]
+    def update(bin_index,sign):
+        for j in range(offsets[bin_index],offsets[bin_index+1]):
+            pixel=int(pixels[j]);amount=int(multiplicity[j])*sign
+            tile=((pixel//width)//tile_px)*tile_cols+(pixel%width)//tile_px
+            before=live.get(pixel,0);after=before+amount
+            tile_events[tile]+=amount
+            if before==0 and after>0:tile_pixels[tile]+=1
+            if before>0 and after==0:tile_pixels[tile]-=1
+            if after:live[pixel]=after
+            else:live.pop(pixel,None)
+    for i in range(n_bins):
+        update(i,1)
+        if i>=window_bins:update(i-window_bins,-1)
+        if i+1>=window_bins:
+            qualified=np.where(tile_pixels>=min_pixels,tile_events,0)
+            scores.append(int(qualified.max()))
+            peak_events.append(int(tile_events.max()))
+            peak_pixels.append(int(tile_pixels.max()))
+    return scores,peak_events,peak_pixels
+
+
 def analyze(config, entry, args):
     import numpy as np
     import cv2
@@ -124,6 +162,7 @@ def analyze(config, entry, args):
     if source.anchor is None: raise ValueError('RAW metadata missing')
     step=args.step_ms/1000; bins=args.window_bins
     hist=[np.zeros(int(math.floor((b-a)/step)),dtype=np.int64) for a,b in spans]
+    spatial_parts=[[] for _ in spans] if getattr(args,'spatial',False) else None
     first_event=None;last_event=None
     previous_raw_time=None; backward_steps=0; max_backward_us=0
     for batch in source.batches():
@@ -150,18 +189,32 @@ def analyze(config, entry, args):
         valid=(events['x']<w)&(events['y']<h)
         kept=np.zeros(len(events),bool);kept[valid]=lut[events['y'][valid],events['x'][valid]]
         for i,(a,b) in enumerate(spans):
-            selected=ts[kept & (ts>=a) & (ts<b)]
-            index=np.floor((selected-a)/step).astype(int)
-            index=index[(index>=0)&(index<len(hist[i]))]
+            chosen=kept & (ts>=a) & (ts<b)
+            index=np.floor((ts[chosen]-a)/step).astype(int)
+            accepted=(index>=0)&(index<len(hist[i]))
+            if spatial_parts is not None:
+                ex,ey=events['x'][chosen][accepted],events['y'][chosen][accepted]
+                pixels=uy[ey,ex]*w+ux[ey,ex]
+                if len(pixels):spatial_parts[i].append(np.column_stack((index[accepted],pixels)))
+            index=index[accepted]
             hist[i]+=np.bincount(index,minlength=len(hist[i]))
         # Read to EOF: a later batch can still contain in-range timestamps.
     if first_event is None or first_event>spans[0][0] or last_event<spans[-1][1]:
         raise ValueError('RAW event extent does not cover evaluation intervals; cannot treat missing data as silence')
-    evs_rows=[]
+    evs_rows=[];spatial_rows=[];spatial_details=[]
     for i,((a,b),counts) in enumerate(zip(spans,hist)):
         for j,count in enumerate(trailing_counts(counts,bins,np),start=bins):
             t=a+j*step
             if t<b: evs_rows.append((i,t,int(count)))
+    if spatial_parts is not None:
+        for i,((a,b),counts,parts) in enumerate(zip(spans,hist,spatial_parts)):
+            scores,peaks,pixels=spatial_scores(parts,len(counts),bins,w,h,args.tile_px,args.min_active_pixels,np)
+            spatial_parts[i]=None
+            for j,(score,peak,occupied) in enumerate(zip(scores,peaks,pixels),start=bins):
+                t=a+j*step
+                if t<b:
+                    spatial_rows.append((i,t,score))
+                    spatial_details.append((i,t,score,peak,occupied))
     if not rgb_rows or not evs_rows: raise ValueError('insufficient samples')
     onset=ann.get('onset',{}).get('first_visible')
     onset_s=None if onset is None else onset['rgb_time_s']-origin
@@ -172,12 +225,20 @@ def analyze(config, entry, args):
                     policy='full-file timestamp histogram; no timestamp modification'),
                 camchain_sha256=digest(chain),annotation_kind='no_rgb_onset' if onset_s is None else 'rgb_onset',
                 note='Offline activity threshold crossings, not vehicle classification or end-to-end latency.')
-    for sensor,rows,threshold in [('rgb',rgb_rows,args.rgb_threshold),('evs',evs_rows,args.evs_threshold)]:
+    methods=[('rgb',rgb_rows,args.rgb_threshold),('evs',evs_rows,args.evs_threshold)]
+    if spatial_parts is not None:methods.append(('evs_spatial',spatial_rows,args.spatial_threshold))
+    for sensor,rows,threshold in methods:
         triggers=crossings(rows,threshold)
         result[sensor]=dict(threshold=threshold,triggers_s=triggers,episodes=len(triggers),
             episodes_per_minute=len(triggers)*60/result['evaluation_seconds'],
             first_trigger_s=triggers[0] if triggers else None,
             first_trigger_minus_rgb_onset_ms=(triggers[0]-onset_s)*1000 if triggers and onset_s is not None else None)
+    result['score_distribution']={sensor:dict(zip(['p50','p95','p99','p99_9','max'],
+        map(float,np.percentile([v for _,t,v in rows],[50,95,99,99.9,100])))) for sensor,rows,_ in methods}
+    if spatial_parts is not None:
+        result['spatial_parameters']=dict(tile_px=args.tile_px,min_active_pixels=args.min_active_pixels,
+            note='fixed tiles, distinct undistorted EVS pixels; not a vehicle classifier')
+        result['_spatial_rows']=spatial_details
     return result,rgb_rows,evs_rows
 
 
@@ -210,17 +271,25 @@ def write_plot(path, result, rgb, evs):
 def write_report(output, results):
     with (output/'summary.csv').open('w',newline='') as stream:
         writer=csv.writer(stream)
-        writer.writerow(['session','error','evaluation_seconds','rgb_first_visible_s','rgb_first_trigger_s','evs_first_trigger_s','rgb_episodes','evs_episodes'])
+        writer.writerow(['session','error','evaluation_seconds','rgb_first_visible_s','rgb_first_trigger_s','evs_first_trigger_s','rgb_episodes','evs_episodes','evs_spatial_first_trigger_s','evs_spatial_episodes'])
         for r in results:
             writer.writerow([r['session'],r.get('error',''),r.get('evaluation_seconds'),r.get('rgb_first_visible_s'),
                 r.get('rgb',{}).get('first_trigger_s'),r.get('evs',{}).get('first_trigger_s'),
-                r.get('rgb',{}).get('episodes'),r.get('evs',{}).get('episodes')])
+                r.get('rgb',{}).get('episodes'),r.get('evs',{}).get('episodes'),
+                r.get('evs_spatial',{}).get('first_trigger_s'),r.get('evs_spatial',{}).get('episodes')])
+    with (output/'background_distribution.csv').open('w',newline='') as stream:
+        writer=csv.writer(stream);writer.writerow(['session','annotation_kind','evaluation_seconds','method','p50','p95','p99','p99_9','max','episodes'])
+        for r in results:
+            if r.get('annotation_kind')!='no_rgb_onset':continue
+            for method,dist in r.get('score_distribution',{}).items():
+                writer.writerow([r['session'],r['annotation_kind'],r['evaluation_seconds'],method,
+                    *[dist[k] for k in ('p50','p95','p99','p99_9','max')],r[method]['episodes']])
     rows=[]
     for r in results:
-        rows.append('<tr><td>'+('<a href="'+html.escape(r['session'],quote=True)+'/scores.svg">波形</a>' if 'error' not in r else '')+'</td>'+''.join('<td>'+html.escape(str(v))+'</td>' for v in (
+        rows.append('<tr><td>'+('<a href="'+html.escape(r['session'],quote=True)+'/spatial_scores.svg">局所波形</a> ' if 'evs_spatial' in r else '')+('<a href="'+html.escape(r['session'],quote=True)+'/scores.svg">波形</a>' if 'error' not in r else '')+'</td>'+''.join('<td>'+html.escape(str(v))+'</td>' for v in (
             r['session'],r.get('error','OK'),r.get('rgb_first_visible_s'),
-            r.get('rgb',{}).get('first_trigger_s'),r.get('evs',{}).get('first_trigger_s')) )+'</tr>')
-    (output/'index.html').write_text('<!doctype html><meta charset="utf-8"><title>RC activity baselines</title><h1>RC飛び出し・活動量ベースライン</h1><p>車の分類ではなく閾値超過の候補です。時刻は元記録の秒数。最初の候補には誤検知が含まれます。波形は各記録のCSVに保存。</p><table border="1"><tr><th>波形</th><th>記録</th><th>状態</th><th>RGB初出現</th><th>RGB最初の候補</th><th>EVS最初の候補</th></tr>'+''.join(rows)+'</table>',encoding='utf-8')
+            r.get('rgb',{}).get('first_trigger_s'),r.get('evs',{}).get('first_trigger_s'),r.get('evs_spatial',{}).get('first_trigger_s')) )+'</tr>')
+    (output/'index.html').write_text('<!doctype html><meta charset="utf-8"><title>RC activity baselines</title><h1>RC飛び出し・活動量ベースライン</h1><p>車の分類ではなく閾値超過の候補です。時刻は元記録の秒数。最初の候補には誤検知が含まれます。波形は各記録のCSVに保存。</p><table border="1"><tr><th>波形</th><th>記録</th><th>状態</th><th>RGB初出現</th><th>RGB最初の候補</th><th>EVS最初の候補</th><th>局所EVS最初の候補</th></tr>'+''.join(rows)+'</table>',encoding='utf-8')
 
 
 def main():
@@ -230,10 +299,15 @@ def main():
     p.add_argument('--evs-threshold',required=True,type=float,help='events within trailing window')
     p.add_argument('--rgb-pixel-delta',type=float,default=15)
     p.add_argument('--step-ms',type=float,default=1);p.add_argument('--window-bins',type=int,default=2)
+    p.add_argument('--spatial',action='store_true')
+    p.add_argument('--tile-px',type=int,default=32)
+    p.add_argument('--min-active-pixels',type=int,default=3)
+    p.add_argument('--spatial-threshold',type=float,default=20)
     p.add_argument('--rgb-topic',default='/realsense/color/image_raw')
     args=p.parse_args()
     if (not 0<args.rgb_threshold<=1 or not math.isfinite(args.evs_threshold) or args.evs_threshold<=0
         or not 0<args.rgb_pixel_delta<=255 or not math.isfinite(args.step_ms) or args.step_ms<=0 or args.window_bins<1):p.error('invalid thresholds/windows')
+    if args.tile_px<1 or args.min_active_pixels<1 or not math.isfinite(args.spatial_threshold) or args.spatial_threshold<=0:p.error('invalid spatial settings')
     if args.output.exists():p.error('output already exists; choose a new directory')
     config=json.loads(args.config.read_text());args.output.mkdir(parents=True)
     (args.output/'run_config.json').write_text(json.dumps(dict(common=config,common_sha256=digest(args.config),parameters={k:str(v) if isinstance(v,Path) else v for k,v in vars(args).items()}),indent=2))
@@ -247,6 +321,13 @@ def main():
             for sensor,series in [('rgb',rgb),('evs',evs)]:
                 with (folder/(sensor+'_scores.csv')).open('w') as f:
                     writer=csv.writer(f);writer.writerow(['interval','relative_time_s','score']);writer.writerows(series)
+            details=result.pop('_spatial_rows',None)
+            if details is not None:
+                with (folder/'evs_spatial_scores.csv').open('w') as stream:
+                    writer=csv.writer(stream);writer.writerow(['interval','relative_time_s','score','max_tile_events','max_tile_active_pixels']);writer.writerows(details)
+                spatial_series=[(i,t,v) for i,t,v,_,_ in details]
+                spatial_plot=dict(result,evs=result['evs_spatial'])
+                write_plot(folder/'spatial_scores.svg',spatial_plot,rgb,spatial_series)
             (folder/'result.json').write_text(json.dumps(result,indent=2))
             write_plot(folder/'scores.svg',result,rgb,evs)
         except Exception as exc:
