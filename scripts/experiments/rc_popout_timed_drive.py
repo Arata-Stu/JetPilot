@@ -78,12 +78,12 @@ def run(args):
 
     previous_signals = {s: signal.signal(s, interrupt) for s in (signal.SIGINT, signal.SIGTERM)}
 
-    def log(phase):
+    def log(phase, details=None):
         print(f'[ego] {phase}', flush=True)
         if args.log:
             with open(args.log, 'a', encoding='utf-8') as stream:
                 stream.write(json.dumps(dict(
-                    phase=phase, recording_label=args.label, wall_time_ns=time.time_ns(),
+                    phase=phase, details=details, recording_label=args.label, wall_time_ns=time.time_ns(),
                     monotonic_s=time.monotonic(), settings=vars(args),
                     semantics='host_command_timing_not_measured_motion',
                 ), ensure_ascii=False) + '\n')
@@ -122,6 +122,49 @@ def run(args):
                 and node.count_subscribers('/auto/control_cmd') >= 1
                 and mode_pub.get_subscription_count() >= 1)
 
+    def failure_details(expected_mode, armed=False):
+        rows = []
+
+        def row(ok, name, detail):
+            rows.append(f"  [{'OK' if ok else 'NG'}] {name}: {detail}")
+
+        def observed(key, limit):
+            if key not in latest:
+                return None, '未受信'
+            value, stamp = latest[key]
+            age = time.monotonic() - stamp
+            return value, f'最終受信から{age:.2f}s（期限{limit:g}s）'
+
+        names = {1: 'AUTO', 2: 'MANUAL', 3: 'STOP', 4: 'PROPO'}
+        value, age = observed('mode', 1.5)
+        row(fresh('mode', 1.5) == expected_mode, '/operation_mode/state',
+            f'{names.get(value, value)} / 必要={names[expected_mode]} / {age}')
+        status, age = observed('bridge', 1.5)
+        row(fresh('bridge', 1.5) is not None, 'JPBB診断の受信', age)
+        if status is not None:
+            values = {item.key: item.value for item in status.values}
+            row(status.level == 0, 'JPBB診断level',
+                f'{status.level} / {getattr(status, "message", "")} / fault_bits={values.get("fault_bits", "不明")}')
+            row(values.get('selector') == 'HOST', 'CH3 selector', values.get('selector', '不明'))
+            row(values.get('status_fresh') == 'true', '基板status_fresh', values.get('status_fresh', '不明'))
+            if armed:
+                row(values.get('host_arm_state') == 'ARMED', 'host_arm_state', values.get('host_arm_state', '不明'))
+        bag, age = observed('bag', 2.5)
+        row(fresh('bag', 2.5) is not None, '/bag/statusの受信', age)
+        if bag is not None:
+            row(bag.recording, '記録状態', f'recording={bag.recording}')
+            row(args.label in bag.current_uri, '試行labelと記録先の一致',
+                f'expected_label={args.label!r} / current_uri={bag.current_uri!r}')
+        publishers = node.count_publishers('/auto/control_cmd')
+        subscribers = node.count_subscribers('/auto/control_cmd')
+        mode_subscribers = mode_pub.get_subscription_count()
+        row(publishers == 1, 'AUTO publisher数', f'{publishers}（必要=この補助の1件のみ）')
+        row(subscribers >= 1, 'AUTO subscriber数', f'{subscribers}（必要>=1）')
+        row(mode_subscribers >= 1, 'モード要求subscriber数', f'{mode_subscribers}（必要>=1）')
+        if interrupted:
+            rows.append('  [NG] 中断信号を受信しました')
+        return '\n'.join(rows)
+
     try:
         # Do not send even neutral commands until discovery and STOP checks pass.
         deadline = time.monotonic() + 5.0
@@ -130,7 +173,9 @@ def run(args):
             if ready() and fresh('mode', 1.5) == OperationModeState.STOP and exclusive():
                 break
         else:
-            raise RuntimeError('開始不可: STOP・JPBB HOST/正常・記録中・AUTO publisher単独を確認してください')
+            details = failure_details(OperationModeState.STOP)
+            log('preflight_failed', details)
+            raise RuntimeError('開始不可（自車指令は未送信）:\n' + details)
         owned = True
         command()
         arm_started = time.monotonic()
@@ -144,7 +189,8 @@ def run(args):
                     and fresh('mode', 1.5) == OperationModeState.AUTO):
                 break
         else:
-            raise RuntimeError('JPBBのAUTOアームが完了しませんでした')
+            raise RuntimeError('JPBBのAUTOアームが完了しませんでした:\n'
+                               + failure_details(OperationModeState.AUTO, armed=True))
         start = time.monotonic()
         previous_phase = None
         previous_tick = start

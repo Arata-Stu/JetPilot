@@ -26,7 +26,7 @@ class Message:
 class FakeROS:
     def __init__(self, failure=None):
         self.now = 0.0
-        self.mode = Message.STOP
+        self.mode = 4 if failure == 'propo' else Message.STOP
         self.callbacks = {}
         self.commands = []
         self.requests = []
@@ -73,8 +73,9 @@ class FakeROS:
             self.now += 0.3
         self.callbacks['/operation_mode/state'](NS(mode=self.mode))
         self.callbacks['/bag/status'](NS(
-            recording=not (self.started and self.failure == 'recording'), current_uri='/record/trial'))
-        if self.started and self.failure == 'stale':
+            recording=not (self.started and self.failure == 'recording'),
+            current_uri='/record/other' if self.failure == 'label' else '/record/trial'))
+        if self.failure == 'no_diagnostics' or self.started and self.failure == 'stale':
             return
         values = dict(selector='HOST', status_fresh='true',
                       host_arm_state='ARMED' if self.mode == Message.AUTO else 'DISARMED')
@@ -136,6 +137,20 @@ class TimedDriveTests(unittest.TestCase):
             self.execute(ros)
         self.assertFalse(ros.requests)
         self.assertFalse(ros.commands)
+
+    def test_preflight_reports_failed_condition_without_commands(self):
+        for failure, expected in (
+                ('propo', '[NG] /operation_mode/state: PROPO'),
+                ('label', '[NG] 試行labelと記録先の一致'),
+                ('no_diagnostics', '[NG] JPBB診断の受信: 未受信'),
+                ('competitor', '[NG] AUTO publisher数: 2')):
+            with self.subTest(failure=failure):
+                ros = FakeROS(failure)
+                with self.assertRaises(RuntimeError) as result:
+                    self.execute(ros)
+                self.assertIn(expected, str(result.exception))
+                self.assertFalse(ros.commands)
+                self.assertFalse(ros.requests)
 
     def test_invalid_inputs(self):
         for key, value in [('throttle', 'nan'), ('duration', '0'), ('duration', '61'),
