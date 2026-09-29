@@ -67,6 +67,20 @@ class DetectionTests(unittest.TestCase):
             m.write_plot(root/'scores.svg',result,rgb,evs)
             m.write_report(root,[result])
             self.assertTrue((root/'index.html').is_file())
+            # Same event multiset: scrambled in-batch, then late after an EOF-like time.
+            for partitions in ([[4,2,0,1,3]], [[0,4],[2],[1,3]], [[4],[3,2],[1,0]]):
+                with self.subTest(partitions=partitions):
+                    source.batches=lambda:iter(SimpleNamespace(events=events[index]) for index in partitions)
+                    reordered,rr,ee=m.analyze(config,entry,args)
+                    self.assertEqual(ee,evs)
+                    self.assertEqual(rr,rgb)
+                    self.assertEqual(reordered['evs'],result['evs'])
+                    self.assertGreater(reordered['event_ordering']['backward_steps'],0)
+                    self.assertGreater(reordered['event_ordering']['max_backward_step_us'],0)
+            # Reordering does not disable the recording-extent check.
+            source.batches=lambda:iter([SimpleNamespace(events=events[1:4])])
+            with self.assertRaisesRegex(ValueError,'does not cover'):
+                m.analyze(config,entry,args)
             sync.write_text('changed')
             with self.assertRaisesRegex(ValueError,'sync changed'):m.analyze(config,entry,args)
 

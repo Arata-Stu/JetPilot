@@ -125,15 +125,28 @@ def analyze(config, entry, args):
     step=args.step_ms/1000; bins=args.window_bins
     hist=[np.zeros(int(math.floor((b-a)/step)),dtype=np.int64) for a,b in spans]
     first_event=None;last_event=None
+    previous_raw_time=None; backward_steps=0; max_backward_us=0
     for batch in source.batches():
         if (source.width,source.height)!=(w,h): raise ValueError('RAW dimensions mismatch')
         events=batch.events
         provisional = source.anchor.reference_time_s + source.anchor.scale * (events['t'].astype(np.float64)-source.anchor.source_time_us)/1e6
         ts=clock.apply(provisional)-origin
         if len(ts)==0: continue
-        if np.any(np.diff(ts)<0) or (last_event is not None and ts[0]<last_event): raise ValueError('nonmonotonic events')
-        if first_event is None:first_event=float(ts[0])
-        last_event=float(ts[-1])
+        if not np.all(np.isfinite(ts)):
+            raise ValueError('nonfinite event timestamps')
+        # Histogram addition is order independent. Preserve events and timestamps;
+        # do not sort, clamp, or discard late events, including across batches.
+        raw_times=events['t'].astype(np.int64)
+        differences=np.diff(raw_times)
+        if previous_raw_time is not None:
+            differences=np.concatenate(([int(raw_times[0])-previous_raw_time],differences))
+        negative=differences[differences<0]
+        backward_steps+=int(len(negative))
+        if len(negative):max_backward_us=max(max_backward_us,int(-negative.min()))
+        previous_raw_time=int(raw_times[-1])
+        batch_min,batch_max=float(ts.min()),float(ts.max())
+        first_event=batch_min if first_event is None else min(first_event,batch_min)
+        last_event=batch_max if last_event is None else max(last_event,batch_max)
         valid=(events['x']<w)&(events['y']<h)
         kept=np.zeros(len(events),bool);kept[valid]=lut[events['y'][valid],events['x'][valid]]
         for i,(a,b) in enumerate(spans):
@@ -141,7 +154,7 @@ def analyze(config, entry, args):
             index=np.floor((selected-a)/step).astype(int)
             index=index[(index>=0)&(index<len(hist[i]))]
             hist[i]+=np.bincount(index,minlength=len(hist[i]))
-        if ts[-1]>=spans[-1][1]:break
+        # Read to EOF: a later batch can still contain in-range timestamps.
     if first_event is None or first_event>spans[0][0] or last_event<spans[-1][1]:
         raise ValueError('RAW event extent does not cover evaluation intervals; cannot treat missing data as silence')
     evs_rows=[]
@@ -155,6 +168,8 @@ def analyze(config, entry, args):
     result=dict(session=ann['session'],annotation=str(ann_path),annotation_sha256=digest(ann_path),
                 roi=config['roi'],valid_pixels=int(mask.sum()),evaluation_seconds=sum(b-a for a,b in spans),
                 intervals=spans,rgb_first_visible_s=onset_s,time_sync_sha256=digest(sync),
+                event_ordering=dict(backward_steps=backward_steps,max_backward_step_us=max_backward_us,
+                    policy='full-file timestamp histogram; no timestamp modification'),
                 camchain_sha256=digest(chain),annotation_kind='no_rgb_onset' if onset_s is None else 'rgb_onset',
                 note='Offline activity threshold crossings, not vehicle classification or end-to-end latency.')
     for sensor,rows,threshold in [('rgb',rgb_rows,args.rgb_threshold),('evs',evs_rows,args.evs_threshold)]:
