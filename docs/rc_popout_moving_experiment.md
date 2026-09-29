@@ -90,3 +90,46 @@ python3 scripts/experiments/rc_popout_timed_drive.py \
 作成済み試行表に対しては、進行shの同じ引数へ `--dry-run` を追加すれば、
 最初の未完了試行の画面をROSなしで確認できる。ROSへの送信・採否更新・走行ログ保存は行わない。
 新規の試行表作成は従来どおり対話端末が必要。
+
+## 9月30日の出現なし6記録：動画生成と注釈
+
+`t_0.1-none{,_01,_02}`は自車スロットル0.1、`t_0.2-none{,_01,_02}`は0.2。
+後半3件はフォルダのみ改名している。MCAP名はそのままで読み込める。
+転送先ホストでROS 2とmulti_sensor_calibrationの実行環境が利用できる場合:
+
+```bash
+cd /home/arata-24/workspaces/JetPilot
+bash scripts/experiments/run_rc_popout_auto_pipeline.sh \
+  --record-root "$PWD/record/09-30/2026-09-30" \
+  --summary-dir "$PWD/record/09-30/analysis/auto_pipeline"
+```
+
+通常どおりROS環境をDocker内で使う場合は、転送先のJetPilotを`/workspaces`に
+マウントしたcontainer内で実行する:
+
+```bash
+cd /workspaces
+bash scripts/experiments/run_rc_popout_auto_pipeline.sh \
+  --record-root /workspaces/record/09-30/2026-09-30 \
+  --summary-dir /workspaces/record/09-30/analysis/auto_pipeline
+```
+
+最初に同じコマンドへ`--list-sessions`を追加すれば、処理対象の6フォルダだけを表示する。
+この一覧確認にはROS環境が不要で、動画生成も行わない。
+ROS workspaceは既定でスクリプトのあるリポジトリの`ros2_ws`を使用し、
+別配置の場合は`ROS2_WS`環境変数または`--ros-setup`、`--config`、`--camchain`を指定する。
+校正はRGB/EVSの取り付け関係と使用設定が対応するものを選ぶ。
+
+各sessionの出力（`<root>`は指定した2026-09-30フォルダ）:
+
+- 比較動画: `<root>/analysis/scenario_overlay/<session>/rotation_only_auto/rgb_vs_overlay.mp4`
+- LED同期確認ページ: `<root>/analysis/led_sync/<session>/review/index.html`
+- 一括結果: `--summary-dir`内の`summary.tsv`
+
+LED抽出→自動同期→比較動画→確認ページの順で逐次処理する。生成済みの段階は再利用し、
+低信頼度の同期は確認対象として残す。再実行で途中から継続できる。
+
+動画生成後は、静止時と同様にLED同期と評価区間を確認する。ただし今回の6件は
+「相手車の出現なし」であり、初出現時刻を付ける必要はない。映像で出現なしを確認し、
+LED・手・配置戻しの区間を除外して、自車走行の評価区間とROIを注釈する。
+自車の移動で背景も動くため、静止時の画像ROIや検出閾値の妥当性は改めて確認する。

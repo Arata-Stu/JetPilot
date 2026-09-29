@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-CONFIG="/workspaces/ros2_ws/src/tool/multi_sensor_calibration/config/rc_popout_evs_rgb.yaml"
-CAMCHAIN="/workspaces/ros2_ws/src/tool/multi_sensor_calibration/config/calibrations/rc_popout_default/kalibr-camchain.yaml"
+PROJECT_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+ROS2_WS="${ROS2_WS:-${PROJECT_ROOT}/ros2_ws}"
+ROS2_SETUP_FILE="${ROS2_SETUP_FILE:-${ROS2_WS}/install/setup.bash}"
+CONFIG="${ROS2_WS}/src/tool/multi_sensor_calibration/config/rc_popout_evs_rgb.yaml"
+CAMCHAIN="${ROS2_WS}/src/tool/multi_sensor_calibration/config/calibrations/rc_popout_default/kalibr-camchain.yaml"
 RGB_ROI="0,0,848,480"
 EVS_ROI="0,0,640,480"
 BIN_MS="1"
@@ -12,6 +15,8 @@ ROI_TILE_SIZE="16"
 EVENT_WINDOW_MS="10"
 EVENT_DILATE_PX="2"
 SELECTED_SESSION=""
+CUSTOM_ROOTS=false
+LIST_SESSIONS=false
 FORCE_EXPORT=false
 FORCE_SYNC=false
 FORCE_VIDEO=false
@@ -35,6 +40,10 @@ Runs the complete unattended pipeline for every non-calibration recording:
 
 Options:
   --session DIR          Process one recording instead of all v1/v2 sessions
+  --record-root DIR      Process immediate session folders in DIR (repeatable);
+                         replaces default v1/v2 roots; cannot combine with --session
+  --list-sessions        List selected folders without ROS or generating files
+  --ros-setup PATH       ROS setup.bash (default: $ROS2_WS/install/setup.bash)
   --no-video             Stop after automatic ROI and time synchronization
   --force-export         Recreate led_sync_data.json and roi_data
   --force-sync           Recompute automatic ROI and time synchronization
@@ -56,6 +65,11 @@ EOF
 while (($#)); do
   case "$1" in
     --session) SELECTED_SESSION="${2:?--session requires a directory}"; shift 2 ;;
+    --record-root)
+      if [[ "$CUSTOM_ROOTS" != true ]]; then ROOTS=(); CUSTOM_ROOTS=true; fi
+      ROOTS+=("${2:?--record-root requires a directory}"); shift 2 ;;
+    --list-sessions) LIST_SESSIONS=true; shift ;;
+    --ros-setup) ROS2_SETUP_FILE="${2:?--ros-setup requires a path}"; shift 2 ;;
     --no-video) NO_VIDEO=true; shift ;;
     --force-export) FORCE_EXPORT=true; shift ;;
     --force-sync) FORCE_SYNC=true; shift ;;
@@ -70,6 +84,52 @@ while (($#)); do
   esac
 done
 
+if [[ -n "$SELECTED_SESSION" && "$CUSTOM_ROOTS" == true ]]; then
+  echo '--session and --record-root cannot be combined' >&2
+  exit 2
+fi
+
+sessions=()
+if [[ -n "$SELECTED_SESSION" ]]; then
+  if [[ ! -d "$SELECTED_SESSION" ]]; then
+    echo "Session directory not found: $SELECTED_SESSION" >&2
+    exit 1
+  fi
+  selected_name="$(basename "$SELECTED_SESSION")"
+  if [[ "$selected_name" == "$CALIBRATION_SESSION" || "$selected_name" == *"_calibration_"* ]]; then
+    echo "--session must select a non-calibration recording: $SELECTED_SESSION" >&2
+    exit 1
+  fi
+  sessions+=("$(cd -- "$SELECTED_SESSION" && pwd)")
+else
+  for root in "${ROOTS[@]}"; do
+    if [[ ! -d "$root" ]]; then
+      if [[ "$CUSTOM_ROOTS" == true ]]; then
+        echo "Recording root not found: $root" >&2; exit 1
+      fi
+      continue
+    fi
+    root="$(cd -- "$root" && pwd)"
+    while IFS= read -r -d '' session; do
+      name="$(basename "$session")"
+      if [[ "$name" == "analysis" || "$name" == "$CALIBRATION_SESSION" || "$name" == *"_calibration_"* ]]; then
+        continue
+      fi
+      sessions+=("$session")
+    done < <(find "$root" -mindepth 1 -maxdepth 1 -type d -print0 | sort -z)
+  done
+fi
+
+if ((${#sessions[@]} == 0)); then
+  echo "No popup recording sessions were found." >&2
+  exit 1
+fi
+
+if [[ "$LIST_SESSIONS" == true ]]; then
+  printf '%s\n' "${sessions[@]}"
+  exit 0
+fi
+
 for required in "$CONFIG" "$CAMCHAIN"; do
   if [[ ! -f "$required" ]]; then
     echo "Required file not found: $required" >&2
@@ -77,13 +137,13 @@ for required in "$CONFIG" "$CAMCHAIN"; do
   fi
 done
 
-if [[ -f /workspaces/ros2_ws/install/setup.bash ]]; then
+if [[ -f "$ROS2_SETUP_FILE" ]]; then
   set +u
   # shellcheck disable=SC1091
-  source /workspaces/ros2_ws/install/setup.bash
+  source "$ROS2_SETUP_FILE"
   set -u
 else
-  echo "ROS workspace is not built: /workspaces/ros2_ws/install/setup.bash" >&2
+  echo "ROS workspace is not built: $ROS2_SETUP_FILE" >&2
   exit 1
 fi
 
@@ -102,36 +162,6 @@ elif [[ -f /workspaces/.venvs/multi_sensor_calibration/bin/activate ]]; then
   # shellcheck disable=SC1091
   source /workspaces/.venvs/multi_sensor_calibration/bin/activate
   set -u
-fi
-
-sessions=()
-if [[ -n "$SELECTED_SESSION" ]]; then
-  if [[ ! -d "$SELECTED_SESSION" ]]; then
-    echo "Session directory not found: $SELECTED_SESSION" >&2
-    exit 1
-  fi
-  selected_name="$(basename "$SELECTED_SESSION")"
-  if [[ "$selected_name" == "$CALIBRATION_SESSION" || "$selected_name" == *"_calibration_"* ]]; then
-    echo "--session must select a non-calibration recording: $SELECTED_SESSION" >&2
-    exit 1
-  fi
-  sessions+=("$(cd -- "$SELECTED_SESSION" && pwd)")
-else
-  for root in "${ROOTS[@]}"; do
-    [[ -d "$root" ]] || continue
-    while IFS= read -r -d '' session; do
-      name="$(basename "$session")"
-      if [[ "$name" == "analysis" || "$name" == "$CALIBRATION_SESSION" || "$name" == *"_calibration_"* ]]; then
-        continue
-      fi
-      sessions+=("$session")
-    done < <(find "$root" -mindepth 1 -maxdepth 1 -type d -print0 | sort -z)
-  done
-fi
-
-if ((${#sessions[@]} == 0)); then
-  echo "No popup recording sessions were found." >&2
-  exit 1
 fi
 
 mkdir -p "$SUMMARY_DIR"
