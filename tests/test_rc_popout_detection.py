@@ -15,6 +15,19 @@ spec=importlib.util.spec_from_file_location('detection',ROOT/'tools/rc_popout_de
 m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
 
 class DetectionTests(unittest.TestCase):
+    def test_common_mask_policies_preserve_saved_semantics(self):
+        common = np.array([[True, True], [False, True]])
+        inside = np.array([[True, True], [False, False]])
+        np.testing.assert_array_equal(m.apply_common_mask(inside, common, 'inside_common'), inside)
+        full = np.ones((2, 2), dtype=bool)
+        np.testing.assert_array_equal(m.apply_common_mask(full, common, 'intersect_common'), common)
+        with self.assertRaisesRegex(ValueError, 'outside common view'):
+            m.apply_common_mask(full, common, 'inside_common')
+        with self.assertRaisesRegex(ValueError, 'empty'):
+            m.apply_common_mask(~common, common, 'intersect_common')
+        with self.assertRaisesRegex(ValueError, 'unsupported'):
+            m.apply_common_mask(full, common, 'unknown')
+
     def test_spatial_rejects_single_pixel_and_diffuse_activity(self):
         hot=np.array([[0,0]]*22)
         score,peak,pixels=m.spatial_scores([hot],3,2,64,64,32,3,np)

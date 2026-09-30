@@ -13,6 +13,17 @@ def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def apply_common_mask(mask, common, policy):
+    if policy not in ('inside_common', 'intersect_common'):
+        raise ValueError(f'unsupported ROI mask policy: {policy!r}')
+    if policy == 'inside_common' and (mask & ~common).any():
+        raise ValueError('inside_common ROI extends outside common view')
+    result = mask & common
+    if not result.any():
+        raise ValueError('empty common ROI')
+    return result
+
+
 def evaluation_intervals(annotation):
     spans = sorted((float(x['start_s']), float(x['end_s']))
                    for x in annotation['intervals'] if x['label'] == 'evaluation')
@@ -125,9 +136,7 @@ def analyze(config, entry, args):
     x,y,rw,rh=coords
     if not (0<=x<x+rw<=w and 0<=y<y+rh<=h): raise ValueError('ROI out of bounds')
     mask=np.zeros((h,w),bool); mask[y:y+rh,x:x+rw]=True
-    if roi.get('mask_policy')!='intersect_common': raise ValueError('intersect_common policy required')
-    mask &= common
-    if not mask.any(): raise ValueError('empty common ROI')
+    mask = apply_common_mask(mask, common, roi.get('mask_policy'))
     session=ann_path.parents[3]/ann['session']
     raw=list(session.glob('*.raw'))
     if len(raw)!=1: raise ValueError('exactly one RAW required')

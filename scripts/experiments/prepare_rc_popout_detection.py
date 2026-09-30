@@ -40,8 +40,12 @@ def build(root, roi_name=None):
         selected = select_roi(annotation.get('rois', []), roi_name, session.name)
         roi = {k: selected[k] for k in ('name', 'x', 'y', 'width', 'height', 'mask_policy')}
         spatial = annotation['spatial']
-        if not spatial or spatial['view_frame'] != 'evs' or roi['mask_policy'] != 'intersect_common':
-            raise ValueError(f'{session.name}: EVS座標の共通視野と交差するROIが必要です')
+        if not spatial or spatial.get('view_frame') != 'evs':
+            raise ValueError(f'{session.name}: EVS座標動画のROIが必要です。'
+                             f'保存値 view_frame={(spatial or {}).get("view_frame")!r}, '
+                             f'preview_id={annotation.get("preview_id")!r}')
+        if roi['mask_policy'] not in ('inside_common', 'intersect_common'):
+            raise ValueError(f'{session.name}: 未対応のROIマスク方式 {roi["mask_policy"]!r}')
         if digest(spatial['camchain']) != spatial['camchain_sha256']:
             raise ValueError(f'{session.name}: 校正ファイルが変更されています')
         if digest(annotation['time_sync']) != annotation['time_sync_sha256']:
