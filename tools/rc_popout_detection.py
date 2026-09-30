@@ -271,9 +271,15 @@ def write_plot(path, result, rgb, evs):
         onset=result['rgb_first_visible_s']
         if onset is not None:
             parts.append(f'<path d="M{x(onset):.2f},{top} v110" stroke="#6a3"/>')
+        for marker in result.get('phase_markers', []):
+            if begin <= marker['time_s'] <= end:
+                px=x(marker['time_s'])
+                parts.append(f'<path d="M{px:.2f},{top+10} v100" stroke="#8050aa" stroke-dasharray="3 3"/>')
+                parts.append(f'<text x="{px+3:.2f}" y="{top+14}" font-size="10">{html.escape(marker["label"])}</text>')
         for a,b in result['intervals']:
             parts.append(f'<path d="M{x(a):.2f},{top+120} H{x(b):.2f}" stroke="black"/>')
-    parts.append(f'<text x="60" y="350">Source time: {begin:.3f} to {end:.3f} s; green = first visible RGB</text></svg>')
+    axis_label=html.escape(result.get('time_axis_label', 'Source time'))
+    parts.append(f'<text x="60" y="350">{axis_label}: {begin:.3f} to {end:.3f} s; green = first visible RGB</text></svg>')
     path.write_text(''.join(parts),encoding='utf-8')
 
 
