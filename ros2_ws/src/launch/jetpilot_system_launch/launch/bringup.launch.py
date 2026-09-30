@@ -950,6 +950,8 @@ def generate_launch_description() -> lut.LaunchDescription:
                 'bag_manager_output_dir': args.bag_manager_output_dir,
                 'bag_manager_recording_name': args.bag_manager_recording_name,
                 'teleop_cmd_param': args.teleop_cmd_param,
+                'vehicle_steering_trim': (lu.is_true(args.enable_vehicle)
+                    and str(args.vehicle_interface_pkg) == 'jetpilot_bridge_interface'),
                 'teleop_fixed_throttle_mode': args.teleop_fixed_throttle_mode,
                 'fixed_throttle': args.fixed_throttle,
                 'teleop_button_mapping_param': args.teleop_button_mapping_param,

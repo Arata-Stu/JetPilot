@@ -291,3 +291,18 @@ JPBBのホスト経路は1500 usをニュートラルとして出力する。
 - `~/rc_channels`と`~/output_channels`をrosbagへ記録し、指令と実出力を比較する。
 - USBを差し直しただけでは車両が再始動しないことを確認する。
 - 実機試験が完了するまでタイヤを接地せず、モーターを接続しない。
+
+
+## ゲームパッド補正とプロポトリムの分離
+
+JPBBを指定したsystem bringupでは、D-pad左右の補正はJPBB側のホスト専用
+`steering_offset`に一本化する。teleop側は`steering_offset_enabled=false`でoffsetを0固定にする。
+MANUAL/AUTOでは「操舵指令 × JPBB steering_scale + JPBB steering_offset」、
+PROPOでは受信機PWMの直接経路となり、ホストoffsetは加算しない。
+プロポ自身のトリムはPROPO側の調整として独立する。
+STOP・アーム前はトリム付き操舵ではなく安全中立なので、補正確認はMANUALアーム後に行う。
+
+旧実装では同じD-pad操作がteleopとJPBBの両offsetを変更していた。
+JPBB scale=-1の場合にoffsetが相殺され、大きな値では途中のclampで操舵範囲が偏る。
+修正後はゲームパッドの保存済みoffsetも無効化し、この二重適用を防ぐ。
+この変更はROS側のみで、基板firmwareの書き換えは不要。

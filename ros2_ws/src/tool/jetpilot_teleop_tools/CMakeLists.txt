@@ -35,6 +35,10 @@ target_link_libraries(
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(test_steering_offset_owner test/test_steering_offset_owner.cpp)
+  target_include_directories(test_steering_offset_owner PRIVATE include)
+  target_compile_features(test_steering_offset_owner PUBLIC cxx_std_17)
+  target_link_libraries(test_steering_offset_owner ${PROJECT_NAME}_teleop_cmd_node)
   ament_add_gtest(test_button_rising_edge test/test_button_rising_edge.cpp)
   target_include_directories(test_button_rising_edge PRIVATE include)
   target_compile_features(test_button_rising_edge PUBLIC cxx_std_17)

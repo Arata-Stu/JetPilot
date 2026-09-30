@@ -88,6 +88,7 @@ def add_nodes(args: lu.ArgumentContainer):
                 args.teleop_cmd_param,
                 {'use_sim_time': use_sim_time,
                  'fixed_throttle_mode': lu.is_true(args.teleop_fixed_throttle_mode),
+                 'steering_offset_enabled': not lu.is_true(args.vehicle_steering_trim),
                  'fixed_throttle': lut.ParameterValue(args.fixed_throttle, value_type=float)},
             ],
         ))
@@ -187,6 +188,7 @@ def generate_launch_description() -> lut.LaunchDescription:
     args.add_arg('enable_joy', False, cli=True)
     args.add_arg('enable_teleop', False, cli=True)
     args.add_arg('teleop_fixed_throttle_mode', False, cli=True)
+    args.add_arg('vehicle_steering_trim', False, cli=True)
     args.add_arg('fixed_throttle', '0.2', cli=True)
     args.add_arg('enable_rc_serial', False, cli=True)
     args.add_arg('enable_jetson_stats', is_jetson_platform(), cli=True)

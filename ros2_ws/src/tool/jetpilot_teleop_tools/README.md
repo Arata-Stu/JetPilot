@@ -52,7 +52,7 @@ axis、deadman、scaleは[`config/teleop_cmd.param.yaml`](config/teleop_cmd.para
 
 `teleop_cmd_node` は deadman button が押されている間だけ joystick 値を指令へ変換し、既定では250 Hzで最新値を`/teleop/control_cmd`へ出力します。設定されたdeadmanを離した場合、および`input_timeout_s`を超えてjoy入力が途絶えた場合は steering/throttle/brake/reverse をすべて0にします。固定スロットルモードでもdeadmanは必須で、既定profileでは三角ボタンを離すと即座にzero commandへ戻ります。固定スロットルモードと`deadman_button: -1`の併用は起動時に拒否されます。
 
-既定ではD-pad左右が`steering_offset`を`steering_offset_step`ずつ増減し、上下が`throttle_scale`を`throttle_scale_step`ずつ増減します。いずれも押下edgeで1回だけ変更されます。Joy Profile Editorの「Button Functions」で各方向の割り当てを、「Joy Adjustment」でoffsetとscaleの初期値・刻み・範囲を設定できます。
+teleop側の補正が有効な既定構成ではD-pad左右が`steering_offset`を`steering_offset_step`ずつ増減し、上下が`throttle_scale`を`throttle_scale_step`ずつ増減します。いずれも押下edgeで1回だけ変更されます。Joy Profile Editorの「Button Functions」で各方向の割り当てを、「Joy Adjustment」でoffsetとscaleの初期値・刻み・範囲を設定できます。
 
 `/speed_offset_inc` または `/speed_offset_dec` に `std_msgs/msg/Bool(data=true)` を1回送ると、`throttle_scale_step` ずつスロットルスケールを変更します。範囲は `throttle_scale_min` から `throttle_scale_max` までに制限され、現在値は `ros2 param get /teleop_cmd_node throttle_scale` で確認できます。既定のD-pad割り当ては、上がスケール増加、下が減少です。左右は従来どおりsteering offsetを調整します。
 
@@ -83,3 +83,25 @@ ros2 launch jetpilot_teleop_tools jetpilot_teleop_tools.launch.xml
 ```
 
 通常は `jetpilot_system_launch` の `enable_joy:=true`、`enable_teleop:=true` から起動します。profile editor が生成した parameter は `/workspaces/ros2_ws/joy_profiles` にあればそちらを優先します。
+
+
+## JPBB使用時の操舵トリムの分離
+
+`bringup.sh ... --vehicle jpbb`では、システムlaunchがteleopへ
+`steering_offset_enabled=false`を渡す。teleopは保存済みJoy profileにoffsetがあっても
+0へ戻し、D-padの`/steer_offset_inc`・`/steer_offset_dec`を購読しない。
+実行中にteleopのoffsetを非ゼロへ設定する要求も拒否する。操舵軸の符号・scaleとdeadmanは維持する。
+
+D-padはJPBBの`steering_offset`だけを変更し、MANUALとAUTOのホスト経路へ1回だけ適用する。
+PROPOの受信機PWM直接経路には適用されない。プロポのトリムは受信機側で別に設定する。
+STOPとアーム前の中立ハンドシェイクは従来どおり安全中立で、ホストトリムを適用しない。
+D-padをPROPO中に操作してもホスト用パラメータの変更であり、PROPO出力の補正にはならない。
+
+JPBB以外の既存起動構成・単体teleop起動は従来どおり。単体でJPBBと組み合わせる場合は
+teleopへ`steering_offset_enabled:=false`を明示する。`tool.launch.py`単体では
+`vehicle_steering_trim:=true`で同じ設定になる。
+
+更新後にteleopとsystem launchをビルドし、bringupを再起動する。
+D-pad操作前後でteleopの`steering_offset`が0のまま、JPBB側だけが変わることを確認する。
+古い二重適用状態で作った値を正しい直進補正として引き継がず、ホスト経路で直進を再確認する。
+JPBBのホストoffsetを次回起動へ残す場合は、使用中のJPBB driver parameter YAMLへ保存する。

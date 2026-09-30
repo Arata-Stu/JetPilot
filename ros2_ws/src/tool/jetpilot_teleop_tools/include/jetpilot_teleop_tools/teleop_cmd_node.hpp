@@ -19,7 +19,7 @@ namespace jetpilot_teleop_tools
 class TeleopCmdNode : public rclcpp::Node
 {
 public:
-  TeleopCmdNode();
+  explicit TeleopCmdNode(const rclcpp::NodeOptions & options = rclcpp::NodeOptions());
 
 private:
   double declare_numeric_parameter(const std::string & name, double default_value);
@@ -41,6 +41,7 @@ private:
   int brake_button_;
   int deadman_button_;
   bool fixed_throttle_mode_;
+  bool steering_offset_enabled_;
   std::atomic<double> fixed_throttle_;
   std::atomic<double> steering_scale_;
   std::atomic<double> steering_offset_{0.0};

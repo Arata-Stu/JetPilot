@@ -11,7 +11,8 @@
 namespace jetpilot_teleop_tools
 {
 
-TeleopCmdNode::TeleopCmdNode() : Node("teleop_cmd_node")
+TeleopCmdNode::TeleopCmdNode(const rclcpp::NodeOptions & options)
+: Node("teleop_cmd_node", options)
 {
   steering_axis_ = declare_parameter<int>("steering_axis", 0);
   throttle_axis_ = declare_parameter<int>("throttle_axis", 5);
@@ -27,7 +28,17 @@ TeleopCmdNode::TeleopCmdNode() : Node("teleop_cmd_node")
     throw std::invalid_argument("fixed_throttle must be finite and within [0, 1]");
   }
   steering_scale_ = declare_numeric_parameter("steering_scale", 1.0);
+  rcl_interfaces::msg::ParameterDescriptor offset_owner_descriptor;
+  offset_owner_descriptor.read_only = true;
+  steering_offset_enabled_ = declare_parameter<bool>(
+    "steering_offset_enabled", true, offset_owner_descriptor);
   steering_offset_ = declare_numeric_parameter("steering_offset", 0.0);
+  if (!steering_offset_enabled_) {
+    // Vehicle-side trim owns both MANUAL and AUTO. Do not retain a saved Joy trim.
+    steering_offset_.store(0.0);
+    set_parameter(rclcpp::Parameter("steering_offset", 0.0));
+    RCLCPP_INFO(get_logger(), "Steering trim is owned by the vehicle interface; teleop offset disabled");
+  }
   steering_offset_step_ = std::max(
     0.0, declare_numeric_parameter("steering_offset_step", 0.01));
   throttle_scale_step_ = std::max(0.0, declare_numeric_parameter("throttle_scale_step", 0.05));
@@ -65,7 +76,9 @@ TeleopCmdNode::TeleopCmdNode() : Node("teleop_cmd_node")
   rcl_interfaces::msg::ParameterDescriptor tuning_descriptor;
   tuning_descriptor.read_only = true;
   declare_parameter<std::vector<std::string>>("dynamic_tuning_parameters",
-    std::vector<std::string>{"throttle_scale", "fixed_throttle", "steering_scale", "steering_offset"}, tuning_descriptor);
+    steering_offset_enabled_
+      ? std::vector<std::string>{"throttle_scale", "fixed_throttle", "steering_scale", "steering_offset"}
+      : std::vector<std::string>{"throttle_scale", "fixed_throttle", "steering_scale"}, tuning_descriptor);
 
   parameter_callback_handle_ = add_on_set_parameters_callback(
     [this](const std::vector<rclcpp::Parameter> & parameters) {
@@ -74,20 +87,22 @@ TeleopCmdNode::TeleopCmdNode() : Node("teleop_cmd_node")
 
   joy_sub_ = create_subscription<sensor_msgs::msg::Joy>(
     "/joy", 10, [this](const sensor_msgs::msg::Joy::SharedPtr msg) { handle_joy(*msg); });
-  steer_offset_inc_sub_ = create_subscription<std_msgs::msg::Bool>(
-    "/steer_offset_inc", 10, [this](const std_msgs::msg::Bool::SharedPtr msg) {
-      if (msg->data)
-      {
-        adjust_steering_offset(1.0);
-      }
-    });
-  steer_offset_dec_sub_ = create_subscription<std_msgs::msg::Bool>(
-    "/steer_offset_dec", 10, [this](const std_msgs::msg::Bool::SharedPtr msg) {
-      if (msg->data)
-      {
-        adjust_steering_offset(-1.0);
-      }
-    });
+  if (steering_offset_enabled_) {
+    steer_offset_inc_sub_ = create_subscription<std_msgs::msg::Bool>(
+      "/steer_offset_inc", 10, [this](const std_msgs::msg::Bool::SharedPtr msg) {
+        if (msg->data)
+        {
+          adjust_steering_offset(1.0);
+        }
+      });
+    steer_offset_dec_sub_ = create_subscription<std_msgs::msg::Bool>(
+      "/steer_offset_dec", 10, [this](const std_msgs::msg::Bool::SharedPtr msg) {
+        if (msg->data)
+        {
+          adjust_steering_offset(-1.0);
+        }
+      });
+  }
   speed_offset_inc_sub_ = create_subscription<std_msgs::msg::Bool>(
     "/speed_offset_inc", 10, [this](const std_msgs::msg::Bool::SharedPtr msg) {
       if (msg->data)
@@ -227,6 +242,11 @@ rcl_interfaces::msg::SetParametersResult TeleopCmdNode::handle_parameters(
       return result;
     }
     const auto value = parameter.as_double();
+    if (name == "steering_offset" && !steering_offset_enabled_ && value != 0.0) {
+      result.successful = false;
+      result.reason = "steering_offset is owned by the vehicle interface; teleop must remain zero";
+      return result;
+    }
     const auto minimum = name == "steering_scale" ? -3.0 :
       name == "steering_offset" ? -1.0 :
       name == "throttle_scale" ? throttle_scale_min_ : 0.0;
