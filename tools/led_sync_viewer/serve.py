@@ -28,6 +28,13 @@ def _inside(path: Path, root: Path) -> bool:
     return True
 
 
+def annotation_time_sync(dataset: Path) -> Path:
+    manual = dataset.parent / "time_sync_led.yaml"
+    # A present but invalid manual file must fail, not silently use old auto sync.
+    selected = manual if manual.exists() or manual.is_symlink() else dataset.parent / "time_sync_led_auto.yaml"
+    return selected.resolve()
+
+
 def build_handler(html_path: Path, record_root: Path, camchain_path: Path):
     jobs: dict[str, dict] = {}
     jobs_lock = threading.Lock()
@@ -398,9 +405,9 @@ def build_handler(html_path: Path, record_root: Path, camchain_path: Path):
                 return
             annotation_preview = request.path == "/api/annotation-preview"
             if annotation_preview:
-                output = (dataset.parent / "time_sync_led_auto.yaml").resolve()
+                output = annotation_time_sync(dataset)
                 if not _inside(output, record_root) or not output.is_file():
-                    self._send_json({"error": "保存済みの自動同期YAMLが必要です"}, HTTPStatus.BAD_REQUEST)
+                    self._send_json({"error": "保存済みの同期YAMLが必要です（手動time_sync_led.yamlを優先、なければtime_sync_led_auto.yaml）"}, HTTPStatus.BAD_REQUEST)
                     return
             else:
                 content = payload.get("yaml")
