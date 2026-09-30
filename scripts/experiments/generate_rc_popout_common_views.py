@@ -21,6 +21,7 @@ def digest(path):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--record-root', type=Path, required=True)
+    parser.add_argument('--sessions', nargs='+', help='Only these immediate session folder names')
     parser.add_argument('--camchain', type=Path, required=True)
     parser.add_argument('--projection', choices=['rotation-only', 'fixed-depth'], default='rotation-only')
     parser.add_argument('--depth-m', type=float, help='Required for fixed-depth; plane assumption, not measured depth')
@@ -35,6 +36,12 @@ def main():
         parser.error('record-root directory and camchain file must exist')
     sessions = sorted(p for p in root.iterdir() if p.is_dir() and p.name != 'analysis'
                       and '_calibration_' not in p.name and any(p.glob('*.mcap')))
+    if args.sessions:
+        requested = set(args.sessions)
+        missing = requested - {p.name for p in sessions}
+        if missing:
+            parser.error(f'Unknown MCAP sessions: {", ".join(sorted(missing))}')
+        sessions = [p for p in sessions if p.name in requested]
     if not sessions:
         parser.error('No MCAP sessions found in record-root')
     failures, results = 0, []

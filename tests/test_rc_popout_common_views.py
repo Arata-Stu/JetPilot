@@ -46,6 +46,14 @@ class CommonViewsTests(unittest.TestCase):
             with patch.object(MODULE.sys, 'argv', argv + ['--dry-run']), contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(MODULE.main(), 0)
             self.assertFalse((root / 'analysis/scenario_overlay').exists())
+            with patch.object(MODULE.sys, 'argv', argv + ['--dry-run', '--sessions', 'scene1', 'scene4']), contextlib.redirect_stdout(io.StringIO()) as output:
+                self.assertEqual(MODULE.main(), 0)
+                self.assertIn('sessions=2 failed=0', output.getvalue())
+                self.assertNotIn('[1/2] scene0', output.getvalue())
+            with patch.object(MODULE.sys, 'argv', argv + ['--dry-run', '--sessions', 'missing']), contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaises(SystemExit) as error:
+                    MODULE.main()
+                self.assertEqual(error.exception.code, 2)
             with patch.object(MODULE.sys, 'argv', argv), patch.object(MODULE.subprocess, 'run', render), contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(MODULE.main(), 0)
                 self.assertEqual(len(calls), 6)
