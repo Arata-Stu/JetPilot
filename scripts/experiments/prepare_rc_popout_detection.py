@@ -10,7 +10,18 @@ def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def build(root, roi_name):
+def select_roi(rois, roi_name, session):
+    selected = rois if roi_name is None else [x for x in rois if x.get('name') == roi_name]
+    if len(selected) != 1:
+        names = [x.get('name', '<unnamed>') for x in rois]
+        if not rois:
+            raise ValueError(f'{session}: 保存済みROIが0件です。ROI共有の実行結果と保存先を確認してください')
+        raise ValueError(f'{session}: ROIを一意に選べません。保存済みROI名={names!r} / '
+                         f'指定名={roi_name!r}。--roi-name で対象を指定してください')
+    return selected[0]
+
+
+def build(root, roi_name=None):
     sessions = sorted(p for p in root.iterdir() if p.is_dir() and p.name != 'analysis'
                       and '_calibration_' not in p.name and any(p.glob('*.mcap')))
     if not sessions:
@@ -26,10 +37,8 @@ def build(root, roi_name):
         evaluation = [x for x in annotation['intervals'] if x['label'] == 'evaluation']
         if not evaluation or any(not x['start_s'] < x['end_s'] for x in evaluation):
             raise ValueError(f'{session.name}: 評価区間がありません／不正です')
-        selected = [x for x in annotation['rois'] if x['name'] == roi_name]
-        if len(selected) != 1:
-            raise ValueError(f'{session.name}: ROI {roi_name!r} が一意に保存されていません')
-        roi = {k: selected[0][k] for k in ('name', 'x', 'y', 'width', 'height', 'mask_policy')}
+        selected = select_roi(annotation.get('rois', []), roi_name, session.name)
+        roi = {k: selected[k] for k in ('name', 'x', 'y', 'width', 'height', 'mask_policy')}
         spatial = annotation['spatial']
         if not spatial or spatial['view_frame'] != 'evs' or roi['mask_policy'] != 'intersect_common':
             raise ValueError(f'{session.name}: EVS座標の共通視野と交差するROIが必要です')
@@ -49,7 +58,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--record-root', required=True, type=Path)
     parser.add_argument('--output', required=True, type=Path)
-    parser.add_argument('--roi-name', default='band')
+    parser.add_argument('--roi-name', help='ROI name; omit to use the sole saved ROI in each scene')
     args = parser.parse_args()
     try:
         config = build(args.record_root.resolve(), args.roi_name)
