@@ -11,7 +11,7 @@ teleop_cmd_node:
     steering_scale: -1.0
     steering_offset: 0.0
     # /steer_offset_inc and /steer_offset_dec change steering_offset by this step.
-    steering_offset_step: 0.01
+    steering_offset_step: 0.001
     throttle_scale: 1.0
     # /speed_offset_inc and /speed_offset_dec change throttle_scale by this step.
     throttle_scale_step: 0.05
