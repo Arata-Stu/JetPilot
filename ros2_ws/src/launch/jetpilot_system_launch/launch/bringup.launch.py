@@ -167,6 +167,23 @@ class _LaunchBoolean(lut.Substitution):
         return 'normalized JetPilot launch boolean'
 
 
+class _VehicleSteeringTrim(lut.Substitution):
+    """Resolve trim ownership only after launch arguments have actual values."""
+
+    def __init__(self, enabled, interface_pkg):
+        super().__init__()
+        self._enabled = enabled
+        self._interface_pkg = interface_pkg
+
+    def perform(self, context) -> str:
+        enabled = _as_bool(lu.perform_context(context, self._enabled))
+        package = lu.perform_context(context, self._interface_pkg)
+        return 'true' if enabled and package == 'jetpilot_bridge_interface' else 'false'
+
+    def describe(self) -> str:
+        return 'JPBB owns HOST steering trim'
+
+
 class _ReplayArguments(lut.Substitution):
     def __init__(self, additional_args, allow_unsafe_control_topics, extra_topics=()):
         super().__init__()
@@ -950,8 +967,8 @@ def generate_launch_description() -> lut.LaunchDescription:
                 'bag_manager_output_dir': args.bag_manager_output_dir,
                 'bag_manager_recording_name': args.bag_manager_recording_name,
                 'teleop_cmd_param': args.teleop_cmd_param,
-                'vehicle_steering_trim': (lu.is_true(args.enable_vehicle)
-                    and str(args.vehicle_interface_pkg) == 'jetpilot_bridge_interface'),
+                'vehicle_steering_trim': _VehicleSteeringTrim(
+                    args.enable_vehicle, args.vehicle_interface_pkg),
                 'teleop_fixed_throttle_mode': args.teleop_fixed_throttle_mode,
                 'fixed_throttle': args.fixed_throttle,
                 'teleop_button_mapping_param': args.teleop_button_mapping_param,

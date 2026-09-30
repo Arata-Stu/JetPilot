@@ -26,16 +26,28 @@ class TrimLaunchTests(unittest.TestCase):
 
     def test_bringup_selects_jpbb_active_vehicle_only(self):
         tree=ast.parse((ROOT/'bringup.launch.py').read_text())
+        # Top-level ArgumentContainer values are unresolved substitutions, not strings.
+        class Deferred:
+            def __init__(self, name): self.name = name
+            def __str__(self): return '<unresolved launch substitution>'
+
+        env = dict(lut=SimpleNamespace(Substitution=object), _as_bool=truth,
+                   lu=SimpleNamespace(perform_context=lambda ctx, value: ctx[value.name]))
+        cls = next(n for n in tree.body if isinstance(n, ast.ClassDef)
+                   and n.name == '_VehicleSteeringTrim')
+        exec(compile(ast.Module(body=[cls], type_ignores=[]), 'bringup.launch.py', 'exec'), env)
         expressions=[v for node in ast.walk(tree) if isinstance(node,ast.Dict)
                      for k,v in zip(node.keys,node.values)
                      if isinstance(k,ast.Constant) and k.value=='vehicle_steering_trim']
         self.assertEqual(len(expressions),1)
         code=compile(ast.Expression(expressions[0]),'bringup.launch.py','eval')
-        for enabled,pkg,expected in [(True,'jetpilot_bridge_interface',True),
-                                      (False,'jetpilot_bridge_interface',False),
-                                      (True,'pca9685_rc_driver',False),
-                                      (True,'jetpilot_vesc_interface',False)]:
-            self.assertEqual(eval(code,dict(lu=SimpleNamespace(is_true=truth),
-                args=Args(enable_vehicle=enabled,vehicle_interface_pkg=pkg))),expected)
+        env['args'] = Args(enable_vehicle=Deferred('enabled'),
+                           vehicle_interface_pkg=Deferred('pkg'))
+        substitution = eval(code, env)
+        for enabled,pkg,expected in [('true','jetpilot_bridge_interface','true'),
+                                      ('false','jetpilot_bridge_interface','false'),
+                                      ('true','pca9685_rc_driver','false'),
+                                      ('true','jetpilot_vesc_interface','false')]:
+            self.assertEqual(substitution.perform(dict(enabled=enabled, pkg=pkg)), expected)
 
 if __name__=='__main__':unittest.main()
