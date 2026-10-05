@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "split_id": "rc_popout_moving_ego02_v1",
+  "fixed_on": "2026-10-05",
+  "unit": "whole_recording",
+  "ego_throttle": 0.2,
+  "selection_rule": "First accepted repetition in each condition for development; second and third for evaluation. Condition/repetition mapping follows the conversation handoff and must be checked against bench metadata on the data host.",
+  "prior_exposure": "Aggregate scores, onset times and before/after statistics for all recordings have already been inspected. This is an internal evaluation split fixed before implementing the new local-background method, not a previously unseen test dataset.",
+  "groups": [
+    {
+      "condition": "none",
+      "record_root_relative": "2026-09-30",
+      "development": ["t_0.2-none"],
+      "evaluation": ["t_0.2-none_01", "t_0.2-none_02"]
+    },
+    {
+      "condition": "popout_20pct_left",
+      "record_root_relative": "dynamic",
+      "development": ["test_01"],
+      "evaluation": ["test_02", "test_04"]
+    },
+    {
+      "condition": "popout_20pct_right",
+      "record_root_relative": "dynamic",
+      "development": ["test_05"],
+      "evaluation": ["test_06", "test_07"]
+    },
+    {
+      "condition": "popout_100pct_left",
+      "record_root_relative": "dynamic",
+      "development": ["test_11"],
+      "evaluation": ["test_12", "test_13"]
+    },
+    {
+      "condition": "popout_100pct_right",
+      "record_root_relative": "dynamic",
+      "development": ["test_14"],
+      "evaluation": ["test_15", "test_16"]
+    }
+  ],
+  "auxiliary_after_freeze": ["t_0.1-none", "t_0.1-none_01", "t_0.1-none_02"],
+  "policy": {
+    "same_split_for_rgb_and_evs": true,
+    "frames_or_windows_must_not_cross_roles": true,
+    "evaluation_used_for_tuning": false,
+    "stationary_records_role": "Apply frozen new method for transfer verification; these records were already used in earlier baseline development, so they are not independent unseen data.",
+    "remote_access": "User runs commands; no agent SSH."
+  }
+}
