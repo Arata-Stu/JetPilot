@@ -2,6 +2,7 @@ import contextlib
 import csv
 import io
 import json
+import math
 from pathlib import Path
 import sys
 import tempfile
@@ -139,9 +140,63 @@ class ChangeTests(unittest.TestCase):
     def test_invalid_split_and_parameters_rejected(self):
         with self.assertRaises(ValueError):
             m.select_sessions(dict(groups=[dict(development=['a'], evaluation=['a'])]), 'development')
-        for patch in ({'rgb_scale_floor': 0}, {'history_s': .1}, {'z_clip': float('nan')}, {'min_samples': 2.5}):
+        for patch in ({'rgb_scale_floor': 0}, {'history_s': .1}, {'z_clip': float('nan')}, {'min_samples': 2.5},
+                      {'decay_tau_s': -.1}, {'release_ratio': -1}, {'release_ratio': 1}):
             with self.assertRaises(ValueError):
                 m.validate_settings(dict(settings(), **patch))
+
+    def test_decay_integral_independent_of_rate_and_bounded(self):
+        tau, rate = .1, 9.
+        expected = tau * rate * (1-math.exp(-1/tau))
+        for dt in (.001, .01, .05):
+            value = 0.
+            for _ in range(round(1/dt)):
+                value = m.advance_cusum(value, rate, dt, tau)
+            self.assertAlmostEqual(value, expected, places=12)
+            self.assertLessEqual(value, tau*rate)
+        # Background z=0 => rate=-k=-1; an old maximal transient must clear.
+        value = tau*rate
+        for _ in range(250):
+            value = m.advance_cusum(value, -1., .001, tau)
+        self.assertEqual(value, 0.)
+
+    def test_two_changes_are_separated_without_hiding_first_alarm(self):
+        for sensor, step, divisor in [('evs', .001, 1), ('rgb', 1/60, 20000)]:
+            data = rows(step=step, until=2., jump_at=.6)
+            for r in data:
+                if r['from_drive_s'] >= 1.05:
+                    r['score'] = 300.
+                r['score'] /= divisor
+            _, old = m.detect(data, sensor, settings())
+            _, new = m.detect(data, sensor, dict(settings(), decay_tau_s=.1, release_ratio=.5))
+            self.assertEqual(len(old), 1)
+            self.assertEqual(len(new), 2)
+            self.assertGreaterEqual(new[0]['start_from_drive_s'], .6)
+            self.assertLess(new[0]['start_from_drive_s'], .65)
+            self.assertLess(new[0]['end_from_drive_s'], 1.05)
+            self.assertGreaterEqual(new[1]['start_from_drive_s'], 1.05)
+            self.assertEqual(new[0]['end_reason'], 'cusum_below_release')
+
+    def test_leaky_prefix_and_phase_invariance(self):
+        data = rows(step=.001)
+        p = dict(settings(), decay_tau_s=.1, release_ratio=.5)
+        a, _ = m.detect(data[:651], 'evs', p)
+        data[700]['score'] = 1e9
+        b, _ = m.detect(data, 'evs', p)
+        c, _ = m.detect([dict(r, phase='outside_phases') for r in data], 'evs', p)
+        self.assertEqual(a, b[:651])
+        self.assertEqual([r['alarm'] for r in b], [r['alarm'] for r in c])
+
+    def test_release_can_rearm_before_cusum_reaches_zero(self):
+        data = rows(step=.001)
+        p = dict(settings(), decay_tau_s=.1, release_ratio=.5)
+        series, events = m.detect(data, 'evs', p)
+        end = next(r for r in series if r['from_drive_s'] == events[0]['end_from_drive_s'])
+        self.assertFalse(end['active'])
+        self.assertGreater(end['cusum_s'], 0)
+        self.assertLessEqual(end['cusum_s'], p['threshold_s']*p['release_ratio'])
+        report = m.summarize('s', 'evs', series, events, .9, .03)
+        self.assertFalse(report['active_candidate_at_onset'])
 
     def test_cli_development_and_frozen_evaluation(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -153,18 +208,28 @@ class ChangeTests(unittest.TestCase):
             eval_csv = motion/'test/evs_aligned_scores.csv'
             original = eval_csv.read_text(); eval_csv.unlink()
             with contextlib.redirect_stdout(io.StringIO()):
-                self.assertEqual(m.main(base + ['--output', str(dev)]), 0)
+                self.assertEqual(m.main(base + ['--output', str(dev), '--decay-tau-s', '.1', '--release-ratio', '.5']), 0)
             self.assertFalse((dev/'test').exists())
             summary = json.loads((dev/'summary.json').read_text())
             self.assertEqual({r['session'] for r in summary}, {'dev'})
             self.assertEqual({r['method'] for r in summary}, {'rgb', 'evs'})
             self.assertTrue((dev/'dev/rgb_change_scores.svg').exists())
+            with (dev/'candidates.csv').open() as f:
+                candidates = list(csv.DictReader(f))
+            self.assertEqual({r['session'] for r in candidates}, {'dev'})
+            self.assertTrue(all(float(r['duration_s']) >= 0 for r in candidates))
             with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                 m.main(base + ['--subset', 'evaluation', '--output', str(ev)])
             self.assertFalse(ev.exists())
             frozen = ['--parameters', str(dev/'detector_parameters.json')]
             with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                 m.main(base + frozen + ['--subset', 'evaluation', '--threshold-s', '.01', '--output', str(ev)])
+            stale = root/'old_parameters.json'
+            old = json.loads((dev/'detector_parameters.json').read_text())
+            old['algorithm'] = 'rolling_median_mad_time_cusum_v1'
+            m.write_json(stale, old)
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                m.main(base + ['--parameters', str(stale), '--subset', 'evaluation', '--output', str(ev)])
             eval_csv.write_text(original)
             with contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(m.main(base + frozen + ['--subset', 'evaluation', '--output', str(ev)]), 0)

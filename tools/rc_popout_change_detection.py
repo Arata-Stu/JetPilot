@@ -18,13 +18,13 @@ from statistics import median
 
 
 ROOT = Path(__file__).resolve().parents[1]
-ALGORITHM = 'rolling_median_mad_time_cusum_v1'
+ALGORITHM = 'rolling_median_mad_time_cusum_v2'
 DEFAULT_SPLIT = ROOT / 'docs/evidence/rc_popout_20260930/development_evaluation_split_v1.json'
 DEFAULTS = dict(history_s=0.30, min_history_s=0.20, min_samples=8,
                 drift_k=1.0, threshold_s=0.05, z_clip=10.0,
                 rgb_scale_floor=0.001, evs_scale_floor=20.0,
                 rgb_max_gap_s=0.10, evs_max_gap_s=0.003,
-                onset_guard_s=0.030)
+                onset_guard_s=0.030, decay_tau_s=0.0, release_ratio=0.0)
 
 
 def digest(path):
@@ -53,14 +53,32 @@ def validate_settings(settings):
     if set(settings) != set(DEFAULTS) | {'evs_window_s'}:
         raise ValueError('unexpected or missing detector settings')
     for key, value in settings.items():
-        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
-            raise ValueError(f'{key} must be finite and positive')
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+            raise ValueError(f'{key} must be finite and numeric')
+        if value < 0 or (value == 0 and key not in ('decay_tau_s', 'release_ratio')):
+            raise ValueError(f'{key} is outside its allowed positive/nonnegative range')
     if not isinstance(settings['min_samples'], int) or settings['min_samples'] < 2:
         raise ValueError('min_samples must be an integer >= 2')
     if settings['min_history_s'] >= settings['history_s']:
         raise ValueError('min_history_s must be smaller than history_s')
     if settings['drift_k'] >= settings['z_clip']:
         raise ValueError('drift_k must be smaller than z_clip')
+    if settings['release_ratio'] >= 1:
+        raise ValueError('release_ratio must be in [0, 1)')
+
+
+def advance_cusum(value, rate, dt, decay_tau_s):
+    """Integrate current rate over dt; optional exact exponential forgetting.
+
+    For tau > 0 solve dC/dt = rate - C/tau over this step, then clip at zero.
+    Constant-rate behavior is independent of update frequency before sampling
+    of threshold crossings. The current sample is available only at the end.
+    """
+    if decay_tau_s == 0:
+        return max(0.0, value + rate * dt)
+    retain = math.exp(-dt / decay_tau_s)
+    gain = -decay_tau_s * math.expm1(-dt / decay_tau_s)
+    return max(0.0, retain * value + gain * rate)
 
 
 def read_scores(path, zero):
@@ -144,13 +162,14 @@ def detect(rows, sensor, settings):
                 scale = max(floor, 1.4826 * median(abs(v - baseline) for v in values))
                 z = max(-settings['z_clip'], min(settings['z_clip'], (row['score'] - baseline) / scale))
                 # Backward time quadrature, available at t; never backdate alarm to t-dt.
-                cusum = max(0.0, cusum + (z - settings['drift_k']) * dt)
+                cusum = advance_cusum(cusum, z - settings['drift_k'], dt, settings['decay_tau_s'])
                 if active is None and cusum >= settings['threshold_s']:
                     alarm = True
                     active = dict(interval=row['interval'], start_from_drive_s=t,
                                   start_relative_time_s=row['relative_time_s'], start_phase=row['phase'])
-                if cusum <= 0:
-                    close_episode(row, 'cusum_returned_to_zero')
+                if cusum <= settings['threshold_s'] * settings['release_ratio']:
+                    reason = 'cusum_below_release' if settings['release_ratio'] > 0 else 'cusum_returned_to_zero'
+                    close_episode(row, reason)
         if not ready:
             close_episode(previous or row, 'warmup')
             cusum = 0.0
@@ -182,7 +201,10 @@ def summarize(session, sensor, series, episodes, onset, guard):
     result = dict(session=session, method=sensor, status='complete', samples=len(series),
                   ready_samples=sum(r['ready'] for r in series), ready_observed_seconds=ready_seconds,
                   candidates=len(starts), first_candidate_from_drive_s=starts[0] if starts else None,
-                  rgb_first_visible_from_drive_s=onset, phase_counts=phases)
+                  rgb_first_visible_from_drive_s=onset, phase_counts=phases,
+                  first_candidate_end_from_drive_s=episodes[0]['end_from_drive_s'] if episodes else None,
+                  active_candidate_at_onset=None if onset is None else any(
+                      e['start_from_drive_s'] <= onset < e['end_from_drive_s'] for e in episodes))
     if onset is not None:
         result.update(candidates_before_guard=sum(t < onset - guard for t in starts),
                       candidates_near_onset=sum(onset - guard <= t <= onset + guard for t in starts),
@@ -237,6 +259,9 @@ def plot(path, series, episodes, onset, settings, title):
         if threshold:
             yy = y(settings['threshold_s'])
             parts.append(f'<path d="M80 {yy} H1080" stroke="#b22" stroke-dasharray="5 4"/>')
+            if settings['release_ratio'] > 0:
+                yy = y(settings['threshold_s'] * settings['release_ratio'])
+                parts.append(f'<path d="M80 {yy} H1080" stroke="#777" stroke-dasharray="2 4"/>')
         for e in episodes:
             if not first <= e['start_from_drive_s'] <= last:
                 continue
@@ -249,7 +274,7 @@ def plot(path, series, episodes, onset, settings, title):
             t = first + span * j / 5
             parts.append(f'<text x="{x(t)}" y="{top+154}" font-size="12">{t:.2f}</text>')
     parts += ['<text x="80" y="645" font-family="sans-serif">Time from drive command [s]. Red: candidate; green: RGB onset (report only).</text>',
-              '<text x="80" y="670" font-family="sans-serif">Blue: signal; orange: past median. Full annotated CSV; no command-phase gating.</text>', '</svg>']
+              '<text x="80" y="670" font-family="sans-serif">Blue: signal; orange: past median; gray dotted: release. No command-phase gating.</text>', '</svg>']
     path.write_text('\n'.join(parts))
 
 
@@ -343,7 +368,7 @@ def main(argv=None):
     except (OSError, ValueError, KeyError, TypeError) as error:
         parser.exit(1, f'error: {error}\n')
 
-    summaries = []
+    summaries, candidate_rows = [], []
     for session in sessions:
         print(f'[{args.subset}] {session}', flush=True)
         try:
@@ -352,6 +377,7 @@ def main(argv=None):
             out = args.output / session
             out.mkdir()
             scene_results = []
+            scene_candidates = []
             for sensor in ('rgb', 'evs'):
                 path = folder / f'{sensor}_aligned_scores.csv'
                 rows = read_scores(path, alignment['drive_start_s'])
@@ -366,6 +392,13 @@ def main(argv=None):
                 onset = alignment.get('rgb_first_visible_from_drive_s')
                 result = summarize(session, sensor, series, episodes, onset, settings['onset_guard_s'])
                 scene_results.append(result)
+                for number, episode in enumerate(episodes, 1):
+                    start, end = episode['start_from_drive_s'], episode['end_from_drive_s']
+                    scene_candidates.append(dict(session=session, method=sensor, candidate=number,
+                        start_from_drive_s=start, end_from_drive_s=end, duration_s=end-start,
+                        start_phase=episode['start_phase'], end_reason=episode['end_reason'],
+                        rgb_first_visible_from_drive_s=onset,
+                        start_minus_onset_s=None if onset is None else start-onset))
                 write_json(out / f'{sensor}_candidates.json', episodes)
                 plot(out / f'{sensor}_change_scores.svg', series, episodes, onset, settings, f'{session} / {sensor}')
                 # Display crop only: detector ran on the whole CSV without a phase reset.
@@ -378,6 +411,7 @@ def main(argv=None):
                       f'first={result["first_candidate_from_drive_s"]}', flush=True)
             write_json(out / 'result.json', dict(alignment=alignment, input_hashes=hashes, results=scene_results))
             summaries.extend(scene_results)
+            candidate_rows.extend(scene_candidates)
         except (OSError, ValueError, KeyError, TypeError) as error:
             summaries.append(dict(session=session, method='', status='failed', error=str(error)))
             print(f'  FAILED: {error}', flush=True)
@@ -385,11 +419,18 @@ def main(argv=None):
     fields = ['session', 'method', 'status', 'error', 'samples', 'ready_samples', 'ready_observed_seconds',
               'candidates', 'first_candidate_from_drive_s', 'rgb_first_visible_from_drive_s',
               'first_candidate_minus_onset_s', 'candidates_before_guard', 'candidates_near_onset',
-              'candidates_after_guard']
+              'candidates_after_guard', 'first_candidate_end_from_drive_s', 'active_candidate_at_onset']
     with (args.output / 'summary.csv').open('w') as stream:
         writer = csv.DictWriter(stream, fieldnames=fields, extrasaction='ignore')
         writer.writeheader()
         writer.writerows(summaries)
+    with (args.output / 'candidates.csv').open('w') as stream:
+        fields = ['session', 'method', 'candidate', 'start_from_drive_s', 'end_from_drive_s',
+                  'duration_s', 'start_phase', 'end_reason', 'rgb_first_visible_from_drive_s',
+                  'start_minus_onset_s']
+        writer = csv.DictWriter(stream, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(candidate_rows)
     links = []
     for r in summaries:
         session = html.escape(r['session'], quote=True)
