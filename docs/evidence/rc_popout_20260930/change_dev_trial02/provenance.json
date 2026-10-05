@@ -1,0 +1,9 @@
+{
+  "source": "User-pasted Linux CSV output; original data not accessed locally",
+  "source_attachment": "a2462b06-5482-4f66-aabc-2ff0407c2158",
+  "source_sha256": "742244feee7d9df95cb7b7a47c13ffc86da9c46c551cbb5c9902bd474d60a9e2",
+  "remote_output": "/workspaces/record/09-30/analysis/change_dev_trial02",
+  "command": "bash scripts/experiments/analyze_rc_popout_changes.sh --motion-dir /workspaces/record/09-30/analysis/detection_motion_trial01 --subset development --decay-tau-s 0.10 --release-ratio 0.5 --output /workspaces/record/09-30/analysis/change_dev_trial02",
+  "summary_rows": 10,
+  "candidates_rows": 47
+}

@@ -97,7 +97,7 @@ def spatial_scores(parts, n_bins, window_bins, width, height, tile_px, min_pixel
     return scores,peak_events,peak_pixels
 
 
-def analyze(config, entry, args):
+def analyze(config, entry, args, *, tile_sink=None):
     import numpy as np
     import cv2
     from multi_sensor_calibration.io import load_yaml
@@ -137,6 +137,8 @@ def analyze(config, entry, args):
     if not (0<=x<x+rw<=w and 0<=y<y+rh<=h): raise ValueError('ROI out of bounds')
     mask=np.zeros((h,w),bool); mask[y:y+rh,x:x+rw]=True
     mask = apply_common_mask(mask, common, roi.get('mask_policy'))
+    if tile_sink is not None:
+        tile_sink.initialize(mask, spans, args.step_ms/1000, args.window_bins)
     session=ann_path.parents[3]/ann['session']
     raw=list(session.glob('*.raw'))
     if len(raw)!=1: raise ValueError('exactly one RAW required')
@@ -156,8 +158,11 @@ def analyze(config, entry, args):
         gray=cv2.cvtColor(corrected,cv2.COLOR_BGR2GRAY).astype(np.int16)
         if previous is not None and interval==previous_interval:
             if t<=previous_t: raise ValueError('RGB timestamps not increasing')
-            score=float(np.mean(np.abs(gray[mask]-previous[mask])>=args.rgb_pixel_delta))
+            changed=np.abs(gray-previous)>=args.rgb_pixel_delta
+            score=float(np.mean(changed[mask]))
             rgb_rows.append((interval,t,score))
+            if tile_sink is not None:
+                tile_sink.rgb(interval, previous_t, t, changed)
         previous=gray;previous_interval=interval;previous_t=t
     # Classify each raw event in undistorted EVS coordinates; keep multiplicity.
     yy,xx=np.indices((h,w)); points=np.stack((xx,yy),axis=-1).astype(np.float32).reshape(-1,1,2)
@@ -205,6 +210,9 @@ def analyze(config, entry, args):
                 ex,ey=events['x'][chosen][accepted],events['y'][chosen][accepted]
                 pixels=uy[ey,ex]*w+ux[ey,ex]
                 if len(pixels):spatial_parts[i].append(np.column_stack((index[accepted],pixels)))
+            if tile_sink is not None:
+                ex,ey=events['x'][chosen][accepted],events['y'][chosen][accepted]
+                tile_sink.events(i, index[accepted], ux[ey,ex], uy[ey,ex])
             index=index[accepted]
             hist[i]+=np.bincount(index,minlength=len(hist[i]))
         # Read to EOF: a later batch can still contain in-range timestamps.

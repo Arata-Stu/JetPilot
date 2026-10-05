@@ -10,6 +10,7 @@ from unittest.mock import patch
 import numpy as np
 
 ROOT=Path(__file__).resolve().parents[1]
+sys.path.insert(0,str(ROOT/'tools'))
 sys.path.insert(0,str(ROOT/'ros2_ws/src/tool/multi_sensor_calibration'))
 spec=importlib.util.spec_from_file_location('detection',ROOT/'tools/rc_popout_detection.py')
 m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
@@ -105,9 +106,18 @@ class DetectionTests(unittest.TestCase):
             for partitions in ([[4,2,0,1,3]], [[0,4],[2],[1,3]], [[4],[3,2],[1,0]]):
                 with self.subTest(partitions=partitions):
                     source.batches=lambda:iter(SimpleNamespace(events=events[index]) for index in partitions)
-                    reordered,rr,ee=m.analyze(config,entry,args)
+                    from rc_popout_tile_activity import TileSink
+                    sink=TileSink(2)
+                    reordered,rr,ee=m.analyze(config,entry,args,tile_sink=sink)
+                    arrays=sink.finish()
                     self.assertEqual(ee,evs)
                     self.assertEqual(rr,rgb)
+                    np.testing.assert_array_equal(arrays['rgb']['counts'].sum(axis=1)/16, [r[2] for r in rgb])
+                    np.testing.assert_array_equal(arrays['evs']['counts'].sum(axis=1), [r[2] for r in evs])
+                    np.testing.assert_array_equal(arrays['evs']['time_s'], [r[1] for r in evs])
+                    self.assertEqual(arrays['rgb']['counts'].max(),4)
+                    self.assertEqual(arrays['evs']['counts'][:,0].max(),3)
+                    self.assertEqual(arrays['evs']['counts'][:,1:].max(),0)
                     self.assertEqual(reordered['evs'],result['evs'])
                     self.assertGreater(reordered['event_ordering']['backward_steps'],0)
                     self.assertGreater(reordered['event_ordering']['max_backward_step_us'],0)
