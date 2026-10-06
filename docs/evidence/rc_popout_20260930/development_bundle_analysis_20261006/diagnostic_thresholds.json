@@ -1,0 +1,16 @@
+[
+  {
+    "sensor": "rgb",
+    "control": "t_0.2-none",
+    "control_max": 0.6486545135187527,
+    "threshold": 0.65,
+    "step": 0.05
+  },
+  {
+    "sensor": "evs",
+    "control": "t_0.2-none",
+    "control_max": 0.22757893736646734,
+    "threshold": 0.25,
+    "step": 0.05
+  }
+]

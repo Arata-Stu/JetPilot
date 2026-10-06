@@ -1,0 +1,173 @@
+{
+  "schema_version": 1,
+  "purpose": "Spatial review of EVS candidates; not object tracks or new detection results",
+  "source_bundle_sha256": "4df3a0ac25cea3c2c086f89fc2fe14eca78b4d651d3b8bda4f7cdd92a3f87d87",
+  "candidate_table_sha256": "79568baa53bfb89115920c61358f88ffd0bc9681c32b84361317807ac794bde9",
+  "split_sha256": "8df7a191f987bd22333230d5d309c0ebcb4ebd2f2b85b039331c47b26603cd08",
+  "detector_threshold": 0.25,
+  "detector_window_ms": 2.0,
+  "spatial": {
+    "view_frame": "evs",
+    "output_size": [
+      640,
+      480
+    ],
+    "projection": "rotation-only",
+    "depth_m": null,
+    "camchain": "/workspaces/ros2_ws/src/tool/multi_sensor_calibration/config/calibrations/rc_popout_default/kalibr-camchain.yaml",
+    "camchain_sha256": "36d931d4598ebfb02dc095dc52be4b3b49056dcee01463c01bf7f374114b9a12",
+    "rgb_to_view_homography": [
+      [
+        1.3014063190178589,
+        0.01878164958581602,
+        -238.37537422396684
+      ],
+      [
+        -0.008146420226858173,
+        1.3001443472362693,
+        -88.82128913808391
+      ],
+      [
+        1.3228671015946593e-05,
+        2.3169795498635207e-05,
+        0.9884803580376667
+      ]
+    ],
+    "event_to_view_homography": [
+      [
+        1.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        1.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "common_valid_mask": "/workspaces/record/09-30/2026-09-30/analysis/scenario_overlay/t_0.1-none/common_evs_batch_f662a24759c52a45/common_valid_mask.png"
+  },
+  "scenes": [
+    {
+      "session": "test_01",
+      "candidate_recording_s": 14.78799295425415,
+      "candidate_from_drive_s": 1.6884410381317139,
+      "drive_start_s": 13.099551916122437,
+      "rgb_onset_recording_s": 14.6492919921875,
+      "reference_origin_s": 1790751748.3324177,
+      "rgb_timestamp_source": "bag",
+      "annotation_sha256": "17ed1b339cd0a978d0deac2f580beb21d476d1df6793391c54bb548fac9b82ac",
+      "time_sync_sha256": "dda12d168945ec3d35960a9d2974b3d1ba9045d388d76a1538d1fe4275e60eee",
+      "tiles": [
+        {
+          "tile_id": 180,
+          "x": 0,
+          "y": 288,
+          "width": 32,
+          "height": 32,
+          "valid_pixels": 1024
+        },
+        {
+          "tile_id": 181,
+          "x": 32,
+          "y": 288,
+          "width": 32,
+          "height": 32,
+          "valid_pixels": 1024
+        }
+      ]
+    },
+    {
+      "session": "test_05",
+      "candidate_recording_s": 12.939008237838745,
+      "candidate_from_drive_s": 1.6978969593048099,
+      "drive_start_s": 11.241111278533936,
+      "rgb_onset_recording_s": 12.771912336349487,
+      "reference_origin_s": 1790751971.4408987,
+      "rgb_timestamp_source": "bag",
+      "annotation_sha256": "2058eb9da28a233e3ac29c5a8fb83386ef7435106e0c9936bbeb7f70aad52e0d",
+      "time_sync_sha256": "2e87564a84b55a08a9d6df8c50aba914c0bacd35bba6cadbf8c75a72b6c926a2",
+      "tiles": [
+        {
+          "tile_id": 196,
+          "x": 512,
+          "y": 288,
+          "width": 32,
+          "height": 32,
+          "valid_pixels": 1024
+        },
+        {
+          "tile_id": 197,
+          "x": 544,
+          "y": 288,
+          "width": 32,
+          "height": 32,
+          "valid_pixels": 1024
+        }
+      ]
+    },
+    {
+      "session": "test_11",
+      "candidate_recording_s": 17.930066726684572,
+      "candidate_from_drive_s": 1.7404529075622577,
+      "drive_start_s": 16.189613819122314,
+      "rgb_onset_recording_s": 17.883052825927734,
+      "reference_origin_s": 1790752618.0240715,
+      "rgb_timestamp_source": "bag",
+      "annotation_sha256": "57b465b6fdaf908fb9fa31cf18902ae437433e410cb8f2c89c11b65ef140b5cd",
+      "time_sync_sha256": "8854c2e5591bf2d529b69df7cd7d68538613e65514792f56f6aaec77e9a76d09",
+      "tiles": [
+        {
+          "tile_id": 180,
+          "x": 0,
+          "y": 288,
+          "width": 32,
+          "height": 32,
+          "valid_pixels": 1024
+        },
+        {
+          "tile_id": 181,
+          "x": 32,
+          "y": 288,
+          "width": 32,
+          "height": 32,
+          "valid_pixels": 1024
+        }
+      ]
+    },
+    {
+      "session": "test_14",
+      "candidate_recording_s": 10.902608516693116,
+      "candidate_from_drive_s": 1.686857107162476,
+      "drive_start_s": 9.21575140953064,
+      "rgb_onset_recording_s": 10.862126588821411,
+      "reference_origin_s": 1790752812.1262772,
+      "rgb_timestamp_source": "bag",
+      "annotation_sha256": "c1dcaa935b5e7b343e50731829788403ee7fe1c32e6baa42252a830f784ae173",
+      "time_sync_sha256": "c699dfcdb45fae7917a736ff36d330389ba04dc673421727cf90f2d02ba24494",
+      "tiles": [
+        {
+          "tile_id": 176,
+          "x": 512,
+          "y": 256,
+          "width": 32,
+          "height": 32,
+          "valid_pixels": 1024
+        },
+        {
+          "tile_id": 177,
+          "x": 544,
+          "y": 256,
+          "width": 32,
+          "height": 32,
+          "valid_pixels": 1024
+        }
+      ]
+    }
+  ]
+}

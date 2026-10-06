@@ -1,0 +1,6 @@
+{
+  "status": "complete",
+  "reproduced_cases": 10,
+  "plots": true,
+  "note": "Exploratory development diagnostics, not a frozen or validated detector."
+}
