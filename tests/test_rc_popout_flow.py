@@ -149,6 +149,7 @@ class FlowTests(unittest.TestCase):
         self.assertAlmostEqual(result['evaluation_seconds'],.03)
         self.assertAlmostEqual(result['ready_observed_seconds'],.01)
         self.assertAlmostEqual(result['unobservable_seconds'],.02)
+        self.assertEqual(result['active_seconds'],0.)  # .04 alarm must not extend back into this phase.
         self.assertEqual(result['candidates'],0)
 
     def test_event_histogram_preserves_late_duplicates_and_excludes_future(self):

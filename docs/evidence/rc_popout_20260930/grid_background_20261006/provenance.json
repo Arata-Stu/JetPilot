@@ -1,0 +1,21 @@
+{
+  "source_output": "/Users/at/project/competition/JetPilot/record/09-30/analysis/grid_background_dev_20261006",
+  "scope": "five development records only; transferred archived tiles; no current RAW validation",
+  "selection_history": "Primary first trial margin=1.1. Margins 1.5, 2, 3 inspected after development results. Margin=2 selected for further visual review; no evaluation data opened.",
+  "files_sha256": {
+    "background_models.json": "48b0db5d762c84d7b2c06e257d2ef783b0476c8201ad3cd85727cfeaac02b58c",
+    "candidate_review_manifest.json": "663ea3737306f6250a803b2e0a748c04ad0abfd9635c2a4976a838b48443c34c",
+    "candidates.csv": "e43480b3a8e311207d3dc9bd83cd77cdcd91aa548b5b6e70545156deb1a9a1f0",
+    "detector_parameters.json": "b8954ac6bdcc4838580d35bce39ad1e7238d24907f83881353e2a110381cf6ca",
+    "run_config.json": "6fedf0eddc5d257c868e6628fe8ee57e0af04564d9e7c5faff2d31faeb42a9c8",
+    "score_overview.pdf": "0bf77f7ce32a0e1c12ba3c44a946f421bc40546e07a526103f4c866134ab6e6a",
+    "score_overview.png": "23b49e8e91a23ffd56c432b955d308f6b62d67f1e92a34be5c305ddaa46d32ad",
+    "summary.csv": "55537fd3b4aa403e0ec8fa86708f47500ae237f322b600227162e7f48210bdb2",
+    "test_01_evs_candidate_maps.png": "bcfc36500fdc3fadb63b1b093d6a75355f66dc2b2730c2190de3325b291a90f7",
+    "test_05_evs_candidate_maps.png": "0a776e9e9eaf3473ed9767c2b6f2d594a449816fe1016a3dad14e49d59111456",
+    "test_11_evs_candidate_maps.png": "f54831e19478dfc3114c3c1102c1098dffcd1ccf66a227995cb5d991533903a1",
+    "test_14_evs_candidate_maps.png": "3d026c0f61bc480d40bb9e180903287ce64b00cd13662b6dbb10d0ffa70c20b2",
+    "threshold_sensitivity.csv": "18e23085b0b70a1cd3b3169a21683a7c6af11903d6ba518fa3c52b69b52da636",
+    "threshold_sensitivity_candidates.csv": "2a69fb3d9ade07a63d2f0118a890a2da69cae9ee837da29b07a199ccbbcd719d"
+  }
+}

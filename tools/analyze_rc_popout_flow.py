@@ -231,12 +231,13 @@ def phase_summaries(rows, phases):
         spans = phase['intervals']
         duration = sum(b-a for a,b in spans)
         ready = active = 0.
-        for r in rows:
+        for index, r in enumerate(rows):
             # Conservative coverage: both endpoints must have a valid estimate.
             dt = r['ready_observed_step_s']
             overlap = sum(max(0., min(r['time_s'],b)-max(r['time_s']-dt,a)) for a,b in spans)
             ready += overlap
-            active += overlap if r['active'] else 0.
+            # Alarm becomes available at its timestamp, not one sample earlier.
+            active += overlap if index > 0 and rows[index-1]['active'] else 0.
         alarms = sum(r['alarm'] and any(a <= r['time_s'] < b for a,b in spans) for r in rows)
         result.append(dict(phase=phase['phase'], evaluation_seconds=duration, ready_observed_seconds=ready,
             unobservable_seconds=max(0.,duration-ready), ready_fraction=ready/duration if duration else None,
