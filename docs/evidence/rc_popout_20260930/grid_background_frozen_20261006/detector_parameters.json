@@ -1,0 +1,102 @@
+{
+  "algorithm": "phase_background_pca_grid_residual_v1",
+  "settings": {
+    "rank": 3,
+    "fit_step_s": 0.02,
+    "coefficient_limit": 3.0,
+    "residual_quantile": 0.95,
+    "decay_tau_s": 0.05,
+    "drift_k": 1.0,
+    "z_clip": 10.0,
+    "threshold_margin": 2.0,
+    "threshold_floor_s": 0.001,
+    "release_ratio": 0.5,
+    "rgb_max_gap_s": 0.1,
+    "evs_max_gap_s": 0.003,
+    "onset_guard_s": 0.03
+  },
+  "calibration": {
+    "rgb": {
+      "negative_max": 0.09882698513955221,
+      "threshold_s": 0.19765397027910442,
+      "rule": "max(threshold_floor_s, entire_negative_max * threshold_margin)"
+    },
+    "evs": {
+      "negative_max": 0.030451394606719834,
+      "threshold_s": 0.06090278921343967,
+      "rule": "max(threshold_floor_s, entire_negative_max * threshold_margin)"
+    }
+  },
+  "background_session": "t_0.2-none",
+  "model_sha256": "48b0db5d762c84d7b2c06e257d2ef783b0476c8201ad3cd85727cfeaac02b58c",
+  "input_definition": {
+    "tile_px": 32,
+    "roi": {
+      "name": "band",
+      "x": 0,
+      "y": 70,
+      "width": 640,
+      "height": 272,
+      "mask_policy": "intersect_common"
+    },
+    "spatial": {
+      "view_frame": "evs",
+      "output_size": [
+        640,
+        480
+      ],
+      "projection": "rotation-only",
+      "depth_m": null,
+      "camchain": "/workspaces/ros2_ws/src/tool/multi_sensor_calibration/config/calibrations/rc_popout_default/kalibr-camchain.yaml",
+      "camchain_sha256": "36d931d4598ebfb02dc095dc52be4b3b49056dcee01463c01bf7f374114b9a12",
+      "rgb_to_view_homography": [
+        [
+          1.3014063190178589,
+          0.01878164958581602,
+          -238.37537422396684
+        ],
+        [
+          -0.008146420226858173,
+          1.3001443472362693,
+          -88.82128913808391
+        ],
+        [
+          1.3228671015946593e-05,
+          2.3169795498635207e-05,
+          0.9884803580376667
+        ]
+      ],
+      "event_to_view_homography": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "common_valid_mask": "/workspaces/record/09-30/2026-09-30/analysis/scenario_overlay/t_0.1-none/common_evs_batch_f662a24759c52a45/common_valid_mask.png"
+    },
+    "rgb_topic": "/realsense/color/image_raw",
+    "rgb_pixel_delta": 15,
+    "step_ms": 1,
+    "window_bins": 2
+  },
+  "split_sha256": "8df7a191f987bd22333230d5d309c0ebcb4ebd2f2b85b039331c47b26603cd08",
+  "code_sha256": {
+    "rc_popout_grid_background.py": "ef29bd685952306f2e5077583b223087731b7b8602d2e950b5b6c02d6067b0e4",
+    "analyze_rc_popout_grid_background.py": "1285a6a3ff481efbc03966eac3e60d7d5cd18562482e38cbaa3e4b6763056238",
+    "rc_popout_local_detection.py": "f81282c88715daf71d64bed5964a32928793b00869cbe0ad03b34b62f3b27d32",
+    "rc_popout_change_detection.py": "71cc8b97cc276a677022709b8c7373b4c6f608d112369020e55839f49a22c976",
+    "analyze_rc_popout_development_bundle.py": "d723624f55bfbd4716eb7515cb6238a595917122fb4632e5732a4e16a413498a"
+  },
+  "status": "development_candidate_not_evaluated"
+}

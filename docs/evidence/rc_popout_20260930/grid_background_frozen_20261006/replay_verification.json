@@ -1,0 +1,81 @@
+{
+  "scope": "Development replay only; evaluation recordings not available locally and not run.",
+  "frozen_manifest_sha256": "a207d2bd0feb3a8f3126b152d0ae85057eb74e898ff061618675991b5671c2d8",
+  "baseline_dir": "record/09-30/analysis/grid_background_dev_20261006",
+  "output_dir": "record/09-30/analysis/grid_background_frozen_replay_20261006",
+  "numpy_version": "2.3.5",
+  "bundle_sha256": "4df3a0ac25cea3c2c086f89fc2fe14eca78b4d651d3b8bda4f7cdd92a3f87d87",
+  "summary_original_fields_equal_with_atol_1e_10": true,
+  "checks": [
+    {
+      "session": "t_0.2-none",
+      "sensor": "rgb",
+      "all_saved_arrays_exactly_equal": true,
+      "candidates_exactly_equal": true,
+      "candidates": 0
+    },
+    {
+      "session": "t_0.2-none",
+      "sensor": "evs",
+      "all_saved_arrays_exactly_equal": true,
+      "candidates_exactly_equal": true,
+      "candidates": 0
+    },
+    {
+      "session": "test_01",
+      "sensor": "rgb",
+      "all_saved_arrays_exactly_equal": true,
+      "candidates_exactly_equal": true,
+      "candidates": 3
+    },
+    {
+      "session": "test_01",
+      "sensor": "evs",
+      "all_saved_arrays_exactly_equal": true,
+      "candidates_exactly_equal": true,
+      "candidates": 1
+    },
+    {
+      "session": "test_05",
+      "sensor": "rgb",
+      "all_saved_arrays_exactly_equal": true,
+      "candidates_exactly_equal": true,
+      "candidates": 0
+    },
+    {
+      "session": "test_05",
+      "sensor": "evs",
+      "all_saved_arrays_exactly_equal": true,
+      "candidates_exactly_equal": true,
+      "candidates": 1
+    },
+    {
+      "session": "test_11",
+      "sensor": "rgb",
+      "all_saved_arrays_exactly_equal": true,
+      "candidates_exactly_equal": true,
+      "candidates": 2
+    },
+    {
+      "session": "test_11",
+      "sensor": "evs",
+      "all_saved_arrays_exactly_equal": true,
+      "candidates_exactly_equal": true,
+      "candidates": 1
+    },
+    {
+      "session": "test_14",
+      "sensor": "rgb",
+      "all_saved_arrays_exactly_equal": true,
+      "candidates_exactly_equal": true,
+      "candidates": 1
+    },
+    {
+      "session": "test_14",
+      "sensor": "evs",
+      "all_saved_arrays_exactly_equal": true,
+      "candidates_exactly_equal": true,
+      "candidates": 1
+    }
+  ]
+}

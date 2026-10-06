@@ -1,4 +1,4 @@
-"""Export all ROI tile activity for development-only spatial diagnostics.
+"""Export ROI tile activity for development or frozen internal evaluation.
 
 Keeps the existing calibrated RGB/EVS score definitions, windows and sampling.
 Onset-aligned panels are descriptive only; this tool does not detect objects.
@@ -176,7 +176,8 @@ def main(argv=None):
     parser.add_argument('--motion-dir', required=True, type=Path)
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--split', default=DEFAULT_SPLIT, type=Path)
-    parser.add_argument('--subset', choices=['development'], default='development')
+    parser.add_argument('--subset', choices=['development', 'evaluation'], default='development')
+    parser.add_argument('--frozen-dir', type=Path, help='Required for evaluation; locks extraction definition and code')
     parser.add_argument('--score-config', type=Path)
     parser.add_argument('--tile-px', default=32, type=int)
     parser.add_argument('--max-memory-mb', default=512, type=int)
@@ -186,9 +187,16 @@ def main(argv=None):
             raise ValueError('output already exists; choose a new directory')
         if args.tile_px < 1 or args.max_memory_mb < 1:
             raise ValueError('tile size and memory limit must be positive')
-        split = json.loads(args.split.read_text()); sessions = select_sessions(split, 'development')
+        split = json.loads(args.split.read_text()); sessions = select_sessions(split, args.subset)
+        if args.subset == 'evaluation' and args.frozen_dir is None:
+            raise ValueError('evaluation extraction requires --frozen-dir before opening evaluation data')
+        if args.subset == 'development' and args.frozen_dir is not None:
+            raise ValueError('--frozen-dir is for evaluation extraction only')
         source_path = score_config_path(args.motion_dir, args.score_config)
         source = json.loads(source_path.read_text()); config = source['common']
+        if args.frozen_dir:
+            from evaluate_rc_popout_grid_background import check_extraction_contract
+            check_extraction_contract(args.frozen_dir, source, args.tile_px, args.split)
         entries = {e['session']: e for e in config['sessions']}
         if len(entries) != len(config['sessions']) or any(s not in entries for s in sessions):
             raise ValueError('duplicate or missing sessions in source config')
@@ -198,16 +206,17 @@ def main(argv=None):
         detector_args = SimpleNamespace(**dict(source['parameters'], spatial=False))
         args.output.mkdir(parents=True)
         write_json(args.output/'run_config.json', dict(
-            version=1, tile_px=args.tile_px, subset='development', sessions=sessions,
+            version=1, tile_px=args.tile_px, subset=args.subset, sessions=sessions,
             motion_dir=str(args.motion_dir.resolve()), source_config_path=str(source_path),
             source_config=source, source_config_sha256=digest(source_path), split=split,
             exporter_sha256=digest(__file__), extraction_code_sha256=digest(Path(__file__).with_name('rc_popout_detection.py')),
-            note='Descriptive spatial analysis. Same original RGB/EVS samples and windows; no detector tuning or evaluation data.'))
+            frozen_manifest_sha256=None if args.frozen_dir is None else digest(args.frozen_dir/'freeze.json'),
+            note='Same original RGB/EVS samples and windows. Evaluation performs extraction only; no tuning panels.'))
     except (ValueError, OSError, KeyError, TypeError) as error:
         parser.exit(1, f'error: {error}\n')
     status, alignments = [], {}
     for session in sessions:
-        print(f'[development] {session}: extracting calibrated RGB and RAW event tiles', flush=True)
+        print(f'[{args.subset}] {session}: extracting calibrated RGB and RAW event tiles', flush=True)
         try:
             alignment, hashes = check_scene(args.motion_dir/session, source_path.parent)
             sink = TileSink(args.tile_px, args.max_memory_mb)
@@ -238,7 +247,8 @@ def main(argv=None):
             write_json(out/'tiles.json', dict(tiles=sink.tiles, output_size=sink.size, roi=config['roi'],
                 step_s=sink.step, event_window_s=sink.step*sink.bins,
                 tile_anchor='EVS image origin, intersect original common ROI; partial tiles use actual valid area'))
-            write_json(out/'result.json', dict(source_result=result, alignment=alignment, input_hashes=hashes))
+            write_json(out/'result.json', dict(source_result=result, alignment=alignment, input_hashes=hashes,
+                tile_arrays_sha256={sensor: digest(out/f'{sensor}_tiles.npz') for sensor in arrays}))
             alignments[session] = alignment
             status.append(dict(session=session, status='complete', tiles=len(sink.tiles)))
             print(f'  complete: tiles={len(sink.tiles)}, RGB={len(rgb)}, EVS={len(evs)}', flush=True)
@@ -246,7 +256,9 @@ def main(argv=None):
             status.append(dict(session=session, status='failed', stage='extraction', error=str(error)))
             print(f'  FAILED: {error}', flush=True)
         write_json(args.output/'summary.json', status)
-    if controls[0] in alignments:
+    if args.subset == 'evaluation':
+        errors = []  # No onset-aligned, best-tile exploratory panels on evaluation data.
+    elif controls[0] in alignments:
         errors = make_reviews(args.output, [s for s in sessions if s in alignments], controls[0], alignments)
     else:
         errors = [dict(session=controls[0], stage='review', error='no control extraction; cannot compare')]
@@ -257,7 +269,7 @@ def main(argv=None):
         links.append(f'<li>{html.escape(session)}: {r["status"]}' +
                      (f' / <a href="{html.escape(session, quote=True)}/tile_review.svg">タイル比較</a>' if review.exists() else '') +
                      (': '+html.escape(r['error']) if 'error' in r else '') + '</li>')
-    (args.output/'index.html').write_text('<!doctype html><meta charset="utf-8"><h1>調整用・タイル活動量</h1>'
+    (args.output/'index.html').write_text(f'<!doctype html><meta charset="utf-8"><h1>{args.subset}・タイル活動量</h1>'
         '<p>記述的比較です。初出現前後の図は検知結果ではありません。RGBとEVSの色・数値の単位は別です。</p>'
         '<p>CSVは出現後p95が最大のタイルを選んだ診断値であり、車両位置や未知時刻の検知を意味しません。</p>'
         '<ul>'+''.join(links)+'</ul>' + ''.join(f'<p>FAILED review: {html.escape(str(e))}</p>' for e in errors))

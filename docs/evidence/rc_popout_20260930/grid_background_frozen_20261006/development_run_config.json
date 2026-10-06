@@ -1,0 +1,158 @@
+{
+  "algorithm": "phase_background_pca_grid_residual_v1",
+  "settings": {
+    "rank": 3,
+    "fit_step_s": 0.02,
+    "coefficient_limit": 3.0,
+    "residual_quantile": 0.95,
+    "decay_tau_s": 0.05,
+    "drift_k": 1.0,
+    "z_clip": 10.0,
+    "threshold_margin": 2.0,
+    "threshold_floor_s": 0.001,
+    "release_ratio": 0.5,
+    "rgb_max_gap_s": 0.1,
+    "evs_max_gap_s": 0.003,
+    "onset_guard_s": 0.03
+  },
+  "calibration": {
+    "rgb": {
+      "negative_max": 0.09882698513955221,
+      "threshold_s": 0.19765397027910442,
+      "rule": "max(threshold_floor_s, entire_negative_max * threshold_margin)"
+    },
+    "evs": {
+      "negative_max": 0.030451394606719834,
+      "threshold_s": 0.06090278921343967,
+      "rule": "max(threshold_floor_s, entire_negative_max * threshold_margin)"
+    }
+  },
+  "background_session": "t_0.2-none",
+  "model_sha256": "48b0db5d762c84d7b2c06e257d2ef783b0476c8201ad3cd85727cfeaac02b58c",
+  "input_definition": {
+    "tile_px": 32,
+    "roi": {
+      "name": "band",
+      "x": 0,
+      "y": 70,
+      "width": 640,
+      "height": 272,
+      "mask_policy": "intersect_common"
+    },
+    "spatial": {
+      "view_frame": "evs",
+      "output_size": [
+        640,
+        480
+      ],
+      "projection": "rotation-only",
+      "depth_m": null,
+      "camchain": "/workspaces/ros2_ws/src/tool/multi_sensor_calibration/config/calibrations/rc_popout_default/kalibr-camchain.yaml",
+      "camchain_sha256": "36d931d4598ebfb02dc095dc52be4b3b49056dcee01463c01bf7f374114b9a12",
+      "rgb_to_view_homography": [
+        [
+          1.3014063190178589,
+          0.01878164958581602,
+          -238.37537422396684
+        ],
+        [
+          -0.008146420226858173,
+          1.3001443472362693,
+          -88.82128913808391
+        ],
+        [
+          1.3228671015946593e-05,
+          2.3169795498635207e-05,
+          0.9884803580376667
+        ]
+      ],
+      "event_to_view_homography": [
+        [
+          1.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          1.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "common_valid_mask": "/workspaces/record/09-30/2026-09-30/analysis/scenario_overlay/t_0.1-none/common_evs_batch_f662a24759c52a45/common_valid_mask.png"
+    },
+    "rgb_topic": "/realsense/color/image_raw",
+    "rgb_pixel_delta": 15,
+    "step_ms": 1,
+    "window_bins": 2
+  },
+  "split_sha256": "8df7a191f987bd22333230d5d309c0ebcb4ebd2f2b85b039331c47b26603cd08",
+  "code_sha256": {
+    "rc_popout_grid_background.py": "ef29bd685952306f2e5077583b223087731b7b8602d2e950b5b6c02d6067b0e4",
+    "analyze_rc_popout_grid_background.py": "1285a6a3ff481efbc03966eac3e60d7d5cd18562482e38cbaa3e4b6763056238",
+    "rc_popout_local_detection.py": "f81282c88715daf71d64bed5964a32928793b00869cbe0ad03b34b62f3b27d32",
+    "rc_popout_change_detection.py": "71cc8b97cc276a677022709b8c7373b4c6f608d112369020e55839f49a22c976",
+    "analyze_rc_popout_development_bundle.py": "d723624f55bfbd4716eb7515cb6238a595917122fb4632e5732a4e16a413498a"
+  },
+  "status": "development_candidate_not_evaluated",
+  "provenance": {
+    "mode": "archive",
+    "path": "/Users/at/project/competition/JetPilot/record/09-30/analysis/development_debug_bundle01.zip",
+    "bundle_sha256": "4df3a0ac25cea3c2c086f89fc2fe14eca78b4d651d3b8bda4f7cdd92a3f87d87",
+    "input_sha256": {
+      "tile_dev_trial01/test_11/tiles.json": "45c87b99165b0851cc7abf6fb7131aafe3ef4f280646ec31fb4efbf8e4b764f5",
+      "tile_dev_trial01/test_11/result.json": "265ac9ce7b564e87d491f186b797d596ed9a96713f3e2456f52956d4601f1b45",
+      "tile_dev_trial01/t_0.2-none/tiles.json": "45c87b99165b0851cc7abf6fb7131aafe3ef4f280646ec31fb4efbf8e4b764f5",
+      "local_dev_trial01/test_05/result.json": "09c11ab35b44702f3514a35e5a9c9ea6c46f1fc2c022fc7aa3b107f88b72c33e",
+      "tile_dev_trial01/t_0.2-none/evs_tiles.npz": "b7f42b965ee23bce135a7c3e1c2efed093f1932a793348ac162aeb19f32f7333",
+      "local_dev_trial01/test_14/result.json": "a7353790026ed8518c58621cfa728c71e59fa72ceafc305d4546a533e3489eac",
+      "tile_dev_trial01/test_01/rgb_tiles.npz": "da1a8c71fcaeb8d5aade495d1c405ce25f10529a6a2ccd52dd66d8a41ae6d3e3",
+      "tile_dev_trial01/test_01/result.json": "161a40a6ab4c42c4fc77422725438d03ad7c03ac85da9a1a9dc3e00a52bfe5a2",
+      "tile_dev_trial01/test_14/tiles.json": "45c87b99165b0851cc7abf6fb7131aafe3ef4f280646ec31fb4efbf8e4b764f5",
+      "tile_dev_trial01/test_01/evs_tiles.npz": "2087e181c315a75ece2b8fae6ae5417862a6da3a4c0b1c466c1a8e5ca74eb8c6",
+      "local_dev_trial01/detector_parameters.json": "32ee95ea87ee9858ebd146389e1ebe97ed7b2225e86f474dd18a770be2415310",
+      "local_dev_trial01/run_config.json": "840c90861c85dcdbdb86c50a0e591aaf8ebfddfc94ed7de40f4f3f63d32ac8a1",
+      "local_dev_trial01/summary.csv": "43736039c406645d320fc6874689c7c84dc7e3e8318bc50b66d4c0ef32aeee38",
+      "tile_dev_trial01/test_01/tiles.json": "45c87b99165b0851cc7abf6fb7131aafe3ef4f280646ec31fb4efbf8e4b764f5",
+      "local_review_trial01/summary.csv": "86e403eb1e48505aa57976825098211f26bd2adcea0f50f2afcd24c9c07a5dce",
+      "local_review_trial01/review_errors.json": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+      "tile_dev_trial01/test_14/rgb_tiles.npz": "392fde9c66c85cbd9f4131a372c445508d5b01371f526040f71fd3807b69f76c",
+      "tile_dev_trial01/test_14/result.json": "39d834c5b075de225e4cfd3b9f02cfe0999c310a1cfd4890403a4cbee805e0ee",
+      "tile_dev_trial01/t_0.2-none/rgb_tiles.npz": "f065387d9f736f0706810e2329e32962be0a4579f8288e598ad1a4086309e750",
+      "tile_dev_trial01/test_05/tiles.json": "45c87b99165b0851cc7abf6fb7131aafe3ef4f280646ec31fb4efbf8e4b764f5",
+      "tile_dev_trial01/test_05/rgb_tiles.npz": "15066281cf88d31c4fffe7ecf5c609fc3eb62af442289694d1d44f6c40f3a1e8",
+      "tile_dev_trial01/t_0.2-none/result.json": "ed70ea9831a461cdcfdd4e0de2492d18bc3a552b59d735e3fcdeb21c53ee8822",
+      "local_dev_trial01/test_01/result.json": "01a899ff69171622969e109529aecd344b4a363dd760f4065e71417d5a92e73a",
+      "local_dev_trial01/candidates.csv": "653f55e79d1db65177d7477ee34c8cdc274ed4fb7ff518c6f46dd73bf278f2de",
+      "tile_dev_trial01/test_05/evs_tiles.npz": "84bbaf98e341b80a50c127cbbd1a2984d28058ad29f65d83c4d9d428f426d8ca",
+      "tile_dev_trial01/test_05/result.json": "cdd77e28e9645c1881f09a34c99be151651686fa3cd8a54315c9f40635e69f5c",
+      "tile_dev_trial01/run_config.json": "12cef1ce6851df077616e04f2738968113facca7af76ed9726170862989ca8a8",
+      "tile_dev_trial01/test_14/evs_tiles.npz": "97ff0bd61f963dd4e40cf474ad2c0899d1bf402858f2d86918d40b67ae45cf1d",
+      "local_dev_trial01/t_0.2-none/result.json": "1760fb1b03c3fcc8ca33892033e23ed793c05ff5d998865a44b75766d5bcbeef",
+      "tile_dev_trial01/test_11/evs_tiles.npz": "8a621627b467babdb338e031b16a23260a3779a8883f2d79e515c70263565d3c",
+      "local_dev_trial01/test_11/result.json": "90e5b5241f4e9df7a06f1074964fb6ff9ef0dd076c0fd51669e05c7e1b9ca8d1",
+      "tile_dev_trial01/test_11/rgb_tiles.npz": "f486305238f5c7d8375ac0ae73bf8eda7f1ab8b9a9b7998c6daae97859bc8350"
+    },
+    "verification": "Archived hashes checked; current RAW, sync and annotations not reopened."
+  },
+  "sessions": [
+    "t_0.2-none",
+    "test_01",
+    "test_05",
+    "test_11",
+    "test_14"
+  ],
+  "subset": "development",
+  "numpy_version": "2.3.5",
+  "probe_margins": [
+    1.1,
+    1.5,
+    2.0,
+    3.0
+  ],
+  "note": "Negative reuse is fitting, not an independent specificity test. Labels enter reports only."
+}

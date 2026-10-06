@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "status": "frozen_for_internal_evaluation",
+  "algorithm": "phase_background_pca_grid_residual_v1",
+  "source_development_dir": "/Users/at/project/competition/JetPilot/docs/evidence/rc_popout_20260930/grid_background_20261006",
+  "files_sha256": {
+    "detector_parameters.json": "b8954ac6bdcc4838580d35bce39ad1e7238d24907f83881353e2a110381cf6ca",
+    "background_models.json": "48b0db5d762c84d7b2c06e257d2ef783b0476c8201ad3cd85727cfeaac02b58c",
+    "development_run_config.json": "6fedf0eddc5d257c868e6628fe8ee57e0af04564d9e7c5faff2d31faeb42a9c8",
+    "development_summary.csv": "55537fd3b4aa403e0ec8fa86708f47500ae237f322b600227162e7f48210bdb2",
+    "split.json": "8df7a191f987bd22333230d5d309c0ebcb4ebd2f2b85b039331c47b26603cd08"
+  },
+  "code_sha256": {
+    "rc_popout_grid_background.py": "ef29bd685952306f2e5077583b223087731b7b8602d2e950b5b6c02d6067b0e4",
+    "analyze_rc_popout_grid_background.py": "1285a6a3ff481efbc03966eac3e60d7d5cd18562482e38cbaa3e4b6763056238",
+    "rc_popout_local_detection.py": "f81282c88715daf71d64bed5964a32928793b00869cbe0ad03b34b62f3b27d32",
+    "rc_popout_change_detection.py": "71cc8b97cc276a677022709b8c7373b4c6f608d112369020e55839f49a22c976",
+    "analyze_rc_popout_development_bundle.py": "d723624f55bfbd4716eb7515cb6238a595917122fb4632e5732a4e16a413498a",
+    "evaluate_rc_popout_grid_background.py": "73444f66e8a6285a573a9d8ef8e9317f20c6c6bbcf75b6a183a530a97aaa705f",
+    "rc_popout_tile_activity.py": "1706ea432110eca45b352a0470fcad2eba4c03f5ab7e7de5e665ae2a420bffa6",
+    "rc_popout_detection.py": "24d11607637c44f291578efc51b6530f82fc2bc1088911a051823c129d805391"
+  },
+  "evaluation_sessions": [
+    "t_0.2-none_01",
+    "t_0.2-none_02",
+    "test_02",
+    "test_04",
+    "test_06",
+    "test_07",
+    "test_12",
+    "test_13",
+    "test_15",
+    "test_16"
+  ],
+  "selection_note": "Development positives were inspected when choosing the settings; this freeze records that chosen model, not an independent development result.",
+  "prior_exposure": "Aggregate scores, onset times and before/after statistics for all recordings have already been inspected. This is an internal evaluation split fixed before implementing the new local-background method, not a previously unseen test dataset.",
+  "policy": "No refitting, threshold recalibration, parameter overrides, or onset/phase gating."
+}
