@@ -1,0 +1,384 @@
+{
+  "schema_version": 1,
+  "review_date": "2026-10-06",
+  "review_scope": "Qualitative review of four development contact sheets and candidate-after stills; metadata consistency checked locally.",
+  "candidate_manifest": "docs/evidence/rc_popout_20260930/development_bundle_analysis_20261006/candidate_review_manifest.json",
+  "candidate_manifest_sha256": "c8434d980d849c5e8434248c78e414ea89edb9bc0ed10507813e04b946b3cfcd",
+  "detector_threshold": 0.25,
+  "preview_event_window_ms": 10.0,
+  "preview_event_window_position": "center",
+  "detector_window_ms": 2.0,
+  "not_performed": [
+    "RAW event re-extraction",
+    "Exact past-2ms candidate-window inspection",
+    "Full recording video review",
+    "Evaluation-set execution",
+    "Time-sync or calibration re-estimation"
+  ],
+  "scenes": [
+    {
+      "session": "test_01",
+      "candidate": {
+        "session": "test_01",
+        "candidate_recording_s": 14.78799295425415,
+        "candidate_from_drive_s": 1.6884410381317139,
+        "drive_start_s": 13.099551916122437,
+        "rgb_onset_recording_s": 14.6492919921875,
+        "reference_origin_s": 1790751748.3324177,
+        "rgb_timestamp_source": "bag",
+        "annotation_sha256": "17ed1b339cd0a978d0deac2f580beb21d476d1df6793391c54bb548fac9b82ac",
+        "time_sync_sha256": "dda12d168945ec3d35960a9d2974b3d1ba9045d388d76a1538d1fe4275e60eee",
+        "tiles": [
+          {
+            "tile_id": 180,
+            "x": 0,
+            "y": 288,
+            "width": 32,
+            "height": 32,
+            "valid_pixels": 1024
+          },
+          {
+            "tile_id": 181,
+            "x": 32,
+            "y": 288,
+            "width": 32,
+            "height": 32,
+            "valid_pixels": 1024
+          }
+        ]
+      },
+      "candidate_minus_rgb_onset_ms": 138.7009620666504,
+      "first_display_after_candidate_ms": 13.612985610961914,
+      "source_preview": "/workspaces/record/09-30/dynamic/analysis/scenario_overlay/test_01/common_evs_batch_02b8e1514494acfd",
+      "source_truncated": true,
+      "received_frame_rows": 36,
+      "manifest_match": true,
+      "frame_time_consistency": true,
+      "inputs": [
+        {
+          "path": "/Users/at/Downloads/scp/test_01/summary.json",
+          "sha256": "c7a96eae8c96f24556124cc7baa711c39d8a6b3139d0b799cdb164b5cde34ba7"
+        },
+        {
+          "path": "/Users/at/Downloads/scp/test_01/frames.csv",
+          "sha256": "1b95ac7c3d1784fff756b10e4c751f7a47d6ba88ac591a2d0b5a56f77b947521"
+        },
+        {
+          "path": "/Users/at/Downloads/scp/test_01/before_onset.png",
+          "sha256": "8f4e2ada783bd88bc4a4c9c5fda0c24b368d5cf3f47dd72bc2c8a654ddfa1053",
+          "size": [
+            1280,
+            608
+          ]
+        },
+        {
+          "path": "/Users/at/Downloads/scp/test_01/onset_after.png",
+          "sha256": "f679ad1e33e49cc1fa38ddbb8e0fdac7fb0100db489e6e2e92c048dee30c1e8a",
+          "size": [
+            1280,
+            608
+          ]
+        },
+        {
+          "path": "/Users/at/Downloads/scp/test_01/candidate_before.png",
+          "sha256": "ede47ba2e57ade041e0ab668e0c588867bfe04f3b9c82c2965e466e5b9494c2c",
+          "size": [
+            1280,
+            608
+          ]
+        },
+        {
+          "path": "/Users/at/Downloads/scp/test_01/candidate_after.png",
+          "sha256": "28fb51eeb21afd3342073b0a1d4640d2982d633ffe5e681b79b97c3f855c2f1a",
+          "size": [
+            1280,
+            608
+          ]
+        },
+        {
+          "path": "/Users/at/Downloads/scp/test_01/contact_sheet.png",
+          "sha256": "8955e4b0c9d36be7f35b26fc636d6f4ea89aacbbd6542be625c1185a343b00c7",
+          "size": [
+            2560,
+            1280
+          ]
+        }
+      ],
+      "saved_figure": "test_01_candidate_after.png",
+      "visual_assessment": "Vehicle-contour-like events overlap the fixed candidate tiles; background contribution and exact past-2ms trigger causality are unresolved."
+    },
+    {
+      "session": "test_05",
+      "candidate": {
+        "session": "test_05",
+        "candidate_recording_s": 12.939008237838745,
+        "candidate_from_drive_s": 1.6978969593048099,
+        "drive_start_s": 11.241111278533936,
+        "rgb_onset_recording_s": 12.771912336349487,
+        "reference_origin_s": 1790751971.4408987,
+        "rgb_timestamp_source": "bag",
+        "annotation_sha256": "2058eb9da28a233e3ac29c5a8fb83386ef7435106e0c9936bbeb7f70aad52e0d",
+        "time_sync_sha256": "2e87564a84b55a08a9d6df8c50aba914c0bacd35bba6cadbf8c75a72b6c926a2",
+        "tiles": [
+          {
+            "tile_id": 196,
+            "x": 512,
+            "y": 288,
+            "width": 32,
+            "height": 32,
+            "valid_pixels": 1024
+          },
+          {
+            "tile_id": 197,
+            "x": 544,
+            "y": 288,
+            "width": 32,
+            "height": 32,
+            "valid_pixels": 1024
+          }
+        ]
+      },
+      "candidate_minus_rgb_onset_ms": 167.09590148925813,
+      "first_display_after_candidate_ms": 0.6229858398434374,
+      "source_preview": "/workspaces/record/09-30/dynamic/analysis/scenario_overlay/test_05/common_evs_batch_f975ebf68ed91c20",
+      "source_truncated": true,
+      "received_frame_rows": 36,
+      "manifest_match": true,
+      "frame_time_consistency": true,
+      "inputs": [
+        {
+          "path": "/Users/at/Downloads/scp/test_05/summary.json",
+          "sha256": "c90e199a5c963b6b13ff9b91f80209d1af63d7b488cfd229642a163c74e8ca12"
+        },
+        {
+          "path": "/Users/at/Downloads/scp/test_05/frames.csv",
+          "sha256": "a03343896421cd16173797fa2bd5e04c73a3b7f0a7ac58091696ca39dd387a7f"
+        },
+        {
+          "path": "/Users/at/Downloads/scp/test_05/before_onset.png",
+          "sha256": "d6e600ccaf2d394636cc1ce7e6581becc61391e56cbb2c7a8b14e23439bb3875",
+          "size": [
+            1280,
+            608
+          ]
+        },
+        {
+          "path": "/Users/at/Downloads/scp/test_05/onset_after.png",
+          "sha256": "75be1952df061bdafb8b21641c95602d7b71aec21fc691ce051521dd51b55770",
+          "size": [
+            1280,
+            608
+          ]
+        },
+        {
+          "path": "/Users/at/Downloads/scp/test_05/candidate_before.png",
+          "sha256": "a78d4299139298792cd7ee46c2474cae70b8d44cca07ee754023f5ca541d8e77",
+          "size": [
+            1280,
+            608
+          ]
+        },
+        {
+          "path": "/Users/at/Downloads/scp/test_05/candidate_after.png",
+          "sha256": "7a899c6e18e6518b5a636e33c5542e412daf03a794c303332a64076531b6190e",
+          "size": [
+            1280,
+            608
+          ]
+        },
+        {
+          "path": "/Users/at/Downloads/scp/test_05/contact_sheet.png",
+          "sha256": "02270da3307743bc9ba89c95ee7d09485037fb1077012309868dc95d8cb0dc0b",
+          "size": [
+            2560,
+            1280
+          ]
+        }
+      ],
+      "saved_figure": "test_05_candidate_after.png",
+      "visual_assessment": "Vehicle-contour-like events overlap the fixed candidate tiles; background contribution and exact past-2ms trigger causality are unresolved."
+    },
+    {
+      "session": "test_11",
+      "candidate": {
+        "session": "test_11",
+        "candidate_recording_s": 17.930066726684572,
+        "candidate_from_drive_s": 1.7404529075622577,
+        "drive_start_s": 16.189613819122314,
+        "rgb_onset_recording_s": 17.883052825927734,
+        "reference_origin_s": 1790752618.0240715,
+        "rgb_timestamp_source": "bag",
+        "annotation_sha256": "57b465b6fdaf908fb9fa31cf18902ae437433e410cb8f2c89c11b65ef140b5cd",
+        "time_sync_sha256": "8854c2e5591bf2d529b69df7cd7d68538613e65514792f56f6aaec77e9a76d09",
+        "tiles": [
+          {
+            "tile_id": 180,
+            "x": 0,
+            "y": 288,
+            "width": 32,
+            "height": 32,
+            "valid_pixels": 1024
+          },
+          {
+            "tile_id": 181,
+            "x": 32,
+            "y": 288,
+            "width": 32,
+            "height": 32,
+            "valid_pixels": 1024
+          }
+        ]
+      },
+      "candidate_minus_rgb_onset_ms": 47.01390075683776,
+      "first_display_after_candidate_ms": 3.6142845153790404,
+      "source_preview": "/workspaces/record/09-30/dynamic/analysis/scenario_overlay/test_11/common_evs_batch_b5e37fce85d74911",
+      "source_truncated": true,
+      "received_frame_rows": 36,
+      "manifest_match": true,
+      "frame_time_consistency": true,
+      "inputs": [
+        {
+          "path": "/Users/at/Downloads/scp/test_11/summary.json",
+          "sha256": "1dc48ed7b19388a4fb43de7ff65aadb4813c2e196b3186c94c2fad4194983207"
+        },
+        {
+          "path": "/Users/at/Downloads/scp/test_11/frames.csv",
+          "sha256": "9500d0cf13fdecc96421cdc4e541bb86a1e96365685b2fad0bdd2ef29eed4278"
+        },
+        {
+          "path": "/Users/at/Downloads/scp/test_11/before_onset.png",
+          "sha256": "7b4b0e1963cec2e604d994305c7566324d8fcb9fc75fd348e94db5b771fa0394",
+          "size": [
+            1280,
+            608
+          ]
+        },
+        {
+          "path": "/Users/at/Downloads/scp/test_11/onset_after.png",
+          "sha256": "7c035706011bb5304828f90f8bfccd12834c06fd7d6d2515e7cd9d122ff5e20f",
+          "size": [
+            1280,
+            608
+          ]
+        },
+        {
+          "path": "/Users/at/Downloads/scp/test_11/candidate_before.png",
+          "sha256": "5081c8a39a312d309b30c7679a978758b155929cfc82c3b69048a6bacb33684c",
+          "size": [
+            1280,
+            608
+          ]
+        },
+        {
+          "path": "/Users/at/Downloads/scp/test_11/candidate_after.png",
+          "sha256": "62e71e656060494b1b5ea86364ac6582cea84d6931c0a4892c1c33282b2d2f83",
+          "size": [
+            1280,
+            608
+          ]
+        },
+        {
+          "path": "/Users/at/Downloads/scp/test_11/contact_sheet.png",
+          "sha256": "64ad20b617664cc332dbf80e056142176a27bb910b9a47df39d4ec3a9e47bf37",
+          "size": [
+            2560,
+            1280
+          ]
+        }
+      ],
+      "saved_figure": "test_11_candidate_after.png",
+      "visual_assessment": "Vehicle-contour-like events overlap the fixed candidate tiles; background contribution and exact past-2ms trigger causality are unresolved."
+    },
+    {
+      "session": "test_14",
+      "candidate": {
+        "session": "test_14",
+        "candidate_recording_s": 10.902608516693116,
+        "candidate_from_drive_s": 1.686857107162476,
+        "drive_start_s": 9.21575140953064,
+        "rgb_onset_recording_s": 10.862126588821411,
+        "reference_origin_s": 1790752812.1262772,
+        "rgb_timestamp_source": "bag",
+        "annotation_sha256": "c1dcaa935b5e7b343e50731829788403ee7fe1c32e6baa42252a830f784ae173",
+        "time_sync_sha256": "c699dfcdb45fae7917a736ff36d330389ba04dc673421727cf90f2d02ba24494",
+        "tiles": [
+          {
+            "tile_id": 176,
+            "x": 512,
+            "y": 256,
+            "width": 32,
+            "height": 32,
+            "valid_pixels": 1024
+          },
+          {
+            "tile_id": 177,
+            "x": 544,
+            "y": 256,
+            "width": 32,
+            "height": 32,
+            "valid_pixels": 1024
+          }
+        ]
+      },
+      "candidate_minus_rgb_onset_ms": 40.48192787170457,
+      "first_display_after_candidate_ms": 5.005952835082539,
+      "source_preview": "/workspaces/record/09-30/dynamic/analysis/scenario_overlay/test_14/common_evs_batch_02e0950593526983",
+      "source_truncated": false,
+      "received_frame_rows": 36,
+      "manifest_match": true,
+      "frame_time_consistency": true,
+      "inputs": [
+        {
+          "path": "/Users/at/Downloads/scp/test_14/summary.json",
+          "sha256": "f8f6c6c6d35164e2ce88a5900b9ccbb358cab8b0e50d81fd6b7c19e7cef96de4"
+        },
+        {
+          "path": "/Users/at/Downloads/scp/test_14/frames.csv",
+          "sha256": "c33990afe5e7e3b905b3a5615c84d412dbdf7c89357d6d9bcd45340b8c941e55"
+        },
+        {
+          "path": "/Users/at/Downloads/scp/test_14/before_onset.png",
+          "sha256": "83c0db7a0fbb1dfecc5328120e43ab7a65a8e8b25037bf450a00966b28a6a533",
+          "size": [
+            1280,
+            608
+          ]
+        },
+        {
+          "path": "/Users/at/Downloads/scp/test_14/onset_after.png",
+          "sha256": "ea5b9b41a3aa5f57020abe9eb5353b649841bef2523d4fa5d389e07595cbd4fe",
+          "size": [
+            1280,
+            608
+          ]
+        },
+        {
+          "path": "/Users/at/Downloads/scp/test_14/candidate_before.png",
+          "sha256": "0d7aae77b1fcbbde270ef6b527bf1e4c482d8f9aecd1d3294e0feba298394adc",
+          "size": [
+            1280,
+            608
+          ]
+        },
+        {
+          "path": "/Users/at/Downloads/scp/test_14/candidate_after.png",
+          "sha256": "02c4d9b25a61e15e1da6dcc484f782ce633eb8a533ba04f91ce33a3a4b307187",
+          "size": [
+            1280,
+            608
+          ]
+        },
+        {
+          "path": "/Users/at/Downloads/scp/test_14/contact_sheet.png",
+          "sha256": "8f905b3ab2761c5ca1b5e6d4ec8c3f3bfc8c982ed22ad3604b290aa80db02398",
+          "size": [
+            2560,
+            1280
+          ]
+        }
+      ],
+      "saved_figure": "test_14_candidate_after.png",
+      "visual_assessment": "Vehicle-contour-like events overlap the fixed candidate tiles; background contribution and exact past-2ms trigger causality are unresolved."
+    }
+  ]
+}

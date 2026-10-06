@@ -100,7 +100,8 @@ bash scripts/experiments/generate_rc_popout_common_views.sh \
 切り出し動画の録画時刻と再生時刻が異なるケース、同期・注釈・投影・フレーム対応の不一致検出、既存出力の保護をテストした。
 元動画の末尾だけが未生成の場合の受け入れ、候補周辺が不足する場合の拒否、時間軸エラーとの区別もテストした。
 候補manifestと元の解析CSVの一致もテストしている。
-実験動画はLinux側にあり、こちらでは実データの動画生成と対象の目視確認は未実施。
+実データの動画生成はユーザーがLinux側で4件実行済み。受領したcontact sheetと候補直後PNGの[定性レビュー](rc_popout_candidate_visual_review_20261006.md)を行い、保存された候補manifest・各36行の時刻対応と整合することも確認した。
+元録画全体の目視確認、RAW再抽出による過去2 ms窓の検証は未実施。
 
 ```bash
 python3 -m unittest discover -s tests -p 'test_rc_popout_candidate_videos.py' -v

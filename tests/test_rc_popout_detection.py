@@ -92,6 +92,23 @@ class DetectionTests(unittest.TestCase):
             args=SimpleNamespace(rgb_topic='rgb',rgb_pixel_delta=15,rgb_threshold=.1,evs_threshold=3,step_ms=1,window_bins=2,spatial=True,tile_px=32,min_active_pixels=3,spatial_threshold=3)
             entry=dict(session='scene',annotation=str(ann_path))
             result,rgb,evs=m.analyze(config,entry,args)
+            class FrameObserver:
+                def initialize(self,mask,spans):
+                    self.mask=mask;self.spans=spans;self.images=[];self.event_rows=[]
+                def rgb_frame(self,interval,t,image):
+                    self.images.append((interval,t,image.copy()))
+                def events(self,interval,ts,x,y):
+                    self.event_rows.extend(zip([interval]*len(ts),ts.tolist(),x.tolist(),y.tolist()))
+            observer=FrameObserver()
+            observed,observed_rgb,observed_evs=m.analyze(config,entry,args,frame_sink=observer)
+            self.assertEqual(observed,result)
+            self.assertEqual(observed_rgb,rgb)
+            self.assertEqual(observed_evs,evs)
+            self.assertEqual(len(observer.images),len(rgb)+1)  # Includes interval's first frame.
+            self.assertTrue(all(im.dtype==np.uint8 for _,_,im in observer.images))
+            self.assertEqual(len(observer.event_rows),3)  # Repeated events remain separate.
+            self.assertAlmostEqual(observer.event_rows[0][1],.3501)
+            self.assertEqual(observer.event_rows[0][2:],(0,0))
             self.assertEqual(max(x[2] for x in evs),3)
             self.assertAlmostEqual(result['rgb']['first_trigger_s'],.4)
             self.assertGreater(result['evs']['first_trigger_s'],.3501)
@@ -121,6 +138,9 @@ class DetectionTests(unittest.TestCase):
                     self.assertEqual(reordered['evs'],result['evs'])
                     self.assertGreater(reordered['event_ordering']['backward_steps'],0)
                     self.assertGreater(reordered['event_ordering']['max_backward_step_us'],0)
+                    delayed=FrameObserver()
+                    m.analyze(config,entry,args,frame_sink=delayed)
+                    self.assertEqual(sorted(delayed.event_rows),sorted(observer.event_rows))
             # Reordering does not disable the recording-extent check.
             source.batches=lambda:iter([SimpleNamespace(events=events[1:4])])
             with self.assertRaisesRegex(ValueError,'does not cover'):
