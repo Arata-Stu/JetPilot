@@ -1,0 +1,106 @@
+{
+  "rgb": {
+    "negative_records": 2,
+    "negative_records_with_candidates": 1,
+    "negative_candidates": 1,
+    "negative_ready_observed_seconds": 24.42751383781433,
+    "negative_drive_ready_seconds": 4.019883155822754,
+    "negative_drive_active_seconds": 0.06606817245483398,
+    "positive_records": 8,
+    "positive_records_with_onset_to_250ms_candidate": 4,
+    "positive_records_with_before_guard_candidates": 7,
+    "positive_before_guard_candidates": 8,
+    "positive_before_onset_candidates": 8,
+    "positive_candidates": 18,
+    "positive_drive_candidates": 14,
+    "positive_ready_observed_seconds": 66.03255558013916,
+    "positive_drive_ready_seconds": 16.098921298980713,
+    "positive_no_early_and_near_records": [
+      "test_12"
+    ],
+    "positive_active_at_onset_records": 0,
+    "all_candidates": 19,
+    "first_candidate_deltas_ms_with_no_early_and_near": {
+      "test_12": 151.78394317626953
+    },
+    "groups": {
+      "popout_20pct_left": {
+        "records": 2,
+        "records_with_before_guard": 2,
+        "records_with_onset_to_250ms": 2
+      },
+      "popout_20pct_right": {
+        "records": 2,
+        "records_with_before_guard": 2,
+        "records_with_onset_to_250ms": 0
+      },
+      "popout_100pct_left": {
+        "records": 2,
+        "records_with_before_guard": 1,
+        "records_with_onset_to_250ms": 2
+      },
+      "popout_100pct_right": {
+        "records": 2,
+        "records_with_before_guard": 2,
+        "records_with_onset_to_250ms": 0
+      }
+    }
+  },
+  "evs": {
+    "negative_records": 2,
+    "negative_records_with_candidates": 0,
+    "negative_candidates": 0,
+    "negative_ready_observed_seconds": 24.489,
+    "negative_drive_ready_seconds": 4.019883155822754,
+    "negative_drive_active_seconds": 0.0,
+    "positive_records": 8,
+    "positive_records_with_onset_to_250ms_candidate": 8,
+    "positive_records_with_before_guard_candidates": 2,
+    "positive_before_guard_candidates": 2,
+    "positive_before_onset_candidates": 2,
+    "positive_candidates": 11,
+    "positive_drive_candidates": 10,
+    "positive_ready_observed_seconds": 66.302,
+    "positive_drive_ready_seconds": 16.098921298980713,
+    "positive_no_early_and_near_records": [
+      "test_04",
+      "test_06",
+      "test_07",
+      "test_12",
+      "test_13",
+      "test_15"
+    ],
+    "positive_active_at_onset_records": 0,
+    "all_candidates": 11,
+    "first_candidate_deltas_ms_with_no_early_and_near": {
+      "test_04": 46.299581527708966,
+      "test_06": 90.27011108398497,
+      "test_07": 97.95750999450803,
+      "test_12": 28.46537780761693,
+      "test_13": 24.309932708739268,
+      "test_15": 30.302904129028363
+    },
+    "groups": {
+      "popout_20pct_left": {
+        "records": 2,
+        "records_with_before_guard": 1,
+        "records_with_onset_to_250ms": 2
+      },
+      "popout_20pct_right": {
+        "records": 2,
+        "records_with_before_guard": 0,
+        "records_with_onset_to_250ms": 2
+      },
+      "popout_100pct_left": {
+        "records": 2,
+        "records_with_before_guard": 0,
+        "records_with_onset_to_250ms": 2
+      },
+      "popout_100pct_right": {
+        "records": 2,
+        "records_with_before_guard": 1,
+        "records_with_onset_to_250ms": 2
+      }
+    }
+  }
+}
