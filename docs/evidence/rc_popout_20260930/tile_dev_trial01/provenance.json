@@ -1,0 +1,15 @@
+{
+  "source": "User-pasted export log, summary.json, review_errors.json and tile_diagnostics.csv; original NPZ/RAW/bag not accessed locally",
+  "recorded_on": "2026-10-06",
+  "remote_output": "/workspaces/record/09-30/analysis/tile_dev_trial01",
+  "command": "bash scripts/experiments/export_rc_popout_tiles.sh --motion-dir /workspaces/record/09-30/analysis/detection_motion_trial01 --subset development --tile-px 32 --output /workspaces/record/09-30/analysis/tile_dev_trial01",
+  "review_errors": [],
+  "sessions": [
+    {"session": "t_0.2-none", "status": "complete", "tiles": 180, "rgb_samples": 741, "evs_samples": 12506},
+    {"session": "test_01", "status": "complete", "tiles": 180, "rgb_samples": 687, "evs_samples": 11533},
+    {"session": "test_05", "status": "complete", "tiles": 180, "rgb_samples": 543, "evs_samples": 9120},
+    {"session": "test_11", "status": "complete", "tiles": 180, "rgb_samples": 663, "evs_samples": 11130},
+    {"session": "test_14", "status": "complete", "tiles": 180, "rgb_samples": 384, "evs_samples": 6453}
+  ],
+  "interpretation": "Post-hoc peak-tile statistics support examining local changes, not a detection success claim. No evaluation records were opened for this stage."
+}

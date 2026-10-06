@@ -1,0 +1,116 @@
+# タイルの局所変化検知：調整用の試作
+
+`tools/rc_popout_local_detection.py` は、保存済みの全タイルの活動量から逐次的な候補を出す。
+全ROI検知に残った背景反応を減らせるか調べるための初版で、実データでの有効性は未確認。
+[タイル出力の事後ピーク](rc_popout_tile_activity.md)を対象位置・検知時刻として入力することはしない。
+
+## 実行コマンド
+
+今回のコード変更をデータ側へ反映した後に実行する。タイル出力の再生成やcolcon buildは不要。
+NumPyが必要。shは既存の校正用venvを選択する。ROS・Metavision・RAW/bagの再読込は不要。
+
+```bash
+cd /workspaces
+
+bash scripts/experiments/analyze_rc_popout_local_changes.sh \
+  --tile-dir /workspaces/record/09-30/analysis/tile_dev_trial01 \
+  --subset development \
+  --output /workspaces/record/09-30/analysis/local_dev_trial01
+
+cat /workspaces/record/09-30/analysis/local_dev_trial01/summary.csv
+cat /workspaces/record/09-30/analysis/local_dev_trial01/candidates.csv
+```
+
+調整用5件のみ処理する。評価用にはまだ対応せず `--subset evaluation` を受け付けない。
+保存先が存在すると中止する。既存の全ROI検知・タイル出力は変更しない。
+タイル抽出時に保存した参照パスから元の設定・alignment・注釈・同期YAMLのハッシュを照合するため、それらのメタデータは引き続き必要。
+変更があれば中止し、古い同期と新しい注釈を混在させない。
+
+## 共通の判定構造
+
+RGBとEVSで同じ構造を使う。単位が違うため、ばらつきの下限だけはセンサ別の初期値を設ける。
+ROI全域の全タイル、保存済み時間範囲全体が対象。セッション・方向・プロポ設定別の分岐はない。
+
+1. 各タイルの個数を有効画素数で割る。RGBは変化画素率、EVSは元の蓄積窓内イベント密度。
+2. **そのタイルの過去だけ**から中央値とMADを計算し、現在の上方偏差を標準化する。
+3. 同じタイル行における標準化偏差の中央値のうち、正の部分を引く。横に広く共通する増加を減らすための仮説であり、フローによる運動補償ではない。
+4. 残った偏差をタイルごとに減衰付きで時間積分する。
+5. 上下左右に隣り合う2タイルの積分値の小さい方を取り、その全ペア最大値が閾値以上なら候補にする。
+
+```text
+x_i(t)     = tile_count / valid_pixels_i
+m_i, s_i   = past median, max(scale_floor, 1/valid_pixels_i, 1.4826 * past MAD)
+z_i(t)     = clip((x_i(t)-m_i)/s_i, -z_clip, z_clip)
+g_row(t)   = max(0, median of z across valid tiles in the same row)
+r_i(t)     = clip(z_i(t)-g_row(t), -z_clip, z_clip)
+C_i(t)     = max(0, exp(-dt/tau)*C_i(previous)
+                   + tau*(1-exp(-dt/tau))*(r_i(t)-drift_k))
+pair_score = max over adjacent pairs (i,j) of min(C_i(t), C_j(t))
+```
+
+各タイル行の中央値は自分自身も含む。行に有効タイルが3個未満なら中止する。
+行の過半数を対象が占めれば対象の変化も差し引かれ得るため、必ずしも検知を改善するものではない。
+現在の観測窓始点を `a(t)` とすると、背景の参照は終端が `[a(t)-history_s, a(t)]` の過去窓のみ。
+現在窓と重なるEVS窓を背景に混ぜない。RGBはNPZに保存された実際のフレーム対の始点を使う。
+同じ行の現在値を使う空間比較は時刻tに利用可能な情報であり、未来の入力は使わない。
+
+候補開始は `pair_score >= threshold_s`、終了は `pair_score <= threshold_s * release_ratio`。
+候補開始に寄与したペアのIDを保存するが、候補中に最大ペアが変わることはある。物体の追跡IDではない。
+孤立した1タイルや互いに離れた2タイルの積分値だけでは候補にならない。
+これはタイル間の一致であり、同一タイル内の異なる活動画素数を要求するホットピクセル対策とは異なる。
+
+背景は候補中も更新する。欠測・注釈区間境界で背景と積分をリセットして準備し直す。
+長いRGBフレーム対は背景にも使わない。発進や制動のphase、初出現時刻でリセット・抑制はしない。
+注釈は集計と表示にのみ付加する。発進から1.5秒後だけ判定するような撮影タイミングの利用はしない。
+候補時刻は入力と積分条件が揃った現在時刻とし、蓄積窓の先頭へ戻さない。
+
+## 初期値
+
+| 引数 | 初期値 | 意味 |
+|---|---:|---|
+| `--history-s` | 0.30 | 過去参照幅 [s] |
+| `--min-history-s` | 0.20 | 参照窓終端に必要な時間幅 [s] |
+| `--min-samples` | 8 | 背景推定の最小サンプル数 |
+| `--rgb-scale-floor` | 0.02 | RGB変化画素率のスケール下限 |
+| `--evs-scale-floor` | 0.005 | EVSイベント密度のスケール下限 |
+| `--rgb-max-gap-s` / `--evs-max-gap-s` | 0.10 / 0.003 | 許容する観測間隔・支持窓幅 [s] |
+| `--z-clip` | 10 | 標準化偏差の上下限 |
+| `--drift-k` | 1 | 積分から差し引く偏差 |
+| `--decay-tau-s` | 0.10 | 積分値の減衰時定数 [s] |
+| `--threshold-s` | 0.05 | ペアの積分スコアの開始閾値 |
+| `--release-ratio` | 0.5 | 終了閾値／開始閾値 |
+| `--onset-guard-s` | 0.030 | 表示・集計用の初出現前後区分。判定には未使用 |
+
+時間関係の初期値は全ROIの第2試行を引き継いだ。タイルのばらつき下限は新しい試行値で、最適化した値ではない。
+1024有効画素ではRGB下限は約20画素、EVS下限は約5イベントに相当する。部分タイルには1カウント分以上の密度下限も適用する。
+RGBのフレーム頻度、EVSの元の窓幅・更新周期を維持する。高頻度EVSの重複窓を独立した統計証拠とは扱わない。
+初回はこの一組で実行し、誤反応と候補の場所を確認する。大量の閾値探索やセッション別の調整は行わない。
+
+## 出力と結果の読み方
+
+- `summary.csv`：従来と同じ集計に `drive_candidates` を追加。全時間の候補数と指令走行中に始まった候補数を分ける。
+- `candidates.csv`：全候補の開始・終了・継続時間・開始phase・開始時の隣接ペアID・初出現との差。
+- `index.html`：各センサの全時間波形と走行付近の表示へのリンク。
+- `<session>/<sensor>_local_scores.csv`：準備状態、参照数と終端、局所偏差の最大値、行共通成分の最大値、ペアスコア、最大ペアIDなど。
+- `<session>/<sensor>_local_state.npz`：全時刻×全タイルの `residual_z`, `cusum_s` と `time_s`, `tile_id`。未準備の偏差はNaN。保存はfloat32、判定計算はfloat64。
+- `<session>/result.json`：集計・alignment・入力NPZとメタデータのハッシュ。
+- `detector_parameters.json`：アルゴリズム・コード・区分・入力定義・全設定。`--parameters` で同じ調整runを再実行できるが、上書き指定やコード等の不一致は拒否する。
+
+まず負例の全時間と走行中の候補数を確認し、次に正例の初出現前の候補を調べる。
+初出現付近の候補にはペア位置と映像の対象位置を照合する必要がある。時刻だけで真陽性を決めない。
+ペアの座標は元タイル出力の `tiles.json` の `tile_id` に対応する。
+候補の場所が背景の端などであれば、その反応を飛び出しの成功として扱わない。
+初出現±30 msの集計区分は、許容誤差や正解対応付け範囲を確定したものではない。
+
+この段階では検知率・誤警報率の保証や優劣を出さない。評価用10件と静止条件への適用は方式を固定した後の段階。
+現在のコマンドは調整用のみを受け付ける。評価用に拡張する際も保存済みパラメータ・入力定義を固定して照合する。
+
+## 検証
+
+```bash
+python3 -m unittest discover -s tests -p 'test_rc_popout_local_detection.py' -v
+bash -n scripts/experiments/analyze_rc_popout_local_changes.sh
+```
+
+合成データで一様増加・孤立／非隣接の抑制、隣接した局所変化への反応、再検知、未来からの独立性、現在窓の参照除外、欠測・区間リセット、部分タイル、メタデータ整合、設定再利用を確認する。
+これは実データの背景分離性能を保証するテストではない。実データはユーザー実行待ち。
