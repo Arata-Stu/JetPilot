@@ -125,6 +125,39 @@ class CandidateVideoTests(unittest.TestCase):
             video.write_json(wrong/'summary.json',summary)
             self.assertEqual(video.find_preview(root,scene,manifest['spatial'],.3,.3)['folder'],folder)
 
+    def test_missing_recording_tail_allowed_when_clip_is_covered(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);_,manifest=fixture(root);scene=manifest['scenes'][0]
+            folder=root/'analysis/scenario_overlay'/scene['session']/'matching'
+            summary=json.loads((folder/'summary.json').read_text())
+            summary.update(truncated=True,requested_frames=80)
+            video.write_json(folder/'summary.json',summary)
+            plan=video.find_preview(root,scene,manifest['spatial'],.3,.3)
+            self.assertEqual(plan['span'],(9,21,15))
+            self.assertTrue(plan['summary']['truncated'])
+
+    def test_missing_tail_inside_required_clip_still_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);_,manifest=fixture(root);scene=manifest['scenes'][0]
+            folder=root/'analysis/scenario_overlay'/scene['session']/'matching'
+            summary=json.loads((folder/'summary.json').read_text())
+            summary.update(truncated=True,requested_frames=80,rendered_frames=20)
+            video.write_json(folder/'summary.json',summary)
+            lines=(folder/'frames.csv').read_text().splitlines(keepends=True)
+            (folder/'frames.csv').write_text(''.join(lines[:21]))
+            with self.assertRaisesRegex(ValueError,'does not cover the full requested clip'):
+                video.find_preview(root,scene,manifest['spatial'],.3,.3)
+
+    def test_event_timeline_error_distinguished_from_truncation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);_,manifest=fixture(root);scene=manifest['scenes'][0]
+            folder=root/'analysis/scenario_overlay'/scene['session']/'matching'
+            summary=json.loads((folder/'summary.json').read_text())
+            summary.update(timeline='event',truncated=False)
+            video.write_json(folder/'summary.json',summary)
+            with self.assertRaisesRegex(ValueError,"timeline='event', truncated=False"):
+                video.find_preview(root,scene,manifest['spatial'],.3,.3)
+
     def test_four_synthetic_videos_encode_and_keep_frame_count(self):
         try:
             import cv2
@@ -134,11 +167,17 @@ class CandidateVideoTests(unittest.TestCase):
             self.skipTest('ffmpeg not installed')
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp);path,manifest=fixture(root,True)
+            # Exercise a real, decodable prefix of a longer requested recording.
+            partial=root/'analysis/scenario_overlay'/manifest['scenes'][0]['session']/'matching/summary.json'
+            summary=json.loads(partial.read_text());summary.update(truncated=True,requested_frames=80)
+            video.write_json(partial,summary)
             before=video.digest(root/'source.mp4')
             out=root/'out'
             self.assertEqual(video.main(['--record-root',str(root),'--output',str(out),'--manifest',str(path)]),0)
             results=json.loads((out/'summary.json').read_text())
             self.assertEqual(len(results),4)
+            self.assertTrue(results[0]['source_truncated'])
+            self.assertFalse(results[1]['source_truncated'])
             for result in results:
                 self.assertEqual(result['status'],'complete')
                 self.assertEqual(result['frames'],12)

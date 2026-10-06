@@ -129,14 +129,18 @@ def find_preview(root, scene, spatial, before, after):
                     or summary.get('rgb_timestamp_source', 'bag') != scene['rgb_timestamp_source']
                     or Path(summary['bag']).name != scene['session']):
                 raise ValueError('sync, recording origin or timestamp source mismatch')
-            if summary.get('timeline', 'rgb') != 'rgb' or summary.get('truncated', False):
-                raise ValueError('complete RGB-timeline preview required')
+            if summary.get('timeline', 'rgb') != 'rgb':
+                raise ValueError(f"RGB-timeline preview required; timeline={summary.get('timeline')!r}, "
+                                 f"truncated={summary.get('truncated', False)!r}")
             if (not math.isfinite(summary['event_window_ms']) or summary['event_window_ms'] <= 0
                     or summary['event_window_position'] not in ('before', 'center', 'after')):
                 raise ValueError('invalid preview event window')
             if not (path.parent/'rgb_vs_overlay.mp4').is_file():
                 raise ValueError('comparison video missing')
             frames = read_frames(path.parent/'frames.csv', summary)
+            # A RAW stream can finish before the RGB recording, so a complete
+            # usable prefix may legitimately have truncated=true. Require the
+            # requested clip's coverage, not the unneeded recording tail.
             span = select_span(frames, scene['candidate_recording_s'], before, after)
             valid.append((path.parent, summary, frames, span))
         except (ValueError, KeyError, TypeError, OSError) as error:
@@ -270,6 +274,8 @@ def render(scene, manifest, plan, destination, slow, ffmpeg):
             csv_writer = csv.DictWriter(stream, fieldnames=list(mapping[0]))
             csv_writer.writeheader(); csv_writer.writerows(mapping)
         report = dict(session=scene['session'], status='complete', source_preview=str(plan['folder']),
+            source_truncated=bool(summary.get('truncated', False)),
+            source_requested_frames=summary.get('requested_frames'), source_rendered_frames=summary['rendered_frames'],
             source_summary_sha256=digest(plan['folder']/'summary.json'), source_frames_sha256=digest(plan['folder']/'frames.csv'),
             source_video_sha256=digest(source), annotation_sha256=digest(plan['annotation_path']),
             time_sync_sha256=digest(plan['sync_path']), candidate=scene, frames=count, fps=fps, slowdown=slow,
@@ -313,6 +319,8 @@ def main(argv=None):
             lo, hi, crossing = plan['span']
             delay = 1000*(plan['frames'][crossing]['relative_time_s']-scene['candidate_recording_s'])
             print(f"{scene['session']}: {plan['folder'].name}, source frames={lo}..{hi-1}, first display=+{delay:.3f}ms", flush=True)
+            if plan['summary'].get('truncated', False):
+                print('  元動画の末尾は未生成ですが、候補前後の指定区間は含まれています', flush=True)
         if args.dry_run:
             return 0
         ffmpeg = shutil.which('ffmpeg')
@@ -346,8 +354,10 @@ def main(argv=None):
             if report['status'] != 'complete':
                 page.append(f'<section><h2>{name}: failed</h2><pre>{html.escape(report["error"])}</pre></section>')
                 continue
+            tail_note = ('元動画の末尾は未生成です。ここで使用する候補前後の区間と動画フレームの整合は確認済みです。 '
+                         if report['source_truncated'] else '')
             page.append(f'<section><h2>{name}</h2><p>候補時刻から最初の表示フレームまで：+{report["first_display_after_candidate_ms"]:.3f} ms。'
-                        f'元動画のEVS表示窓：{report["preview_event_window_ms"]:g} ms / {html.escape(report["preview_event_window_position"])}。</p>'
+                        f'元動画のEVS表示窓：{report["preview_event_window_ms"]:g} ms / {html.escape(report["preview_event_window_position"])}。{tail_note}</p>'
                         f'<video controls loop preload="metadata" src="{name}/candidate_review.mp4"></video>'
                         f'<p><a href="{name}/frames.csv">フレーム時刻対応表</a> / <a href="{name}/summary.json">入力・候補情報</a></p>'
                         f'<a href="{name}/contact_sheet.png"><img loading="lazy" src="{name}/contact_sheet.png" alt="初出現前後と候補直前直後"></a></section>')
