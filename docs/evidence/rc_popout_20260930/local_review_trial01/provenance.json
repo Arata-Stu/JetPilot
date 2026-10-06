@@ -1,0 +1,8 @@
+{
+  "source": "User-pasted local review console output and summary.csv. Per-pair CSVs, NPZ arrays and actual SVGs have not been inspected locally.",
+  "recorded_on": "2026-10-06",
+  "remote_output": "/workspaces/record/09-30/analysis/local_review_trial01",
+  "summary_rows": 10,
+  "review_errors": [],
+  "interpretation": "Global aggregation hides independent pair starts, but the negative control also has many pair episodes. Pair count is not object count or detection success. No threshold or detector change follows from this aggregate alone."
+}

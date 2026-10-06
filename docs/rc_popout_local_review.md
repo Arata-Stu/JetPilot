@@ -4,6 +4,78 @@
 候補回数だけを見ず、警報が続いた時間と場所を確認する。
 結果の数値と解釈は [rc_popout_local_detection.md](rc_popout_local_detection.md) に保存した。
 
+## 2026-10-06：監査第1試行の実データ結果
+
+ユーザー提示の集計では10ケースが成功し、`review_errors.json` は空配列。
+元の数値は [summary.csv](evidence/rc_popout_20260930/local_review_trial01/summary.csv) に保存した。
+ここで実際に読めたのは集計値であり、実データのNPZ・ペア別CSV・比較図はまだこちらで見ていない。
+
+| session | RGB走行中ON率 | EVS走行中ON率 | RGBの独立ペア反応数 | EVSの独立ペア反応数 |
+|---|---:|---:|---:|---:|
+| `t_0.2-none` | 96.04% | 17.21% | 162 | 10 |
+| `test_01` | 95.46% | 41.87% | 224 | 98 |
+| `test_05` | 95.58% | 30.16% | 228 | 93 |
+| `test_11` | 95.79% | 39.03% | 211 | 100 |
+| `test_14` | 95.07% | 40.21% | 227 | 81 |
+
+ON率は走行指令区間内の準備済み観測時間に対する割合。独立ペア反応数は全保存区間の値で、互いに重複するペアも含む。
+
+確認できたこと：
+
+- RGBは正例・負例のどちらでも約95～96%の時間でON。現設定の全体警報は飛び出し有無を区別できていない。
+- RGBの全体警報中に最大ペアが41～51回切り替わっている。隣接ペア同士の微小な順位変動も含むため、その回数を独立物体の数とは読まない。
+- 正例RGBの初出現周辺で新たに始まったペア反応は26・49・62・55件で、全て既存の全体警報中に始まっている。EVSも8件中7件、33件中32件、52件中51件、43件中43件が同様。
+- 従って元の全体候補一覧が、各場所の反応開始を隠していることは確認できた。ただし、それらが対象車両への反応かは集計から分からない。
+- 負例RGBにも162件の独立ペア反応がある。候補を空間ごとに分離するだけでは背景への反応は除去できない。
+- EVSは負例より正例で走行中ON率が大きいが、対象の検知時刻や先行性の証明にはならない。負例の走行中ON率17.21%も残っている。
+- float32閾値近傍カウントは全ケース0で、今回の±1e-8の監査範囲では境界値の丸め問題は報告されていない。
+
+次の判断には元のタイル時系列が必要。現在の0.05という開始閾値とスケール下限は未調整の初期値であり、
+この集計だけで「閾値を変えれば分離できる」「活動量特徴では不可能」のどちらも確定しない。
+
+次は調整用5件の保存NPZとメタデータをローカルへ受け取り、背景と出現付近のスコアの重なりを直接調べる。
+まず現方式の空間・時間分布と負例基準の閾値候補を数値で確認し、正例の出現前誤反応・出現後候補の位置・遅れを併記する。
+設定を変える場合も調整用だけで選び、全体警報と空間ごとの候補を分けて記録する。
+背景の反応と対象付近の反応が分離しなければ、変化量に加えて動きの方向などの特徴を検討する。現時点ではその追加方式を実装・実証したとは扱わない。
+ROIや繰り返し現れる背景位置を結果に合わせて切り捨てたり、初出現時刻を検知開始の条件にしたりしない。評価用は使用しない。
+
+## 調整用データの受け渡し
+
+次のコマンドは保存済みの調整用5件のタイル時系列と設定・結果をZIPへまとめる。
+元ファイルは変更せず、RAW・動画・評価用時系列を含めない。既存ZIPがあれば上書きせず停止する。
+受け取り後は局所検知結果に記録された入力ハッシュと照合し、保存当時のデータとして解析する。
+このZIPだけで現在のRAW・同期YAML・注釈との一致まで再検証したとは扱わない。
+
+```bash
+python3 - <<'PY'
+from pathlib import Path
+from zipfile import ZIP_DEFLATED, ZipFile
+
+root = Path("/workspaces/record/09-30/analysis")
+sessions = ["t_0.2-none", "test_01", "test_05", "test_11", "test_14"]
+paths = [root / "tile_dev_trial01/run_config.json"]
+for name in ("run_config.json", "detector_parameters.json", "summary.csv", "candidates.csv"):
+    paths.append(root / "local_dev_trial01" / name)
+for name in ("summary.csv", "review_errors.json"):
+    paths.append(root / "local_review_trial01" / name)
+for session in sessions:
+    for name in ("rgb_tiles.npz", "evs_tiles.npz", "tiles.json", "result.json"):
+        paths.append(root / "tile_dev_trial01" / session / name)
+    paths.append(root / "local_dev_trial01" / session / "result.json")
+
+missing = [str(p) for p in paths if not p.is_file()]
+if missing:
+    raise SystemExit("Missing files:\n" + "\n".join(missing))
+out = root / "development_debug_bundle01.zip"
+with ZipFile(out, "x", compression=ZIP_DEFLATED) as bundle:
+    for p in paths:
+        bundle.write(p, p.relative_to(root))
+print(f"Saved: {out}\nFiles: {len(paths)} / Size: {out.stat().st_size / 1024**2:.1f} MiB")
+PY
+```
+
+このZIPを会話へ添付する。SSHによる取得は行わない。
+
 ## 実行
 
 今回の追加ファイルを解析側へ反映してから実行する。
@@ -85,4 +157,4 @@ bash -n scripts/experiments/review_rc_popout_local_changes.sh
 
 合成データで、場所を変えた反応が全体警報としてつながる場合、ペア反応と全体占有時間を区別できることを確認する。
 欠測・準備状態・境界、過去側サンプルの選択、float32閾値境界、入力不整合の拒否、元結果の保存も検証した。
-合成比較図の描画確認済み。実データの監査はユーザー実行待ち。
+合成比較図の描画確認済み。実データの監査集計は上記ユーザー提示結果で確認した。
