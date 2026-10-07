@@ -1,0 +1,16 @@
+{
+  "received_date": "2026-10-08",
+  "reported_remote_output": "/workspaces/record/09-28/analysis/grid_background_static_trial01",
+  "input_kind": "User terminal transcript, not the remote CSV original bytes",
+  "source_transcript_sha256": "1fc0ce8fbbacb7633a78983a26761b85b703c0ba1ae563f39221462e9ae61138",
+  "summary_sha256": "8f26d44b11535e9b7370a63565b9de07e0ca8d95d67f5c0a7569e952dd204f96",
+  "script_sha256": "fd635968a99f44056389e161c1a888fc297010a7677eb4c8ed16adc228509e78",
+  "local_frozen_parameters_sha256": "b8954ac6bdcc4838580d35bce39ad1e7238d24907f83881353e2a110381cf6ca",
+  "verification": "36 rows, complete population and conditions, thresholds, counts and timestamp arithmetic checked.",
+  "unverified": [
+    "Remote run_config and frozen-file provenance",
+    "Candidate coordinates and video correspondence",
+    "Re-extracted tile arrays and raw data",
+    "Same-input activity baseline results"
+  ]
+}
