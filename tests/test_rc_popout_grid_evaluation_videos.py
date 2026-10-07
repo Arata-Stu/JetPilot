@@ -96,6 +96,55 @@ class EvaluationVideoTests(unittest.TestCase):
 
 
 class OptionalOnsetRenderTests(unittest.TestCase):
+    def test_seek_that_reports_correct_index_but_returns_next_pixels_is_avoided(self):
+        try:
+            import cv2
+        except ImportError:
+            self.skipTest('OpenCV unavailable')
+        ffmpeg = shutil.which('ffmpeg')
+        if not ffmpeg:
+            self.skipTest('ffmpeg unavailable')
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _, manifest = preview_fixture(root, make_video=True)
+            scene = manifest['scenes'][0]
+            plan = video.find_preview(root, scene, manifest['spatial'], .3, .3)
+            capture = cv2.VideoCapture
+            reference = capture(str(plan['folder']/'rgb_vs_overlay.mp4'))
+            crossing = plan['span'][2]
+            for _ in range(crossing+1):
+                ok, expected = reference.read()
+                self.assertTrue(ok)
+            reference.release()
+            expected = video.decorate(expected, plan['frames'][crossing], scene,
+                                      manifest, plan['summary'], 4., cv2)
+            seeks = []
+
+            class InaccurateSeek:
+                def __init__(self, path):
+                    self.cap = capture(path)
+                    self.shift = 0
+
+                def set(self, prop, value):
+                    if prop == cv2.CAP_PROP_POS_FRAMES:
+                        seeks.append(value)
+                        self.shift = 1
+                        return self.cap.set(prop, value+1)
+                    return self.cap.set(prop, value)
+
+                def get(self, prop):
+                    value = self.cap.get(prop)
+                    return value-self.shift if prop == cv2.CAP_PROP_POS_FRAMES else value
+
+                def __getattr__(self, name):
+                    return getattr(self.cap, name)
+
+            with patch.object(cv2, 'VideoCapture', InaccurateSeek):
+                report = video.render(scene, manifest, plan, root/'review', 4., ffmpeg)
+            self.assertEqual(seeks, [])
+            self.assertEqual(report['source_decode_strategy'], 'sequential_from_start')
+            np.testing.assert_array_equal(cv2.imread(str(root/'review/candidate_after.png')), expected)
+
     def test_negative_rgb_and_early_evs_clips_do_not_need_onset_in_span(self):
         try:
             import cv2

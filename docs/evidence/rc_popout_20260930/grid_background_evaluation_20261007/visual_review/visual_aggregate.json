@@ -1,0 +1,37 @@
+{
+  "rgb": {
+    "vehicle_supported": 2,
+    "background": 15,
+    "uncertain": 2,
+    "onset_to_250ms": {
+      "vehicle_supported": 0,
+      "background": 3,
+      "uncertain": 1
+    },
+    "positive_sessions_with_background": [
+      "test_02",
+      "test_04",
+      "test_06",
+      "test_07",
+      "test_12",
+      "test_13",
+      "test_15",
+      "test_16"
+    ]
+  },
+  "evs": {
+    "vehicle_supported": 6,
+    "background": 4,
+    "uncertain": 1,
+    "onset_to_250ms": {
+      "vehicle_supported": 6,
+      "background": 1,
+      "uncertain": 1
+    },
+    "positive_sessions_with_background": [
+      "test_02",
+      "test_04",
+      "test_16"
+    ]
+  }
+}

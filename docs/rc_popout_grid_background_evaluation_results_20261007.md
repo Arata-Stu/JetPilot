@@ -2,7 +2,9 @@
 
 2026-10-07。ユーザーがデータ側で実行した `grid_background_eval_trial01/summary.csv` と `candidates.csv` の貼付内容を集計した。モデル・閾値・ROI・区分表は変更していない。
 
-## 結論
+**追記：全30候補の確認資料を受領し、[映像照合結果](rc_popout_grid_background_evaluation_visual_review_20261007.md)を保存した。** 初出現後250 ms以内のEVS候補は、車体との対応を支持する6件、背景1件、判断保留1件。以下の8/8件・4/8件はCSVによる時間的一致の集計を保持したもので、車両検知成功数ではない。確認動画8本に1フレームの時刻対応不整合があり、rendererを修正した。該当映像の厳密な時刻照合は再生成待ち。
+
+## CSV受領時点の結論
 
 **EVSの8/8件は「初出現後250 ms以内に候補がある」という時間的な一致であり、車両検知8/8件とはまだ扱えない。** 全候補表から、左飛び出しの `test_04` のEVS候補が画像右上寄り（タイル97・98）にあると分かった。他の多くの出現後候補は車両が通過する下側の高さにあり、この1件は特に映像照合が必要である。RGBでも時間窓内の4件中3件が上側のタイル78・79だった。
 
@@ -19,7 +21,7 @@
 - 閾値は手元の固定設定と一致：RGB `0.19765397027910442`、EVS `0.06090278921343967`。
 - 最初の候補・初出現・差分の算術整合、走行中警報時間が観測時間以下であることを確認。
 - 全候補の連番・件数・最初の時刻・初出現差分・早期／250 ms窓の件数がsummaryと一致し、選択タイルの隣接関係も確認した。
-- 実行時 `run_config.json`・固定ファイル、評価用配列・動画は未受領。リモートのコード・モデルハッシュや車両との空間的な対応を、貼付CSVから独立検証したことにはならない。
+- CSV受領時点では実行時 `run_config.json`・固定ファイル、評価用配列・動画は未受領だった。その後、確認動画・生成metadataを受領して照合した範囲は上記の映像照合結果に記す。評価用配列・RAWからの推論再現は行っていない。
 
 [集計JSON](evidence/rc_popout_20260930/grid_background_evaluation_20261007/aggregate.json)、[出典・ハッシュ・確認範囲](evidence/rc_popout_20260930/grid_background_evaluation_20261007/provenance.json)。
 
@@ -108,9 +110,9 @@ cd /workspaces
 bash scripts/experiments/render_rc_popout_grid_evaluation_reviews.sh \
   --evaluation-dir /workspaces/record/09-30/analysis/grid_background_eval_trial01 \
   --record-base /workspaces/record/09-30 \
-  --output /workspaces/record/09-30/analysis/grid_background_eval_review_trial01
+  --output /workspaces/record/09-30/analysis/grid_background_eval_review_trial02
 
-cat /workspaces/record/09-30/analysis/grid_background_eval_review_trial01/review_errors.json
+cat /workspaces/record/09-30/analysis/grid_background_eval_review_trial02/review_errors.json
 ```
 
 - 出力 `index.html` から全候補を閲覧する。個別出力は例として `test_04/evs_c001/`、負例は `t_0.2-none_01/rgb_c001/`。
@@ -120,8 +122,8 @@ cat /workspaces/record/09-30/analysis/grid_background_eval_review_trial01/review
 - 元動画の末尾が未生成でも、候補前後の必要区間が保存されていれば利用する。描画窓（通常中央10 ms）と検知窓（EVS過去2 ms）は別物であり、この動画だけで検知器が使ったイベント集合を再現したとは扱わない。
 - `--dry-run` を追加すれば出力せず適合プレビューを検査できる。既存出力へは上書きしない。
 
-ローカルでは合成データを用いた14テストが成功した。全候補／候補0件の保持、負例・早期候補の動画生成、左右両画面の枠座標、CSV・alarm・注釈不一致の拒否、従来の調整用動画生成を確認した。実データ評価の動画生成と目視判定はデータ側での実行待ちである。
+初版の全30候補動画を受領し、contact sheetと原寸PNGで暫定的な位置判定を終えた。そこで一部クリップに1フレームの対応不整合を確認したため、シークから逐次デコードへ修正した。現在の関連15テストが成功している。全候補／候補0件の保持、負例・早期候補の動画生成、左右両画面の枠座標、CSV・alarm・注釈不一致の拒否に加え、誤った画素を返すシークへの回帰テストを含む。上記コマンドは修正版のtrial02を生成する。実データで修正効果を確認する作業は残っている。
 
-まず `test_04/evs_c001`、RGBのタイル78・79、EVSの早期タイル82・83を確認し、その後ほかの全候補も同じ基準で確認する。「車体に対応」「背景に対応」「判断不能」を区別して記録し、確認結果に合わせて評価値を整理する。評価データの一部だけからタイルを除外したり、閾値を変更したりしない。空間的な確認後に、固定方式を静止記録へ適用する。
+`test_04/evs_c001` とRGBのタイル78・79は段ボール上端、EVSの早期タイル82・83は壁面ボード下端に対応していた。全30候補を「車体との対応を支持」「背景位置」「判断保留」に分けて[判定CSV](evidence/rc_popout_20260930/grid_background_evaluation_20261007/visual_review/visual_decisions.csv)へ保存した。評価データの一部だけからタイルを除外したり、閾値を変更したりしない。表示時刻を再確認した後、固定方式の静止記録への適用を進める。
 
-ポスターの暫定表現は「固定したgrid背景モデルを内部評価用の移動シナリオへ適用し、EVSでは飛び出しあり8記録すべてでRGB初出現後250 ms以内に候補を得た。一方2記録で早期警報が残り、出現後候補にも対象位置との対応が疑わしい例があった。飛び出しなし2記録では候補0件だった。車両検知性能の確定には映像照合が必要」とする。
+ポスターには時間的一致の8/8件を検知成功率として記載しない。[映像照合結果の暫定表現](rc_popout_grid_background_evaluation_visual_review_20261007.md)を参照し、車体との対応を支持する6件、背景1件、判断保留1件、および早期警報を区別する。

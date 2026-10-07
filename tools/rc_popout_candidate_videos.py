@@ -203,8 +203,13 @@ def render(scene, manifest, plan, destination, slow, ffmpeg, *, require_onset=Tr
                     or int(round(cap.get(cv2.CAP_PROP_FRAME_COUNT))) != len(rows)
                     or not math.isclose(cap.get(cv2.CAP_PROP_FPS), summary['fps'], rel_tol=.002)):
                 raise ValueError('decoded video dimensions/frame count/fps differ from summary')
-            if not cap.set(cv2.CAP_PROP_POS_FRAMES, lo) or abs(cap.get(cv2.CAP_PROP_POS_FRAMES)-lo) > .1:
-                raise ValueError('cannot seek exact source frame')
+            # Some H.264/OpenCV combinations report the requested frame after a
+            # seek but return the next frame's pixels. Decode from the beginning
+            # so CSV row indices remain tied to sequentially decoded frames.
+            for skipped in range(lo):
+                ok, _ = cap.read()
+                if not ok or abs(cap.get(cv2.CAP_PROP_POS_FRAMES)-(skipped+1)) > .1:
+                    raise ValueError(f'video decode/frame index mismatch before clip at {skipped}')
             temporary = folder/'intermediate.mp4'
             writer = cv2.VideoWriter(str(temporary), cv2.VideoWriter_fourcc(*'mp4v'), fps, (width*2,height+128))
             if not writer.isOpened():
@@ -289,6 +294,7 @@ def render(scene, manifest, plan, destination, slow, ffmpeg, *, require_onset=Tr
             csv_writer.writeheader(); csv_writer.writerows(mapping)
         report = dict(session=scene['session'], method=scene.get('method', 'evs'),
             candidate_id=scene.get('candidate_id', 1), require_onset=require_onset,
+            source_decode_strategy='sequential_from_start',
             status='complete', source_preview=str(plan['folder']),
             source_truncated=bool(summary.get('truncated', False)),
             source_requested_frames=summary.get('requested_frames'), source_rendered_frames=summary['rendered_frames'],
