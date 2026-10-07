@@ -104,7 +104,7 @@
 cat /workspaces/record/09-28/analysis/grid_background_static_trial01/candidates.csv
 ```
 
-確認映像の選択には実行時の設定・元記録・注釈との整合が必要になる。現在受領しているのはsummary・errors・候補CSVであり、静止用の候補映像をまだ生成・照合した結果ではない。
+確認映像の選択には実行時の設定・元記録・注釈との整合が必要になる。summary・errors・候補CSVに加え、[枠付き動画trial01の実行ログ](evidence/rc_popout_20260930/grid_background_static_20261008/review_trial01_user_log.txt)を受領した。24候補中22件が生成済みで、`popout-0928-static-100_01` の両センサは同期／時刻基準の一致検査で停止した。生成条件の引継ぎを修正し、[trial02再実行手順](rc_popout_grid_static_transfer_20261007.md#trial01実行ログと生成条件の引継ぎ修正)を追加した。実際の候補映像は未受領で、車体との対応判定はまだ行っていない。
 
 ## 集計の再現
 

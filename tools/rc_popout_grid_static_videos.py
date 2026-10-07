@@ -151,14 +151,19 @@ def plan_previews(manifest, before, after):
 
 
 def preview_commands(manifest, plans):
-    groups = {}
+    missing = {}
     for scene, plan in zip(manifest['scenes'], plans):
         if 'error' in plan:
-            groups.setdefault(scene['record_root'], set()).add(scene['session'])
+            missing[scene['record_root'], scene['session']] = scene
     script = static.ROOT/'scripts/experiments/generate_rc_popout_common_views.sh'
-    return [['bash', str(script), '--record-root', root,
+    # Pin each recording to inference inputs. The general batch generator's
+    # manual-first policy may select a different sync than the saved annotation.
+    return [['bash', str(script), '--record-root', scene['record_root'],
              '--camchain', manifest['spatial']['camchain'], '--projection', 'rotation-only',
-             '--sessions', *sorted(sessions)] for root, sessions in sorted(groups.items())]
+             '--time-sync', scene['time_sync_path'], '--time-sync-sha256', scene['time_sync_sha256'],
+             '--rgb-timestamp-source', scene['rgb_timestamp_source'],
+             '--reference-origin-s', str(scene['reference_origin_s']),
+             '--sessions', scene['session']] for _, scene in sorted(missing.items())]
 
 
 def write_page(output, manifest, results):

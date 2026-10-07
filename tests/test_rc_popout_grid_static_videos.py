@@ -87,21 +87,41 @@ class StaticVideoTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'differs from saved alarm'):
             review.load_review(self.output, self.frozen)
 
-    def test_dry_run_never_prepares_or_writes_and_commands_group_record_roots(self):
+    def test_dry_run_never_prepares_or_writes_and_commands_pin_each_recording(self):
         destination = self.root/'review'
         manifest = review.load_review(self.output, self.frozen)
         plans = review.plan_previews(manifest, .3, .3)
         commands = review.preview_commands(manifest, plans)
-        self.assertEqual(len(commands), 1)
+        self.assertEqual(len(commands), 12)  # One per recording, not per candidate.
         command = commands[0]
         sessions = command[command.index('--sessions')+1:]
-        self.assertEqual(len(sessions), 12)
+        self.assertEqual(len(sessions), 1)
         self.assertEqual(command[command.index('--record-root')+1], str((self.root/'recordings').resolve()))
+        for command in commands:
+            session = command[command.index('--sessions')+1]
+            scene = next(s for s in manifest['scenes'] if s['session'] == session)
+            for flag, key in (('--time-sync', 'time_sync_path'), ('--time-sync-sha256', 'time_sync_sha256'),
+                              ('--rgb-timestamp-source', 'rgb_timestamp_source'), ('--reference-origin-s', 'reference_origin_s')):
+                self.assertEqual(command[command.index(flag)+1], str(scene[key]))
         with patch.object(review.subprocess, 'run') as run, contextlib.redirect_stdout(io.StringIO()):
             code = review.main(['--static-dir', str(self.output), '--frozen-dir', str(self.frozen),
                                 '--output', str(destination), '--prepare-previews', '--dry-run'])
         self.assertEqual(code, 1)
         run.assert_not_called(); self.assertFalse(destination.exists())
+
+    def test_only_failed_recording_gets_a_pinned_generation_command(self):
+        from test_rc_popout_common_views import MODULE as generator
+        manifest = review.load_review(self.output, self.frozen)
+        session = 'popout-0928-static-100_01'
+        plans = [dict(error='old sync') if s['session'] == session else dict(folder='matching')
+                 for s in manifest['scenes']]
+        commands = review.preview_commands(manifest, plans)
+        self.assertEqual(len(commands), 1)
+        with patch.object(generator.subprocess, 'run') as render, contextlib.redirect_stdout(io.StringIO()) as log:
+            self.assertEqual(generator.main(commands[0][2:]+['--dry-run']), 0)
+        self.assertIn('pinned to analysis', log.getvalue())
+        self.assertIn('--rgb-timestamp-source bag', log.getvalue())
+        render.assert_not_called()
 
     def test_failed_previews_are_reported_alongside_zero_candidate_records(self):
         try:

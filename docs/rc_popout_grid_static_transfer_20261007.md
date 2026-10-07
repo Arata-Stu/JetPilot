@@ -94,7 +94,7 @@ bash scripts/experiments/render_rc_popout_grid_static_reviews.sh \
   --prepare-previews
 ```
 
-`--prepare-previews` は解析と一致する動画がない記録だけ、既存の `generate_rc_popout_common_views.sh` でrotation-only動画を用意する。動画生成には従来と同じROS・Metavision・LED同期エクスポートが必要。一致する動画がある場合は再利用し、切り出しにはOpenCVとffmpegを使う。保存済み注釈が参照する同期と一致しなければ描画を拒否し、同期・注釈を自動で書き換えない。
+`--prepare-previews` は解析と一致する動画がない記録だけ、既存の `generate_rc_popout_common_views.sh` でrotation-only動画を用意する。動画生成には従来と同じROS・Metavisionが必要。一致する動画がある場合は再利用し、切り出しにはOpenCVとffmpegを使う。保存済み注釈が参照する同期のパスとSHA-256、RGB時刻基準、時刻原点を生成側へ明示する。通常の手動YAML優先選択やLEDエクスポート側の時刻基準で置き換えない。保存済み解析と一致しなければ描画を拒否し、同期・注釈を自動で書き換えない。
 
 同じコマンドに `--dry-run` を付けると、整合性検査と不足動画の生成コマンド表示だけを行う。`--prepare-previews` を併記してもdry-runでは動画や出力を作らない。不足時は終了コード1となる。
 
@@ -107,6 +107,26 @@ RGB初出現がクリップに含まれる場合は初出現前後もcontact she
 まず `popout-0928-static_01`（20%左）と `popout-0928-static_04`（20%右）を条件内の先頭例として確認し、その後全候補を照合する。枠内が車体か背景か、初出現が遮蔽物端か画像端か、上下・左右の位置ずれとグリッド境界との関係を見る。良い結果だけを選んで評価しない。
 
 新規の静止レビュー6件と、既存の静止評価9件・候補動画9件・移動評価動画6件のテスト計30件が成功。静止の全候補保持、ゼロ候補の一覧、入力不一致の拒否、dry-runの無書込、静止表示、実際のH.264生成・復号とフレーム対応を確認した。実データの動画生成・候補位置の判定は利用者側で上記を実行してから行う。
+
+### trial01実行ログと生成条件の引継ぎ修正
+
+利用者の [trial01実行ログ](evidence/rc_popout_20260930/grid_background_static_20261008/review_trial01_user_log.txt) では共通視野動画12本が生成され、枠付き24候補中22件が成功、`popout-0928-static-100_01` のRGB・EVSだけが失敗した。失敗箇所は同期ハッシュ・時刻原点・時刻基準の一致検査で、旧ログはこれらを一つのメッセージにまとめているため、不一致項目までは断定できない。対象記録の生成側は `time_sync_led.yaml` を選択していた。
+
+初版には、確認側では解析時の参照先を保持しながら、不足動画の生成側へその情報を渡さず、手動同期優先とLEDエクスポートの時刻基準を使う不備があった。各記録の解析時の同期パス・ハッシュ・RGB時刻基準・原点を直接渡すよう修正した。生成後とキャッシュ再利用時にも実際のsummaryを照合する。不一致のエラーには項目名と期待値・実値を表示する。検出の再推論、同期の再推定、注釈の変更は行わない。
+
+修正版を実行側へ反映後、新しい出力先で再実行する。一致済み11記録の共通視野動画は再利用し、不足する1記録を生成する。枠付きクリップは新しいフォルダへ全24候補を出力する。
+
+```bash
+cd /workspaces
+bash scripts/experiments/render_rc_popout_grid_static_reviews.sh \
+  --static-dir /workspaces/record/09-28/analysis/grid_background_static_trial01 \
+  --output /workspaces/record/09-28/analysis/grid_background_static_review_trial02 \
+  --prepare-previews
+```
+
+同期ファイルの手動／自動を一方へ上書きして回避しない。この修正は保存済み解析の再現用であり、最新の手動同期を新たに採用して評価し直す場合は、動画だけでなく検出解析も更新する別工程が必要になる。
+
+修正後の関連27テストが成功。手動YAMLが存在しても解析時の自動YAMLを指定する例、LED側headerと解析側bagの相違、指定同期の欠損・改変時の拒否、生成後／再利用時の原点・ハッシュ検査、不足1記録のみの生成指示、既存の候補動画生成を検証した。リモートの修正版による再実行は未確認。
 
 ```bash
 PYTHONPATH=tools:tests python3 -m unittest \

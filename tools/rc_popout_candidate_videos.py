@@ -125,11 +125,16 @@ def find_preview(root, scene, spatial, before, after):
                         'rgb_to_view_homography', 'event_to_view_homography'):
                 if key not in summary or not same_numbers(summary[key], spatial[key]):
                     raise ValueError(f'coordinate/calibration mismatch: {key}')
-            if (summary['time_sync_sha256'] != scene['time_sync_sha256']
-                    or abs(summary['reference_origin_s']-scene['reference_origin_s']) > 1e-6
-                    or summary.get('rgb_timestamp_source', 'bag') != scene['rgb_timestamp_source']
-                    or Path(summary['bag']).name != scene['session']):
-                raise ValueError('sync, recording origin or timestamp source mismatch')
+            for key in ('time_sync_sha256', 'rgb_timestamp_source', 'reference_origin_s'):
+                actual = summary.get(key, 'bag' if key == 'rgb_timestamp_source' else None)
+                expected = scene[key]
+                matches = (isinstance(actual, (int, float)) and not isinstance(actual, bool)
+                           and math.isfinite(actual) and abs(actual-expected) <= 1e-6
+                           if key == 'reference_origin_s' else actual == expected)
+                if not matches:
+                    raise ValueError(f'{key} mismatch: expected={expected!r}, actual={actual!r}')
+            if Path(summary['bag']).name != scene['session']:
+                raise ValueError(f'recording mismatch: expected={scene["session"]!r}, actual={summary["bag"]!r}')
             if summary.get('timeline', 'rgb') != 'rgb':
                 raise ValueError(f"RGB-timeline preview required; timeline={summary.get('timeline')!r}, "
                                  f"truncated={summary.get('truncated', False)!r}")
