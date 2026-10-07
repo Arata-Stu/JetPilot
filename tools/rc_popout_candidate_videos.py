@@ -147,7 +147,7 @@ def find_preview(root, scene, spatial, before, after):
             errors.append(f'{path.parent.name}: {error}')
     if not valid:
         detail = '; '.join(errors[:5]) or 'no preview summaries'
-        raise ValueError('解析時と一致する共通視野動画がありません。generate_rc_popout_common_views.shで対象4件を生成してください。 '+detail)
+        raise ValueError(f'解析時と一致する共通視野動画がありません。generate_rc_popout_common_views.shで {scene["session"]} を生成してください。 '+detail)
     # Prefer the annotated preview; otherwise choose matching coordinates/sync
     # with the highest frame rate. Never select just by modification time.
     valid.sort(key=lambda v: (v[0].name != annotation.get('preview_id'), -v[1]['fps'], v[0].name))
@@ -165,11 +165,17 @@ def decorate(frame, row, scene, manifest, summary, slow, cv2):
         for tile in scene['tiles']:
             x, y, w, h = (tile[k] for k in ('x', 'y', 'width', 'height'))
             cv2.rectangle(output, (shift+x,y), (shift+x+w-1,y+h-1), color, 2)
+    method = scene.get('method', 'evs')
+    onset = scene['rgb_onset_recording_s']
+    onset_label = ('RGB onset=none' if onset is None else
+                   f'RGB onset={onset:.6f}s | From onset={1000*(t-onset):+.2f}ms')
+    detector_label = (f"past {manifest['detector_window_ms']:g}ms" if method == 'evs'
+                      else 'consecutive RGB frame pair')
     text = [
-        f"{scene['session']} | Fixed EVS candidate tiles {','.join(str(t['tile_id']) for t in scene['tiles'])} | Playback {1/slow:g}x",
+        f"{scene['session']} | {method.upper()} candidate {scene.get('candidate_id', 1)} | Fixed tiles {','.join(str(t['tile_id']) for t in scene['tiles'])} | Playback {1/slow:g}x",
         f"Recording t={t:.6f}s | From drive={t-scene['drive_start_s']:.6f}s | From candidate={1000*delta:+.2f}ms",
-        f"Candidate={scene['candidate_recording_s']:.6f}s | RGB onset={scene['rgb_onset_recording_s']:.6f}s | From onset={1000*(t-scene['rgb_onset_recording_s']):+.2f}ms",
-        f"Preview EVS: {summary['event_window_ms']:g}ms / {summary['event_window_position']} | Detector: past {manifest['detector_window_ms']:g}ms",
+        f"Candidate={scene['candidate_recording_s']:.6f}s | {onset_label}",
+        f"Preview EVS: {summary['event_window_ms']:g}ms / {summary['event_window_position']} | Detector: {detector_label}",
         'Fixed reference boxes, NOT tracking/alarm duration. Cyan: before candidate; orange: at/after candidate.',
     ]
     for n, line in enumerate(text):
@@ -177,7 +183,7 @@ def decorate(frame, row, scene, manifest, summary, slow, cv2):
     return output
 
 
-def render(scene, manifest, plan, destination, slow, ffmpeg):
+def render(scene, manifest, plan, destination, slow, ffmpeg, *, require_onset=True):
     import cv2
     import numpy as np
     source = plan['folder']/'rgb_vs_overlay.mp4'
@@ -204,14 +210,22 @@ def render(scene, manifest, plan, destination, slow, ffmpeg):
             if not writer.isOpened():
                 raise ValueError('cannot open MP4 writer')
             times = [r['relative_time_s'] for r in rows]
-            onset_index = bisect.bisect_left(times, scene['rgb_onset_recording_s'])
-            if not lo < onset_index < hi:
-                raise ValueError('clip must include frames before and at/after RGB onset; increase --before-s/--after-s')
-            snapshots = {
-                'before_onset': max(lo, bisect.bisect_right(times, scene['rgb_onset_recording_s']-.1)-1),
-                'onset_after': onset_index,
-                'candidate_before': crossing-1, 'candidate_after': crossing,
-            }
+            onset = scene['rgb_onset_recording_s']
+            if require_onset:
+                onset_index = -1 if onset is None else bisect.bisect_left(times, onset)
+                if not lo < onset_index < hi:
+                    raise ValueError('clip must include frames before and at/after RGB onset; increase --before-s/--after-s')
+                snapshots = {
+                    'before_onset': max(lo, bisect.bisect_right(times, onset-.1)-1),
+                    'onset_after': onset_index,
+                    'candidate_before': crossing-1, 'candidate_after': crossing,
+                }
+            else:
+                snapshots = {
+                    'candidate_minus_100ms': max(lo, bisect.bisect_right(times, scene['candidate_recording_s']-.1)-1),
+                    'candidate_before': crossing-1, 'candidate_after': crossing,
+                    'candidate_plus_100ms': min(hi-1, bisect.bisect_left(times, scene['candidate_recording_s']+.1)),
+                }
             if any(not lo <= i < hi for i in snapshots.values()):
                 raise ValueError('clip does not include RGB onset; increase --before-s')
             stills, mapping = {}, []
@@ -230,7 +244,7 @@ def render(scene, manifest, plan, destination, slow, ffmpeg):
                     source_frame=index, source_video_time_s=rows[index]['video_time_s'],
                     recording_relative_s=rows[index]['relative_time_s'], reference_time_s=rows[index]['reference_time_s'],
                     candidate_delta_ms=1000*(rows[index]['relative_time_s']-scene['candidate_recording_s']),
-                    onset_delta_ms=1000*(rows[index]['relative_time_s']-scene['rgb_onset_recording_s'])))
+                    onset_delta_ms=None if onset is None else 1000*(rows[index]['relative_time_s']-onset)))
         finally:
             cap.release()
             if writer is not None:
@@ -273,7 +287,9 @@ def render(scene, manifest, plan, destination, slow, ffmpeg):
         with (folder/'frames.csv').open('w', newline='') as stream:
             csv_writer = csv.DictWriter(stream, fieldnames=list(mapping[0]))
             csv_writer.writeheader(); csv_writer.writerows(mapping)
-        report = dict(session=scene['session'], status='complete', source_preview=str(plan['folder']),
+        report = dict(session=scene['session'], method=scene.get('method', 'evs'),
+            candidate_id=scene.get('candidate_id', 1), require_onset=require_onset,
+            status='complete', source_preview=str(plan['folder']),
             source_truncated=bool(summary.get('truncated', False)),
             source_requested_frames=summary.get('requested_frames'), source_rendered_frames=summary['rendered_frames'],
             source_summary_sha256=digest(plan['folder']/'summary.json'), source_frames_sha256=digest(plan['folder']/'frames.csv'),
@@ -284,7 +300,7 @@ def render(scene, manifest, plan, destination, slow, ffmpeg):
             first_display_after_candidate_ms=1000*(rows[crossing]['relative_time_s']-scene['candidate_recording_s']),
             max_source_frame_gap_ms=1000*max(rows[i]['relative_time_s']-rows[i-1]['relative_time_s'] for i in range(lo+1,hi)),
             preview_event_window_ms=summary['event_window_ms'], preview_event_window_position=summary['event_window_position'],
-            detector_window_ms=manifest['detector_window_ms'],
+            detector_window_ms=manifest['detector_window_ms'] if scene.get('method', 'evs') == 'evs' else None,
             note='Spatial review only. Fixed onset tiles, not tracking. Source RGB cadence and event visualization window retained.')
         write_json(folder/'summary.json', report)
         Path(tmp).rename(destination)

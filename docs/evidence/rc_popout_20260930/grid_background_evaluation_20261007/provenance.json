@@ -5,6 +5,9 @@
   "saved_csv_sha256": "0f17eb66e11d41741e65a75bf61ae1104061cc283eed71130662567ebfe7dd4b",
   "local_reference_parameters_sha256": "b8954ac6bdcc4838580d35bce39ad1e7238d24907f83881353e2a110381cf6ca",
   "local_reference_freeze_sha256": "a207d2bd0feb3a8f3126b152d0ae85057eb74e898ff061618675991b5671c2d8",
-  "verification": "20 unique session/sensor rows, expected split, complete and sample counts, threshold values and internal timing arithmetic checked. Remote run_config, freeze/model hashes, candidates, arrays and videos were not received or independently verified.",
-  "changes": "No detector, model, threshold, ROI, split, or frozen artifacts changed."
+  "verification": "20 unique session/sensor rows, expected split, complete and sample counts, threshold values and internal timing arithmetic checked. All 30 candidate rows subsequently received as pasted text and reconciled with the summary. Remote run_config, freeze/model hashes, arrays and videos were not received or independently verified.",
+  "changes": "No detector, model, threshold, ROI, split, or frozen artifacts changed.",
+  "candidate_table_source": "User-pasted candidates.csv on 2026-10-07; escaped underscores normalized.",
+  "candidate_csv_sha256": "ac662d63ba6cf8f469309f3636faf1c59ce4df7ab9eef7971152313c672b390a",
+  "candidate_checks": "All 30 candidates reconcile with all 20 summary rows, including exact first times, early/near counts, onset deltas, thresholds and physical grid adjacency. Grid coordinates use 640px image width / 32px grid; visual attribution pending."
 }
