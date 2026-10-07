@@ -25,6 +25,8 @@
 
 旧静止解析はROI `x=0,y=150,width=640,height=163`、fixed-depth 2.2 mである。既存のスコア配列を流用せず、**固定方式の入力条件で元のRGB/RAWから再抽出する**。元の設定・注釈・同期ファイルは書き換えない。
 
+時間だけを保存した注釈では `spatial` が `null` または未保存の場合がある。その場合も共通設定の校正ファイルと固定パッケージのハッシュが一致すれば、保存された評価区間・RGB初出現時刻を使って処理する。注釈側の投影を推測して補完せず、`annotation_spatial_status=not_recorded`、`annotation_geometry_changed=null` と記録し、端末にも表示する。共通設定の `spatial` まで欠損している場合や、保存済みの注釈側校正が不一致の場合は停止する。
+
 ## 実行
 
 追加した [Python](../tools/evaluate_rc_popout_grid_static.py) と [シェル](../scripts/experiments/evaluate_rc_popout_grid_static.sh) をデータ側の `/workspaces` に反映して実行する。SSHによる操作は行わず、以下は利用者側で実行するコマンド。
@@ -55,6 +57,8 @@ cat /workspaces/record/09-28/analysis/grid_background_static_trial01/errors.json
 
 固定パッケージの既定パスは、このcheckout内の `docs/evidence/rc_popout_20260930/grid_background_frozen_20261006`。既存出力へ上書きしない。失敗後に入力を修正して再実行する場合も `trial02` など新しい出力名を使う。タイル抽出の配列見積りが512 MiBを超える場合は停止する。メモリに余裕があれば `--max-memory-mb` を明示できるが、これはROI・時間窓・閾値を変更しない。
 
+初版の事前確認では `spatial: null` の注釈を辞書として参照すると `error: 'NoneType' object is not subscriptable` になった。このケースに対応し、必須設定の欠損にはファイル名・JSON項目名を付けるよう修正した。別の読み込み失敗が残る場合は、同じコマンドに `--debug` を付けて実際の例外発生行を確認できる。`--preflight` は出力を作らないため、その失敗だけなら同じ出力先で再確認できる。
+
 ## 出力の読み方
 
 - `summary.csv/json`：18記録×RGB/EVSの36行。処理失敗は `status=failed` として残し、候補0件に置き換えない。
@@ -78,6 +82,6 @@ cat /workspaces/record/09-28/analysis/grid_background_static_trial01/errors.json
 
 ## ローカル検証
 
-新規6件と既存の固定評価・grid背景方式のテストを合わせて20件成功。合成の抽出入力から18記録・36行の生成、固定値の不変、再適合禁止、発進時刻を作らない集計、注釈が候補時刻を変えないこと、入力変更の拒否、タイル活動量の保存、処理失敗の明示を確認した。
+静止用9件と既存の固定評価・grid背景方式のテストを合わせて23件成功。合成の抽出入力から18記録・36行の生成、固定値の不変、再適合禁止、発進時刻を作らない集計、注釈が候補時刻を変えないこと、入力変更の拒否、タイル活動量の保存、処理失敗の明示を確認した。時間だけの注釈の `spatial: null`／欠落を保持した評価、必須項目の欠損をデコード前に拒否すること、`--debug` による例外保持も含む。
 
 元RGB/RAWのデコード境界は合成入力に置き換えている。実機環境でのROS・Metavisionデコード、静止18記録の候補数・位置・反応時刻は上記コマンドによる確認が必要。

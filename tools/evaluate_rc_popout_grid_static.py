@@ -41,6 +41,24 @@ CANDIDATE_FIELDS = [
 ]
 
 
+def json_object(value, location, required=()):
+    """Identify malformed input without hiding its file or JSON field."""
+    if not isinstance(value, dict):
+        actual = 'null' if value is None else type(value).__name__
+        raise ValueError(f'{location}: expected JSON object, got {actual}')
+    for key in required:
+        if key not in value or value[key] is None:
+            raise ValueError(f'{location}.{key}: required value is missing or null')
+    return value
+
+
+def json_list(value, location):
+    if not isinstance(value, list):
+        actual = 'null' if value is None else type(value).__name__
+        raise ValueError(f'{location}: expected JSON array, got {actual}')
+    return value
+
+
 def population():
     """Acquisition inventory, not selected by detector output or onset timing."""
     records = []
@@ -67,7 +85,7 @@ def file_identity(path, *, hash_content=False):
 
 
 def scene_identity(annotation_path):
-    ann = read_json(annotation_path)
+    ann = json_object(read_json(annotation_path), str(annotation_path), ('session', 'time_sync'))
     sync = Path(ann['time_sync'])
     if not sync.is_absolute():
         raise ValueError('annotation time_sync must be an absolute path')
@@ -85,7 +103,10 @@ def scene_identity(annotation_path):
 
 
 def preflight(config_path, frozen_dir):
-    parameters, models, freeze = load_frozen(frozen_dir)
+    try:
+        parameters, models, freeze = load_frozen(frozen_dir)
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise ValueError(f'{frozen_dir}: frozen package validation failed: {error}') from error
     definition = parameters['input_definition']
     spatial = definition['spatial']
     if spatial['view_frame'] != 'evs' or spatial['projection'] != 'rotation-only':
@@ -93,13 +114,20 @@ def preflight(config_path, frozen_dir):
     chain = Path(spatial['camchain'])
     if digest(chain) != spatial['camchain_sha256']:
         raise ValueError('current calibration differs from frozen calibration')
-    original = read_json(config_path)
-    old_spatial = original['spatial']
+    original = json_object(read_json(config_path), str(config_path))
+    old_spatial = json_object(original.get('spatial'), f'{config_path}: spatial',
+                              ('camchain', 'camchain_sha256'))
+    json_object(original.get('roi'), f'{config_path}: roi', ('x', 'y', 'width', 'height'))
     if (old_spatial['camchain_sha256'] != spatial['camchain_sha256']
             or digest(old_spatial['camchain']) != spatial['camchain_sha256']):
         raise ValueError('static calibration differs from frozen calibration; do not override it')
     records = population()
-    entries = {e['session']: e for e in original['sessions']}
+    source_entries = json_list(original.get('sessions'), f'{config_path}: sessions')
+    for index, entry in enumerate(source_entries):
+        json_object(entry, f'{config_path}: sessions[{index}]', ('session', 'annotation'))
+        if not isinstance(entry['session'], str) or not isinstance(entry['annotation'], str):
+            raise ValueError(f'{config_path}: sessions[{index}]: session and annotation must be strings')
+    entries = {e['session']: e for e in source_entries}
     wanted = {r['session'] for r in records}
     if len(entries) != len(original['sessions']) or not wanted <= set(entries):
         raise ValueError(f'duplicate/missing static sessions; missing={sorted(wanted-set(entries))}')
@@ -113,20 +141,32 @@ def preflight(config_path, frozen_dir):
         name = record['session']
         path = Path(entries[name]['annotation'])
         path = (path if path.is_absolute() else config_path.parent/path).resolve()
-        ann = read_json(path)
+        ann = json_object(read_json(path), str(path),
+                          ('session', 'intervals', 'reference_origin_s', 'time_sync', 'time_sync_sha256'))
         if ann['session'] != name or '/' in name or len(path.parents) < 4:
             raise ValueError(f'{name}: invalid annotation session/path')
         if ann.get('rgb_timestamp_source', 'bag') != 'bag':
             raise ValueError(f'{name}: bag timestamps required for this static protocol')
-        spans = evaluation_intervals(ann)
+        for index, interval in enumerate(json_list(ann['intervals'], f'{path}: intervals')):
+            json_object(interval, f'{path}: intervals[{index}]', ('label', 'start_s', 'end_s'))
+        try:
+            spans = evaluation_intervals(ann)
+        except (ValueError, TypeError) as error:
+            raise ValueError(f'{path}: intervals: {error}') from error
         origin = ann['reference_origin_s']
         if isinstance(origin, bool) or not isinstance(origin, (int, float)) or not math.isfinite(origin):
             raise ValueError(f'{name}: invalid RGB time origin')
-        annotated = ann['spatial']
-        if (annotated['view_frame'] != 'evs' or annotated['output_size'] != spatial['output_size']
-                or annotated['camchain_sha256'] != spatial['camchain_sha256']
-                or digest(annotated['camchain']) != spatial['camchain_sha256']):
-            raise ValueError(f'{name}: annotation calibration/EVS coordinates differ')
+        # Temporal-only/older UI saves may have spatial=null. We do not use
+        # per-annotation ROI coordinates: extraction uses the validated common
+        # calibration and frozen geometry. Keep unknown geometry unknown.
+        annotated = ann.get('spatial')
+        if annotated is not None:
+            json_object(annotated, f'{path}: spatial',
+                        ('view_frame', 'output_size', 'camchain', 'camchain_sha256'))
+            if (annotated['view_frame'] != 'evs' or annotated['output_size'] != spatial['output_size']
+                    or annotated['camchain_sha256'] != spatial['camchain_sha256']
+                    or digest(annotated['camchain']) != spatial['camchain_sha256']):
+                raise ValueError(f'{path}: annotation calibration/EVS coordinates differ')
         if not isinstance(ann.get('onset', {}), dict):
             raise ValueError(f'{name}: onset must be an object, not null')
         first = ann.get('onset', {}).get('first_visible')
@@ -145,7 +185,9 @@ def preflight(config_path, frozen_dir):
         scenes.append(dict(record, annotation=str(path), source_identity=identity,
             intervals=spans, reference_origin_s=origin, rgb_first_visible_s=onset,
             annotation_spatial=annotated,
-            annotation_geometry_changed=any(annotated.get(k) != spatial.get(k) for k in
+            annotation_spatial_status='not_recorded' if annotated is None else 'recorded',
+            extraction_geometry_source='frozen_input_definition; source config calibration verified',
+            annotation_geometry_changed=None if annotated is None else any(annotated.get(k) != spatial.get(k) for k in
                 ('view_frame', 'output_size', 'projection', 'depth_m', 'rgb_to_view_homography')),
             onset_review='Retained RGB acquisition timestamp; recheck first visibility in the new projection.'))
         effective['sessions'].append(dict(session=name, annotation=str(path)))
@@ -292,6 +334,10 @@ def evaluate(config_path, frozen_dir, output, max_memory_mb=512, *, preflight_on
           f'ROI={definition["roi"]}; projection={definition["spatial"]["projection"]}', flush=True)
     for sensor in ('rgb', 'evs'):
         print(f'  frozen {sensor} threshold={parameters["calibration"][sensor]["threshold_s"]}', flush=True)
+    for scene in plan['scenes']:
+        if scene['annotation_spatial_status'] == 'not_recorded':
+            print(f'  {scene["session"]}: annotation spatial is missing/null; '
+                  'retaining time annotations, using verified common calibration and frozen geometry.', flush=True)
     print('  RGB onset annotations retained; recheck visibility in the new projection.', flush=True)
     if preflight_only:
         print('Preflight passed: no RAW/RGB decoded and no files written.', flush=True)
@@ -387,11 +433,14 @@ def main(argv=None):
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--max-memory-mb', type=int, default=512)
     parser.add_argument('--preflight', action='store_true', help='Validate metadata and input files only; do not write/decode')
+    parser.add_argument('--debug', action='store_true', help='Show full traceback on failure')
     args = parser.parse_args(argv)
     try:
         return evaluate(args.config.resolve(), args.frozen_dir.resolve(), args.output.resolve(),
                         args.max_memory_mb, preflight_only=args.preflight)
     except (OSError, ValueError, KeyError, TypeError, ImportError) as error:
+        if args.debug:
+            raise
         parser.exit(1, f'error: {error}\n')
 
 

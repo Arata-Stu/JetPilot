@@ -131,6 +131,77 @@ class StaticTransferTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'already exists'):
             m.evaluate(self.config, self.frozen, out)
 
+    def test_temporal_only_annotations_keep_unknown_geometry_and_run(self):
+        config = m.read_json(self.config)
+        selected = [config['sessions'][i] for i in (0, 6)]  # Positive and negative.
+        originals = {}
+        for index, entry in enumerate(selected):
+            path = Path(entry['annotation'])
+            value = m.read_json(path)
+            if index == 0:
+                value['spatial'] = None  # Valid temporal-only UI representation.
+            else:
+                del value['spatial']
+            m.write_json(path, value)
+            originals[path] = path.read_bytes()
+        plan, _, _, _ = m.preflight(self.config, self.frozen)
+        for scene in (plan['scenes'][0], plan['scenes'][6]):
+            self.assertIsNone(scene['annotation_spatial'])
+            self.assertIsNone(scene['annotation_geometry_changed'])
+            self.assertEqual(scene['annotation_spatial_status'], 'not_recorded')
+        self.assertEqual(plan['effective_config']['spatial'], self.definition['spatial'])
+        out = self.root/'temporal_only'
+        log = io.StringIO()
+        with patch.object(m, 'analyze', side_effect=self.fake_extract), contextlib.redirect_stdout(log):
+            self.assertEqual(m.evaluate(self.config, self.frozen, out), 0)
+        self.assertIn('annotation spatial is missing/null', log.getvalue())
+        self.assertEqual(m.read_json(out/'errors.json'), [])
+        for path, content in originals.items(): self.assertEqual(path.read_bytes(), content)
+        summaries = m.read_json(out/'summary.json')
+        self.assertEqual(len(summaries), 36)
+        self.assertTrue(all(r['status'] == 'complete' for r in summaries))
+        self.assertEqual(summaries[0]['rgb_first_visible_s'], 1.)
+        self.assertIsNone(summaries[12]['rgb_first_visible_s'])
+
+    def test_null_required_metadata_reports_file_and_field_before_decode(self):
+        config = m.read_json(self.config)
+        path = Path(config['sessions'][0]['annotation'])
+        for file, transform, field in (
+            (self.config, lambda v: None, 'expected JSON object'),
+            (self.config, lambda v: dict(v, spatial=None), 'spatial'),
+            (self.config, lambda v: dict(v, spatial=dict(v['spatial'], camchain=None)), 'spatial.camchain'),
+            (self.config, lambda v: dict(v, sessions=None), 'sessions'),
+            (self.config, lambda v: dict(v, sessions=[None]), 'sessions[0]'),
+            (path, lambda v: None, 'expected JSON object'),
+            (path, lambda v: dict(v, intervals=None), 'intervals'),
+            (path, lambda v: dict(v, intervals=[None]), 'intervals[0]'),
+            (path, lambda v: dict(v, spatial=[]), 'spatial'),
+            (path, lambda v: dict(v, spatial=dict(v['spatial'], camchain_sha256=None)), 'spatial.camchain_sha256'),
+            (path, lambda v: dict(v, time_sync=None), 'time_sync'),
+        ):
+            with self.subTest(file=file, field=field):
+                before = file.read_bytes()
+                m.write_json(file, transform(m.read_json(file)))
+                out = self.root/'invalid_null'
+                with patch.object(m, 'analyze') as extract, self.assertRaises(ValueError) as error:
+                    m.evaluate(self.config, self.frozen, out)
+                self.assertIn(str(file), str(error.exception))
+                self.assertIn(field, str(error.exception))
+                extract.assert_not_called(); self.assertFalse(out.exists())
+                file.write_bytes(before)
+
+    def test_debug_preserves_exception_chain(self):
+        m.write_json(self.config, None)
+        args = ['--config', str(self.config), '--frozen-dir', str(self.frozen),
+                '--output', str(self.root/'debug'), '--preflight']
+        log = io.StringIO()
+        with contextlib.redirect_stderr(log), self.assertRaises(SystemExit):
+            m.main(args)
+        self.assertIn(str(self.config), log.getvalue())
+        self.assertIn('got null', log.getvalue())
+        with self.assertRaisesRegex(ValueError, 'got null'):
+            m.main(args+['--debug'])
+
     def test_bad_metadata_fails_before_output_or_decode(self):
         config = m.read_json(self.config)
         annotation = Path(config['sessions'][0]['annotation'])
