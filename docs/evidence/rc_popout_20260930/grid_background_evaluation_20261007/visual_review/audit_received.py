@@ -1,8 +1,10 @@
 """Audit transferred review artifacts; no detector execution or source modification.
 
-Usage: python audit_received.py REVIEW_FOLDER
-Requires numpy, OpenCV, tesseract. Outputs beside this script.
+Usage: python audit_received.py REVIEW_FOLDER [--output NEW_FOLDER]
+Requires numpy, OpenCV, tesseract. Default outputs are beside this script.
+For a rerender, supply --code-commit and --previous-review as well.
 """
+import argparse
 import bisect
 import csv
 import hashlib
@@ -34,9 +36,17 @@ def write(path, data):
 
 
 def main():
-    source = Path(sys.argv[1]).resolve()
-    output = Path(__file__).resolve().parent
-    repo = output.parents[4]
+    script_dir = Path(__file__).resolve().parent
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('review_folder', type=Path)
+    parser.add_argument('--output', type=Path, default=script_dir)
+    parser.add_argument('--code-commit', default=REVIEW_CODE_COMMIT)
+    parser.add_argument('--previous-review', type=Path)
+    args = parser.parse_args()
+    source = args.review_folder.resolve()
+    output = args.output.resolve()
+    output.mkdir(parents=True, exist_ok=True)
+    repo = script_dir.parents[4]
     manifest = read(source/'review_manifest.json')
     run = read(source/'run_config.json')
     reports = read(source/'summary.json')
@@ -48,16 +58,16 @@ def main():
     # Preserve the received renderer version even after the local seek fix.
     for name, value in run['review_code_sha256'].items():
         assert Path(name).name == name
-        blob = subprocess.run(['git', 'show', f'{REVIEW_CODE_COMMIT}:tools/{name}'],
+        blob = subprocess.run(['git', 'show', f'{args.code_commit}:tools/{name}'],
                               cwd=repo, capture_output=True, check=True).stdout
         assert hashlib.sha256(blob).hexdigest() == value
-    with (output.parent/'candidates_user_paste.csv').open() as stream:
+    with (script_dir.parent/'candidates_user_paste.csv').open() as stream:
         candidate_csv = list(csv.DictReader(stream))
     assert candidate_csv == [{k: '' if v is None else str(v) for k, v in s['source_candidate'].items()}
                              for s in manifest['scenes']]
     summaries = manifest['summaries']
     assert len(summaries) == 20
-    with (output.parent/'summary_user_paste.csv').open() as stream:
+    with (script_dir.parent/'summary_user_paste.csv').open() as stream:
         pasted = list(csv.DictReader(stream))
     assert pasted == [{k: '' if v is None else str(v) for k, v in s.items()} for s in summaries]
     inventory = [{'path':str(p.relative_to(source)), 'bytes':p.stat().st_size, 'sha256':digest(p)}
@@ -169,7 +179,7 @@ def main():
         reference_clip=reference_clip, suspect_clip=suspect_clip,
         method='Compare timestamp-header pixels (x=0:280, y=0:32) of saved PNGs to sequentially decoded reference clip frames; the reference clip passed its timestamp-label audit. MAE includes MP4 compression.',
         checks=overlap_checks))
-    with (output/'visual_decisions.csv').open() as stream:
+    with (script_dir/'visual_decisions.csv').open() as stream:
         decisions = list(csv.DictReader(stream))
     assert len(decisions) == 30
     assert {(r['session'],r['method'],int(r['candidate'])) for r in decisions} == {
@@ -185,10 +195,27 @@ def main():
             positive_sessions_with_background=sorted({r['session'] for r in selected
                 if r['classification'] == 'background' and r['time_class'] != 'negative_recording'}))
     write(output/'visual_aggregate.json', visual_counts)
+    rerender = None
+    if args.previous_review:
+        previous = args.previous_review.resolve()
+        assert read(previous/'review_manifest.json') == manifest
+        old_reports = read(previous/'summary.json')
+        assert [{k:v for k,v in r.items() if k != 'source_decode_strategy'} for r in reports] == old_reports
+        assert all(r.get('source_decode_strategy') == 'sequential_from_start' for r in reports)
+        changed_snapshots = [dict(candidate=r['candidate'], snapshot=r['snapshot'])
+            for r in timestamp_checks
+            if digest(source/r['candidate']/f"{r['snapshot']}.png") !=
+               digest(previous/r['candidate']/f"{r['snapshot']}.png")]
+        rerender = dict(previous_directory=str(previous), identical_review_manifest=True,
+            identical_reports_except_decode_strategy=True, changed_snapshots=changed_snapshots,
+            unchanged_snapshots=len(timestamp_checks)-len(changed_snapshots))
     result=dict(source_directory=str(source),audit_script_sha256=digest(Path(__file__)),
-        frozen_manifest_hash_matches=True,review_code_reference_commit=REVIEW_CODE_COMMIT,
+        frozen_manifest_hash_matches=True,review_code_reference_commit=args.code_commit,
         received_review_code_hashes=run['review_code_sha256'],review_code_matches_reference_commit=True,
         current_working_review_code_hashes={name:digest(repo/'tools'/name) for name in run['review_code_sha256']},
+        visual_decisions_source=str(script_dir/'visual_decisions.csv'),
+        visual_decisions_sha256=digest(script_dir/'visual_decisions.csv'),
+        rerender_comparison=rerender,
         candidates_match_pasted_csv=True,summaries_match_pasted_csv=True,
         received_files=inventory,decoded_videos=video_checks,total_decoded_frames=sum(r['decoded_frames'] for r in video_checks),
         timestamp_labels=dict(checked=len(timestamp_checks),ocr_unreadable=sum(r['burned_rgb_time_s'] is None for r in timestamp_checks),

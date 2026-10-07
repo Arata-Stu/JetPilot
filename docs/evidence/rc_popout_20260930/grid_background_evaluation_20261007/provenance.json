@@ -21,5 +21,15 @@
     "timing_issue": "32 of 120 snapshot headers, across eight clips in test_04 and test_16, match the next mapped frame. Shared review renderer changed to sequential decoding. Real-data rerender remains pending.",
     "detector_changed": false,
     "visual_classification": "Spatial support/background location/uncertain; not causal source isolation or verified detection accuracy."
+  },
+  "rerender_review": {
+    "received_on": "2026-10-07",
+    "source_directory": "/Users/at/Downloads/scp/grid_background_eval_review_trial02",
+    "verification": "visual_review/trial02/verification.json",
+    "visual_recheck": "visual_review/trial02/visual_recheck.json",
+    "generation": "30 complete; no review_errors; sequential_from_start",
+    "timestamp_check": "120/120 readable; 0/120 mismatches beyond 0.75 ms; maximum absolute discrepancy 0.4967555999755291 ms. The eight previously affected clips are corrected.",
+    "comparison": "32 snapshot PNGs changed (exactly those previously affected); 88 unchanged. Manifests identical and summaries identical except decode strategy. No detection/sync/input change.",
+    "visual_decision_changes": 0
   }
 }

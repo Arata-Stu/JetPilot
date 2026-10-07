@@ -1,0 +1,63 @@
+{
+  "source_directory": "/Users/at/Downloads/scp/grid_background_eval_review_trial02",
+  "reviewed_on": "2026-10-07",
+  "review_scope": "Ten contact sheets visually rechecked: all eight clips whose four snapshot PNGs changed, plus test_02/evs_c002 and test_15/evs_c001. The other 88 snapshot PNGs are byte-identical to trial01; previous spatial decisions are retained.",
+  "classifications": [
+    {
+      "candidate": "test_15/evs_c001",
+      "classification": "uncertain",
+      "changed": false
+    },
+    {
+      "candidate": "test_02/evs_c002",
+      "classification": "vehicle_supported",
+      "changed": false
+    },
+    {
+      "candidate": "test_04/evs_c001",
+      "classification": "background",
+      "changed": false
+    },
+    {
+      "candidate": "test_04/rgb_c003",
+      "classification": "vehicle_supported",
+      "changed": false
+    },
+    {
+      "candidate": "test_16/evs_c002",
+      "classification": "vehicle_supported",
+      "changed": false
+    },
+    {
+      "candidate": "test_16/evs_c003",
+      "classification": "background",
+      "changed": false
+    },
+    {
+      "candidate": "test_04/rgb_c001",
+      "classification": "background",
+      "changed": false
+    },
+    {
+      "candidate": "test_04/rgb_c002",
+      "classification": "background",
+      "changed": false
+    },
+    {
+      "candidate": "test_16/rgb_c001",
+      "classification": "background",
+      "changed": false
+    },
+    {
+      "candidate": "test_16/rgb_c002",
+      "classification": "background",
+      "changed": false
+    }
+  ],
+  "classification_changes": [],
+  "timing_status": "All 120 snapshot labels agree with mapping within 0.75 ms; same-source overlap now matches at frame offset zero. This checks rendered frame mapping, not physical RGB/EVS synchronization.",
+  "test_15_note": "Upper tile overlaps vehicle; lower tile mainly contains floor/occluder boundary. The contribution needed for the tile-pair score cannot be isolated from this centered 10ms preview. Classification remains uncertain.",
+  "detector_changes": false,
+  "pending_physical_sync_reestimation": false,
+  "limitations": "Spatial support does not establish event-source causality or confirmed detection accuracy; full RAW/bag and source previews were not provided."
+}
