@@ -105,14 +105,15 @@ def select_span(rows, candidate, before, after):
 
 
 def find_preview(root, scene, spatial, before, after):
-    annotation_path = root/'analysis/led_sync'/scene['session']/'sequence_annotations.json'
+    annotation_path = Path(scene['annotation_path']) if scene.get('annotation_path') else root/'analysis/led_sync'/scene['session']/'sequence_annotations.json'
     if digest(annotation_path) != scene['annotation_sha256']:
         raise ValueError(f'{annotation_path}: 注釈が候補解析時から変わっています')
     annotation = json.loads(annotation_path.read_text())
     if annotation['session'] != scene['session']:
         raise ValueError('annotation session mismatch')
     manual = annotation_path.parent/'time_sync_led.yaml'
-    sync = manual if manual.exists() or manual.is_symlink() else annotation_path.parent/'time_sync_led_auto.yaml'
+    sync = (Path(scene['time_sync_path']) if scene.get('time_sync_path') else
+            manual if manual.exists() or manual.is_symlink() else annotation_path.parent/'time_sync_led_auto.yaml')
     if digest(sync) != scene['time_sync_sha256']:
         raise ValueError(f'{sync}: 同期が候補解析時から変わっています。候補の再解析が必要です')
     parent = root/'analysis/scenario_overlay'/scene['session']
@@ -171,9 +172,11 @@ def decorate(frame, row, scene, manifest, summary, slow, cv2):
                    f'RGB onset={onset:.6f}s | From onset={1000*(t-onset):+.2f}ms')
     detector_label = (f"past {manifest['detector_window_ms']:g}ms" if method == 'evs'
                       else 'consecutive RGB frame pair')
+    drive = scene.get('drive_start_s')
+    drive_label = 'Static recording' if drive is None else f'From drive={t-drive:.6f}s'
     text = [
         f"{scene['session']} | {method.upper()} candidate {scene.get('candidate_id', 1)} | Fixed tiles {','.join(str(t['tile_id']) for t in scene['tiles'])} | Playback {1/slow:g}x",
-        f"Recording t={t:.6f}s | From drive={t-scene['drive_start_s']:.6f}s | From candidate={1000*delta:+.2f}ms",
+        f"Recording t={t:.6f}s | {drive_label} | From candidate={1000*delta:+.2f}ms",
         f"Candidate={scene['candidate_recording_s']:.6f}s | {onset_label}",
         f"Preview EVS: {summary['event_window_ms']:g}ms / {summary['event_window_position']} | Detector: {detector_label}",
         'Fixed reference boxes, NOT tracking/alarm duration. Cyan: before candidate; orange: at/after candidate.',

@@ -80,7 +80,41 @@ cat /workspaces/record/09-28/analysis/grid_background_static_trial01/errors.json
 3. 同じrotation-only条件の確認映像で候補位置を照合する。旧注釈のRGB取得時刻は保持しているが、投影・共通視野が変わるため、初出現の見え方も再確認する。検知結果に合わせて初出現を移動しない。
 4. 静止と移動の結果を、候補位置・誤警報・反応時刻に分けて比較する。候補を車両検知と確定せず、閾値の再調整は別の探索実験として扱う。
 
-## ローカル検証
+## 静止結果の枠付き確認動画（2026-10-08追加）
+
+[静止用ラッパー](../scripts/experiments/render_rc_popout_grid_static_reviews.sh)と
+[確認ツール](../tools/rc_popout_grid_static_videos.py)を追加した。入力は保存済みの静止解析フォルダで、記録ルートは各注釈から取得する。移動用の評価splitや発進時刻を流用しない。
+
+```bash
+cd /workspaces
+
+bash scripts/experiments/render_rc_popout_grid_static_reviews.sh \
+  --static-dir /workspaces/record/09-28/analysis/grid_background_static_trial01 \
+  --output /workspaces/record/09-28/analysis/grid_background_static_review_trial01 \
+  --prepare-previews
+```
+
+`--prepare-previews` は解析と一致する動画がない記録だけ、既存の `generate_rc_popout_common_views.sh` でrotation-only動画を用意する。動画生成には従来と同じROS・Metavision・LED同期エクスポートが必要。一致する動画がある場合は再利用し、切り出しにはOpenCVとffmpegを使う。保存済み注釈が参照する同期と一致しなければ描画を拒否し、同期・注釈を自動で書き換えない。
+
+同じコマンドに `--dry-run` を付けると、整合性検査と不足動画の生成コマンド表示だけを行う。`--prepare-previews` を併記してもdry-runでは動画や出力を作らない。不足時は終了コード1となる。
+
+18記録・両センサの全結果を検査し、候補0件も一覧へ残す。入力候補数を24件に固定せず、早期・負例も含む保存済み全候補を処理する。今回受領したCSVでは12正例×2センサ＝24候補。凍結ファイル、解析コード、元注釈・同期・校正、保存済みタイル配列、alarm配列と候補時刻・座標・スコア・モデル名の整合を確認する。検出の再推論や学習は行わない。
+
+出力は `index.html`、`summary.json`、`review_errors.json` と、各記録の `rgb_c001/`・`evs_c001/` 内の `candidate_review.mp4`、`contact_sheet.png`、`frames.csv`、`summary.json`。表示は録画基準秒、前後各0.3秒、4倍スロー。発進時刻は作らず `Static recording` と表示する。枠は候補開始時の固定タイルであり、追跡や警報継続表示ではない。
+
+RGB初出現がクリップに含まれる場合は初出現前後もcontact sheetに載せる。含まれない早期候補・負例候補を除外せず、候補前後を表示する。EVS表示窓は元動画の設定を明示し、厳密なEVS初出現時刻の測定には使わない。`pre_drive/drive` は選択された背景モデル名で、実際の運動状態ではない。
+
+まず `popout-0928-static_01`（20%左）と `popout-0928-static_04`（20%右）を条件内の先頭例として確認し、その後全候補を照合する。枠内が車体か背景か、初出現が遮蔽物端か画像端か、上下・左右の位置ずれとグリッド境界との関係を見る。良い結果だけを選んで評価しない。
+
+新規の静止レビュー6件と、既存の静止評価9件・候補動画9件・移動評価動画6件のテスト計30件が成功。静止の全候補保持、ゼロ候補の一覧、入力不一致の拒否、dry-runの無書込、静止表示、実際のH.264生成・復号とフレーム対応を確認した。実データの動画生成・候補位置の判定は利用者側で上記を実行してから行う。
+
+```bash
+PYTHONPATH=tools:tests python3 -m unittest \
+  test_rc_popout_grid_static_videos test_rc_popout_grid_static \
+  test_rc_popout_candidate_videos test_rc_popout_grid_evaluation_videos -v
+```
+
+## 静止評価のローカル検証
 
 静止用9件と既存の固定評価・grid背景方式のテストを合わせて23件成功。合成の抽出入力から18記録・36行の生成、固定値の不変、再適合禁止、発進時刻を作らない集計、注釈が候補時刻を変えないこと、入力変更の拒否、タイル活動量の保存、処理失敗の明示を確認した。時間だけの注釈の `spatial: null`／欠落を保持した評価、必須項目の欠損をデコード前に拒否すること、`--debug` による例外保持も含む。
 
