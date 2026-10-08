@@ -77,3 +77,27 @@ bash scripts/experiments/render_rc_popout_detection_traces.sh \
 元の値は `rgb_trace_values.csv/.npz` と `evs_trace_values.csv/.npz`、入力識別・しきい値・時刻は `summary.json` に保存する。
 
 従来の文字なし図（`poster_detection_traces_20261009/test_05/`）と150 msの重ね描き版（`test_05_overlay/`）は保存してある。600 msに拡張した版は `poster_detection_traces_20261009/test_05_extended/`。`from_evs_candidate_ms` と `from_rgb_onset_ms` の両方を保存する。検知器の入力・設定・しきい値は共通で、表示区間だけを広げている。
+
+## 静止100%のRGB・EVS判定スコアを重ねる
+
+両方に車両対応の候補があった `popout-0928-static-100_01` を表示する。ノートPCのDocker内で実行する。
+
+```bash
+cd /workspaces
+bash scripts/experiments/render_rc_popout_static_traces.sh \
+  --static-dir /workspaces/record/09-28/analysis/grid_background_static_trial01 \
+  --session popout-0928-static-100_01 \
+  --before-ms 100 \
+  --after-ms 500 \
+  --output /workspaces/record/09-28/analysis/static100_detection_traces_trial01
+```
+
+主図は `traces_overlay.png/.svg`、確認ページは `index.html`。元の数値、全候補時刻、区画ID、入力ハッシュは `rgb_trace_values.csv/.npz`、`evs_trace_values.csv/.npz`、`summary.json` に保存する。既存の出力先は上書きしない。より拡大する場合は `--before-ms 50 --after-ms 150` と別の出力先を指定する。
+
+- **RGB・EVS各1本の実際の判定スコア**を、各センサの固定しきい値で割って描く。各隣接2区画の積算値の小さい方をペアのスコアとし、その全ペア中の最大値を使用する。
+- 以前の4本の図は同じ固定2区画の履歴だったが、今回の図では各センサの検知器全体の判定を表示する。RGBとEVSで選択する区画が異なっても、保存済みの検知時刻との対応を保てる。
+- 青はRGB、橙はEVS。RGB初出現が横軸の0 ms、水平破線の1がしきい値。小さい青点はRGBの元サンプル、白抜きの丸と色付き縦線は表示範囲内の全候補開始時刻。未来フレームへの置換や平滑化はしない。
+- 保存済み候補表では、EVSは **+9.834 ms（区画162,182）**、RGBは **+50.291 ms（区画162,163）**。これは指定した1試行の値。静止12試行中でEVS先行幅が最大の例なので、代表値として扱わず、集計結果は別に示す。
+- 保存済みの活動配列から固定モデルの推論を再実行し、保存されたスコア全時系列と候補開始を照合してから描画する。再学習・しきい値変更・RAW/RGB再デコードは不要。
+- 既存の静止映像レビューと同じ検証を用いるため、完了済み18記録の解析フォルダと、解析時の注釈・同期・校正・記録ファイルのメタデータが必要。変更を検出した場合は停止し、別の同期や注釈で黙って描き直さない。
+- Mac側では合成データによる保存結果の再現・時刻/区画対応・PNG/SVG生成・入力不一致拒否を検証。実測静止スコア配列からの最終生成は上のコマンドを実行する。
