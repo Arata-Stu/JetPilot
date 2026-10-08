@@ -1,0 +1,14 @@
+{
+  "static_dir": "/workspaces/record/09-28/analysis/grid_background_static_trial01",
+  "before_s": 0.3,
+  "after_s": 0.3,
+  "slow_factor": 4.0,
+  "prepare_previews": true,
+  "opencv_version": "4.6.0",
+  "review_code_sha256": {
+    "rc_popout_grid_static_videos.py": "e4349ff9114e36c86509232ff68b638dfe45529e03ffddadd17151c4375d5612",
+    "rc_popout_candidate_videos.py": "9292d10adc4e50a1c0f37e1372767b2550d6e37b53124c678450adc87d865095",
+    "rc_popout_grid_evaluation_videos.py": "7ccba82066a2e28c4a7ec454c93e26d703cb1ecb3df0c5cbfc706c737a061e43"
+  },
+  "note": "Static recording times; no fitting or inference. All saved candidates included."
+}

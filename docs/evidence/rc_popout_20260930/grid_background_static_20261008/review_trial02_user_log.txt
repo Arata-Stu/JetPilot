@@ -1,0 +1,65 @@
+cd /workspaces
+
+bash scripts/experiments/render_rc_popout_grid_static_reviews.sh \
+  --static-dir /workspaces/record/09-28/analysis/grid_background_static_trial01 \
+  --output /workspaces/record/09-28/analysis/grid_background_static_review_trial02 \
+  --prepare-previews
+Missing matching previews: bash /workspaces/scripts/experiments/generate_rc_popout_common_views.sh --record-root /workspaces/record/09-28/rc_popout_main_20260928_100/recordings --camchain /workspaces/ros2_ws/src/tool/multi_sensor_calibration/config/calibrations/rc_popout_default/kalibr-camchain.yaml --projection rotation-only --time-sync /workspaces/record/09-28/rc_popout_main_20260928_100/recordings/analysis/led_sync/popout-0928-static-100_01/time_sync_led_auto.yaml --time-sync-sha256 dcb168857b78d39a2444cb38945c126f28a057e2c178f31acaedb34c2198c143 --rgb-timestamp-source bag --reference-origin-s 1790530905.4145336 --sessions popout-0928-static-100_01
+[1/1] popout-0928-static-100_01
+  sync: time_sync_led_auto.yaml (pinned to analysis)
+  RGB timestamps: bag; expected origin: 1790530905.4145336
+  rendering: /workspaces/record/09-28/rc_popout_main_20260928_100/recordings/analysis/scenario_overlay/popout-0928-static-100_01/common_evs_batch_d9726cfc509740ea
+  log: /workspaces/record/09-28/rc_popout_main_20260928_100/recordings/analysis/scenario_overlay/popout-0928-static-100_01/common_evs_batch_d9726cfc509740ea.log
+  complete
+Summary: /workspaces/record/09-28/rc_popout_main_20260928_100/recordings/analysis/common_views_summary.json
+Finished: sessions=1 failed=0
+popout-0928-static_01/rgb_c001: /workspaces/record/09-28/rc_popout_main_20260928/recordings/analysis/scenario_overlay/popout-0928-static_01/common_evs_batch_17d72798580bf584
+popout-0928-static_01/evs_c001: /workspaces/record/09-28/rc_popout_main_20260928/recordings/analysis/scenario_overlay/popout-0928-static_01/common_evs_batch_17d72798580bf584
+popout-0928-static_02/rgb_c001: /workspaces/record/09-28/rc_popout_main_20260928/recordings/analysis/scenario_overlay/popout-0928-static_02/common_evs_batch_a60d26370736d1ea
+popout-0928-static_02/evs_c001: /workspaces/record/09-28/rc_popout_main_20260928/recordings/analysis/scenario_overlay/popout-0928-static_02/common_evs_batch_a60d26370736d1ea
+popout-0928-static_03/rgb_c001: /workspaces/record/09-28/rc_popout_main_20260928/recordings/analysis/scenario_overlay/popout-0928-static_03/common_evs_batch_f0d2b61bab046034
+popout-0928-static_03/evs_c001: /workspaces/record/09-28/rc_popout_main_20260928/recordings/analysis/scenario_overlay/popout-0928-static_03/common_evs_batch_f0d2b61bab046034
+popout-0928-static_04/rgb_c001: /workspaces/record/09-28/rc_popout_main_20260928/recordings/analysis/scenario_overlay/popout-0928-static_04/common_evs_batch_76aec4f883d45bf6
+popout-0928-static_04/evs_c001: /workspaces/record/09-28/rc_popout_main_20260928/recordings/analysis/scenario_overlay/popout-0928-static_04/common_evs_batch_76aec4f883d45bf6
+popout-0928-static_05/rgb_c001: /workspaces/record/09-28/rc_popout_main_20260928/recordings/analysis/scenario_overlay/popout-0928-static_05/common_evs_batch_4afd59a3497511e0
+popout-0928-static_05/evs_c001: /workspaces/record/09-28/rc_popout_main_20260928/recordings/analysis/scenario_overlay/popout-0928-static_05/common_evs_batch_4afd59a3497511e0
+popout-0928-static_06/rgb_c001: /workspaces/record/09-28/rc_popout_main_20260928/recordings/analysis/scenario_overlay/popout-0928-static_06/common_evs_batch_70249fdf27b90e3b
+popout-0928-static_06/evs_c001: /workspaces/record/09-28/rc_popout_main_20260928/recordings/analysis/scenario_overlay/popout-0928-static_06/common_evs_batch_70249fdf27b90e3b
+popout-0928-static-100/rgb_c001: /workspaces/record/09-28/rc_popout_main_20260928_100/recordings/analysis/scenario_overlay/popout-0928-static-100/common_evs_batch_038e42a22f1d950e
+popout-0928-static-100/evs_c001: /workspaces/record/09-28/rc_popout_main_20260928_100/recordings/analysis/scenario_overlay/popout-0928-static-100/common_evs_batch_038e42a22f1d950e
+popout-0928-static-100_01/rgb_c001: /workspaces/record/09-28/rc_popout_main_20260928_100/recordings/analysis/scenario_overlay/popout-0928-static-100_01/common_evs_batch_d9726cfc509740ea
+popout-0928-static-100_01/evs_c001: /workspaces/record/09-28/rc_popout_main_20260928_100/recordings/analysis/scenario_overlay/popout-0928-static-100_01/common_evs_batch_d9726cfc509740ea
+popout-0928-static-100_02/rgb_c001: /workspaces/record/09-28/rc_popout_main_20260928_100/recordings/analysis/scenario_overlay/popout-0928-static-100_02/common_evs_batch_51b7063e936ba141
+popout-0928-static-100_02/evs_c001: /workspaces/record/09-28/rc_popout_main_20260928_100/recordings/analysis/scenario_overlay/popout-0928-static-100_02/common_evs_batch_51b7063e936ba141
+popout-0928-static-100_03/rgb_c001: /workspaces/record/09-28/rc_popout_main_20260928_100/recordings/analysis/scenario_overlay/popout-0928-static-100_03/common_evs_batch_5a1a9ccf70af61ac
+popout-0928-static-100_03/evs_c001: /workspaces/record/09-28/rc_popout_main_20260928_100/recordings/analysis/scenario_overlay/popout-0928-static-100_03/common_evs_batch_5a1a9ccf70af61ac
+popout-0928-static-100_04/rgb_c001: /workspaces/record/09-28/rc_popout_main_20260928_100/recordings/analysis/scenario_overlay/popout-0928-static-100_04/common_evs_batch_0cef3353220a44ed
+popout-0928-static-100_04/evs_c001: /workspaces/record/09-28/rc_popout_main_20260928_100/recordings/analysis/scenario_overlay/popout-0928-static-100_04/common_evs_batch_0cef3353220a44ed
+popout-0928-static-100_05/rgb_c001: /workspaces/record/09-28/rc_popout_main_20260928_100/recordings/analysis/scenario_overlay/popout-0928-static-100_05/common_evs_batch_e012128cacfce2c1
+popout-0928-static-100_05/evs_c001: /workspaces/record/09-28/rc_popout_main_20260928_100/recordings/analysis/scenario_overlay/popout-0928-static-100_05/common_evs_batch_e012128cacfce2c1
+Static review: recordings=18 candidates=24
+complete: popout-0928-static_01/rgb_c001
+complete: popout-0928-static_01/evs_c001
+complete: popout-0928-static_02/rgb_c001
+complete: popout-0928-static_02/evs_c001
+complete: popout-0928-static_03/rgb_c001
+complete: popout-0928-static_03/evs_c001
+complete: popout-0928-static_04/rgb_c001
+complete: popout-0928-static_04/evs_c001
+complete: popout-0928-static_05/rgb_c001
+complete: popout-0928-static_05/evs_c001
+complete: popout-0928-static_06/rgb_c001
+complete: popout-0928-static_06/evs_c001
+complete: popout-0928-static-100/rgb_c001
+complete: popout-0928-static-100/evs_c001
+complete: popout-0928-static-100_01/rgb_c001
+complete: popout-0928-static-100_01/evs_c001
+complete: popout-0928-static-100_02/rgb_c001
+complete: popout-0928-static-100_02/evs_c001
+complete: popout-0928-static-100_03/rgb_c001
+complete: popout-0928-static-100_03/evs_c001
+complete: popout-0928-static-100_04/rgb_c001
+complete: popout-0928-static-100_04/evs_c001
+complete: popout-0928-static-100_05/rgb_c001
+complete: popout-0928-static-100_05/evs_c001
+Report: /workspaces/record/09-28/analysis/grid_background_static_review_trial02/index.html / candidates=24 failed=0

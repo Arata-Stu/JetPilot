@@ -1,0 +1,33 @@
+{
+  "review_date": "2026-10-08",
+  "reviewer": "assistant_visual_review",
+  "source_directory": "/Users/at/Downloads/scp/grid_background_static_review_trial02",
+  "reviewed_contact_sheets": 24,
+  "reviewed_panels": 96,
+  "classification_definition": "Candidate-area correspondence to the visible car (RGB) or car-related event outline (EVS) is supported near the candidate. This is not a proof that all alarm-driving inputs came from the car.",
+  "rgb": {
+    "vehicle_supported": 12,
+    "background": 0,
+    "uncertain": 0
+  },
+  "evs": {
+    "vehicle_supported": 12,
+    "background": 0,
+    "uncertain": 0
+  },
+  "untouched": [
+    "detector",
+    "thresholds",
+    "ROI",
+    "split",
+    "synchronization",
+    "RGB onset annotations"
+  ],
+  "limits": [
+    "Fixed candidate-start tiles are not tracking boxes.",
+    "Center 10 ms preview is different from past 2 ms detector input.",
+    "Four snapshots do not establish the first visible frame; onset annotations were retained, not reannotated.",
+    "No visual inspection of zero-candidate negative recordings was possible in this candidate-only bundle.",
+    "Physical synchronization and exact causal input events were not independently checked."
+  ]
+}
