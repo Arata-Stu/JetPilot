@@ -101,6 +101,46 @@ class EventFigureTests(unittest.TestCase):
                 self.assertEqual(image.size, (3600, 1200))
             self.assertIn('<svg', (folder/'detection_method_events.svg').read_text())
 
+    def test_compact_replot_changes_display_only_and_checks_transferred_data(self):
+        from PIL import Image
+        counts = np.zeros((32, 64, 2), np.int64)
+        counts[8, 8, 1], counts[9, 40, 0] = 3, 4
+        mask = np.ones((32, 64), bool)
+        meta = dict(roi=dict(x=0, y=0, width=64, height=32), output_size=[64, 32],
+                    tiles=[dict(tile_id=i, x=i*32, y=0, width=32, height=32, valid_pixels=1024) for i in (0, 1)])
+        candidate = dict(session='fixture', annotation_sha256='annotation', time_sync_sha256='sync')
+        evidence = dict(scene=dict(meta=meta, data=dict(evs=dict(counts=np.array([[3, 4]])))),
+            parameters=dict(settings=dict(z_clip=10.), input_definition=dict(spatial=dict(camchain_sha256='chain'))),
+            candidate=candidate, provenance=dict(bundle_sha256='bundle'), frozen_manifest_sha256='frozen')
+        result = dict(tile_id=np.array([0, 1]), time_s=np.array([1.]), support_start_s=np.array([.998]))
+        values = dict(observed_density=np.array([3., 4.])/1024,
+            estimated_background=np.array([2., 1.])/1024, positive_residual=np.array([0., 5.]),
+            integrated_residual=np.array([0., .1]), threshold_s=.06)
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(event_figure.figure, 'map_values', return_value=values):
+            folder = Path(tmp)
+            appearance = event_figure.draw(folder, counts, mask, evidence, result, 0, layout='compact')
+            with Image.open(folder/'detection_method_events.png') as image:
+                self.assertEqual(image.size, (3600, 768))
+            self.assertEqual(appearance['residual_display_max'], 5.)
+            with np.load(folder/'source_values.npz') as saved:
+                np.testing.assert_array_equal(saved['counts_by_polarity'], counts)
+                np.testing.assert_array_equal(saved['positive_residual'], values['positive_residual'])
+                self.assertEqual(saved['display_weights'][9, 40], 1.)
+            report = dict(status='complete', source_mode='native_RAW_event_positions_and_archived_grid_model',
+                session='fixture', candidate=candidate, bundle_sha256='bundle', frozen_manifest_sha256='frozen',
+                annotation_sha256='annotation', time_sync_sha256='sync', camchain_sha256='chain',
+                outputs_sha256={'source_values.npz': event_figure.figure.digest(folder/'source_values.npz')},
+                timing=dict(events=7, start_s=.998, end_s=1., window_ms=2.))
+            event_figure.figure.write_json(folder/'summary.json', report)
+            reread, support, timing, _ = event_figure.load_export(folder, evidence, result, 0)
+            np.testing.assert_array_equal(reread, counts)
+            np.testing.assert_array_equal(support, mask)
+            self.assertEqual(timing, report['timing'])
+            path = folder/'source_values.npz'
+            path.write_bytes(path.read_bytes()+b'changed')
+            with self.assertRaisesRegex(ValueError, 'arrays changed'):
+                event_figure.load_export(folder, evidence, result, 0)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -104,7 +104,7 @@ bash scripts/experiments/render_rc_popout_static_traces.sh \
 
 ## RGB写真を使わず、実イベント像で背景差分を説明する
 
-方法説明用に、入力イベント像と区画の残差を濃淡で表したイベント像を並べる。下段には同時刻の背景活動の推定を区画図として置く。図内に文章・折れ線・検知時刻・候補枠は入れない。対象は既存の調整用記録 `test_05`。
+方法説明用に、入力イベント像と区画の残差を濃淡で表したイベント像を並べる。既定の `--layout compact` は前後2枚の横並びで、左だけに薄いグリッドを置く。図内に文章・折れ線・検知時刻・候補枠は入れない。対象は既存の調整用記録 `test_05`。従来の下段に背景区画図を置く版は `--layout model` で生成できる。
 
 ```bash
 cd /workspaces
@@ -116,16 +116,34 @@ bash scripts/experiments/render_rc_popout_event_figure.sh \
 
 この版は **Metavision SDKでRAWを読み直す**。以前のRGB中心の図と同じ固定済みEVS候補時刻・過去2 ms・共通ROIを使用する。全RAWを最後まで読み、遅れて現れるタイムスタンプも元解析と同じ時間ビンに加算する。記録全体のイベントをメモリへ蓄積せず、指定窓の画素ごとの個数だけを保持する。歪み補正後に丸めた座標とROI判定も元解析に合わせ、全区画のイベント数がアーカイブと一致した場合だけ画像を保存する。RGBやグリッドの個数から架空のイベント点は作らない。
 
-- **`detection_method_events.png/.svg`**：イベント入力 → 区画の残差による濃淡表示、背景モデルの小図を含む全体。
+- **`detection_method_events.png/.svg`**：イベント入力 → 区画の残差による濃淡表示。compact版では背景モデルの小図を省く。
 - **`events_grid.png/.svg`**：実イベント像＋薄い32×32画素グリッド。
-- **`residual_events_grid.png/.svg`**：同じイベント点を区画の正の標準化残差に応じて表示。
+- **`residual_events_grid.png/.svg`**：同じイベント点を区画の正の標準化残差に応じて表示。互換性のためファイル名は維持するが、compact版では格子線を描かない。
 - `estimated_background_grid.png/.svg`：背景活動の推定。背景のイベント座標を復元した画像ではない。
 - `events.png` / `residual_events.png`：グリッドなしの個別素材。
 - `index.html` / `summary.json` / `source_values.npz`：図外の説明・窓時刻・RAW識別・区画照合結果・極性別の実画素カウント・重み。
 
 青はOFF、赤はONイベント。両極性が重なる画素は混色。図では発火した画素を表示するが、数値では同一画素の複数イベントも保持する。点の膨張・RGB画像の重畳・候補部分だけの切り抜きは行わない。
 
-右図の透明度は `clip(positive_residual / z_clip, 0, 1)`。**区画の残差を実イベント点上で可視化したもので、画素単位の背景除去・セグメンテーションを実現したという意味ではない。** 同じ区画内の車両と背景のイベントは同じ重みになる。実際の判定には、この区画残差の時間積算と隣接区画の評価が続く。
+右図の透明度は `clip(positive_residual / residual_display_max, 0, 1)`。model版は固定済みの `z_clip=10`、compact版は対象時刻の最大残差を表示上限とする。test_05の今回の図では最大残差が約3.901なので、compact版はmodel版より濃く表示する。**この変更は表示コントラストだけで、元の残差値・検知スコア・しきい値を変更しない。** compact版の濃さはシーン間比較には使わない。
+
+**区画の残差を実イベント点上で可視化したもので、画素単位の背景除去・セグメンテーションを実現したという意味ではない。** 同じ区画内の車両と背景のイベントは同じ重みになる。実際の判定には、この区画残差の時間積算と隣接区画の評価が続く。
+
+### 転送済み実データからの再描画
+
+生成結果にある `summary.json` と `source_values.npz` から、RAWを再度読まずに描き直せる。固定アーカイブとモデル、候補時刻、転送ファイルのハッシュ、全区画のイベント数・残差値を照合する。NumPy・Matplotlib・Pillowが必要で、ROSやMetavisionは不要。リポジトリ直下から実行する例：
+
+```bash
+bash scripts/experiments/render_rc_popout_event_figure.sh \
+  --from-figure /Users/at/Downloads/scp/detection_figure_events_trial01 \
+  --session test_05 \
+  --layout compact \
+  --output /tmp/detection_figure_events_compact
+```
+
+既定のアーカイブはチェックアウト内の `record/09-30/analysis/development_debug_bundle01.zip`。別の場所にある場合は `--bundle` を指定する。出力先は毎回新しい場所にする。
+
+2026-10-09に受領した実測673件を用いてcompact版を生成し、元の全区画の値との一致と画像を確認した。保存先は `docs/evidence/rc_popout_20260930/poster_event_compact_20261009/`。
 
 図外キャプション例：
 

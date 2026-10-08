@@ -1,0 +1,95 @@
+{
+  "status": "complete",
+  "session": "test_05",
+  "subset": "development",
+  "timing": {
+    "start_s": 12.875008237838745,
+    "end_s": 12.877008237838744,
+    "window_ms": 2.0,
+    "events": 673,
+    "raw": {
+      "raw": "/workspaces/record/09-30/dynamic/test_05/openeb_camera_20260930_160611.raw",
+      "bytes": 34390148,
+      "mtime_ns": 1790753537618603951,
+      "metadata_sha256": "39b0133ef4c47af0e85c21099f16d957e69f3511d78b92db39e14e2abd838dd2"
+    },
+    "verification": "Exact event counts matched every archived tile"
+  },
+  "appearance": {
+    "roi": {
+      "name": "band",
+      "x": 0,
+      "y": 70,
+      "width": 640,
+      "height": 272,
+      "mask_policy": "intersect_common"
+    },
+    "polarity_colors": {
+      "off": "#2b63a0",
+      "on": "#d24a43"
+    },
+    "layout": "compact",
+    "residual_display_max": 3.9014010429382324,
+    "event_display": "occupied native event pixels; no dilation or RGB background",
+    "residual_opacity": "clip(positive standardized tile residual / residual_display_max, 0, 1)",
+    "residual_scale_policy": "snapshot maximum",
+    "background_display_max_density": 0.0673828125,
+    "background_opacity": "0.85 * clip(predicted tile density / shared density max, 0, 1)",
+    "note": "Tile-weighted event visualization, not pixelwise background removal or segmentation"
+  },
+  "candidate": {
+    "session": "test_05",
+    "candidate_recording_s": 12.877008237838744,
+    "candidate_from_drive_s": 1.6358969593048087,
+    "drive_start_s": 11.241111278533936,
+    "rgb_onset_recording_s": 12.771912336349487,
+    "reference_origin_s": 1790751971.4408987,
+    "rgb_timestamp_source": "bag",
+    "annotation_sha256": "2058eb9da28a233e3ac29c5a8fb83386ef7435106e0c9936bbeb7f70aad52e0d",
+    "time_sync_sha256": "2e87564a84b55a08a9d6df8c50aba914c0bacd35bba6cadbf8c75a72b6c926a2",
+    "tiles": [
+      {
+        "tile_id": 177,
+        "x": 544,
+        "y": 256,
+        "width": 32,
+        "height": 32,
+        "valid_pixels": 1024
+      },
+      {
+        "tile_id": 178,
+        "x": 576,
+        "y": 256,
+        "width": 32,
+        "height": 32,
+        "valid_pixels": 1024
+      }
+    ]
+  },
+  "source_mode": "native_RAW_event_positions_and_archived_grid_model",
+  "purpose": "Background residual method illustration; no additional detection evaluation",
+  "bundle_sha256": "4df3a0ac25cea3c2c086f89fc2fe14eca78b4d651d3b8bda4f7cdd92a3f87d87",
+  "frozen_manifest_sha256": "a207d2bd0feb3a8f3126b152d0ae85057eb74e898ff061618675991b5671c2d8",
+  "annotation_sha256": "2058eb9da28a233e3ac29c5a8fb83386ef7435106e0c9936bbeb7f70aad52e0d",
+  "time_sync_sha256": "2e87564a84b55a08a9d6df8c50aba914c0bacd35bba6cadbf8c75a72b6c926a2",
+  "camchain_sha256": "36d931d4598ebfb02dc095dc52be4b3b49056dcee01463c01bf7f374114b9a12",
+  "renderer_sha256": "cdb5d1650ba3e96c458af8801407d7e09595e80ac051421e55b5c198dc065961",
+  "outputs_sha256": {
+    "detection_method_events.svg": "b28cdfd8b88ebb199319ef67ac507a636374bafa8b40165d53475ada140f8baf",
+    "source_values.npz": "1178c4d9da0089288db0ebb2d6a90f174badfe8f7ad4a85dba6937adb3e9859e",
+    "estimated_background_grid.svg": "0ef7563f95302b9d3d520ce72b03b2c3e535f2e9920a219f0d0ff5d508a2b5d0",
+    "estimated_background_grid.png": "d92eda1d1ff543067deff4f7688b6756fc50de05d00632fab7e0757d3fc49dd5",
+    "events.png": "c42721df60188a3aa001742e44750b69e8704501f25c3099fe5e38082d9c21ea",
+    "detection_method_events.png": "032239939a9e05a8892a7a0187c431052d841bd55e4bd797055768a7b9fcffe9",
+    "residual_events.png": "a97223127074209422562d6d336c9b086b8e9f19f431599d863ded64f22613ad",
+    "events_grid.svg": "7859b25169445b3faebccc60469f7cfa2bcb2288ce4d0641e6ba26810d985aa9",
+    "residual_events_grid.svg": "ddcbce0215b928398a72060764356849f9f8b0380254802073e5eded8ca0f52a",
+    "residual_events_grid.png": "797ef6653618ee40eaaefa63d53160c61a1dfae089a49d2be59e9d4ba4c8f405",
+    "events_grid.png": "2320e6af36fa428b72611ad0ab091ba8fda0253457f248692e18686e9499e3d0"
+  },
+  "replot_source": {
+    "path": "/Users/at/Downloads/scp/detection_figure_events_trial01",
+    "summary_sha256": "e3af22cc319442fe9316058aac1a5c74f92a992ca2f4b93d64d73ad629416b1c",
+    "arrays_sha256": "3b600affe2b8de3155c4ca4ded6261f0c7d441862b960d5e78b26c303bd0a917"
+  }
+}

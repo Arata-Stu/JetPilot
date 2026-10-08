@@ -152,7 +152,7 @@ def event_image(counts, weights):
     return np.rint(255*(1-alpha[..., None])+ink*alpha[..., None]).astype(np.uint8)
 
 
-def draw(output, counts, mask, evidence, result, index):
+def draw(output, counts, mask, evidence, result, index, *, layout='model'):
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
@@ -162,11 +162,16 @@ def draw(output, counts, mask, evidence, result, index):
     meta = evidence['scene']['meta']
     x, y, w, h = (meta['roi'][k] for k in ('x', 'y', 'width', 'height'))
     values = figure.map_values(evidence, result, index)
-    # Keep the same fixed residual scale as the existing method illustration.
+    if layout not in ('model', 'compact'):
+        raise ValueError('unknown figure layout')
+    # Compact poster view maps the largest residual in this snapshot to full
+    # opacity. This changes display contrast only, never detector inputs/state.
+    residual_max = (max(float(values['positive_residual'].max()), 1e-9) if layout == 'compact'
+                    else evidence['parameters']['settings']['z_clip'])
     weights = np.zeros(mask.shape)
     for tile, z in zip(meta['tiles'], values['positive_residual']):
         tx, ty, tw, th = (tile[k] for k in ('x', 'y', 'width', 'height'))
-        weights[ty:ty+th, tx:tx+tw] = np.clip(z/evidence['parameters']['settings']['z_clip'], 0, 1)
+        weights[ty:ty+th, tx:tx+tw] = np.clip(z/residual_max, 0, 1)
     weights *= mask
     raw, weighted = event_image(counts, mask.astype(float)), event_image(counts, weights)
     scale = max(1e-9, float(max(values['observed_density'].max(), values['estimated_background'].max())))
@@ -179,20 +184,29 @@ def draw(output, counts, mask, evidence, result, index):
             if kind == 'background':
                 ax.add_patch(Rectangle((tx-.5, ty-.5), tw, th, color='#2d659b',
                                       lw=0, alpha=.85*min(1., float(value)/scale)))
-            ax.add_patch(Rectangle((tx-.5, ty-.5), tw, th, fill=False,
-                                  ec='#607f94', lw=.35, alpha=.22))
+            if layout == 'model' or kind != 'residual':
+                ax.add_patch(Rectangle((tx-.5, ty-.5), tw, th, fill=False,
+                    ec='#607f94', lw=.25 if layout == 'compact' else .35,
+                    alpha=.10 if layout == 'compact' else .22))
         ax.set(xlim=(x-.5, x+w-.5), ylim=(y+h-.5, y-.5))
         ax.axis('off')
 
-    fig = plt.figure(figsize=(15, 5), facecolor='white')
-    panel(fig.add_axes([.02, .39, .42, .58]), 'events')
-    panel(fig.add_axes([.56, .39, .42, .58]), 'residual')
-    panel(fig.add_axes([.285, .025, .28, .315]), 'background')
-    fig.add_artist(FancyArrowPatch((.455, .68), (.545, .68), transform=fig.transFigure,
-        arrowstyle='-|>', mutation_scale=24, lw=2, color='#2d659b'))
-    fig.add_artist(FancyArrowPatch((.58, .185), (.70, .395), transform=fig.transFigure,
-        connectionstyle='angle,angleA=0,angleB=90,rad=10', arrowstyle='-|>',
-        mutation_scale=20, lw=1.8, color='#2d659b'))
+    if layout == 'compact':
+        fig = plt.figure(figsize=(15, 3.2), facecolor='white')
+        panel(fig.add_axes([.02, .08, .43, .84]), 'events')
+        panel(fig.add_axes([.55, .08, .43, .84]), 'residual')
+        fig.add_artist(FancyArrowPatch((.466, .5), (.534, .5), transform=fig.transFigure,
+            arrowstyle='-|>', mutation_scale=22, lw=1.8, color='#2d659b'))
+    else:
+        fig = plt.figure(figsize=(15, 5), facecolor='white')
+        panel(fig.add_axes([.02, .39, .42, .58]), 'events')
+        panel(fig.add_axes([.56, .39, .42, .58]), 'residual')
+        panel(fig.add_axes([.285, .025, .28, .315]), 'background')
+        fig.add_artist(FancyArrowPatch((.455, .68), (.545, .68), transform=fig.transFigure,
+            arrowstyle='-|>', mutation_scale=24, lw=2, color='#2d659b'))
+        fig.add_artist(FancyArrowPatch((.58, .185), (.70, .395), transform=fig.transFigure,
+            connectionstyle='angle,angleA=0,angleB=90,rad=10', arrowstyle='-|>',
+            mutation_scale=20, lw=1.8, color='#2d659b'))
     for ext in ('png', 'svg'):
         fig.savefig(output/f'detection_method_events.{ext}', dpi=240, facecolor='white')
     plt.close(fig)
@@ -212,29 +226,116 @@ def draw(output, counts, mask, evidence, result, index):
     for path in output.glob('*.svg'):
         path.write_text('\n'.join(line.rstrip() for line in path.read_text().splitlines())+'\n')
     return dict(roi=meta['roi'], polarity_colors=dict(off='#2b63a0', on='#d24a43'),
+        layout=layout, residual_display_max=residual_max,
         event_display='occupied native event pixels; no dilation or RGB background',
-        residual_opacity='clip(positive standardized tile residual / frozen z_clip, 0, 1)',
+        residual_opacity='clip(positive standardized tile residual / residual_display_max, 0, 1)',
+        residual_scale_policy='snapshot maximum' if layout == 'compact' else 'frozen z_clip',
         background_display_max_density=scale,
         background_opacity='0.85 * clip(predicted tile density / shared density max, 0, 1)',
         note='Tile-weighted event visualization, not pixelwise background removal or segmentation')
 
 
+def load_export(folder, evidence, result, index):
+    """Replot a transferred measured export without RAW/ROS access."""
+    report = figure.read_json(folder/'summary.json')
+    if (report.get('status') != 'complete'
+            or report.get('source_mode') != 'native_RAW_event_positions_and_archived_grid_model'
+            or report['session'] != evidence['candidate']['session']
+            or report['candidate'] != evidence['candidate']
+            or report['bundle_sha256'] != evidence['provenance']['bundle_sha256']
+            or report['frozen_manifest_sha256'] != evidence['frozen_manifest_sha256']):
+        raise ValueError('transferred export differs from the frozen recording/candidate')
+    for key in ('annotation_sha256', 'time_sync_sha256'):
+        if report[key] != evidence['candidate'][key]:
+            raise ValueError(f'transferred export {key} mismatch')
+    if report['camchain_sha256'] != evidence['parameters']['input_definition']['spatial']['camchain_sha256']:
+        raise ValueError('transferred export calibration mismatch')
+    path = folder/'source_values.npz'
+    if figure.digest(path) != report['outputs_sha256']['source_values.npz']:
+        raise ValueError('transferred event arrays changed since RAW extraction')
+    with np.load(path, allow_pickle=False) as saved:
+        counts, mask = saved['counts_by_polarity'], saved['roi_support']
+        for name, expected in figure.map_values(evidence, result, index).items():
+            if not np.array_equal(saved[name], expected):
+                raise ValueError(f'transferred {name} differs from frozen replay')
+        if (not np.array_equal(saved['tile_ids'], result['tile_id'])
+                or abs(float(saved['relative_time_s'])-result['time_s'][index]) > 1e-9):
+            raise ValueError('transferred event timestamp or grid differs')
+    width, height = evidence['scene']['meta']['output_size']
+    if (counts.shape != (height, width, 2) or mask.shape != (height, width)
+            or mask.dtype != bool or counts.dtype.kind not in 'iu' or np.any(counts < 0)
+            or np.any(counts[~mask])):
+        raise ValueError('invalid transferred event pixel arrays')
+    figure.validate_support(mask, evidence['scene']['meta'])
+    verify_counts(counts, mask, evidence['scene']['meta'], evidence['scene']['data']['evs']['counts'][index])
+    timing = report['timing']
+    if (timing['events'] != int(counts.sum()) or abs(timing['end_s']-result['time_s'][index]) > 1e-9
+            or abs(timing['start_s']-result['support_start_s'][index]) > 1e-9):
+        raise ValueError('transferred RAW time window/count mismatch')
+    return counts, mask, timing, report
+
+
+def write_page(output, session, timing, appearance):
+    compact = appearance['layout'] == 'compact'
+    description = ('左：実際のイベント点と薄い32×32画素グリッド。右：背景との差が大きい区画ほどイベント点を濃く表示。'
+                   if compact else '左：実際のイベント点と32×32画素のグリッド。下：同時刻の背景活動推定。右：区画の残差で濃さを重み付け。')
+    scale = ('右図はこの時刻の最大残差を最も濃く表示するよう正規化しています。'
+             'これは表示コントラストの変更で、検知器の入力・スコア・しきい値は変更していません。'
+             if compact else '右図は固定済みz_clipを濃さの上限として表示しています。')
+    (output/'index.html').write_text('<!doctype html><meta charset="utf-8"><title>Measured EVS background residual</title>'
+        '<style>body{font:18px sans-serif;color:#24374b;margin:32px;max-width:1400px}img{width:100%}</style>'
+        f'<h1>{html.escape(session)}：イベント像による背景差分の説明</h1>'
+        '<img src="detection_method_events.png">'
+        f'<p>{description}図内に文章や折れ線はありません。</p>'
+        f'<p>元の検知器と同じ過去 {timing["window_ms"]:g} ms、時刻 {timing["end_s"]:.6f} s。'
+        f'実イベント {timing["events"]} 件。区画ごとの個数は保存済み活動量と一致しています。</p>'
+        f'<p>{scale} 表示上限：標準化残差 {appearance["residual_display_max"]:.6g}。</p>'
+        '<p>青はOFF、赤はONイベント。両極性が同じ画素にある場合は混色。計算では重複イベントも保持し、画像は発火有無で表示します。</p>'
+        '<p>右側は区画の正の標準化残差に応じた濃淡表示で、画素単位の背景除去や車両セグメンテーションではありません。'
+        '別出力の背景推定は区画ごとの統計値です。背景のイベント点を合成していません。</p>'
+        '<p><a href="detection_method_events.svg">全体 SVG</a> / <a href="events_grid.svg">入力図 SVG</a> / '
+        '<a href="residual_events_grid.svg">背景との差 SVG</a> / <a href="summary.json">数値・出典</a></p>', encoding='utf-8')
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--record-root', type=Path, required=True)
+    inputs = parser.add_mutually_exclusive_group(required=True)
+    inputs.add_argument('--record-root', type=Path)
+    inputs.add_argument('--from-figure', type=Path, help='Replot an exported summary.json + source_values.npz without RAW/ROS')
     parser.add_argument('--session', default='test_05')
     parser.add_argument('--bundle', type=Path)
     parser.add_argument('--frozen-dir', type=Path, default=figure.FROZEN)
     parser.add_argument('--camchain', type=Path, default=figure.CALIBRATION/'config/calibrations/rc_popout_default/kalibr-camchain.yaml')
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--layout', choices=('compact', 'model'), default='compact')
     parser.add_argument('--preflight', action='store_true')
     parser.add_argument('--debug', action='store_true')
     args = parser.parse_args(argv)
     try:
         if args.output.exists():
             raise ValueError('output already exists; choose a new directory')
-        bundle = args.bundle or args.record_root.parent/'analysis/development_debug_bundle01.zip'
+        bundle = args.bundle or ((args.record_root.parent if args.record_root else figure.ROOT/'record/09-30')
+                                 /'analysis/development_debug_bundle01.zip')
         evidence = figure.load_evidence(bundle, args.frozen_dir, args.session)
+        if args.from_figure:
+            result, index = figure.replay(evidence)
+            counts, mask, timing, original = load_export(args.from_figure, evidence, result, index)
+            if args.preflight:
+                print('Transferred measured arrays and frozen scores verified; no RAW access or output.')
+                return 0
+            importlib.import_module('matplotlib')
+            importlib.import_module('PIL')
+            args.output.mkdir(parents=True)
+            appearance = draw(args.output, counts, mask, evidence, result, index, layout=args.layout)
+            original.update(appearance=appearance, renderer_sha256=figure.digest(__file__),
+                replot_source=dict(path=str(args.from_figure.resolve()),
+                    summary_sha256=figure.digest(args.from_figure/'summary.json'),
+                    arrays_sha256=figure.digest(args.from_figure/'source_values.npz')),
+                outputs_sha256={p.name: figure.digest(p) for p in args.output.iterdir() if p.is_file()})
+            figure.write_json(args.output/'summary.json', original)
+            write_page(args.output, args.session, timing, appearance)
+            print(f'Saved: {args.output}/detection_method_events.png / reused {timing["events"]} verified real events')
+            return 0
         sources = figure.validate_sources(args.record_root, args.camchain, evidence)
         raw = list(sources['bag'].glob('*.raw'))
         if len(raw) != 1 or not Path(str(raw[0])+'.metadata.yaml').is_file():
@@ -249,7 +350,7 @@ def main(argv=None):
         counts, mask, timing = extract_events(sources, evidence, result, index)
         figure.validate_sources(args.record_root, args.camchain, evidence)
         args.output.mkdir(parents=True)
-        appearance = draw(args.output, counts, mask, evidence, result, index)
+        appearance = draw(args.output, counts, mask, evidence, result, index, layout=args.layout)
         figure.write_json(args.output/'summary.json', dict(status='complete', session=args.session,
             subset='development', timing=timing, appearance=appearance, candidate=evidence['candidate'],
             source_mode='native_RAW_event_positions_and_archived_grid_model',
@@ -258,20 +359,7 @@ def main(argv=None):
             annotation_sha256=figure.digest(sources['annotation']), time_sync_sha256=figure.digest(sources['time_sync']),
             camchain_sha256=figure.digest(sources['camchain']), renderer_sha256=figure.digest(__file__),
             outputs_sha256={p.name: figure.digest(p) for p in args.output.iterdir() if p.is_file()}))
-        (args.output/'index.html').write_text('<!doctype html><meta charset="utf-8"><title>Measured EVS background residual</title>'
-            '<style>body{font:18px sans-serif;color:#24374b;margin:32px;max-width:1400px}img{width:100%}</style>'
-            f'<h1>{html.escape(args.session)}：イベント像による背景差分の説明</h1>'
-            '<img src="detection_method_events.png">'
-            '<p>左：実際のイベント点と32×32画素のグリッド。下：同時刻の背景活動推定。'
-            '右：背景との差が大きい区画ほどイベント点を濃く表示。図内に文章や折れ線はありません。</p>'
-            f'<p>対象窓は元の検知器と同じ過去 {timing["window_ms"]:g} ms、時刻 {timing["end_s"]:.6f} s。'
-            f'実イベント {timing["events"]} 件をRAWから取得し、区画ごとの個数が保存済み活動量と一致することを確認しました。</p>'
-            '<p>青はOFF、赤はONイベント。両極性が同じ画素にある場合は混色します。重複イベントは計算では保持し、画像は画素の発火有無で表示します。'
-            '下の背景推定は区画ごとの統計値であり、架空の背景イベント点は作っていません。</p>'
-            '<p>右側は区画の正の標準化残差に応じた濃淡表示です。画素単位の背景除去や車両セグメンテーションの結果ではありません。'
-            '実際の判定では、この区画残差を時間積算し、隣接区画を評価します。</p>'
-            '<p><a href="detection_method_events.svg">全体 SVG</a> / <a href="events_grid.svg">入力図 SVG</a> / '
-            '<a href="residual_events_grid.svg">背景との差 SVG</a> / <a href="summary.json">数値・出典</a></p>', encoding='utf-8')
+        write_page(args.output, args.session, timing, appearance)
         print(f'Saved: {args.output}/detection_method_events.png / events={timing["events"]}; tile counts verified')
         return 0
     except (OSError, ValueError, KeyError, RuntimeError, ImportError) as error:
