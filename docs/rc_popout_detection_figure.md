@@ -47,3 +47,25 @@ bash scripts/experiments/render_rc_popout_detection_figure.sh \
 ## ローカル検証の範囲
 
 保存済み調整用アーカイブによる固定済み候補・数値の再現、過去RGBフレームの選択、校正投影と区画の有効面積、入力不一致の拒否、文字なし出力を検証した。元rosbagを使った最終生成は、上記コマンドをノートPCのDocker内で実行して確認する。
+
+## RGBの折れ線も表示する
+
+同じ区画、同じ時間範囲のRGBとEVSの積算履歴を出力できる。折れ線のみなので、転送済みアーカイブがあれば元rosbagを読む必要はない。
+
+```bash
+cd /workspaces
+bash scripts/experiments/render_rc_popout_detection_traces.sh \
+  --bundle /workspaces/record/09-30/analysis/development_debug_bundle01.zip \
+  --session test_05 \
+  --output /workspaces/record/09-30/analysis/detection_traces_real_trial01
+```
+
+`trace_rgb.png/.svg`、`trace_evs.png/.svg`、左右に並べた `traces_rgb_evs.png/.svg` を生成する。図中文字なし。左がRGB、右がEVS。
+
+- 既存EVS図の候補区画と同じ2区画（test_05では177・178）を固定し、EVS候補時刻までの150 msを表示する。RGB自身が選んだ候補位置ではない。
+- 元サンプルをそのまま使用し、RGBの小さな点でフレームごとの値を示す。RGBの未来フレーム、再サンプリングや平滑化を加えない。
+- 両図の横軸・縦軸の表示範囲は同じ。縦軸は各センサの積算値をそれぞれの固定しきい値で割った値で、点線は1。元のEVS図右下の非正規化グラフとは表示単位が異なる。
+- test_05の固定済み条件では、全評価区間のRGB候補は0件、EVSは1件。RGBにも検知したような終点マーカーを付けない。各線の濃淡は2区画を区別するためのもの。
+- EVSで事後選択した区画の挙動を説明する図であり、この2本だけでRGB全体の検出性能を評価しない。背景モデル・しきい値はセンサごとに異なる。しきい値比は確率や反応時間ではない。
+
+元の値は `rgb_trace_values.csv/.npz` と `evs_trace_values.csv/.npz`、入力識別・しきい値・時刻は `summary.json` に保存する。

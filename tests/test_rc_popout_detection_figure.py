@@ -10,6 +10,7 @@ import numpy as np
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'tools'))
 import rc_popout_detection_figure as figure
+import rc_popout_detection_traces as traces_figure
 
 ROOT=Path(__file__).resolve().parents[1]
 BUNDLE=ROOT/'record/09-30/analysis/development_debug_bundle01.zip'
@@ -138,6 +139,28 @@ class RealArchiveTests(unittest.TestCase):
                     np.testing.assert_array_equal(data[key],values[key])
             with Image.open(output/'rgb_roi.png') as image:
                 self.assertEqual(image.size,(640,272))
+
+    def test_rgb_evs_traces_keep_native_cadence_and_same_locations(self):
+        evidence,traces,window=traces_figure.prepare(BUNDLE,figure.FROZEN,'test_05')
+        self.assertEqual(window['tile_ids'],[177,178])
+        self.assertEqual(traces['rgb']['full_record_candidates'],0)
+        self.assertEqual(traces['evs']['full_record_candidates'],1)
+        self.assertEqual(len(traces['rgb']['time_s']),9)
+        self.assertEqual(len(traces['evs']['time_s']),151)
+        for method,trace in traces.items():
+            source=evidence['scene']['data'][method]
+            np.testing.assert_array_equal(trace['time_s'],source['time_s'][trace['source_indexes']])
+            self.assertTrue(np.all(trace['time_s']<=window['end_s']))
+            self.assertTrue(np.all(trace['time_s']>=window['start_s']))
+            threshold=evidence['parameters']['calibration'][method]['threshold_s']
+            np.testing.assert_allclose(trace['normalized'],trace['state_s']/threshold)
+            path=ROOT/f'record/09-30/analysis/grid_background_dev_20261006/test_05/{method}_background_maps.npz'
+            if path.exists():
+                with np.load(path,allow_pickle=False) as saved:
+                    cols=[int(np.flatnonzero(saved['tile_id']==tile)[0]) for tile in window['tile_ids']]
+                    np.testing.assert_allclose(trace['state_s'],saved['state_s'][trace['source_indexes']][:,cols],atol=1e-7)
+        self.assertGreater(window['end_s']-traces['rgb']['time_s'][-1],0.)
+        self.assertLess(traces['rgb']['normalized'].max(),1.)
 
 
 if __name__=='__main__':

@@ -1,0 +1,113 @@
+{
+  "status": "complete",
+  "session": "test_05",
+  "subset": "development",
+  "window": {
+    "start_s": 12.727008237838744,
+    "end_s": 12.877008237838744,
+    "duration_ms": 150.0,
+    "tile_ids": [
+      177,
+      178
+    ],
+    "reference": "saved EVS first candidate",
+    "pair_selection": "Fixed EVS-selected pair; RGB did not select these locations",
+    "rgb_onset_relative_s": 12.771912336349487
+  },
+  "appearance": {
+    "y_axis": "integrated residual / sensor-specific frozen threshold",
+    "common_y_limits": [
+      0.0,
+      2.648325562477112
+    ],
+    "common_x_limits_ms": [
+      -150.0,
+      0.0
+    ],
+    "threshold_line": 1.0,
+    "rgb_native_samples_marked": true,
+    "image_text": false,
+    "combined_panel_order": [
+      "rgb",
+      "evs"
+    ]
+  },
+  "sensors": {
+    "rgb": {
+      "samples": 9,
+      "threshold_s": 0.19765397027910442,
+      "first_time_s": 12.738537311553955,
+      "last_time_s": 12.872491836547852,
+      "full_record_candidates": 0,
+      "source_median_step_ms": 16.759395599365234,
+      "last_values_over_threshold": [
+        0.15764321386814117,
+        0.27198728919029236
+      ]
+    },
+    "evs": {
+      "samples": 151,
+      "threshold_s": 0.06090278921343967,
+      "first_time_s": 12.727008237838746,
+      "last_time_s": 12.877008237838744,
+      "full_record_candidates": 1,
+      "source_median_step_ms": 0.9999999999994458,
+      "last_values_over_threshold": [
+        1.0020668506622314,
+        2.3375673294067383
+      ]
+    }
+  },
+  "source_bundle_sha256": "4df3a0ac25cea3c2c086f89fc2fe14eca78b4d651d3b8bda4f7cdd92a3f87d87",
+  "frozen_manifest_sha256": "a207d2bd0feb3a8f3126b152d0ae85057eb74e898ff061618675991b5671c2d8",
+  "renderer_sha256": "9e4cf42950f2bbdf9e8e66e0173e40422dbd0ab7bb664ae70f6d8159f840e13c",
+  "candidate": {
+    "session": "test_05",
+    "candidate_recording_s": 12.877008237838744,
+    "candidate_from_drive_s": 1.6358969593048087,
+    "drive_start_s": 11.241111278533936,
+    "rgb_onset_recording_s": 12.771912336349487,
+    "reference_origin_s": 1790751971.4408987,
+    "rgb_timestamp_source": "bag",
+    "annotation_sha256": "2058eb9da28a233e3ac29c5a8fb83386ef7435106e0c9936bbeb7f70aad52e0d",
+    "time_sync_sha256": "2e87564a84b55a08a9d6df8c50aba914c0bacd35bba6cadbf8c75a72b6c926a2",
+    "tiles": [
+      {
+        "tile_id": 177,
+        "x": 544,
+        "y": 256,
+        "width": 32,
+        "height": 32,
+        "valid_pixels": 1024
+      },
+      {
+        "tile_id": 178,
+        "x": 576,
+        "y": 256,
+        "width": 32,
+        "height": 32,
+        "valid_pixels": 1024
+      }
+    ]
+  },
+  "purpose": "Text-free method illustration of the same EVS-selected pair, not an independent RGB/EVS evaluation",
+  "limitations": [
+    "RGB and EVS use their own frozen background model and threshold.",
+    "Y is threshold-normalized; it is not absolute event count, reaction time, or probability.",
+    "Lines connect native samples without resampling; no future RGB frame is included.",
+    "The selected pair is a spatial reference, not a bounding box.",
+    "RGB may alarm at other locations/times; full-record counts are reported separately."
+  ],
+  "outputs_sha256": {
+    "trace_evs.png": "1d82bc3db46c8aa4fa4c109d54fa7f7e3f694997c4cdb7d48f6812cb74877427",
+    "trace_rgb.svg": "d3616710f8d14fb5e0c24f4dfcdaa95c46eb3de9a52efac42d057fa8fe999a61",
+    "trace_rgb.png": "406865468eaac947f8f9909a4a0ba6cdf22b6d3a062750728ff26c43e9ba2a7b",
+    "rgb_trace_values.npz": "999c2e1e37048b48b343c59c171f4008ff272a9d02f6fce8c76907205d18bee1",
+    "evs_trace_values.csv": "01821a5bfc0c537ccd304fca9e3ebbcb0f6c51baa4ad504e8fc3424abd0faa99",
+    "trace_evs.svg": "39e60e5fa7279410454a7acdf60466adec80c7f3721c5a2779f092e38a5eabc4",
+    "rgb_trace_values.csv": "143721060b6d265f77ee65574e9630595e6e67525b500bf73dec0496c8a880c7",
+    "traces_rgb_evs.png": "7143feb91d54b961ee8840d38bd12bfb393dc0bfc133e55ae8d75b692d2a6c85",
+    "evs_trace_values.npz": "d7a275777312108f408c32a408f1e5740e39492a532d4b1c3ec61f61a346dd9d",
+    "traces_rgb_evs.svg": "0936e954de935f329407fa13945324a797f3d7fedaa0d63b9cce889010637358"
+  }
+}
