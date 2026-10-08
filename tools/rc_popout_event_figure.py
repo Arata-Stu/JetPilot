@@ -55,11 +55,14 @@ def geometry(sources, evidence):
     return common, mask, ux, uy, keep
 
 
-def accumulate(source, clock, origin, mapping, span, end_bin, bins, step):
+def accumulate(source, clock, origin, mapping, span, end_bin, bins, step, *, window_count=1):
     """Use the detector's floor-bin membership, including delayed RAW batches."""
     _, mask, ux, uy, keep = mapping
     h, w = mask.shape
-    counts = np.zeros((h, w, 2), dtype=np.int64)
+    counts = np.zeros((window_count, h, w, 2), dtype=np.int64)
+    first_bin = end_bin-bins*window_count
+    if first_bin < 0:
+        raise ValueError('display window extends before the evaluation interval')
     first, last = None, None
     a, b = span
     for batch in source.batches():
@@ -80,16 +83,18 @@ def accumulate(source, clock, origin, mapping, span, end_bin, bins, step):
         ix = np.flatnonzero(good)
         ix = ix[keep[events['y'][ix], events['x'][ix]]]
         event_bins = np.floor((times[ix]-a)/step).astype(np.int64)
-        ix = ix[(event_bins >= end_bin-bins) & (event_bins < end_bin)]
+        selected = (event_bins >= first_bin) & (event_bins < end_bin)
+        ix, event_bins = ix[selected], event_bins[selected]
         if np.any((events['p'][ix] != 0) & (events['p'][ix] != 1)):
             raise ValueError('expected RAW polarity values 0 or 1')
         ex, ey = events['x'][ix], events['y'][ix]
-        np.add.at(counts, (uy[ey, ex], ux[ey, ex], events['p'][ix].astype(int)), 1)
+        slot = (event_bins-first_bin)//bins
+        np.add.at(counts, (slot, uy[ey, ex], ux[ey, ex], events['p'][ix].astype(int)), 1)
         # Do not stop after passing the window: RAW may contain out-of-order
         # events in subsequent batches, as preserved by the original extractor.
-    if first is None or first > a+(end_bin-bins)*step or last < a+end_bin*step:
+    if first is None or first > a+first_bin*step or last < a+end_bin*step:
         raise ValueError('RAW timestamp extent does not cover the selected detector window')
-    return counts
+    return counts[0] if window_count == 1 else counts
 
 
 def verify_counts(counts, mask, meta, expected):
@@ -101,7 +106,31 @@ def verify_counts(counts, mask, meta, expected):
         raise ValueError('RAW pixel counts do not match the archived detector window tile by tile')
 
 
-def extract_events(sources, evidence, result, index):
+def display_indexes(evidence, result, index, display_window_ms):
+    """Use disjoint detector windows; overlapping 1 ms updates must not double-count events."""
+    definition = evidence['parameters']['input_definition']
+    bins = definition['window_bins']
+    window_ms = definition['step_ms']*bins
+    duration = window_ms if display_window_ms is None else display_window_ms
+    if (not np.isfinite(duration) or duration <= 0 or duration > 100
+            or not np.isclose(duration/window_ms, round(duration/window_ms), rtol=0, atol=1e-9)):
+        raise ValueError(f'display-window-ms must be a positive multiple of {window_ms:g}, at most 100 ms')
+    n = int(round(duration/window_ms))
+    indexes = index-np.arange(n-1, -1, -1)*bins
+    if indexes[0] < 0:
+        raise ValueError('display window exceeds saved evaluation coverage')
+    ends = result['time_s'][indexes]
+    starts = result['support_start_s'][indexes]
+    full_span = slice(int(indexes[0]), index+1)
+    if (not np.all(result['ready'][full_span]) or np.any(result['reset'][full_span])
+            or not np.all(result['interval'][full_span] == result['interval'][index])
+            or not np.allclose(ends-starts, window_ms/1000, rtol=0, atol=1e-8)
+            or not np.allclose(ends[:-1], starts[1:], rtol=0, atol=1e-8)):
+        raise ValueError('display history crosses a gap, reset, or noncontiguous detector windows')
+    return indexes
+
+
+def extract_events(sources, evidence, result, index, display_window_ms=None):
     sys.path.insert(0, str(figure.CALIBRATION))
     from multi_sensor_calibration.evs_sources import MetavisionFileSource
     from multi_sensor_calibration.io import load_yaml
@@ -125,20 +154,30 @@ def extract_events(sources, evidence, result, index):
     step, bins = definition['step_ms']/1000., definition['window_bins']
     end = float(result['time_s'][index])
     end_bin = int(round((end-span[0])/step))
+    indexes = display_indexes(evidence, result, index, display_window_ms)
     start = span[0]+(end_bin-bins)*step
     if (end_bin < bins or abs(end-span[0]-end_bin*step) > 1e-8
             or abs(start-result['support_start_s'][index]) > 1e-8):
         raise ValueError('archived EVS endpoint/support differs from annotation-aligned bins')
     mapping = geometry(sources, evidence)
-    counts = accumulate(source, clock, evidence['candidate']['reference_origin_s'], mapping,
-                        span, end_bin, bins, step)
-    verify_counts(counts, mapping[1], evidence['scene']['meta'],
-                  evidence['scene']['data']['evs']['counts'][index])
+    pixels = accumulate(source, clock, evidence['candidate']['reference_origin_s'], mapping,
+                        span, end_bin, bins, step, window_count=len(indexes))
+    windows = pixels[None] if len(indexes) == 1 else pixels
+    for frame, saved_index in zip(windows, indexes):
+        verify_counts(frame, mapping[1], evidence['scene']['meta'],
+                      evidence['scene']['data']['evs']['counts'][saved_index])
+    counts = windows.sum(axis=0)
+    history = None if len(indexes) == 1 else dict(counts_by_window=windows, source_indexes=indexes,
+        time_s=result['time_s'][indexes], support_start_s=result['support_start_s'][indexes],
+        residual_z=result['residual_z'][indexes])
     if (raw[0].stat().st_size != identity['bytes'] or raw[0].stat().st_mtime_ns != identity['mtime_ns']
             or figure.digest(sidecar) != identity['metadata_sha256']):
         raise ValueError('RAW or its metadata changed during export')
-    return counts, mapping[1], dict(start_s=start, end_s=end, window_ms=step*bins*1000,
-        events=int(counts.sum()), raw=identity, verification='Exact event counts matched every archived tile')
+    return counts, mapping[1], dict(start_s=float(result['support_start_s'][indexes[0]]), end_s=end,
+        window_ms=step*bins*len(indexes)*1000, detector_window_ms=step*bins*1000,
+        detector_start_s=start, detector_events=int(windows[-1].sum()),
+        display_windows=len(indexes), events=int(counts.sum()), raw=identity,
+        verification='Each disjoint detector window matched every archived tile'), history
 
 
 def event_image(counts, weights):
@@ -146,13 +185,30 @@ def event_image(counts, weights):
     present = counts > 0
     n = present.sum(axis=2)
     colors = np.array([[43, 99, 160], [210, 74, 67]], dtype=float)  # OFF / ON.
-    ink = np.einsum('hwp,pc->hwc', present.astype(float), colors)
-    ink /= np.maximum(n, 1)[..., None]
-    alpha = (n > 0)*weights
-    return np.rint(255*(1-alpha[..., None])+ink*alpha[..., None]).astype(np.uint8)
+    weights = weights[..., None] if weights.ndim == 2 else weights
+    opacity = present*weights
+    ink = np.einsum('hwp,pc->hwc', opacity, 255-colors)/np.maximum(n, 1)[..., None]
+    return np.rint(255-ink).astype(np.uint8)
 
 
-def draw(output, counts, mask, evidence, result, index, *, layout='model'):
+def display_weights(counts, mask, meta, residuals, maximum, history=None):
+    def tile_weights(vector):
+        weights = np.zeros(mask.shape)
+        for tile, z in zip(meta['tiles'], vector):
+            x, y, w, h = (tile[k] for k in ('x', 'y', 'width', 'height'))
+            weights[y:y+h, x:x+w] = np.clip(z/maximum, 0, 1)
+        return weights*mask
+    if history is None:
+        return tile_weights(residuals)
+    # Every event contributes once with its own 2 ms block's residual. Repeated
+    # events at a pixel/polarity receive their occurrence-weighted mean opacity.
+    weighted = np.zeros(counts.shape, dtype=float)
+    for frame, z in zip(history['counts_by_window'], history['residual_z']):
+        weighted += frame*tile_weights(z)[..., None]
+    return np.divide(weighted, counts, out=np.zeros_like(weighted), where=counts > 0)
+
+
+def draw(output, counts, mask, evidence, result, index, *, layout='model', history=None):
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
@@ -164,15 +220,14 @@ def draw(output, counts, mask, evidence, result, index, *, layout='model'):
     values = figure.map_values(evidence, result, index)
     if layout not in ('model', 'compact'):
         raise ValueError('unknown figure layout')
+    if history is not None and layout != 'compact':
+        raise ValueError('long accumulation uses --layout compact; the background inset is a single-window model')
     # Compact poster view maps the largest residual in this snapshot to full
     # opacity. This changes display contrast only, never detector inputs/state.
-    residual_max = (max(float(values['positive_residual'].max()), 1e-9) if layout == 'compact'
+    all_residuals = values['positive_residual'] if history is None else history['residual_z']
+    residual_max = (max(float(all_residuals.max()), 1e-9) if layout == 'compact'
                     else evidence['parameters']['settings']['z_clip'])
-    weights = np.zeros(mask.shape)
-    for tile, z in zip(meta['tiles'], values['positive_residual']):
-        tx, ty, tw, th = (tile[k] for k in ('x', 'y', 'width', 'height'))
-        weights[ty:ty+th, tx:tx+tw] = np.clip(z/residual_max, 0, 1)
-    weights *= mask
+    weights = display_weights(counts, mask, meta, values['positive_residual'], residual_max, history)
     raw, weighted = event_image(counts, mask.astype(float)), event_image(counts, weights)
     scale = max(1e-9, float(max(values['observed_density'].max(), values['estimated_background'].max())))
 
@@ -222,6 +277,7 @@ def draw(output, counts, mask, evidence, result, index, *, layout='model'):
     # This is an ROI support mask, not a denoised event mask.
     np.savez_compressed(output/'source_values.npz', counts_by_polarity=counts,
         roi_support=mask, display_weights=weights, **values,
+        **({f'history_{k}': v for k, v in history.items()} if history is not None else {}),
         tile_ids=result['tile_id'], relative_time_s=result['time_s'][index])
     for path in output.glob('*.svg'):
         path.write_text('\n'.join(line.rstrip() for line in path.read_text().splitlines())+'\n')
@@ -229,7 +285,11 @@ def draw(output, counts, mask, evidence, result, index, *, layout='model'):
         layout=layout, residual_display_max=residual_max,
         event_display='occupied native event pixels; no dilation or RGB background',
         residual_opacity='clip(positive standardized tile residual / residual_display_max, 0, 1)',
-        residual_scale_policy='snapshot maximum' if layout == 'compact' else 'frozen z_clip',
+        residual_scale_policy=('display history maximum' if history is not None else 'snapshot maximum')
+            if layout == 'compact' else 'frozen z_clip',
+        residual_time_policy='each disjoint detector window at its endpoint' if history is not None else 'candidate snapshot',
+        repeated_pixel_policy='event-count weighted mean opacity per pixel and polarity',
+        map_values_reference='Candidate-endpoint detector window; history arrays retain each display block separately',
         background_display_max_density=scale,
         background_opacity='0.85 * clip(predicted tile density / shared density max, 0, 1)',
         note='Tile-weighted event visualization, not pixelwise background removal or segmentation')
@@ -255,6 +315,9 @@ def load_export(folder, evidence, result, index):
         raise ValueError('transferred event arrays changed since RAW extraction')
     with np.load(path, allow_pickle=False) as saved:
         counts, mask = saved['counts_by_polarity'], saved['roi_support']
+        history_keys = ('counts_by_window', 'source_indexes', 'time_s', 'support_start_s', 'residual_z')
+        history = ({k: saved[f'history_{k}'] for k in history_keys}
+                   if any(k.startswith('history_') for k in saved.files) else None)
         for name, expected in figure.map_values(evidence, result, index).items():
             if not np.array_equal(saved[name], expected):
                 raise ValueError(f'transferred {name} differs from frozen replay')
@@ -267,19 +330,48 @@ def load_export(folder, evidence, result, index):
             or np.any(counts[~mask])):
         raise ValueError('invalid transferred event pixel arrays')
     figure.validate_support(mask, evidence['scene']['meta'])
-    verify_counts(counts, mask, evidence['scene']['meta'], evidence['scene']['data']['evs']['counts'][index])
     timing = report['timing']
+    expected_start = result['support_start_s'][index]
+    if history is None:
+        verify_counts(counts, mask, evidence['scene']['meta'], evidence['scene']['data']['evs']['counts'][index])
+    else:
+        indexes = display_indexes(evidence, result, index, timing['window_ms'])
+        frames = history['counts_by_window']
+        if (len(indexes) < 2 or frames.shape != (len(indexes), *counts.shape)
+                or frames.dtype.kind not in 'iu' or np.any(frames < 0)
+                or np.any(frames[:, ~mask]) or not np.array_equal(frames.sum(axis=0), counts)
+                or not np.array_equal(history['source_indexes'], indexes)):
+            raise ValueError('invalid transferred display history counts/indexes')
+        for k, expected in (('time_s', result['time_s'][indexes]),
+                            ('support_start_s', result['support_start_s'][indexes]),
+                            ('residual_z', result['residual_z'][indexes])):
+            if not np.array_equal(history[k], expected):
+                raise ValueError(f'transferred history {k} differs from frozen replay')
+        for frame, saved_index in zip(frames, indexes):
+            verify_counts(frame, mask, evidence['scene']['meta'],
+                          evidence['scene']['data']['evs']['counts'][saved_index])
+        expected_start = result['support_start_s'][indexes[0]]
     if (timing['events'] != int(counts.sum()) or abs(timing['end_s']-result['time_s'][index]) > 1e-9
-            or abs(timing['start_s']-result['support_start_s'][index]) > 1e-9):
+            or abs(timing['start_s']-expected_start) > 1e-9
+            or abs(timing['window_ms']-(timing['end_s']-expected_start)*1000) > 1e-6
+            or ('detector_window_ms' in timing and abs(timing['detector_window_ms']-
+                (result['time_s'][index]-result['support_start_s'][index])*1000) > 1e-6)):
         raise ValueError('transferred RAW time window/count mismatch')
-    return counts, mask, timing, report
+    return counts, mask, timing, report, history
+
+
+def check_cached_window(timing, requested):
+    if requested is not None and (not np.isfinite(requested)
+            or not np.isclose(requested, timing['window_ms'], rtol=0, atol=1e-9)):
+        raise ValueError(f'cached figure contains only its {timing["window_ms"]:g} ms window; '
+                         'use --record-root to read RAW for a different display-window-ms')
 
 
 def write_page(output, session, timing, appearance):
     compact = appearance['layout'] == 'compact'
     description = ('左：実際のイベント点と薄い32×32画素グリッド。右：背景との差が大きい区画ほどイベント点を濃く表示。'
                    if compact else '左：実際のイベント点と32×32画素のグリッド。下：同時刻の背景活動推定。右：区画の残差で濃さを重み付け。')
-    scale = ('右図はこの時刻の最大残差を最も濃く表示するよう正規化しています。'
+    scale = ('右図は表示対象の最大残差を最も濃く表示するよう正規化しています。'
              'これは表示コントラストの変更で、検知器の入力・スコア・しきい値は変更していません。'
              if compact else '右図は固定済みz_clipを濃さの上限として表示しています。')
     (output/'index.html').write_text('<!doctype html><meta charset="utf-8"><title>Measured EVS background residual</title>'
@@ -287,8 +379,12 @@ def write_page(output, session, timing, appearance):
         f'<h1>{html.escape(session)}：イベント像による背景差分の説明</h1>'
         '<img src="detection_method_events.png">'
         f'<p>{description}図内に文章や折れ線はありません。</p>'
-        f'<p>元の検知器と同じ過去 {timing["window_ms"]:g} ms、時刻 {timing["end_s"]:.6f} s。'
-        f'実イベント {timing["events"]} 件。区画ごとの個数は保存済み活動量と一致しています。</p>'
+        f'<p>可視化は時刻 {timing["end_s"]:.6f} sまでの過去 {timing["window_ms"]:g} ms、'
+        f'検知器の窓は {timing.get("detector_window_ms", timing["window_ms"]):g} ms。'
+        f'実イベント {timing["events"]} 件。区画ごとの個数は元の検知窓ごとに保存済み活動量と照合しています。</p>'
+        '<p>長い蓄積では、重複しない各検知窓のイベントを、その窓末尾の解析済み残差で重み付けして表示します。'
+        '同じ画素・極性に複数回発火がある場合は、発火回数で重み付けした平均の濃さを使います。'
+        '候補時刻より後のイベントは含めません。表示用の蓄積時間から検知遅延を読み取る図ではありません。</p>'
         f'<p>{scale} 表示上限：標準化残差 {appearance["residual_display_max"]:.6g}。</p>'
         '<p>青はOFF、赤はONイベント。両極性が同じ画素にある場合は混色。計算では重複イベントも保持し、画像は発火有無で表示します。</p>'
         '<p>右側は区画の正の標準化残差に応じた濃淡表示で、画素単位の背景除去や車両セグメンテーションではありません。'
@@ -308,6 +404,8 @@ def main(argv=None):
     parser.add_argument('--camchain', type=Path, default=figure.CALIBRATION/'config/calibrations/rc_popout_default/kalibr-camchain.yaml')
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--layout', choices=('compact', 'model'), default='compact')
+    parser.add_argument('--display-window-ms', type=float,
+        help='Visualization only: a multiple of the detector window, up to 100 ms; default 2 ms for RAW or the exported window for --from-figure')
     parser.add_argument('--preflight', action='store_true')
     parser.add_argument('--debug', action='store_true')
     args = parser.parse_args(argv)
@@ -317,16 +415,19 @@ def main(argv=None):
         bundle = args.bundle or ((args.record_root.parent if args.record_root else figure.ROOT/'record/09-30')
                                  /'analysis/development_debug_bundle01.zip')
         evidence = figure.load_evidence(bundle, args.frozen_dir, args.session)
+        result, index = figure.replay(evidence)
         if args.from_figure:
-            result, index = figure.replay(evidence)
-            counts, mask, timing, original = load_export(args.from_figure, evidence, result, index)
+            counts, mask, timing, original, history = load_export(args.from_figure, evidence, result, index)
+            check_cached_window(timing, args.display_window_ms)
+            if history is not None and args.layout != 'compact':
+                raise ValueError('long accumulation requires --layout compact')
             if args.preflight:
                 print('Transferred measured arrays and frozen scores verified; no RAW access or output.')
                 return 0
             importlib.import_module('matplotlib')
             importlib.import_module('PIL')
             args.output.mkdir(parents=True)
-            appearance = draw(args.output, counts, mask, evidence, result, index, layout=args.layout)
+            appearance = draw(args.output, counts, mask, evidence, result, index, layout=args.layout, history=history)
             original.update(appearance=appearance, renderer_sha256=figure.digest(__file__),
                 replot_source=dict(path=str(args.from_figure.resolve()),
                     summary_sha256=figure.digest(args.from_figure/'summary.json'),
@@ -336,6 +437,9 @@ def main(argv=None):
             write_page(args.output, args.session, timing, appearance)
             print(f'Saved: {args.output}/detection_method_events.png / reused {timing["events"]} verified real events')
             return 0
+        indexes = display_indexes(evidence, result, index, args.display_window_ms)
+        if len(indexes) > 1 and args.layout != 'compact':
+            raise ValueError('long accumulation requires --layout compact')
         sources = figure.validate_sources(args.record_root, args.camchain, evidence)
         raw = list(sources['bag'].glob('*.raw'))
         if len(raw) != 1 or not Path(str(raw[0])+'.metadata.yaml').is_file():
@@ -345,12 +449,11 @@ def main(argv=None):
             return 0
         for module in ('matplotlib', 'PIL', 'cv2', 'yaml', 'metavision_core.event_io'):
             importlib.import_module(module)
-        result, index = figure.replay(evidence)
         print(f'{args.session}: frozen candidate reproduced; reading measured RAW event positions...', flush=True)
-        counts, mask, timing = extract_events(sources, evidence, result, index)
+        counts, mask, timing, history = extract_events(sources, evidence, result, index, args.display_window_ms)
         figure.validate_sources(args.record_root, args.camchain, evidence)
         args.output.mkdir(parents=True)
-        appearance = draw(args.output, counts, mask, evidence, result, index, layout=args.layout)
+        appearance = draw(args.output, counts, mask, evidence, result, index, layout=args.layout, history=history)
         figure.write_json(args.output/'summary.json', dict(status='complete', session=args.session,
             subset='development', timing=timing, appearance=appearance, candidate=evidence['candidate'],
             source_mode='native_RAW_event_positions_and_archived_grid_model',
@@ -360,7 +463,9 @@ def main(argv=None):
             camchain_sha256=figure.digest(sources['camchain']), renderer_sha256=figure.digest(__file__),
             outputs_sha256={p.name: figure.digest(p) for p in args.output.iterdir() if p.is_file()}))
         write_page(args.output, args.session, timing, appearance)
-        print(f'Saved: {args.output}/detection_method_events.png / events={timing["events"]}; tile counts verified')
+        print(f'Saved: {args.output}/detection_method_events.png / events={timing["events"]}; '
+              f'display={timing["window_ms"]:g} ms / detector={timing["detector_window_ms"]:g} ms; '
+              f'{timing["display_windows"]} disjoint windows verified')
         return 0
     except (OSError, ValueError, KeyError, RuntimeError, ImportError) as error:
         if args.debug:

@@ -132,7 +132,8 @@ class EventFigureTests(unittest.TestCase):
                 outputs_sha256={'source_values.npz': event_figure.figure.digest(folder/'source_values.npz')},
                 timing=dict(events=7, start_s=.998, end_s=1., window_ms=2.))
             event_figure.figure.write_json(folder/'summary.json', report)
-            reread, support, timing, _ = event_figure.load_export(folder, evidence, result, 0)
+            reread, support, timing, _, history = event_figure.load_export(folder, evidence, result, 0)
+            self.assertIsNone(history)
             np.testing.assert_array_equal(reread, counts)
             np.testing.assert_array_equal(support, mask)
             self.assertEqual(timing, report['timing'])
@@ -140,6 +141,103 @@ class EventFigureTests(unittest.TestCase):
             path.write_bytes(path.read_bytes()+b'changed')
             with self.assertRaisesRegex(ValueError, 'arrays changed'):
                 event_figure.load_export(folder, evidence, result, 0)
+
+    def test_long_accumulation_is_disjoint_and_keeps_late_events(self):
+        identity = SimpleNamespace(apply=lambda t: t)
+        frames = event_figure.accumulate(fake_source(), identity, 0., self.mapping,
+                                         (0., 1.), 4, 2, .125, window_count=2)
+        self.assertEqual(frames.shape, (2, 2, 3, 2))
+        self.assertEqual(frames[0].sum(), 2)
+        self.assertEqual(frames[1].sum(), 4)
+        combined = event_figure.accumulate(fake_source(), identity, 0., self.mapping,
+                                           (0., 1.), 4, 4, .125)
+        np.testing.assert_array_equal(frames.sum(axis=0), combined)
+        self.assertEqual(frames.sum(), 6)
+
+    def test_display_samples_do_not_use_overlapping_or_future_windows(self):
+        evidence = dict(parameters=dict(input_definition=dict(step_ms=1., window_bins=2)))
+        times = np.arange(2, 42)*.001
+        result = dict(time_s=times, support_start_s=times-.002,
+                      ready=np.ones(40, bool), reset=np.zeros(40, bool), interval=np.zeros(40, int))
+        indexes = event_figure.display_indexes(evidence, result, 29, 20.)
+        np.testing.assert_array_equal(indexes, np.arange(11, 30, 2))
+        self.assertAlmostEqual(result['time_s'][29]-result['support_start_s'][indexes[0]], .020)
+        self.assertTrue(np.all(result['time_s'][indexes] <= result['time_s'][29]))
+        for invalid in (0., -2., 3., 102., float('nan')):
+            with self.assertRaisesRegex(ValueError, 'multiple'):
+                event_figure.display_indexes(evidence, result, 29, invalid)
+        result['reset'][12] = True  # Even between the selected endpoints, a reset invalidates the history.
+        with self.assertRaisesRegex(ValueError, 'gap, reset'):
+            event_figure.display_indexes(evidence, result, 29, 20.)
+        with self.assertRaisesRegex(ValueError, 'coverage'):
+            event_figure.display_indexes(evidence, result, 1, 20.)
+
+    def test_past_events_use_their_own_residual_not_the_final_snapshot(self):
+        mask = np.ones((1, 2), bool)
+        meta = dict(tiles=[dict(x=0, y=0, width=1, height=1), dict(x=1, y=0, width=1, height=1)])
+        frames = np.zeros((2, 1, 2, 2), np.int64)
+        frames[0, 0, 0, 0], frames[1, 0, 0, 0] = 1, 3
+        frames[0, 0, 1, 1], frames[1, 0, 1, 1] = 2, 2
+        history = dict(counts_by_window=frames, residual_z=np.array([[10., 0.], [0., 10.]]))
+        counts = frames.sum(axis=0)
+        opacity = event_figure.display_weights(counts, mask, meta, history['residual_z'][-1], 10., history)
+        self.assertEqual(opacity[0, 0, 0], .25)
+        self.assertEqual(opacity[0, 1, 1], .5)
+        self.assertEqual(opacity[0, 0, 1], 0.)
+        image = event_figure.event_image(counts, opacity)
+        self.assertNotEqual(image[0, 0].tolist(), [255, 255, 255])
+        self.assertTrue(np.all(image >= 0))
+        for requested in (10., 20., float('nan')):
+            with self.assertRaisesRegex(ValueError, 'use --record-root'):
+                event_figure.check_cached_window(dict(window_ms=2.), requested)
+        event_figure.check_cached_window(dict(window_ms=20.), None)
+        event_figure.check_cached_window(dict(window_ms=20.), 20.)
+
+    def test_long_history_export_reloads_and_checks_each_block(self):
+        mask = np.ones((2, 2), bool)
+        frames = np.zeros((2, 2, 2, 2), np.int64)
+        frames[0, 0, 0, 1], frames[1, 1, 1, 0] = 2, 5
+        counts = frames.sum(axis=0)
+        meta = dict(roi=dict(x=0, y=0, width=2, height=2), output_size=[2, 2],
+                    tiles=[dict(tile_id=0, x=0, y=0, width=2, height=2, valid_pixels=4)])
+        candidate = dict(session='fixture', annotation_sha256='ann', time_sync_sha256='sync')
+        evidence = dict(scene=dict(meta=meta, data=dict(evs=dict(counts=np.array([[0], [2], [0], [5]])))),
+            parameters=dict(settings=dict(z_clip=10.), input_definition=dict(step_ms=1., window_bins=2,
+                spatial=dict(camchain_sha256='chain'))), candidate=candidate,
+            provenance=dict(bundle_sha256='bundle'), frozen_manifest_sha256='frozen')
+        times = np.array([.002, .003, .004, .005])
+        result = dict(tile_id=np.array([0]), time_s=times, support_start_s=times-.002,
+            ready=np.ones(4, bool), reset=np.zeros(4, bool), interval=np.zeros(4, int),
+            residual_z=np.array([[0.], [1.], [2.], [5.]], dtype=np.float32))
+        history = dict(counts_by_window=frames, source_indexes=np.array([1, 3]),
+            time_s=times[[1, 3]], support_start_s=result['support_start_s'][[1, 3]],
+            residual_z=result['residual_z'][[1, 3]])
+        values = dict(observed_density=np.array([1.25]), estimated_background=np.array([.2]),
+                      positive_residual=np.array([5.]), integrated_residual=np.array([.1]), threshold_s=.06)
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(event_figure.figure, 'map_values', return_value=values):
+            folder = Path(tmp)
+            appearance = event_figure.draw(folder, counts, mask, evidence, result, 3, layout='compact', history=history)
+            self.assertEqual(appearance['residual_time_policy'], 'each disjoint detector window at its endpoint')
+            report = dict(status='complete', source_mode='native_RAW_event_positions_and_archived_grid_model',
+                session='fixture', candidate=candidate, bundle_sha256='bundle', frozen_manifest_sha256='frozen',
+                annotation_sha256='ann', time_sync_sha256='sync', camchain_sha256='chain',
+                outputs_sha256={'source_values.npz': event_figure.figure.digest(folder/'source_values.npz')},
+                timing=dict(events=7, start_s=.001, end_s=.005, window_ms=4., detector_window_ms=2.))
+            event_figure.figure.write_json(folder/'summary.json', report)
+            reread, _, _, _, cached = event_figure.load_export(folder, evidence, result, 3)
+            np.testing.assert_array_equal(reread, counts)
+            np.testing.assert_array_equal(cached['counts_by_window'], frames)
+            # Preserve the total image but assign an event to the wrong time block.
+            path = folder/'source_values.npz'
+            with np.load(path) as saved:
+                arrays = {k:saved[k] for k in saved.files}
+            arrays['history_counts_by_window'][0, 0, 0, 1] -= 1
+            arrays['history_counts_by_window'][1, 0, 0, 1] += 1
+            np.savez_compressed(path, **arrays)
+            report['outputs_sha256']['source_values.npz'] = event_figure.figure.digest(path)
+            event_figure.figure.write_json(folder/'summary.json', report)
+            with self.assertRaisesRegex(ValueError, 'tile by tile'):
+                event_figure.load_export(folder, evidence, result, 3)
 
 
 if __name__ == '__main__':
