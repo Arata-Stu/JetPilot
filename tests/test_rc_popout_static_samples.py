@@ -120,6 +120,67 @@ class StaticSamplesTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'first-visible RGB frame is absent'):
             samples.select_stills(rows, scene, [-1., 0., 2.], 1.)
 
+    def test_adjacent_rgb_uses_real_neighbor_indices_and_epoch_timestamps(self):
+        base = 1790530915.0516164
+        times = [base-.04, base-.016693592, base, base+.01678586, base+.03353071]
+        self.assertEqual(samples.adjacent_rgb_indices(times, base), [1, 2, 3])
+        self.assertEqual(samples.adjacent_rgb_indices([0., .011, .049, .080], .049), [1, 2, 3])
+        for bad in ([], [0., 0., .01], [0., float('nan'), .01], [0., .02, .01]):
+            with self.assertRaisesRegex(ValueError, 'strictly increasing'):
+                samples.adjacent_rgb_indices(bad, .01)
+        with self.assertRaisesRegex(ValueError, 'not an RGB frame'):
+            samples.adjacent_rgb_indices(times, base+.008)
+        for edge in (times[0], times[-1]):
+            with self.assertRaisesRegex(ValueError, 'preceding and following'):
+                samples.adjacent_rgb_indices(times, edge)
+
+    def test_rgb_adjacent_preflight_does_not_decode_or_write(self):
+        output = self.root/'adjacent'
+        with contextlib.redirect_stdout(io.StringIO()) as log, \
+             patch.object(samples, 'write_rgb_adjacent') as write, patch.object(samples.subprocess, 'run') as run:
+            code = samples.main(['--static-dir', str(self.static), '--output', str(output),
+                                 '--rgb-adjacent-only', '--preflight'])
+        self.assertEqual(code, 0)
+        self.assertIn('3 adjacent RGB frames only', log.getvalue())
+        self.assertNotIn('scenario-overlay', log.getvalue())
+        self.assertFalse(output.exists())
+        write.assert_not_called(); run.assert_not_called()
+
+    def test_rgb_adjacent_exports_only_native_rgb_in_evs_view_without_raw_or_video(self):
+        import cv2
+        import numpy as np
+        sys.path.insert(0, str(samples.CALIBRATION))
+        from multi_sensor_calibration import scenario_overlay as renderer
+        output = self.root/'adjacent'
+        times = [100., 100.97, 100.983306408, 101., 101.016785860, 101.05]
+        camera = dict(camera_model='pinhole', distortion_model='radtan', resolution=[640, 480],
+            intrinsics=[500., 500., 320., 240.], distortion_coeffs=[0., 0., 0., 0.])
+        rgb = [(times[i], np.full((480, 640, 3), 40*j, dtype=np.uint8)) for j, i in enumerate((2, 3, 4), 1)]
+        with patch('multi_sensor_calibration.io.load_yaml', return_value={'cam0': camera, 'cam1': camera}), \
+             patch.object(renderer, '_selected_rgb_times', return_value=(100., list(range(6)), times)), \
+             patch.object(renderer, '_rgb_frames', return_value=iter(rgb)) as decode, \
+             patch.object(renderer, '_event_frames', side_effect=AssertionError('no RAW decoding')) as raw, \
+             patch.object(samples.subprocess, 'run', side_effect=AssertionError('no video rendering')) as video, \
+             contextlib.redirect_stdout(io.StringIO()):
+            code = samples.main(['--static-dir', str(self.static), '--output', str(output),
+                                 '--sessions', samples.SESSIONS[0], '--rgb-adjacent-only'])
+        self.assertEqual(code, 0)
+        self.assertEqual(decode.call_args.args[-1], [2, 3, 4])
+        raw.assert_not_called(); video.assert_not_called()
+        folder = output/samples.SESSIONS[0]
+        summary = samples.read_json(folder/'summary.json')
+        self.assertEqual(summary['sample_mode'], 'adjacent_rgb')
+        self.assertEqual([s['source_rgb_frame'] for s in summary['stills']], [2, 3, 4])
+        self.assertAlmostEqual(summary['stills'][0]['rgb_offset_ms'], -16.693592, places=6)
+        self.assertAlmostEqual(summary['stills'][2]['rgb_offset_ms'], 16.785860, places=6)
+        for i, label in enumerate(('before', 'onset', 'after'), 1):
+            image = cv2.imread(str(folder/'stills'/label/'rgb.png'))
+            self.assertEqual(image.shape, (480, 640, 3))
+            self.assertEqual(image[240, 320].tolist(), [40*i]*3)
+        self.assertEqual(len(list((folder/'stills').glob('*/*.png'))), 3)
+        self.assertFalse((folder/'video').exists())
+        self.assertNotIn('.mp4', (output/'index.html').read_text())
+
     def test_main_records_success_and_failed_render_in_gallery(self):
         scene, summary, rows, _ = self.render_fixture()
         output = self.root/'presentation'

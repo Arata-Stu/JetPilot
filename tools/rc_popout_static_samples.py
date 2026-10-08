@@ -97,6 +97,7 @@ def prepare(static_dir, sessions, before_s, after_s):
             raw=str(raw[0]), annotation=str(annotation), annotation_sha256=digest(annotation),
             time_sync=str(sync), time_sync_sha256=digest(sync), reference_origin_s=origin,
             rgb_onset_s=onset, start_s=start, duration_s=before_s+after_s,
+            evaluation_intervals=source['intervals'],
             source_identity=identity))
     return spatial, result
 
@@ -170,6 +171,81 @@ def select_stills(rows, scene, offsets_ms, step_ms):
     return selected
 
 
+def adjacent_rgb_indices(times, onset):
+    """Find the annotated frame and its actual neighbors, not a nominal 60 Hz offset."""
+    if (not times or not all(finite(t) for t in times)
+            or any(a >= b for a, b in zip(times, times[1:]))):
+        raise ValueError('RGB timestamps must be finite and strictly increasing')
+    index = bisect.bisect_left(times, onset-1e-6)
+    if index == len(times) or abs(times[index]-onset) > 1e-6:
+        raise ValueError('annotated first-visible timestamp is not an RGB frame')
+    if index == 0 or index == len(times)-1:
+        raise ValueError('RGB onset needs both the immediately preceding and following frames')
+    return [index-1, index, index+1]
+
+
+def write_rgb_adjacent(folder, scene, spatial):
+    """Export native RGB neighbors in the saved EVS coordinates without reading RAW events."""
+    import cv2
+    import numpy as np
+    from multi_sensor_calibration import scenario_overlay as renderer
+    from multi_sensor_calibration.io import load_yaml
+
+    origin, _, times = renderer._selected_rgb_times(scene['bag'], '/realsense/color/image_raw', 'bag',
+        start_s=0., duration_s=None, every_n=1, max_frames=None)
+    if abs(origin-scene['reference_origin_s']) > 1e-6:
+        raise ValueError('RGB origin differs from the saved annotation')
+    t0 = scene['reference_origin_s']+scene['rgb_onset_s']
+    indices = adjacent_rgb_indices(times, t0)
+    if not all(any(a <= times[i]-origin < b for a, b in scene['evaluation_intervals']) for i in indices):
+        raise ValueError('adjacent RGB frames exceed the annotated evaluation interval')
+    chain = load_yaml(spatial['camchain'])
+    evs, rgb = renderer._camera(chain, 'cam0', np), renderer._camera(chain, 'cam1', np)
+    size = tuple(spatial['output_size'])
+    maps = [cv2.initUndistortRectifyMap(c['matrix'], c['distortion'], None, c['matrix'], c['size'], cv2.CV_32FC1)
+            for c in (evs, rgb)]
+    h_rgb = np.asarray(spatial['rgb_to_view_homography'])
+    h_evs = np.asarray(spatial['event_to_view_homography'])
+    # Same linear-sampling support mask as scenario-overlay; no image cropping.
+    supports = []
+    for camera, remap, transform in ((evs, maps[0], h_evs), (rgb, maps[1], h_rgb)):
+        valid = np.ones((camera['size'][1], camera['size'][0]), dtype=np.float32)
+        valid = cv2.remap(valid, *remap, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+        valid = cv2.warpPerspective(valid, transform, size, flags=cv2.INTER_LINEAR,
+                                   borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+        supports.append(valid >= .999)
+    common = supports[0] & supports[1]
+    if not common.any():
+        raise ValueError('calibration has no common valid field of view')
+    if not cv2.imwrite(str(folder/'common_valid_mask.png'), common.astype('uint8')*255):
+        raise RuntimeError('common mask write failed')
+    frames = renderer._rgb_frames(scene['bag'], '/realsense/color/image_raw', 'bag', indices)
+    selected, panels = [], []
+    for label, index, (timestamp, image) in zip(('before', 'onset', 'after'), indices, frames):
+        if abs(timestamp-times[index]) > 1e-6 or (image.shape[1], image.shape[0]) != rgb['size']:
+            raise ValueError('decoded RGB frame time/dimensions differ from source metadata')
+        corrected = cv2.remap(image, *maps[1], cv2.INTER_LINEAR)
+        pixels = cv2.warpPerspective(corrected, h_rgb, size)
+        pixels[~common] = (35, 35, 35)
+        path = folder/'stills'/label/'rgb.png'
+        path.parent.mkdir(parents=True)
+        if not cv2.imwrite(str(path), pixels):
+            raise RuntimeError(f'PNG write failed: {path}')
+        delta = (timestamp-t0)*1000
+        selected.append(dict(label=label, source_rgb_frame=index, rgb_time_s=timestamp,
+            relative_time_s=timestamp-origin, rgb_offset_ms=delta,
+            outputs={'rgb': dict(path=str(path.relative_to(folder)), sha256=digest(path))}))
+        panel = cv2.copyMakeBorder(pixels, 44, 0, 0, 0, cv2.BORDER_CONSTANT, value=(250, 250, 250))
+        line = f'{label} | RGB frame {index} | t-t0={delta:+.3f} ms'
+        cv2.putText(panel, line, (8, 28), cv2.FONT_HERSHEY_SIMPLEX, .5, (20, 20, 20), 1, cv2.LINE_AA)
+        panels.append(panel)
+    if len(selected) != 3:
+        raise ValueError('RGB ended before all three adjacent frames were decoded')
+    if not cv2.imwrite(str(folder/'contact_sheet.png'), np.concatenate(panels, axis=1)):
+        raise RuntimeError('RGB contact sheet write failed')
+    return selected
+
+
 def write_stills(folder, scene, spatial, summary, selected):
     """Render PNGs directly from RGB/RAW, without recompressing video screenshots."""
     import cv2
@@ -238,24 +314,27 @@ def write_stills(folder, scene, spatial, summary, selected):
         raise RuntimeError('contact sheet write failed')
 
 
-def write_index(output, results, slowdown):
+def write_index(output, results, slowdown, rgb_only=False):
     parts = ['<!doctype html><meta charset="utf-8"><title>静止・プロポ100%のサンプル</title>',
         '<style>body{font:16px sans-serif;margin:24px;max-width:1400px}img{max-width:100%}video{width:80%}section{margin:40px 0}</style>',
         '<h1>自車静止・プロポ100%：出現前／RGB初出現／出現後</h1>',
-        f'<p>EVS座標640×480・EVS時間軸。過去2 msのイベント。{slowdown:.2f}倍スロー。RGBは直前フレームを保持し、補間しません。</p>',
-        '<p>t0は既存のRGB初出現注釈です。初出現は車体が一部見えた時刻で、車体全体が出た時刻ではありません。PNGは元RGB/RAWから直接生成しています。</p>']
+        ('<p>EVS座標640×480。RGB初出現の直前・初出現・直後の3フレーム。表示値はRGBの取得時刻差です。PNGは元RGBから直接生成しています。</p>' if rgb_only else
+         f'<p>EVS座標640×480・EVS時間軸。過去2 msのイベント。{slowdown:.2f}倍スロー。RGBは直前フレームを保持し、補間しません。PNGは元RGB/RAWから直接生成しています。</p>'),
+        '<p>t0は既存のRGB初出現注釈です。初出現は車体が一部見えた時刻で、車体全体が出た時刻ではありません。</p>']
     for result in results:
         name = html.escape(result['session'])
         parts.append(f'<section><h2>{name}</h2>')
         if result['status'] != 'complete':
             parts.append('<p>'+html.escape(result['error'])+'</p></section>')
             continue
-        parts += [f'<a href="{name}/contact_sheet.png"><img src="{name}/contact_sheet.png"></a>',
-            f'<video controls preload="metadata" src="{name}/video/rgb_vs_overlay.mp4"></video>',
-            f'<p><a href="{name}/video/polarity_only.mp4">EVS単独スロー</a> / <a href="{name}/video/overlay_polarity.mp4">重畳スロー</a> / <a href="{name}/summary.json">時刻・生成条件</a></p>']
+        parts.append(f'<a href="{name}/contact_sheet.png"><img src="{name}/contact_sheet.png"></a>')
+        if not rgb_only:
+            parts += [f'<video controls preload="metadata" src="{name}/video/rgb_vs_overlay.mp4"></video>',
+                f'<p><a href="{name}/video/polarity_only.mp4">EVS単独スロー</a> / <a href="{name}/video/overlay_polarity.mp4">重畳スロー</a></p>']
+        parts.append(f'<p><a href="{name}/summary.json">時刻・生成条件</a></p>')
         for sample in result['stills']:
             label = sample['label']
-            links = ' / '.join(f'<a href="{name}/stills/{label}/{kind}.png">{kind}</a>' for kind in ('rgb', 'evs', 'overlay'))
+            links = ' / '.join(f'<a href="{name}/stills/{label}/{kind}.png">{kind}</a>' for kind in (('rgb',) if rgb_only else ('rgb', 'evs', 'overlay')))
             parts.append(f'<p>{label}：{links}</p>')
         parts.append('</section>')
     (output/'index.html').write_text('\n'.join(parts))
@@ -268,7 +347,9 @@ def main(argv=None):
     parser.add_argument('--sessions', nargs='+', choices=SESSIONS, default=SESSIONS)
     parser.add_argument('--before-s', type=float, default=.15)
     parser.add_argument('--after-s', type=float, default=.35)
-    parser.add_argument('--sample-offset-ms', type=float, nargs=3, default=[-100., 0., 100.], metavar=('BEFORE', 'ONSET', 'AFTER'))
+    selection = parser.add_mutually_exclusive_group()
+    selection.add_argument('--sample-offset-ms', type=float, nargs=3, default=[-100., 0., 100.], metavar=('BEFORE', 'ONSET', 'AFTER'))
+    selection.add_argument('--rgb-adjacent-only', action='store_true', help='Export only the RGB frame before/at/after onset in EVS coordinates; no RAW decoding or video rendering')
     parser.add_argument('--step-ms', type=float, default=1.)
     parser.add_argument('--fps', type=float, default=60.)
     parser.add_argument('--preflight', action='store_true', help='Validate inputs and print commands; no ROS/RAW decoding or writes')
@@ -278,7 +359,7 @@ def main(argv=None):
         if not all(finite(x) and x > 0 for x in values) or args.step_ms < .001:
             raise ValueError('durations, step and fps must be positive and finite; step >= 0.001 ms')
         offsets = args.sample_offset_ms
-        if not all(finite(x) for x in offsets) or not (-args.before_s*1000 <= offsets[0] < offsets[1] == 0 < offsets[2] < args.after_s*1000):
+        if not args.rgb_adjacent_only and (not all(finite(x) for x in offsets) or not (-args.before_s*1000 <= offsets[0] < offsets[1] == 0 < offsets[2] < args.after_s*1000)):
             raise ValueError('still offsets must be before < 0, onset = 0, after > 0, within the clip')
         if args.step_ms*args.fps >= 1000:
             raise ValueError('choose step_ms * fps < 1000 for slow playback')
@@ -286,15 +367,17 @@ def main(argv=None):
             raise ValueError('duplicate sessions')
         if args.output.exists():
             raise ValueError(f'output exists; choose a new directory: {args.output}')
-        spatial, scenes = prepare(args.static_dir.resolve(), args.sessions, args.before_s, args.after_s)
+        spatial, scenes = prepare(args.static_dir.resolve(), args.sessions,
+            0. if args.rgb_adjacent_only else args.before_s, 0. if args.rgb_adjacent_only else args.after_s)
         slowdown = 1000/(args.step_ms*args.fps)
-        print(f'Static 100%: {len(scenes)} sessions / EVS coordinates + event timeline / {slowdown:.2f}x slow')
+        mode = 'EVS coordinates / 3 adjacent RGB frames only' if args.rgb_adjacent_only else f'EVS coordinates + event timeline / {slowdown:.2f}x slow'
+        print(f'Static 100%: {len(scenes)} sessions / {mode}')
         commands = []
         for scene in scenes:
             cmd = command(scene, spatial, args.output.resolve()/scene['session'], args.step_ms, args.fps)
             commands.append(cmd)
             print(f"{scene['session']} ({scene['condition']}): RGB onset={scene['rgb_onset_s']:.6f}s / pinned {Path(scene['time_sync']).name}")
-            if args.preflight:
+            if args.preflight and not args.rgb_adjacent_only:
                 print(shlex.join(cmd))
         if args.preflight:
             print('Preflight passed: no RGB/RAW decoded and no files written.')
@@ -316,27 +399,36 @@ def main(argv=None):
             folder.mkdir()
             try:
                 print(f"Rendering {scene['session']} ...", flush=True)
-                with (folder/'render.log').open('w') as stream:
-                    subprocess.run(cmd, stdout=stream, stderr=subprocess.STDOUT, env=env, check=True)
-                summary, rows = validate_render(folder/'video', scene, spatial, args.step_ms, args.fps)
-                selected = select_stills(rows, scene, offsets, args.step_ms)
-                write_stills(folder, scene, spatial, summary, selected)
+                if args.rgb_adjacent_only:
+                    selected = write_rgb_adjacent(folder, scene, spatial)
+                    metadata = dict(spatial=spatial, sample_mode='adjacent_rgb')
+                    detail = 'RGB PNG 3枚 / '+', '.join(f"{s['rgb_offset_ms']:+.3f} ms" for s in selected)
+                else:
+                    with (folder/'render.log').open('w') as stream:
+                        subprocess.run(cmd, stdout=stream, stderr=subprocess.STDOUT, env=env, check=True)
+                    summary, rows = validate_render(folder/'video', scene, spatial, args.step_ms, args.fps)
+                    selected = select_stills(rows, scene, offsets, args.step_ms)
+                    write_stills(folder, scene, spatial, summary, selected)
+                    metadata = dict(render=summary, sample_mode='event_offsets')
+                    detail = f'{len(rows)} frames / PNG 9枚'
                 for path, expected in ((scene['annotation'], scene['annotation_sha256']),
                                        (scene['time_sync'], scene['time_sync_sha256']),
                                        (spatial['camchain'], spatial['camchain_sha256'])):
                     if digest(path) != expected:
                         raise ValueError(f'input changed during still extraction: {path}')
                 result = dict(session=scene['session'], status='complete', condition=scene['condition'],
-                    source=scene, render=summary, stills=selected,
+                    source=scene, **metadata, stills=selected,
                     limitations='Existing RGB onset retained. Rotation-only retains parallax. Offline visualization, not physical latency or new detector evidence.')
                 write_json(folder/'summary.json', result)
-                print(f"  complete: {len(rows)} frames / PNG 9枚 / contact_sheet.png", flush=True)
+                print(f"  complete: {detail} / contact_sheet.png", flush=True)
             except (OSError, ValueError, KeyError, RuntimeError, cv2.error, subprocess.CalledProcessError) as error:
-                result = dict(session=scene['session'], status='failed', error=str(error), log=str(folder/'render.log'))
-                print(f"  FAILED: {error}; see {folder/'render.log'}", file=sys.stderr, flush=True)
+                result = dict(session=scene['session'], status='failed', error=str(error))
+                if (folder/'render.log').exists():
+                    result['log'] = str(folder/'render.log')
+                print(f"  FAILED: {error}"+(f"; see {result['log']}" if 'log' in result else ''), file=sys.stderr, flush=True)
             results.append(result)
             write_json(args.output/'summary.json', results)
-            write_index(args.output, results, slowdown)
+            write_index(args.output, results, slowdown, args.rgb_adjacent_only)
         failures = sum(r['status'] != 'complete' for r in results)
         print(f'Report: {args.output}/index.html / sessions={len(results)} failed={failures}')
         return int(bool(failures))

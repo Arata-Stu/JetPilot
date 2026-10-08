@@ -42,6 +42,24 @@ bash scripts/experiments/render_rc_popout_static_samples.sh \
 
 時刻を変える例：`--sample-offset-ms -100 0 200`（出現後200 ms）。動画を変更する場合は `--before-s 0.2 --after-s 0.5`。イベントの1 ms刻みを保って60 fpsで再生する限り、スロー倍率は16.67倍。
 
+## RGB初出現の前後1フレームだけに差し替える
+
+基準時刻の説明図には、`--rgb-adjacent-only`で元RGBの「直前・初出現・直後」の3枚だけを生成できる。EVS座標640×480・共通有効視野を維持し、PNGを元RGBから直接書き出す。RAWイベントの復号や動画の再生成は行わない。`--sample-offset-ms`との同時指定はできない。
+
+```bash
+cd /workspaces
+
+bash scripts/experiments/render_rc_popout_static_samples.sh \
+  --static-dir /workspaces/record/09-28/analysis/grid_background_static_trial01 \
+  --sessions popout-0928-static-100_01 \
+  --rgb-adjacent-only \
+  --output /workspaces/record/09-28/analysis/static100_rgb_adjacent_trial01
+```
+
+各記録の `stills/before/rgb.png`、`stills/onset/rgb.png`、`stills/after/rgb.png` を使用する。`contact_sheet.png`は実際のRGB取得時刻差を添えた3枚組。`summary.json`に元RGBのフレーム番号と取得時刻を保存する。1 msのEVS表示時刻や公称60 fpsの逆数をラベルに使わず、実際のRGB取得時刻差を用いる。
+
+転送済み`static100_samples_trial01`の時刻対応表では、`popout-0928-static-100_01`のRGB隣接フレームは初出現から **−16.694 ms／0 ms／＋16.786 ms**。以前の−100.6 ms／＋83.8 msの画像を単に改名する処理ではない。前後フレームのない記録や、注釈時刻に対応するRGBフレームがない場合は停止する。
+
 ## 生成物
 
 `index.html`から全6記録を比較できる。各記録の中身：
@@ -74,4 +92,4 @@ PNG9枚は文字・検知枠なしで元RGB/RAWから直接生成する。圧縮
 PYTHONPATH=tools python3 -m unittest discover -s tests -p test_rc_popout_static_samples.py -v
 ```
 
-2026-10-08にローカルで新規7テストと、利用するscenario-overlayの既存13テストが成功した。合成データによるPNG生成・時刻対応・事前検査・途中失敗の報告を確認した。実データのRGB/RAW生成はノートPCで実行し、`failed=0`と画像・動画の表示を確認する。
+2026-10-08にローカルで初版7テストと、利用するscenario-overlayの既存13テストが成功した。RGB隣接フレーム機能では追加3テストも含め、ネイティブRGBの隣接性、不等間隔・エポック時刻、RAWと動画生成を呼ばないPNG出力を検証する。実データの初版生成は利用者ログで6記録すべて成功。隣接RGBの新しいPNG生成はノートPCで実行し、`failed=0`と画像を確認する。
