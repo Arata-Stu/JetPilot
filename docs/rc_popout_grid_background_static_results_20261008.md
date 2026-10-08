@@ -218,6 +218,43 @@ rotation-onlyではカメラの並進を使っていないため、有限距離�
 
 数値の出典は静止の[記録別時刻CSV](evidence/rc_popout_20260930/grid_background_static_20261008/paired_times.csv)、移動の[全候補判定CSV](evidence/rc_popout_20260930/grid_background_evaluation_20261007/visual_review/visual_decisions.csv)および[映像照合報告](rc_popout_grid_background_evaluation_visual_review_20261007.md)。文章化に際して検知器・閾値・注釈・判定は変更していない。
 
+## 評価方法を説明する図（2026-10-08）
+
+ポスターの評価方法欄に使える図を、実際の確認動画・保存済み検知配列から作成した。元のポスターPDFは変更していない。
+
+### 図A：RGB初出現と候補時刻
+
+[PNG](evidence/rc_popout_20260930/poster_evaluation_figures_20261008/01_rgb_onset_and_timing.png)／[SVG](evidence/rc_popout_20260930/poster_evaluation_figures_20261008/01_rgb_onset_and_timing.svg)
+
+静止条件 `popout-0928-static-100_02` のRGB初出現前後の連続3フレームを、同じ範囲で切り出した。選択理由は遮蔽物端と出現した車体を図中で確認しやすいことであり、全記録の平均や代表的な優位性を示すものではない。直前・初出現・次フレームは元動画の697・698・699番、初出現に対し−16.757・0・+16.833 ms。図の候補時刻は同じ記録の解析結果で、EVS +9.986 ms、RGB +33.589 msである。
+
+元の確認動画のRGB側だけを使用し、座標 x=15..184、y=200..334 を拡大表示した。既存の水色候補枠は消去していない。動画を先頭から逐次復号し、保存済み対応表と初出現注釈が一致するフレームを使用した。初出現注釈・同期・検知設定は変更していない。物理的な出現時刻やセンサ固有の遅延を説明する図ではない。
+
+図注案：
+
+> RGB初出現時刻の定義と検出候補時刻の関係。連続するRGBフレームから注釈した初出現時刻を基準とし、各センサの候補時刻との差を求める。静止条件の1記録を示す。
+
+### 図B：背景活動と局所残差
+
+[PNG](evidence/rc_popout_20260930/poster_evaluation_figures_20261008/02_grid_background_activity.png)／[SVG](evidence/rc_popout_20260930/poster_evaluation_figures_20261008/02_grid_background_activity.svg)
+
+直進条件の調整用 `test_11` における、EVS最初の候補時刻の観測密度・推定背景密度・標準化した正の特徴残差を並べた。観測密度は転送済みタイル配列のイベント数／有効画素数、推定背景と残差は保存済み `evs_background_maps.npz` から読み込んだ。モデル再適合や検知器の再実行はしていない。空間範囲は共通ROIのy=70..342、グリッドの縦横比を保ち、候補ペア160・180を枠で示す。
+
+観測・背景密度は共通の色尺度。右図は平方根密度の特徴差を標準化し、正の値を上限10で制限した別尺度であり、左2図の密度を単に引いた値ではない。背景に対応する残差も一部残る。時刻はRGB初出現の約13.0 ms後で、内部評価成績ではなく方法を説明する調整用例である。図Aとは異なる記録・条件であることを明記した。
+
+図注案：
+
+> 直進時の背景活動を考慮した局所反応の抽出例。飛び出しなし記録から構成したモデルで背景を推定し、標準化した正の残差を時間積算する。隣接2タイルの反応から検出候補を求める。
+
+[生成コード](evidence/rc_popout_20260930/poster_evaluation_figures_20261008/build_figures.py)と[出典・時刻・ハッシュ](evidence/rc_popout_20260930/poster_evaluation_figures_20261008/provenance.json)を保存。SVGは文字をパス化し、画像を埋め込んだ単独ファイル。PNGは2880×1752画素。図Aで使用した切り出し画素と図Bの3配列も同じフォルダに保存した。OpenCV、NumPy、Pillow、Matplotlibおよび日本語フォントのあるPython環境で再生成できる。
+
+```bash
+python3 docs/evidence/rc_popout_20260930/poster_evaluation_figures_20261008/build_figures.py \
+  --review-root /Users/at/Downloads/scp/grid_background_static_review_trial02 \
+  --bundle record/09-30/analysis/development_debug_bundle01.zip \
+  --maps-root record/09-30/analysis/grid_background_dev_20261006
+```
+
 ## 集計の再現
 
 保存済みの貼付原文から、件数・時刻の整合性検査と集計を再実行できる。推論を再実行したり、固定モデルを変更したりするコマンドではない。

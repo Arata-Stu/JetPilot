@@ -1,0 +1,106 @@
+{
+  "figure_a": {
+    "session": "popout-0928-static-100_02",
+    "purpose": "Annotated RGB onset and actual per-record candidate times; illustrative static recording, not an average.",
+    "annotation_t0_s": 11.717456579208374,
+    "candidate_minus_onset_ms": {
+      "evs": 9.985811233519826,
+      "rgb": 33.58936309814453
+    },
+    "crop_entries": [
+      {
+        "output": "popout-0928-static-100_02_rgb_frame_697.png",
+        "source_frame": 697,
+        "clip_frame": 14,
+        "recording_time_s": 11.70069932937622,
+        "onset_delta_ms": -16.75724983215332,
+        "crop_xyxy": [
+          15,
+          200,
+          185,
+          335
+        ],
+        "sha256": "235029936b24c9fdafb800586062a05faac6d2c6acd3b514051030503b252ef4"
+      },
+      {
+        "output": "popout-0928-static-100_02_rgb_frame_698.png",
+        "source_frame": 698,
+        "clip_frame": 15,
+        "recording_time_s": 11.717456579208374,
+        "onset_delta_ms": 0.0,
+        "crop_xyxy": [
+          15,
+          200,
+          185,
+          335
+        ],
+        "sha256": "72dd5de2d9695ff95317afde3c7b496cffbe13386fb1dc0ebb5dca39c3069608"
+      },
+      {
+        "output": "popout-0928-static-100_02_rgb_frame_699.png",
+        "source_frame": 699,
+        "clip_frame": 16,
+        "recording_time_s": 11.734289169311523,
+        "onset_delta_ms": 16.832590103149414,
+        "crop_xyxy": [
+          15,
+          200,
+          185,
+          335
+        ],
+        "sha256": "cd343e901c26d922cd0abc69ad76cdd3c496edce6f0b00255cb8d37a4c62fc37"
+      }
+    ],
+    "source_files": {
+      "/Users/at/Downloads/scp/grid_background_static_review_trial02/popout-0928-static-100_02/rgb_c001/summary.json": "c36bca4374341578e7e7763e5f0a7367ea22ef40340c28cd795e370a35a00981",
+      "/Users/at/Downloads/scp/grid_background_static_review_trial02/popout-0928-static-100_02/rgb_c001/frames.csv": "3e14d90cd6c344bf38f65c0d5368198d93820adbd1d4645829db6b5204b4ed76",
+      "/Users/at/Downloads/scp/grid_background_static_review_trial02/popout-0928-static-100_02/rgb_c001/candidate_review.mp4": "4996f3034df5e4c555171a25753a2c12a92963cb15b8c13965ec180fa9c1362b",
+      "/Users/at/Downloads/scp/grid_background_static_review_trial02/popout-0928-static-100_02/evs_c001/summary.json": "ded61257bb95ad731bf99afccdd23cb71cc4a2f08e5c0e91abb9e339e88fc0c9"
+    },
+    "limitations": [
+      "Existing time annotation retained; no onset relabeling.",
+      "Video decoded sequentially; identical crops and existing tile overlays retained.",
+      "These are offline candidate timestamps, not end-to-end response latency."
+    ]
+  },
+  "figure_b": {
+    "session": "test_11",
+    "subset": "development",
+    "method": "evs",
+    "purpose": "Method illustration, not evaluation success evidence.",
+    "index": 8762,
+    "candidate_recording_s": 17.89606672668457,
+    "candidate_minus_rgb_onset_ms": 13.013900756835284,
+    "pair_tile_ids": [
+      160,
+      180
+    ],
+    "view_limits_xy": [
+      0,
+      640,
+      70,
+      342
+    ],
+    "density_color_limits": [
+      0,
+      0.21875
+    ],
+    "residual_color_limits": [
+      0,
+      10
+    ],
+    "bundle_sha256": "4df3a0ac25cea3c2c086f89fc2fe14eca78b4d651d3b8bda4f7cdd92a3f87d87",
+    "bundle_tile_sha256": "8a621627b467babdb338e031b16a23260a3779a8883f2d79e515c70263565d3c",
+    "npz_sha256": "d29e5a4ef4775d8ae4bb545f1b974b2815f8bb5b1f5230356d6548fc531ae57d",
+    "candidates_sha256": "e43480b3a8e311207d3dc9bd83cd77cdcd91aa548b5b6e70545156deb1a9a1f0",
+    "computation": "Observed density=n/A. Predicted density and positive standardized sqrt-density residual read from saved detector arrays; no refitting or inference rerun."
+  },
+  "code_sha256": "99e139c65060839bc0bb316866571dee0591140f90c4f1bae8f45c24dae2ab09",
+  "outputs": {
+    "01_rgb_onset_and_timing.png": "9a095dc4783bca87d872a889e78b549b915d2635746ecc828796bdc15134762a",
+    "01_rgb_onset_and_timing.svg": "f742260ce1700dac5fcea15b13220ee8a16b331ef4bb4a09ee7bcdb249885109",
+    "02_grid_background_activity.png": "833cac6fed272a55fef7116f0c83eb8305e66b222bfa9e0b392071f545215c80",
+    "02_grid_background_activity.svg": "c2b44f87fa4b0a0b98a0eae87e2916fe3529577aa771c2575de669131867fe80",
+    "source_maps.npz": "82398f83f5c531140d180bde05256c61b27bb5d53154e8e3cb3b13acb24a90a1"
+  }
+}
