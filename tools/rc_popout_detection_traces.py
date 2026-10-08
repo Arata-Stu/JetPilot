@@ -15,7 +15,10 @@ from rc_popout_detection_figure import FROZEN, ROOT, digest, load_evidence, repl
 from rc_popout_grid_background import alarm_episodes, score_maps
 
 
-def prepare(bundle, frozen, session):
+def prepare(bundle, frozen, session, before_ms=100., after_ms=500.):
+    if (not np.isfinite(before_ms) or not np.isfinite(after_ms)
+            or before_ms < 0 or after_ms < 0 or before_ms+after_ms <= 0):
+        raise ValueError('before/after ms must be finite, nonnegative and span a positive duration')
     evidence = load_evidence(bundle, frozen, session)
     evs, index = replay(evidence)
     p, scene = evidence['parameters'], evidence['scene']
@@ -25,8 +28,9 @@ def prepare(bundle, frozen, session):
     with (frozen/'development_summary.csv').open() as stream:
         saved = {r['method']: r for r in csv.DictReader(stream) if r['session'] == session}
     candidate = evidence['candidate']
-    end = float(evs['time_s'][index])
-    start = end - .150
+    candidate_time = float(evs['time_s'][index])
+    onset = candidate['rgb_onset_recording_s']
+    start, end = onset-before_ms/1000., onset+after_ms/1000.
     ids = [tile['tile_id'] for tile in candidate['tiles']]
     traces = {}
     for method, result in results.items():
@@ -39,6 +43,8 @@ def prepare(bundle, frozen, session):
                             - float(row['first_candidate_from_drive_s'])) > 1e-7:
             raise ValueError(f'{method}: first candidate differs from frozen summary')
         times = result['time_s']
+        if start < times[0] or end > times[-1]:
+            raise ValueError(f'{method}: requested window exceeds saved evaluation coverage')
         selected = np.flatnonzero((times >= start) & (times <= end))
         columns = [int(np.flatnonzero(result['tile_id'] == tile)[0]) for tile in ids]
         if len(selected) < 2:
@@ -48,12 +54,20 @@ def prepare(bundle, frozen, session):
                 or len(set(result['interval'][selected])) != 1):
             raise ValueError(f'{method}: selected history contains a reset or unobservable gap')
         states = result['state_s'][selected][:, columns]
-        traces[method] = dict(time_s=times[selected], from_candidate_ms=(times[selected]-end)*1000,
+        marker = np.flatnonzero(selected == index) if method == 'evs' else np.array([], dtype=int)
+        ready = result['ready']
+        traces[method] = dict(time_s=times[selected], from_candidate_ms=(times[selected]-candidate_time)*1000,
             state_s=states, normalized=states/threshold, threshold_s=threshold,
             source_indexes=selected, full_record_candidates=len(episodes),
+            candidate_marker_index=int(marker[0]) if len(marker) else None,
+            full_evaluation_from_rgb_onset_ms=[float((times[0]-onset)*1000), float((times[-1]-onset)*1000)],
+            full_evaluation_observed_s=float(result['observed_step_s'][ready].sum()),
+            full_evaluation_max_global_score_ratio=float(result['score'][ready].max()/threshold),
             source_median_step_ms=float(np.median(np.diff(times)))*1000)
-    return evidence, traces, dict(start_s=start, end_s=end, duration_ms=150.,
-        tile_ids=ids, reference='saved EVS first candidate',
+    return evidence, traces, dict(start_s=start, end_s=end, duration_ms=before_ms+after_ms,
+        before_ms=before_ms, after_ms=after_ms,
+        saved_evs_candidate_s=candidate_time, saved_evs_candidate_from_rgb_onset_ms=(candidate_time-onset)*1000,
+        tile_ids=ids, reference='annotated RGB first-visible time',
         pair_selection='Fixed EVS-selected pair; RGB did not select these locations',
         rgb_onset_relative_s=candidate['rgb_onset_recording_s'])
 
@@ -67,7 +81,7 @@ def draw(output, traces, window):
     styles = ('-', (0, (5, 2.5)))
     ymax = max(1.2, max(float(t['normalized'].max()) for t in traces.values())*1.10)
     onset = window['rgb_onset_relative_s']
-    start_ms, end_ms = ((window[k]-onset)*1000 for k in ('start_s', 'end_s'))
+    start_ms, end_ms = -window['before_ms'], window['after_ms']
     xmin = float(np.floor(start_ms/50)*50)
     xmax = float(np.ceil(end_ms/10)*10)
     ticks = np.arange(xmin, xmax+1e-9, 50.)
@@ -80,8 +94,9 @@ def draw(output, traces, window):
                 ax.plot(times, t['normalized'][:, column], color=colors[method],
                         ls=style, lw=2.3, marker='o' if method == 'rgb' else None, ms=4,
                         label=f'{method.upper()} / {"AB"[column]}', clip_on=False)
-            if method == 'evs':
-                ax.plot(times[-1], t['normalized'][-1].min(),
+            marker = t['candidate_marker_index']
+            if marker is not None:
+                ax.plot(times[marker], t['normalized'][marker].min(),
                         'o', color=colors[method], ms=6, clip_on=False)
         ax.axhline(1., color='#697986', ls=(0, (4, 3)), lw=1.1, zorder=1.5)
         ax.axvline(0., color='#aab8c2', lw=.8, ls=':', zorder=0)
@@ -95,8 +110,7 @@ def draw(output, traces, window):
         ax.tick_params(labelsize=11, colors='#24374b', length=4)
         ax.grid(axis='y', color='#e6ebef', lw=.6)
         ax.set_axisbelow(True)
-        ax.legend(loc='upper left', ncol=len(methods), frameon=True,
-                  facecolor='white', edgecolor='none', framealpha=1.,
+        ax.legend(loc='lower left', bbox_to_anchor=(0, 1.02), ncol=2*len(methods), frameon=False,
                   fontsize=11, handlelength=2.7, columnspacing=1.6)
 
     for name, groups in (('trace_rgb', [['rgb']]), ('trace_evs', [['evs']]),
@@ -130,13 +144,16 @@ def main(argv=None):
     parser.add_argument('--bundle', type=Path, default=ROOT/'record/09-30/analysis/development_debug_bundle01.zip')
     parser.add_argument('--frozen-dir', type=Path, default=FROZEN)
     parser.add_argument('--session', default='test_05')
+    parser.add_argument('--before-ms', type=float, default=100., help='display time before RGB onset (default: 100)')
+    parser.add_argument('--after-ms', type=float, default=500., help='display time after RGB onset (default: 500)')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args(argv)
     try:
         if args.output.exists():
             raise ValueError('output already exists; choose a new directory')
         import matplotlib  # Check plotting dependency before creating output.
-        evidence, traces, window = prepare(args.bundle, args.frozen_dir, args.session)
+        evidence, traces, window = prepare(args.bundle, args.frozen_dir, args.session,
+                                           args.before_ms, args.after_ms)
         args.output.mkdir(parents=True)
         appearance = draw(args.output, traces, window)
         sensors = {}
@@ -155,6 +172,12 @@ def main(argv=None):
             sensors[method] = dict(samples=len(t['time_s']), threshold_s=t['threshold_s'],
                 first_time_s=float(t['time_s'][0]), last_time_s=float(t['time_s'][-1]),
                 full_record_candidates=t['full_record_candidates'],
+                full_evaluation_from_rgb_onset_ms=t['full_evaluation_from_rgb_onset_ms'],
+                full_evaluation_observed_s=t['full_evaluation_observed_s'],
+                full_evaluation_max_global_score_ratio=t['full_evaluation_max_global_score_ratio'],
+                displayed_max_tile_ratios=t['normalized'].max(axis=0).tolist(),
+                displayed_max_pair_score_ratio=float(t['normalized'].min(axis=1).max()),
+                candidate_marker_index=t['candidate_marker_index'],
                 source_median_step_ms=t['source_median_step_ms'],
                 last_values_over_threshold=t['normalized'][-1].tolist())
         report = dict(status='complete', session=args.session, subset='development', window=window,
@@ -166,7 +189,7 @@ def main(argv=None):
             purpose='Method illustration of the same EVS-selected pair, not an independent RGB/EVS evaluation',
             limitations=['RGB and EVS use their own frozen background model and threshold.',
                          'Y is threshold-normalized; it is not absolute event count, reaction time, or probability.',
-                         'Lines connect native samples without resampling; no future RGB frame is included.',
+                         'Lines connect native samples at their acquisition timestamps without resampling.',
                          'The selected pair is a spatial reference, not a bounding box.',
                          'RGB may alarm at other locations/times; full-record counts are reported separately.'],
             outputs_sha256={p.name: digest(p) for p in args.output.iterdir() if p.is_file()})
@@ -175,12 +198,16 @@ def main(argv=None):
             '<title>RGB / EVS measured traces</title>'
             '<style>body{font:18px sans-serif;color:#24374b;margin:32px}img{width:100%;max-width:1300px}p{max-width:1100px}</style>'
             f'<h1>{html.escape(args.session)}：RGB・EVSの重ね描き</h1>'
-            '<img src="traces_overlay.png"><p>同じ隣接2区画、同じ150 ms。横軸はRGBで見え始めた時刻を0 msとした時間、50 ms刻み。'
+            f'<img src="traces_overlay.png"><p>同じ隣接2区画、RGB初出現の−{window["before_ms"]:g}〜+{window["after_ms"]:g} ms。'
+            '横軸はRGBで見え始めた時刻を0 msとした時間、50 ms刻み。'
             '縦軸は各センサの積算スコアをそのセンサの固定しきい値で割った値。点線は1。</p>'
             '<p>青：RGB、橙：EVS。実線：区画A、破線：区画B。同じA/Bは同じ画像位置を示す。</p>'
-            '<p>RGBの小さな点は元のフレームごとの値。EVS右端の丸は検出候補時刻。RGBには検出を示す丸を追加していない。</p>'
+            '<p>RGBの小さな点は元のフレームごとの値。橙の丸は保存済みEVS候補時刻（表示区間内の場合のみ）。RGBには検出を示す丸を追加していない。</p>'
             f'<p>区画ID {window["tile_ids"]}。表示サンプル数 RGB={sensors["rgb"]["samples"]} / EVS={sensors["evs"]["samples"]}。'
             f'全評価区間の候補数 RGB={sensors["rgb"]["full_record_candidates"]} / EVS={sensors["evs"]["full_record_candidates"]}。</p>'
+            f'<p>RGBの評価対象データは初出現から {sensors["rgb"]["full_evaluation_from_rgb_onset_ms"][0]/1000:.3f}〜'
+            f'{sensors["rgb"]["full_evaluation_from_rgb_onset_ms"][1]/1000:.3f} s。全評価区間・全隣接ペアの最大検知スコア比は '
+            f'{sensors["rgb"]["full_evaluation_max_global_score_ratio"]:.3f}。上図の固定2区画の値とは集計範囲が異なる。</p>'
             '<p>EVSで選ばれた区画の履歴をRGBでも表示した方法説明用の図。RGB自身が選んだ候補区画や、検出性能の独立評価を表すものではない。</p>'
             '<p><a href="traces_overlay.svg">重ね描き SVG</a> / <a href="trace_rgb.svg">RGB SVG</a> / '
             '<a href="trace_evs.svg">EVS SVG</a> / <a href="summary.json">数値と出典</a></p>'

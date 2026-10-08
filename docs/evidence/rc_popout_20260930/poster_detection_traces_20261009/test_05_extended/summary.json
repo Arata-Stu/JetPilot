@@ -1,0 +1,179 @@
+{
+  "status": "complete",
+  "session": "test_05",
+  "subset": "development",
+  "window": {
+    "start_s": 12.671912336349488,
+    "end_s": 13.271912336349487,
+    "duration_ms": 600.0,
+    "before_ms": 100.0,
+    "after_ms": 500.0,
+    "saved_evs_candidate_s": 12.877008237838744,
+    "saved_evs_candidate_from_rgb_onset_ms": 105.09590148925696,
+    "tile_ids": [
+      177,
+      178
+    ],
+    "reference": "annotated RGB first-visible time",
+    "pair_selection": "Fixed EVS-selected pair; RGB did not select these locations",
+    "rgb_onset_relative_s": 12.771912336349487
+  },
+  "appearance": {
+    "y_axis": "integrated residual / sensor-specific frozen threshold",
+    "common_y_limits": [
+      -0.0662081390619278,
+      2.648325562477112
+    ],
+    "common_x_limits_ms": [
+      -100.0,
+      500.0
+    ],
+    "x_axis": "milliseconds from annotated RGB first-visible time",
+    "data_window_from_rgb_onset_ms": [
+      -100.0,
+      500.0
+    ],
+    "x_ticks_ms": [
+      -100.0,
+      -50.0,
+      0.0,
+      50.0,
+      100.0,
+      150.0,
+      200.0,
+      250.0,
+      300.0,
+      350.0,
+      400.0,
+      450.0,
+      500.0
+    ],
+    "threshold_line": 1.0,
+    "rgb_native_samples_marked": true,
+    "image_text": "axis labels, ticks and legend only",
+    "colors": {
+      "rgb": "#245e91",
+      "evs": "#c45800"
+    },
+    "line_styles": {
+      "A": "solid",
+      "B": "dashed"
+    },
+    "tile_labels": {
+      "A": 177,
+      "B": 178
+    },
+    "combined_panel_order": [
+      "rgb",
+      "evs"
+    ],
+    "overlay_order": [
+      "rgb",
+      "evs"
+    ]
+  },
+  "sensors": {
+    "rgb": {
+      "samples": 36,
+      "threshold_s": 0.19765397027910442,
+      "first_time_s": 12.673378944396973,
+      "last_time_s": 13.258326292037964,
+      "full_record_candidates": 0,
+      "full_evaluation_from_rgb_onset_ms": [
+        -5917.564392089844,
+        3168.879747390747
+      ],
+      "full_evaluation_observed_s": 9.08644413948059,
+      "full_evaluation_max_global_score_ratio": 0.9660165918200599,
+      "displayed_max_tile_ratios": [
+        0.25251656770706177,
+        0.27198728919029236
+      ],
+      "displayed_max_pair_score_ratio": 0.2029622346162796,
+      "candidate_marker_index": null,
+      "source_median_step_ms": 16.759395599365234,
+      "last_values_over_threshold": [
+        0.0,
+        0.0
+      ]
+    },
+    "evs": {
+      "samples": 600,
+      "threshold_s": 0.06090278921343967,
+      "first_time_s": 12.672008237838746,
+      "last_time_s": 13.271008237838746,
+      "full_record_candidates": 1,
+      "full_evaluation_from_rgb_onset_ms": [
+        -5932.904098510742,
+        3186.0959014892583
+      ],
+      "full_evaluation_observed_s": 9.119,
+      "full_evaluation_max_global_score_ratio": 6.525828752218587,
+      "displayed_max_tile_ratios": [
+        2.0643093585968018,
+        2.4075686931610107
+      ],
+      "displayed_max_pair_score_ratio": 1.628868818283081,
+      "candidate_marker_index": 205,
+      "source_median_step_ms": 0.9999999999994458,
+      "last_values_over_threshold": [
+        0.0,
+        0.0
+      ]
+    }
+  },
+  "source_bundle_sha256": "4df3a0ac25cea3c2c086f89fc2fe14eca78b4d651d3b8bda4f7cdd92a3f87d87",
+  "frozen_manifest_sha256": "a207d2bd0feb3a8f3126b152d0ae85057eb74e898ff061618675991b5671c2d8",
+  "renderer_sha256": "9016aec8c61eb6509d3a7aaa650ba508c87e7a38a3f7b483cf0d609d7419c67d",
+  "candidate": {
+    "session": "test_05",
+    "candidate_recording_s": 12.877008237838744,
+    "candidate_from_drive_s": 1.6358969593048087,
+    "drive_start_s": 11.241111278533936,
+    "rgb_onset_recording_s": 12.771912336349487,
+    "reference_origin_s": 1790751971.4408987,
+    "rgb_timestamp_source": "bag",
+    "annotation_sha256": "2058eb9da28a233e3ac29c5a8fb83386ef7435106e0c9936bbeb7f70aad52e0d",
+    "time_sync_sha256": "2e87564a84b55a08a9d6df8c50aba914c0bacd35bba6cadbf8c75a72b6c926a2",
+    "tiles": [
+      {
+        "tile_id": 177,
+        "x": 544,
+        "y": 256,
+        "width": 32,
+        "height": 32,
+        "valid_pixels": 1024
+      },
+      {
+        "tile_id": 178,
+        "x": 576,
+        "y": 256,
+        "width": 32,
+        "height": 32,
+        "valid_pixels": 1024
+      }
+    ]
+  },
+  "purpose": "Method illustration of the same EVS-selected pair, not an independent RGB/EVS evaluation",
+  "limitations": [
+    "RGB and EVS use their own frozen background model and threshold.",
+    "Y is threshold-normalized; it is not absolute event count, reaction time, or probability.",
+    "Lines connect native samples at their acquisition timestamps without resampling.",
+    "The selected pair is a spatial reference, not a bounding box.",
+    "RGB may alarm at other locations/times; full-record counts are reported separately."
+  ],
+  "outputs_sha256": {
+    "trace_evs.png": "242aafdc9cdb50cdaec048d217d6f33afbf263c66913e8900904c2b586e672a9",
+    "traces_overlay.svg": "3eae7ea0c7fa7469118a7f7bf401b259ea2b1274aca03762ea5b3a8844f2da55",
+    "trace_rgb.svg": "9ec168e311988c06ef338dc60ebf8d6c03fff91c1853519c4f23fe913a23fd57",
+    "trace_rgb.png": "d03a32ebff663f3ce4257d33030eaddd08c34974ecc31be6fa0329ebb7663a8c",
+    "rgb_trace_values.npz": "a9385967c5696e14beaba40ed44cbd66152183c887b373a3f84fad6bf0828403",
+    "traces_overlay.png": "93cb29981d60e9ac5690ac64aaeac77412bcead40b20ccf3ad18fb7d99dee49c",
+    "evs_trace_values.csv": "a6f6b6dbe6cb8f24b531855ef83e5a0ead4a554dcd01976e9f6bd62eccb2d39c",
+    "trace_evs.svg": "4b3bf848974ca64c60c3db003c52f541ba02f1c0a9231de295d0a191828b8db1",
+    "rgb_trace_values.csv": "321ea8ba1503788effac42ba5a1714a8b5995323c0a034c38fb8e8c5698fa367",
+    "traces_rgb_evs.png": "fd387ddef30e073f89d501dd293da6492b91c95ac070f884f78c74d17c14f17d",
+    "evs_trace_values.npz": "f1dacb94e1c27ea09f734c3398145d957c127cd9cda68c01f28244ec77f4761e",
+    "traces_rgb_evs.svg": "a03406ccc11f05ac4951e95c5d736b0f52f471e4f1317352dbdab5aba1febb7c"
+  }
+}

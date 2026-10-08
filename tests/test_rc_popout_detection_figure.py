@@ -145,8 +145,8 @@ class RealArchiveTests(unittest.TestCase):
         self.assertEqual(window['tile_ids'],[177,178])
         self.assertEqual(traces['rgb']['full_record_candidates'],0)
         self.assertEqual(traces['evs']['full_record_candidates'],1)
-        self.assertEqual(len(traces['rgb']['time_s']),9)
-        self.assertEqual(len(traces['evs']['time_s']),151)
+        self.assertEqual(len(traces['rgb']['time_s']),36)
+        self.assertEqual(len(traces['evs']['time_s']),600)
         for method,trace in traces.items():
             source=evidence['scene']['data'][method]
             np.testing.assert_array_equal(trace['time_s'],source['time_s'][trace['source_indexes']])
@@ -161,6 +161,23 @@ class RealArchiveTests(unittest.TestCase):
                     np.testing.assert_allclose(trace['state_s'],saved['state_s'][trace['source_indexes']][:,cols],atol=1e-7)
         self.assertGreater(window['end_s']-traces['rgb']['time_s'][-1],0.)
         self.assertLess(traces['rgb']['normalized'].max(),1.)
+        self.assertLess(traces['rgb']['full_evaluation_max_global_score_ratio'],1.)
+        self.assertAlmostEqual(traces['rgb']['full_evaluation_max_global_score_ratio'],.9660165918,places=8)
+        marker=traces['evs']['candidate_marker_index']
+        self.assertIsNone(traces['rgb']['candidate_marker_index'])
+        self.assertLess(marker,len(traces['evs']['time_s'])-1)
+        self.assertAlmostEqual(traces['evs']['time_s'][marker],evidence['candidate']['candidate_recording_s'])
+        self.assertAlmostEqual(traces['evs']['from_candidate_ms'][marker],0.)
+        self.assertGreater(traces['rgb']['from_candidate_ms'][-1],300.)
+
+    def test_trace_window_rejects_invalid_and_unavailable_coverage(self):
+        for before,after in ((-1.,500.),(100.,float('inf')),(float('nan'),500.),(0.,0.)):
+            with self.assertRaisesRegex(ValueError,'finite'):
+                traces_figure.prepare(BUNDLE,figure.FROZEN,'test_05',before,after)
+        with self.assertRaisesRegex(ValueError,'exceeds saved evaluation coverage'):
+            traces_figure.prepare(BUNDLE,figure.FROZEN,'test_05',100.,5000.)
+        evidence,traces,window=traces_figure.prepare(BUNDLE,figure.FROZEN,'test_05',100.,100.)
+        self.assertIsNone(traces['evs']['candidate_marker_index'])
 
 
 if __name__=='__main__':
